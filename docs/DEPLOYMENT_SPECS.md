@@ -373,9 +373,14 @@ backup-uat:
   environment: uat
   steps:
     - uses: actions/checkout@v4
-    - run: sudo apt-get install -y postgresql-client
+    - name: Install PostgreSQL 17 Client
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y postgresql-common
+        sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        sudo apt-get install -y postgresql-client-17
     - run: |
-        pg_dump "$DATABASE_URL" \
+        /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" \
           --no-owner --no-acl --clean --if-exists \
           --file ata-lta-erp-uat-$(date +%Y%m%d-%H%M%S).sql
       env:
