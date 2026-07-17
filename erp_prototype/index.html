@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ATA &amp; LTA Accounting Firm ERP</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="hidden">
+    <div class="loading-container">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Syncing data...</div>
+    </div>
+  </div>
+
+  <!-- Login Screen -->
+  <div id="login-screen" class="hidden">
+    <div class="login-card">
+      <h1>ATA &amp; LTA ERP</h1>
+      <p class="login-subtitle">Accounting Firm Management System</p>
+      <form id="login-form" class="form-stacked">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" name="email" required placeholder="user@ata-lta.com">
+        </div>
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" required placeholder="Enter password">
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+      </form>
+      <div id="login-error" class="login-error hidden"></div>
+    </div>
+  </div>
+
+  <!-- App Shell (hidden by default) -->
+  <div id="app-shell" class="hidden">
+    <header class="app-header">
+      <div class="header-brand">
+        <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" aria-label="Toggle sidebar" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="logo">ATA &amp; LTA ERP</span>
+      </div>
+      <div class="header-actions">
+        <div class="entity-pill">
+          <select id="entity-switcher" class="form-select pill-select">
+            <option value="ATA">ATA Accounting</option>
+            <option value="LTA">LTA Accounting</option>
+          </select>
+          <span id="entity-badge" class="badge"></span>
+        </div>
+        <button id="theme-toggle-btn" class="theme-toggle-btn" aria-label="Toggle dark mode" title="Toggle dark mode">
+          <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg id="theme-icon-sun" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+        </button>
+        <div class="user-chip">
+          <span id="user-avatar" class="avatar"></span>
+          <span id="user-name" class="user-name">User</span>
+          <button id="logout-btn" class="btn btn-secondary btn-sm">Logout</button>
+        </div>
+      </div>
+      <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
+    </header>
+
+    <div class="app-layout">
+      <nav id="sidebar" class="sidebar">
+        <ul class="nav-list">
+          <li><a href="#dashboard" data-module="dashboard"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-link-text">Dashboard</span></span></a></li>
+          <li><a href="#clients" data-module="clients"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span class="nav-link-text">Client List</span></span></a></li>
+          <li><a href="#operations" data-module="operations"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="nav-link-text">Operations</span></span></a></li>
+          <li><a href="#billing" data-module="billing"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="nav-link-text">Billing</span></span></a></li>
+          <li><a href="#disbursement" data-module="disbursement"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span><span class="nav-link-text">Disbursement</span></span></a></li>
+          <li><a href="#transmittal" data-module="transmittal"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span><span class="nav-link-text">Transmittal</span></span></a></li>
+          <li><a href="#reports" data-module="reports"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="nav-link-text">Reports</span></span></a></li>
+          <li><a href="#admin" data-module="admin"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="nav-link-text">Admin</span></span></a></li>
+        </ul>
+      </nav>
+
+      <main id="content" class="content"></main>
+    </div>
+  </div>
+
+  <script src="js/utils.js"></script>
+  <script src="js/apiClient.js"></script>
+  <script src="js/dataTable.js"></script>
+  <script src="js/kanban.js"></script>
+  <script src="js/datepicker.js"></script>
+  <script src="js/timepicker.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/clients.js"></script>
+  <script src="js/workflow.js"></script>
+  <script src="js/logos.js"></script>
+  <script src="js/billing.js"></script>
+  <script src="js/disbursement.js"></script>
+  <script src="js/dms.js"></script>
+  <script src="js/reports.js"></script>
+  <script src="js/transmittal.js"></script>
+  <script src="js/pendingChanges.js"></script>
+  <script src="js/users.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

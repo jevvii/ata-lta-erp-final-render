@@ -1,0 +1,3042 @@
+/**
+ * Disbursement & Expense Module
+ * Expense filing, fund source tagging, 1-tier approval, templates, print voucher.
+ */
+
+const Disbursement = {
+  view: 'list', // 'list' | 'form' | 'detail' | 'report' | 'templates' | 'templateForm'
+  detailId: null,
+  templateEditingId: null,
+  listViewMode: 'table', // 'table' | 'board' | 'list'
+  EDITABLE_STATUSES: ['Draft', 'Submitted', 'Under Review', 'Pending'],
+  PENDING_APPROVAL_STATUSES: ['Submitted', 'Under Review', 'Pending'],
+  STANDARD_CATEGORIES: ['Transportation', 'Notary', 'Meals', 'Government Fee', 'Other'],
+
+  render() {
+    const container = el('div', { class: 'page' });
+    
+    if (this.view === 'detail' && this.detailId) {
+      const d = DB.getById('disbursements', this.detailId);
+      const titleBar = el('div', { class: 'page-title-bar-v2' });
+      const h1 = el('h1', { class: 'breadcrumb-h1' });
+      const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Disbursement' });
+      baseLink.addEventListener('click', () => { location.hash = '#disbursement'; });
+      h1.appendChild(baseLink);
+      h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
+      h1.appendChild(document.createTextNode(d?.description || 'Detail'));
+      titleBar.appendChild(h1);
+      
+      const actions = el('div', { class: 'title-bar-actions' });
+      if (d) {
+        // Edit button — Admin and Accounting (users with disbursement:edit or create)
+        const canEdit = Auth.can('disbursement:edit') || Auth.can('disbursement:create');
+        const isPendingStatus = ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status);
+        if (canEdit && isPendingStatus) {
+          const editBtn = el('button', { class: 'btn btn-warning btn-sm', text: '✏️ Edit Expense', style: 'margin-right:8px;' });
+          editBtn.addEventListener('click', () => {
+            this.detailId = d.id;
+            openFormPanel({
+              icon: '💰', title: 'Edit Expense',
+              formContent: this.renderForm(), formId: 'disbursement-form',
+              viewContext: 'expense-form',
+              fullPageRoute: `#disbursement/form/${d.id}`,
+              actions: [
+                { text: 'Update Expense', class: 'btn btn-primary', type: 'submit', form: 'disbursement-form', testId: 'submit-expense-btn' },
+                { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement/detail/' + d.id), testId: 'cancel-expense-btn' }
+              ]
+            });
+          });
+          actions.appendChild(editBtn);
+        }
+
+        // Delete button — Admin only (checked via can('disbursement:delete'))
+        if (Auth.can('disbursement:delete')) {
+          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
+          deleteBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
+              // Unlink from WR if linked
+              if (d.linkedWorkRequestId) {
+                const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+                if (wr) {
+                  const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
+                  DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
+                }
+              }
+              DB.delete('disbursements', d.id);
+              location.hash = '#disbursement';
+              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+            }, 'danger');
+          });
+          actions.appendChild(deleteBtn);
+        }
+        if (d.status === 'Draft' && Auth.can('disbursement:create')) {
+          const submitBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Submit Expense', style: 'margin-right:8px;' });
+          submitBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
+              DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
+              App.handleRoute();
+            }, 'success');
+          });
+          actions.appendChild(submitBtn);
+        }
+        const noLogoLabel = el('label', { style: 'margin-right:12px; font-size:0.8125rem; display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:var(--color-text-muted);' });
+        const noLogoCheckbox = el('input', { type: 'checkbox' });
+        noLogoLabel.appendChild(noLogoCheckbox);
+        noLogoLabel.appendChild(document.createTextNode('No Logo (Generic)'));
+        actions.appendChild(noLogoLabel);
+
+        const genExpBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Generate Expense PDF', style: 'margin-right:8px;' });
+        genExpBtn.addEventListener('click', () => {
+          const noLogo = noLogoCheckbox.checked;
+          this.generateExpensePDF(d, noLogo);
+        });
+        actions.appendChild(genExpBtn);
+
+        const genVouchBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Generate Voucher', style: 'margin-right:8px;' });
+        genVouchBtn.addEventListener('click', () => this.generateVoucher(d));
+        actions.appendChild(genVouchBtn);
+      }
+      const backBtn = el('button', { class: 'btn btn-secondary btn-sm', text: '← Back to List' });
+      backBtn.addEventListener('click', () => { location.hash = '#disbursement'; });
+      actions.appendChild(backBtn);
+      titleBar.appendChild(actions);
+      container.appendChild(titleBar);
+    } else if (this.view === 'form') {
+      container.classList.add('disbursement-tab-page');
+      const isNew = !this.detailId;
+      const existing = isNew ? null : DB.getById('disbursements', this.detailId);
+      const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${this.detailId}`;
+      const viewSwitcher = buildFormViewSwitcher({
+        currentMode: PaneMode.FULL_PAGE,
+        viewContext: 'expense-form',
+        onSidePeek: () => {
+          const expenseId = this.detailId;
+          closeFormPanelAndRoute('#disbursement');
+          this.showForm(expenseId, PaneMode.SIDE_PEEK);
+        },
+        onCenterPeek: () => {
+          const expenseId = this.detailId;
+          closeFormPanelAndRoute('#disbursement');
+          this.showForm(expenseId, PaneMode.CENTER_PEEK);
+        },
+        onNewTab: () => {
+          window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
+        }
+      });
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Disbursement',
+        baseHash: '#disbursement',
+        currentText: isNew ? 'New Expense' : (existing?.description || 'Edit Expense'),
+        viewSwitcher,
+        actions: [
+          { text: isNew ? 'Submit Expense' : 'Save Changes', class: 'btn btn-primary btn-sm', type: 'submit', form: 'disbursement-form' },
+          { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#disbursement'; } }
+        ]
+      }));
+    } else if (this.view === 'templateForm') {
+      container.classList.add('disbursement-tab-page');
+      const isNew = !this.templateEditingId;
+      const template = isNew ? null : DB.getById('disbursementTemplates', this.templateEditingId);
+      const fullPageRoute = isNew ? '#disbursement/templateForm/new' : `#disbursement/templateForm/${this.templateEditingId}`;
+      const viewSwitcher = buildFormViewSwitcher({
+        currentMode: PaneMode.FULL_PAGE,
+        viewContext: 'disbursement-template-form',
+        onSidePeek: () => {
+          closeFormPanelAndRoute('#disbursement');
+          this.showTemplateForm(template, PaneMode.SIDE_PEEK);
+        },
+        onCenterPeek: () => {
+          closeFormPanelAndRoute('#disbursement');
+          this.showTemplateForm(template, PaneMode.CENTER_PEEK);
+        },
+        onNewTab: () => {
+          window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
+        }
+      });
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Disbursement',
+        baseHash: '#disbursement',
+        currentText: isNew ? 'New Disbursement Template' : (template?.name || 'Edit Template'),
+        viewSwitcher,
+        actions: [
+          { text: 'Save Template', class: 'btn btn-primary btn-sm', type: 'submit', form: 'disb-tpl-form' },
+          { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#disbursement'; } }
+        ]
+      }));
+    } else if (['list', 'templates', 'report', 'archive'].includes(this.view)) {
+      container.classList.add('disbursement-tab-page');
+      const titleBar = el('div', { class: 'page-title-bar-v2' });
+      titleBar.appendChild(el('h1', { text: 'Disbursement' }));
+      container.appendChild(titleBar);
+      container.appendChild(this.renderTabNav());
+    }
+
+    if (this.view === 'list') container.appendChild(this.renderList());
+    else if (this.view === 'form') container.appendChild(this.renderForm({ hideHeader: true }));
+    else if (this.view === 'detail') container.appendChild(this.renderDetail());
+    else if (this.view === 'report') container.appendChild(this.renderReport());
+    else if (this.view === 'templates') container.appendChild(this.renderTemplates());
+    else if (this.view === 'archive') container.appendChild(this.renderArchive());
+    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
+
+    setTimeout(() => this.updateStickyOffsets(), 0);
+    return container;
+  },
+
+  init() {
+    this.updateStickyOffsets();
+  },
+
+  updateStickyOffsets() {
+    App.updateStickyOffsets();
+  },
+
+  renderTabNav() {
+    const entity = Auth.activeEntity;
+    const entMatch = ent => {
+      const uEnt = (ent || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
+      return uEnt === entity.toUpperCase();
+    };
+
+    const dbCount = DB.getWhere('disbursements', d => {
+      if (!entMatch(d.entity)) return false;
+      return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
+    }).length;
+
+    const templateCount = DB.getWhere('disbursementTemplates', t => {
+      const tEnt = (t.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
+      }
+      return tEnt === entity.toUpperCase();
+    }).length;
+
+    const archiveDbCount = DB.getWhere('disbursements', d => {
+      if (!entMatch(d.entity)) return false;
+      if (d.status === 'Cancelled') return true;
+      if (d.status === 'Funded' && d.archived) return true;
+      return false;
+    }).length;
+
+    const rejectedCount = DB.getWhere('pendingChanges', pc => {
+      if (pc.table !== 'disbursements' || pc.status !== 'rejected') return false;
+      const data = pc.proposedData || {};
+      if (!entMatch(data.entity)) return false;
+      if (!Auth.isManagerial() && pc.submittedBy !== Auth.user.id) return false;
+      return true;
+    }).length + DB.getWhere('operationsRequests', r => {
+      if (r.type !== 'disbursement' || r.status !== 'rejected') return false;
+      if (!entMatch(r.entity)) return false;
+      if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
+      return true;
+    }).length;
+
+    const archiveCount = archiveDbCount + rejectedCount;
+
+    const tabs = [
+      { key: 'list', label: 'Disbursements', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: dbCount },
+      { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
+      { key: 'report', label: 'Summary Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
+      { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
+    ];
+
+    const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
+      this.view = key;
+      App.handleRoute();
+    });
+
+    const canCreate = Auth.can('disbursement:create');
+    const canRequest = Auth.can('disbursement:request');
+
+    if (canCreate && canRequest) {
+      const wrapper = el('div', { class: 'split-btn-group' });
+
+      const primaryBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-left'
+      });
+      primaryBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> File Expense';
+      primaryBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      wrapper.appendChild(primaryBtn);
+
+      const toggleBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-right'
+      });
+      toggleBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      wrapper.appendChild(toggleBtn);
+
+      const menu = el('div', { class: 'dropdown-menu split-btn-menu hidden' });
+
+      const requestItem = el('button', { class: 'dropdown-item' });
+      requestItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Disbursement';
+      requestItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.add('hidden');
+        Disbursement.showRequestDisbursementModal();
+      });
+
+      menu.appendChild(requestItem);
+      wrapper.appendChild(menu);
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('hidden');
+      });
+
+      tabNav.appendChild(wrapper);
+    } else if (canCreate) {
+      const addBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
+        html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> File Expense'
+      });
+      addBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      tabNav.appendChild(addBtn);
+    } else if (canRequest) {
+      const reqBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;'
+      });
+      reqBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Disbursement';
+      reqBtn.addEventListener('click', () => { Disbursement.showRequestDisbursementModal(); });
+      tabNav.appendChild(reqBtn);
+    }
+
+    return tabNav;
+  },
+
+  getFundSource(item) {
+    if (item.fundSource) return item.fundSource;
+    if (item.type === 'ClientFunded') return 'Client Fund';
+    return 'Firm Fund';
+  },
+
+  getEmployeeId(item) {
+    return item.employeeId || item.requestedBy;
+  },
+
+  recurringBadge(item) {
+    if (!item.fromTemplate) return el('span');
+    return el('span', { class: 'badge badge-recurring', text: 'Recurring' });
+  },
+
+  canEditDisbursement(d) {
+    return Auth.can('disbursement:create') &&
+           this.EDITABLE_STATUSES.includes(d.status);
+  },
+
+  showForm(disbId = null, mode = null) {
+    this.detailId = disbId;
+    const isNew = !disbId;
+    const existing = isNew ? null : DB.getById('disbursements', disbId);
+    const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${disbId}`;
+
+    openFormPanel({
+      icon: '💰',
+      title: isNew ? 'File Expense' : `Edit Expense — ${existing?.description || ''}`.trim(),
+      formContent: this.renderForm(),
+      formId: 'disbursement-form',
+      mode,
+      viewContext: 'expense-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: isNew ? 'Submit Expense' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'disbursement-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement') }
+      ]
+    });
+  },
+
+  statusBadge(status) {
+    const map = {
+      'Draft': 'badge-warning',
+      'Submitted': 'badge-warning',
+      'Under Review': 'badge-warning',
+      'Pending': 'badge-warning',
+      'Approved': 'badge-info',
+      'Released': 'badge-success',
+      'Funded': 'badge-success',
+      'Rejected': 'badge-danger',
+      'Cancelled': 'badge-danger'
+    };
+    const label = status;
+    return el('span', { class: 'badge ' + (map[status] || ''), text: label });
+  },
+
+  methodIcon(method) {
+    const icons = PaymentIcons;
+    const def = icons['Other Digital'];
+    const cfg = icons[method] || def;
+    const wrap = el('span', {
+      style: `display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius: 12px; font-size:0.75rem; font-weight:700; color:${cfg.color}; background:${cfg.bg}; letter-spacing:0.3px;`
+    });
+    const svgWrap = document.createElement('span');
+    svgWrap.innerHTML = cfg.svg;
+    wrap.appendChild(svgWrap.firstChild);
+    wrap.appendChild(document.createTextNode(cfg.label));
+    return wrap;
+  },
+
+  // ============================================================
+  // List View
+  // ============================================================
+  renderList() {
+    const entity = Auth.activeEntity;
+    let viewMode = App.getPreferredViewMode('disbursement');
+    let groupBy = App.restoreGroupBy('disbursement') || 'none';
+
+    const groupOptions = [
+      { key: 'none', label: 'None' },
+      { key: 'employee', label: 'Employee', getName: d => {
+        const u = DB.getById('users', this.getEmployeeId(d));
+        return u?.name || 'Unassigned';
+      }},
+      { key: 'workRequest', label: 'Work Request', getName: d => {
+        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        return wr?.title || 'No Work Request';
+      }},
+      { key: 'client', label: 'Client', getName: d => {
+        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const client = wr ? DB.getById('clients', wr.clientId) : null;
+        return client?.name || 'No Client';
+      }},
+      { key: 'fund', label: 'Fund', getName: d => this.getFundSource(d) || 'No Fund' }
+    ];
+
+    const wrapper = el('div');
+    const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
+    const filters = el('div', { class: 'filters-bar' });
+
+
+
+    // Jira Filter Toolbar & Active Filters State
+    const activeFilters = {
+      workRequest: new Set(),
+      client: new Set(),
+      employee: new Set(),
+      fund: new Set(),
+      status: new Set(),
+      date: new Set()
+    };
+
+    const savedFilters = App.restoreFilters('disbursement');
+    if (savedFilters) {
+      if (Array.isArray(savedFilters.workRequest)) savedFilters.workRequest.forEach(v => activeFilters.workRequest.add(v));
+      else if (savedFilters.workRequest) activeFilters.workRequest.add(savedFilters.workRequest);
+      if (Array.isArray(savedFilters.client)) savedFilters.client.forEach(v => activeFilters.client.add(v));
+      else if (savedFilters.client) activeFilters.client.add(savedFilters.client);
+      if (Array.isArray(savedFilters.employee)) savedFilters.employee.forEach(v => activeFilters.employee.add(v));
+      else if (savedFilters.employee) activeFilters.employee.add(savedFilters.employee);
+      if (Array.isArray(savedFilters.fund)) savedFilters.fund.forEach(v => activeFilters.fund.add(v));
+      else if (savedFilters.fund) activeFilters.fund.add(savedFilters.fund);
+      if (Array.isArray(savedFilters.status)) savedFilters.status.forEach(v => activeFilters.status.add(v));
+      else if (savedFilters.status) activeFilters.status.add(savedFilters.status);
+      if (Array.isArray(savedFilters.date)) savedFilters.date.forEach(v => activeFilters.date.add(v));
+    }
+
+    this.searchQuery = '';
+
+    const saveCurrentFilters = () => {
+      App.saveFilters('disbursement', {
+        workRequest: Array.from(activeFilters.workRequest),
+        client: Array.from(activeFilters.client),
+        employee: Array.from(activeFilters.employee),
+        fund: Array.from(activeFilters.fund),
+        status: Array.from(activeFilters.status),
+        date: Array.from(activeFilters.date)
+      });
+    };
+
+    const getWorkRequestOptions = () => DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase()) && Auth.canViewWr(wr);
+    }).map(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      return { value: wr.id, label: wr.title + ' — ' + (client?.name || '—') };
+    });
+
+    const getClientOptions = () => DB.getWhere('clients', c => {
+      const clientEnt = (c.entity || '').toUpperCase();
+      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
+    }).map(c => ({ value: c.id, label: c.name }));
+
+    const getEmployeeOptions = () => {
+      const set = new Set();
+      DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role)).forEach(u => set.add(u.name));
+      (DB.getAll('tasks') || []).forEach(t => {
+        const name = (t.assigneeName || '').trim();
+        if (name) set.add(name);
+      });
+      return Array.from(set).map(n => ({ value: n, label: n }));
+    };
+
+    const getFundOptions = () => [
+      { value: 'Firm Fund', label: 'Firm Fund' },
+      { value: 'Client Fund', label: 'Client Fund' }
+    ];
+
+    const getStatusOptions = () => [
+      { value: 'Draft', label: 'Draft' },
+      { value: 'Pending', label: 'Pending' },
+      { value: 'Approved', label: 'Approved' },
+      { value: 'Released', label: 'Released' },
+      { value: 'Funded', label: 'Funded' },
+      { value: 'Rejected', label: 'Rejected' }
+    ];
+
+    const getDueDateOptions = () => [
+      { value: 'Overdue', label: 'Overdue' },
+      { value: 'Due Today', label: 'Due Today' },
+      { value: 'Due This Week', label: 'Due This Week' },
+      { value: 'Due This Month', label: 'Due This Month' },
+      { value: 'Due Later', label: 'Due Later' }
+    ];
+
+    const categories = {
+      workRequest: { label: 'Work Request', getOptions: getWorkRequestOptions },
+      client: { label: 'Client', getOptions: getClientOptions },
+      employee: { label: 'Employee', getOptions: getEmployeeOptions },
+      fund: { label: 'Fund', getOptions: getFundOptions },
+      status: { label: 'Status', getOptions: getStatusOptions },
+      date: { label: 'Date', hasDatePicker: true, getOptions: getDueDateOptions }
+    };
+
+    const toolbarContainer = createJiraFilterToolbar({
+      moduleName: 'disbursement',
+      searchConfig: {
+        placeholder: 'Search disbursement...',
+        onSearch: (q) => { this.searchQuery = q; refresh(); }
+      },
+      categories,
+      activeFilters,
+      onFilterChange: () => {
+        saveCurrentFilters();
+        refresh();
+      },
+      viewMode,
+      onViewModeChange: (newMode) => {
+        viewMode = newMode;
+        App.setPreferredViewMode('disbursement', newMode);
+        saveCurrentFilters();
+        refresh();
+      },
+      groupByOptions: groupOptions,
+      currentGroupBy: groupBy,
+      onGroupByChange: (newGroupBy) => {
+        groupBy = newGroupBy;
+        App.saveGroupBy('disbursement', groupBy);
+        refresh();
+      }
+    });
+
+    stickyContainer.appendChild(toolbarContainer);
+    wrapper.appendChild(stickyContainer);
+
+    const listContainer = el('div');
+    wrapper.appendChild(listContainer);
+
+    const refresh = () => this.refreshList(listContainer, activeFilters, viewMode, groupBy, groupOptions, stickyContainer);
+    refresh();
+
+    return wrapper;
+  },
+
+  refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    const entity = Auth.activeEntity;
+    let items = DB.getWhere('disbursements', d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
+
+    items = items.filter(d => Auth.canViewDisbursement(d));
+    items = items.filter(d => d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived));
+    const hasItems = items.length > 0;
+
+    if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {
+      items = items.filter(d => activeFilters.workRequest.has(d.linkedWorkRequestId));
+    }
+    if (activeFilters.client && activeFilters.client.size > 0) {
+      items = items.filter(d => {
+        if (!d.linkedWorkRequestId) return false;
+        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        return wr && activeFilters.client.has(wr.clientId);
+      });
+    }
+    if (activeFilters.employee && activeFilters.employee.size > 0) {
+      items = items.filter(d => {
+        const empId = d.employeeId || d.requestedBy;
+        const u = empId ? DB.getById('users', empId) : null;
+        return u && activeFilters.employee.has(u.name);
+      });
+    }
+    if (activeFilters.fund && activeFilters.fund.size > 0) {
+      items = items.filter(d => activeFilters.fund.has(this.getFundSource(d)));
+    }
+    if (activeFilters.status && activeFilters.status.size > 0) {
+      items = items.filter(d => {
+        if (activeFilters.status.has(d.status)) return true;
+        if (activeFilters.status.has('Pending') && this.PENDING_APPROVAL_STATUSES.includes(d.status)) return true;
+        return false;
+      });
+    }
+    if (activeFilters.date && activeFilters.date.size > 0) {
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const endOfWeek = new Date(now);
+      endOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? 0 : 7 - now.getDay()));
+      const endOfWeekStr = endOfWeek.toISOString().slice(0, 10);
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      const endOfMonthStr = endOfMonth.toISOString().slice(0, 10);
+
+      items = items.filter(d => {
+        const dStr = (d.date || d.requestedDate || '').slice(0, 10);
+        if (!dStr) return false;
+        if (activeFilters.date.has(`DATE:${dStr}`)) return true;
+        let bucket = 'Due Later';
+        if (dStr < todayStr) bucket = 'Overdue';
+        else if (dStr === todayStr) bucket = 'Due Today';
+        else if (dStr <= endOfWeekStr) bucket = 'Due This Week';
+        else if (dStr <= endOfMonthStr) bucket = 'Due This Month';
+        return activeFilters.date.has(bucket);
+      });
+    }
+    // Text search filter
+    if (this.searchQuery) {
+      items = items.filter(d => {
+        const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
+        const client = wr ? DB.getById('clients', wr.clientId) : null;
+        const emp = d.employeeId ? DB.getById('users', d.employeeId) : null;
+        const hay = [
+          d.voucherNumber || '',
+          d.description || d.purpose || '',
+          client?.name || '',
+          wr?.title || '',
+          emp?.name || '',
+          d.status || '',
+          String(d.amount || ''),
+        ].join(' ').toLowerCase();
+        return hay.includes(this.searchQuery);
+      });
+    }
+    items.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
+
+    const hasActiveFilters = Object.values(activeFilters).some(s => s && s.size > 0) || !!this.searchQuery;
+
+    if (items.length === 0) {
+      if (hasActiveFilters && hasItems) {
+        container.appendChild(renderFilterEmptyState(
+          'No expenses match your filters',
+          null,
+          [{ text: 'Clear filters', className: 'btn btn-primary btn-sm', onClick: () => { App.clearSavedFilters('disbursement'); App.handleRoute(); } }]
+        ));
+      } else {
+        container.appendChild(renderEmptyState('No expenses found', null, { variant: 'zero-state' }));
+      }
+      return;
+    }
+
+    if (viewMode === 'table') {
+      this.renderTableView(container, items);
+    } else if (viewMode === 'board') {
+      this.renderBoardView(container, items, groupBy, groupOptions, toolbarContainer);
+    } else {
+      this.renderCompactListView(container, items);
+    }
+  },
+
+  renderTableView(container, items) {
+    const buildActions = (d) => {
+      const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center;' });
+
+      if (this.canEditDisbursement(d)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(d.id); });
+        wrapper.appendChild(editBtn);
+      }
+
+      if (d.status === 'Funded' && !d.archived) {
+        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
+        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveDisbursement(d.id); });
+        wrapper.appendChild(archiveBtn);
+      }
+
+      return wrapper;
+    };
+
+    const columns = [
+      { key: 'employee', label: 'Employee', render: (d) => DB.getById('users', this.getEmployeeId(d))?.name || '—' },
+      {
+        key: 'category',
+        label: 'Category',
+        width: '30%',
+        render: (d) => {
+          const cell = el('div', { class: 'dt-title-cell' });
+          const line = el('div', { style: 'display: flex; align-items: center; gap: 6px; flex-wrap: wrap;' });
+          line.appendChild(el('span', { class: 'dt-title-link', text: d.category }));
+          if (d.fromTemplate) line.appendChild(this.recurringBadge(d));
+          cell.appendChild(line);
+          if (d.linkedWorkRequestId) {
+            const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+            if (wr) {
+              const sub = el('div', { style: 'font-size: 0.725rem; color: var(--color-text-muted);' });
+              let suffix = ' (Entire WR)';
+              if (d.linkedTaskId) {
+                const task = DB.getById('tasks', d.linkedTaskId);
+                if (task) suffix = ` (Task: ${task.title})`;
+              }
+              sub.appendChild(el('span', { text: '🔗 ' + wr.title + suffix, style: 'font-weight: 500;' }));
+              cell.appendChild(sub);
+            }
+          }
+          return cell;
+        }
+      },
+      { key: 'amount', label: 'Amount', render: (d) => formatPHP(d.amount || 0), align: 'right', width: '100px' },
+      {
+        key: 'fund',
+        label: 'Fund',
+        width: '110px',
+        render: (d) => {
+          const source = this.getFundSource(d);
+          return el('span', { class: 'badge ' + (source === 'Firm Fund' ? 'badge-info' : 'badge-warning'), text: source });
+        }
+      },
+      { key: 'status', label: 'Status', render: (d) => this.statusBadge(d.status), width: '120px' },
+      { key: 'paymentMethod', label: 'Payment Method', render: (d) => (d.status === 'Released' && d.paymentDetails?.method) ? d.paymentDetails.method : '—', width: '130px' },
+      { key: 'submittedAt', label: 'Date', render: (d) => formatDate(d.submittedAt), width: '110px' },
+      { key: 'actions', label: 'Actions', render: (d) => buildActions(d), class: 'dt-actions-col', width: '180px' }
+    ];
+
+    const tableView = DataTable.render({
+      items,
+      columns,
+      selectable: true,
+      bulkActions: (ids) => {
+        const rows = ids.map(id => DB.getById('disbursements', id)).filter(Boolean);
+        const canArchive = rows.filter(d => d.status === 'Funded' && !d.archived).length;
+        if (canArchive === 0) return [];
+        return [{
+          text: `Archive (${canArchive})`,
+          className: 'btn btn-primary btn-sm',
+          onClick: (sel) => this.bulkArchiveDisbursements(sel)
+        }];
+      },
+      rowId: (d) => d.id,
+      onRowClick: (d) => { location.hash = '#disbursement/detail/' + d.id; }
+    });
+
+    container.appendChild(tableView);
+  },
+
+  /**
+   * Role-aware board columns for Disbursement.
+   *
+   * - Admin: Draft | Released | Funded | Rejected
+   *   Pending/Approved/Release Pending Approval are funnelled to the Admin Console.
+   * - Accounting: Draft | Pending | Released | Funded | Rejected
+   *   Approved/Release Pending Approval are funnelled to the Admin Console / handler list.
+   * - Operations: Requested | Released | Funded | Rejected
+   *   Draft is hidden; Pending maps the pre-approval statuses.
+   * - Others: Released | Funded | Rejected
+   */
+  getBoardColumns() {
+    const departments = Auth.user?.departments || [];
+    const role = Auth.user?.role;
+    const isAdmin = role === 'Admin';
+    const isAccounting = departments.includes('Accounting');
+    const isOperations = departments.includes('Operations');
+
+    if (isAdmin) {
+      return [
+        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
+        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
+        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
+        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
+      ];
+    }
+
+    if (isAccounting) {
+      return [
+        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
+        { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
+        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
+        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
+        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
+      ];
+    }
+
+    if (isOperations) {
+      return [
+        { key: 'Requested', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#94a3b8' },
+        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
+        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
+        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
+      ];
+    }
+
+    return [
+      { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
+      { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
+      { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
+    ];
+  },
+
+  getDisbursementDisplayStatus(status) {
+    if (status === 'Released') return 'Released';
+    if (status === 'Funded') return 'Funded';
+    return status;
+  },
+
+  renderBoardView(container, items, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
+    toolbarContainer?.classList.remove('grouped-board-active');
+    if (items.length === 0) {
+      container.appendChild(renderEmptyStateV2({
+        variant: 'zero-state',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        title: 'No expenses found',
+        body: 'Create an expense to start tracking disbursements.'
+      }));
+      return;
+    }
+
+    const canEdit = Auth.can('disbursement:edit');
+    const canCreate = Auth.can('disbursement:create');
+    const canDelete = Auth.can('disbursement:delete');
+    const self = this;
+
+    const boardPhases = this.getBoardColumns();
+    const statusColors = {
+      'Draft': '#94a3b8',
+      'Submitted': '#f59e0b',
+      'Under Review': '#f59e0b',
+      'Pending': '#f59e0b',
+      'Approved': '#3b82f6',
+      'Released': '#10b981',
+      'Funded': '#059669',
+      'Rejected': '#ef4444'
+    };
+
+    // Normalize boardOrder within each visible column (skip pending-change proxies).
+    const sortedItems = [];
+    boardPhases.forEach(phase => {
+      const colItems = items.filter(d => phase.statuses.includes(d.status) && !d.pendingChangeId);
+      colItems.sort((a, b) => {
+        const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
+        const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
+        if (oa !== null && ob !== null) return oa - ob;
+        if (oa !== null) return -1;
+        if (ob !== null) return 1;
+        return new Date(a.createdAt || a.submittedAt || 0) - new Date(b.createdAt || b.submittedAt || 0);
+      });
+      colItems.forEach((d, idx) => {
+        const newOrder = (idx + 1) * 1000;
+        if (d.boardOrder !== newOrder) {
+          d.boardOrder = newOrder;
+          DB.update('disbursements', d.id, { boardOrder: newOrder });
+        }
+      });
+      const colPendingItems = items.filter(d => phase.statuses.includes(d.status) && d.pendingChangeId);
+      sortedItems.push(...colItems, ...colPendingItems);
+    });
+
+    const makeColumns = () => boardPhases.map(phase => {
+      const col = {
+        ...phase,
+        icon: 'phase',
+        emptyState: { variant: 'compact', title: 'No expenses', body: '' }
+      };
+      if (phase.key === 'Draft' && canCreate) {
+        col.addButton = { label: 'Add Expense', onClick: () => self.showForm() };
+      }
+      return col;
+    });
+
+    const seqMap = getChronologicalSequenceMap('disbursements');
+
+    const renderCard = (d) => {
+      const emp = DB.getById('users', self.getEmployeeId(d));
+      const source = self.getFundSource(d);
+
+      const statusPriorityClass = {
+        'Draft': 'card-v2-priority-normal',
+        'Submitted': 'card-v2-priority-medium',
+        'Under Review': 'card-v2-priority-medium',
+        'Pending': 'card-v2-priority-medium',
+        'Approved': 'card-v2-priority-medium',
+        'Released': 'card-v2-priority-low',
+        'Funded': 'card-v2-priority-low',
+        'Rejected': 'card-v2-priority-urgent'
+      }[d.status] || 'card-v2-priority-normal';
+
+      const progressMap = {
+        'Draft': 0,
+        'Submitted': 15,
+        'Under Review': 25,
+        'Pending': 35,
+        'Approved': 50,
+        'Released': 100,
+        'Funded': 100,
+        'Rejected': 0
+      };
+      const progress = progressMap[d.status] || 0;
+
+      const descParts = [];
+      if (d.linkedWorkRequestId) {
+        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        if (wr) {
+          let linked = wr.title;
+          if (d.linkedTaskId) {
+            const task = DB.getById('tasks', d.linkedTaskId);
+            if (task) linked += ` (Task: ${task.title})`;
+          }
+          descParts.push(linked);
+        }
+      }
+      if (d.fromTemplate) descParts.push('Recurring');
+
+      const card = buildCompactBoardCard({
+        key: 'DIS-' + (seqMap.get(d.id) || 1),
+        progress,
+        statusColor: statusColors[d.status] || '#cbd5e1',
+        title: d.category,
+        description: `${emp?.name || '—'} • ${source}`,
+        detail: descParts.join(' • '),
+        date: d.submittedAt ? formatDate(d.submittedAt) : '',
+        priority: self.getDisbursementDisplayStatus(d.status),
+        priorityClass: statusPriorityClass,
+        onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+      });
+
+      const footerRight = card.querySelector('.card-v2-footer-right');
+      footerRight.appendChild(el('div', { class: 'card-v2-footer-item', text: formatPHP(d.amount), style: 'font-weight:700;color:var(--color-text);' }));
+      return card;
+    };
+
+    const cardMenuItems = (d) => {
+      const menu = [{
+        label: 'View Details',
+        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+        onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+      }];
+      if (canEdit && d.status === 'Draft' && !d.pendingChangeId) {
+        menu.push({
+          label: 'Edit',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+          onClick: () => self.showForm(d.id)
+        });
+      }
+      if (canDelete && !d.pendingChangeId) {
+        menu.push({
+          label: 'Delete',
+          className: 'danger',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+          onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
+            if (d.linkedWorkRequestId) {
+              const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+              if (wr) {
+                const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
+                DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
+              }
+            }
+            DB.delete('disbursements', d.id);
+            App.handleRoute();
+            Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+          }, 'danger')
+        });
+      }
+      if (canCreate && d.status === 'Draft' && !d.pendingChangeId) {
+        menu.push({
+          label: 'Submit Expense',
+          className: 'primary',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
+          onClick: () => Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
+            DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
+            App.handleRoute();
+          }, 'success')
+        });
+      }
+      if (d.status === 'Funded' && !d.archived) {
+        menu.push({
+          label: 'Archive',
+          className: 'primary',
+          icon: ArchivePage.icons.archive,
+          onClick: () => self.archiveDisbursement(d.id)
+        });
+      }
+      return menu;
+    };
+
+    const boardDrag = {
+      enabled: true,
+      canDrag: d => {
+        const canManage = canEdit || Auth.can('disbursement:approve') || Auth.can('disbursement:mark_released') || Auth.isManagerial();
+        return canManage && !d.pendingChangeId;
+      },
+      canDrop: ({ item, targetStatus }) => {
+        if (item.status === targetStatus) return true;
+        // Map pre-approval statuses to the canonical Pending step.
+        const preApproval = ['Submitted', 'Under Review', 'Pending'];
+        const effectiveStatus = preApproval.includes(item.status) ? 'Pending' : item.status;
+        const flow = ['Draft', 'Pending', 'Approved', 'Released', 'Funded'];
+        const currentIdx = flow.indexOf(effectiveStatus);
+        const targetIdx = flow.indexOf(targetStatus);
+        if (currentIdx === -1 || targetIdx === -1) return false;
+        return targetIdx > currentIdx;
+      },
+      orderField: 'boardOrder',
+      onDrop({ item, targetStatus, newOrder, fromStatus }) {
+        if (fromStatus === targetStatus) {
+          DB.update('disbursements', item.id, { boardOrder: newOrder });
+          App.handleRoute();
+          return;
+        }
+
+        // Permission gate: Approved requires disbursement:approve
+        if (targetStatus === 'Approved' && !Auth.can('disbursement:approve')) {
+          Workflow.showMessage('Permission Denied', 'Only users with approval rights can approve disbursements.', 'danger');
+          return;
+        }
+
+        // Permission gate: Released requires mark_released or approve
+        if (targetStatus === 'Released' && !Auth.can('disbursement:mark_released') && !Auth.can('disbursement:approve')) {
+          Workflow.showMessage('Permission Denied', 'You do not have permission to release disbursements.', 'danger');
+          return;
+        }
+
+        // Block if pending admin approval
+        if (item.pendingChangeId) {
+          Workflow.showMessage('Pending Approval', 'This disbursement is pending administrative approval and cannot be moved.', 'warning');
+          return;
+        }
+
+        // Block Draft → beyond Pending if no amount
+        if (fromStatus === 'Draft' && targetStatus !== 'Pending' && (!item.amount || item.amount <= 0)) {
+          Workflow.showMessage('Incomplete Disbursement', 'Cannot advance — disbursement has no amount specified.', 'warning');
+          return;
+        }
+
+        const label = item.category + ' — ' + formatPHP(item.amount);
+        const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('disbursement:release');
+        const applyMove = () => {
+          // Non-managerial marking as Released must submit for admin approval.
+          const nextStatus = (targetStatus === 'Released' && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
+          const changes = { boardOrder: newOrder, status: nextStatus, updatedAt: new Date().toISOString() };
+          if (nextStatus === 'Release Pending Approval') {
+            changes.releaseRequestedBy = Auth.user.id;
+            changes.releaseRequestedAt = new Date().toISOString();
+          }
+          DB.update('disbursements', item.id, changes);
+          App.handleRoute();
+        };
+
+        // Confirm critical transitions
+        if (['Approved', 'Released', 'Funded'].includes(targetStatus)) {
+          const msgs = {
+            'Approved': `Approve disbursement "${label}"?`,
+            'Released': canReleaseDirectly ? `Mark disbursement "${label}" as Released?` : `Submit disbursement "${label}" for release approval?`,
+            'Funded': `Mark disbursement "${label}" as Funded? This confirms funds have been credited.`
+          };
+          Workflow.showConfirm('Confirm Status Change', msgs[targetStatus], applyMove, 'success');
+          return;
+        }
+
+        applyMove();
+      }
+    };
+
+    if (groupBy !== 'none') {
+      toolbarContainer?.classList.add('grouped-board-active');
+      renderGroupedKanbanBoard({
+        container,
+        items: sortedItems,
+        columns: makeColumns(),
+        toolbarContainer,
+        groupBy,
+        groupOptions,
+        renderCard,
+        cardMenuItems,
+        storageKey: 'erp_disbursement_grouped_collapsed',
+        drag: boardDrag
+      });
+      return;
+    }
+
+    KanbanBoard.render({
+      container,
+      items: sortedItems,
+      columns: makeColumns(),
+      renderCard,
+      cardMenuItems,
+      drag: boardDrag
+    });
+  },
+
+  renderCompactListView(container, items) {
+    const list = el('div', { class: 'list-view' });
+    items.forEach(d => {
+      const emp = DB.getById('users', this.getEmployeeId(d));
+      const item = el('div', { class: 'list-item', style: 'cursor: pointer;' });
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('button, a, input, select')) return;
+        location.hash = '#disbursement/detail/' + d.id;
+      });
+      const left = el('div');
+      const titleRow = el('div', { class: 'list-item-title' });
+      titleRow.appendChild(document.createTextNode(d.category + ' — ' + formatPHP(d.amount)));
+      if (d.fromTemplate) {
+        titleRow.appendChild(document.createTextNode(' '));
+        titleRow.appendChild(this.recurringBadge(d));
+      }
+      left.appendChild(titleRow);
+      let wrMeta = '';
+      if (d.linkedWorkRequestId) {
+        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        if (wr) {
+          wrMeta = ' • WR: ' + wr.title;
+          if (d.linkedTaskId) {
+            const task = DB.getById('tasks', d.linkedTaskId);
+            if (task) wrMeta += ` (Task: ${task.title})`;
+          } else {
+            wrMeta += ' (Entire WR)';
+          }
+        }
+      }
+      left.appendChild(el('div', { class: 'list-item-meta', text: (emp?.name || '—') + ' • ' + this.getFundSource(d) + ' • ' + formatDate(d.submittedAt) + wrMeta }));
+      item.appendChild(left);
+      const actionWrap = el('div', { style: 'display:flex;gap:4px;align-items:center;flex-shrink:0;' });
+      if (this.canEditDisbursement(d)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(d.id); });
+        actionWrap.appendChild(editBtn);
+      }
+      item.appendChild(actionWrap);
+      list.appendChild(item);
+    });
+    container.appendChild(list);
+  },
+
+  // ============================================================
+  // Expense Filing Form
+  // ============================================================
+  renderForm(opts = {}) {
+    const { hideHeader = false } = opts;
+    // Allow access if user can create new disbursements OR can edit existing ones
+    const isNew = !this.detailId;
+    if (isNew && !Auth.can('disbursement:create')) {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+    if (!isNew && !Auth.can('disbursement:create') && !Auth.can('disbursement:edit')) {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    const entity = Auth.activeEntity;
+    const existing = this.detailId ? DB.getById('disbursements', this.detailId) : null;
+    const opReq = this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId) : null;
+    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : null;
+
+    const container = el('div');
+
+    if (!hideHeader) {
+      const headerBar = el('div', { class: 'form-header-bar' });
+      const headerActions = el('div', { class: 'form-actions-top' });
+      const saveBtnTop = el('button', { type: 'submit', form: 'disbursement-form', class: 'btn btn-primary', text: isNew ? 'Submit Expense' : 'Save Changes' });
+      headerActions.appendChild(saveBtnTop);
+      const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+      cancelBtn.addEventListener('click', () => closeFormPanelAndRoute('#disbursement'));
+      headerActions.appendChild(cancelBtn);
+      headerBar.appendChild(headerActions);
+      container.appendChild(headerBar);
+    }
+
+    const form = el('form', { class: 'form-stacked notion-form', id: 'disbursement-form' });
+
+    // ── Top property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
+
+    // Category
+    const catGroup = el('div', { class: 'notion-prop' });
+    catGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg> Category' }));
+    
+    const OTHER_CATEGORY = 'Other';
+    const standardCategories = this.STANDARD_CATEGORIES;
+    let initialCategory = '';
+    if (existing) {
+      initialCategory = existing.category;
+    } else if (opReq) {
+      initialCategory = opReq.category;
+    }
+    const isCustom = initialCategory && !standardCategories.includes(initialCategory);
+
+    const catSel = el('select', { required: true, class: 'notion-prop-select' });
+    standardCategories.forEach(c => {
+      const opt = el('option', { value: c, text: c });
+      if (isCustom) {
+        if (c === OTHER_CATEGORY) opt.selected = true;
+      } else {
+        if (initialCategory === c) opt.selected = true;
+      }
+      catSel.appendChild(opt);
+    });
+
+    let previousSelection;
+    if (isCustom) {
+      previousSelection = OTHER_CATEGORY;
+    } else if (initialCategory && initialCategory !== OTHER_CATEGORY) {
+      previousSelection = initialCategory;
+    } else {
+      previousSelection = catSel.value;
+    }
+
+    const catInput = el('input', {
+      type: 'text',
+      placeholder: 'Enter custom category...',
+      class: 'notion-prop-input',
+      value: isCustom ? initialCategory : ''
+    });
+
+    const backBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-secondary btn-sm',
+      text: 'Back'
+    });
+
+    const inputWrapper = el('div', {
+      class: 'notion-input-with-btn'
+    });
+    inputWrapper.appendChild(catInput);
+    inputWrapper.appendChild(backBtn);
+
+    const switchToCustomInput = () => {
+      catSel.style.display = 'none';
+      catSel.removeAttribute('name');
+      catSel.required = false;
+
+      inputWrapper.style.display = 'flex';
+      catInput.setAttribute('name', 'category');
+      catInput.required = true;
+    };
+
+    const switchToDropdown = () => {
+      inputWrapper.style.display = 'none';
+      catInput.removeAttribute('name');
+      catInput.required = false;
+
+      catSel.style.display = '';
+      catSel.setAttribute('name', 'category');
+      catSel.required = true;
+    };
+
+    if (isCustom) {
+      switchToCustomInput();
+    } else {
+      switchToDropdown();
+    }
+
+    catSel.addEventListener('change', () => {
+      if (catSel.value === OTHER_CATEGORY) {
+        switchToCustomInput();
+        catInput.focus();
+      } else {
+        previousSelection = catSel.value;
+      }
+    });
+
+    backBtn.addEventListener('click', () => {
+      switchToDropdown();
+      catSel.value = previousSelection;
+    });
+
+    catGroup.appendChild(catSel);
+    catGroup.appendChild(inputWrapper);
+    propsGrid.appendChild(catGroup);
+
+    // Linked Work Request
+    const wrGroup = el('div', { class: 'notion-prop' });
+    wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request' }));
+    const wrSelAttrs = { name: 'linkedWorkRequestId', class: 'notion-prop-select' };
+    if (prefill) wrSelAttrs.disabled = true;
+    const wrSel = el('select', wrSelAttrs);
+    wrSel.appendChild(el('option', { value: '', text: '— None —' }));
+    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      const opt = el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') });
+      if (existing && existing.linkedWorkRequestId === wr.id) opt.selected = true;
+      else if (!existing && prefill && prefill.workRequestId === wr.id) opt.selected = true;
+      wrSel.appendChild(opt);
+    });
+    wrGroup.appendChild(wrSel);
+    if (prefill && prefill.workRequestId) wrGroup.appendChild(el('input', { type: 'hidden', name: 'linkedWorkRequestId', value: prefill.workRequestId }));
+    propsGrid.appendChild(wrGroup);
+
+    // Task link (Dynamic based on WR)
+    const taskGroup = el('div', { class: 'notion-prop' });
+    taskGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> Task' }));
+    const taskSel = el('select', { name: 'linkedTaskId', class: 'notion-prop-select' });
+    taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+    taskGroup.appendChild(taskSel);
+    propsGrid.appendChild(taskGroup);
+
+    // Amount
+    const amtGroup = el('div', { class: 'notion-prop' });
+    amtGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Amount (₱)' }));
+    amtGroup.appendChild(el('input', { type: 'number', name: 'amount', class: 'notion-prop-input', min: 0, step: 0.01, required: true, value: existing ? String(existing.amount) : (opReq ? String(opReq.amount) : '') }));
+    propsGrid.appendChild(amtGroup);
+
+    // Fund Source
+    const fundGroup = el('div', { class: 'notion-prop' });
+    fundGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Fund Source' }));
+    const fundWrap = el('div', { class: 'radio-group notion-radio-group' });
+    ['Firm Fund', 'Client Fund'].forEach(f => {
+      const label = el('label', { class: 'radio-label' });
+      const radio = el('input', { type: 'radio', name: 'fundSource', value: f, required: true });
+      if (existing ? existing.fundSource === f : f === 'Firm Fund') radio.checked = true;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(' ' + f));
+      fundWrap.appendChild(label);
+    });
+    fundGroup.appendChild(fundWrap);
+    propsGrid.appendChild(fundGroup);
+
+    form.appendChild(propsGrid);
+
+    // Description free-form
+    const descSection = el('div', { class: 'notion-freeform' });
+    descSection.appendChild(el('label', { class: 'notion-section-label', text: 'Description' }));
+    const descInput = el('input', { type: 'text', name: 'description', class: 'notion-freeform-input', placeholder: 'What is this expense for?', required: true, value: existing ? (existing.description || '') : (opReq ? (opReq.notes || 'Operations Disbursement Request') : '') });
+    descSection.appendChild(descInput);
+    form.appendChild(descSection);
+
+    // Receipt upload
+    const receiptGroup = el('div', { class: 'notion-freeform' });
+    receiptGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Receipt' }));
+    receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt', class: 'notion-file-input' }));
+    if (existing && existing.receiptFilename) {
+      receiptGroup.appendChild(el('p', { text: 'Current: ' + existing.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    } else if (!existing && opReq && opReq.receiptFilename) {
+      receiptGroup.appendChild(el('p', { text: 'Requested receipt: ' + opReq.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    }
+    form.appendChild(receiptGroup);
+
+    const updateTasks = () => {
+      while (taskSel.firstChild) taskSel.removeChild(taskSel.firstChild);
+      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      const wrId = wrSel.value;
+      if (wrId) {
+        DB.getWhere('tasks', t => t.workRequestId === wrId).forEach(t => {
+          const opt = el('option', { value: t.id, text: t.title });
+          if (existing && existing.linkedTaskId === t.id) opt.selected = true;
+          else if (!existing && opReq && opReq.linkedTaskId === t.id) opt.selected = true;
+          taskSel.appendChild(opt);
+        });
+      }
+    };
+    wrSel.addEventListener('change', updateTasks);
+    updateTasks(); // Initial load
+
+    // Linked invoice (only for Client Fund) — collapsible notion section
+    const invGroup = el('div', { class: 'notion-collapsible hidden', id: 'linked-invoice-group' });
+    const invToggle = el('div', { class: 'notion-toggle-header', text: 'Linked Billing Invoice' });
+    const invBody = el('div', { class: 'notion-toggle-body' });
+    const invSel = el('select', { name: 'linkedInvoiceId', class: 'notion-prop-select' });
+    invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
+    DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
+      const client = DB.getById('clients', inv.clientId);
+      const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
+      if (existing && existing.linkedInvoiceId === inv.id) opt.selected = true;
+      invSel.appendChild(opt);
+    });
+    invBody.appendChild(invSel);
+    invGroup.appendChild(invToggle);
+    invGroup.appendChild(invBody);
+    form.appendChild(invGroup);
+
+    invToggle.addEventListener('click', () => {
+      invGroup.classList.toggle('open');
+      invToggle.classList.toggle('collapsed');
+    });
+
+    form.querySelectorAll('input[name="fundSource"]').forEach(r => {
+      r.addEventListener('change', () => {
+        const isClient = form.querySelector('input[name="fundSource"]:checked')?.value === 'Client Fund';
+        invGroup.classList.toggle('hidden', !isClient);
+      });
+    });
+    const initialClientFund = existing && existing.fundSource === 'Client Fund';
+    if (initialClientFund) invGroup.classList.remove('hidden');
+
+    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form); });
+
+    container.appendChild(form);
+    return container;
+  },
+
+  submitForm(form) {
+    if (!validateRequiredFields(form)) return;
+    const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
+
+    const data = Object.fromEntries(new FormData(form).entries());
+    const entity = Auth.activeEntity;
+    const receiptInput = form.querySelector('input[name="receipt"]');
+    const receiptFile = receiptInput?.files?.[0];
+    const isNew = !this.detailId;
+
+    const amount = parseFloat(data.amount) || 0;
+    if (amount <= 0) {
+      Workflow.showMessage('Validation Error', 'Please enter a disbursement amount greater than zero.', 'warning');
+      return;
+    }
+
+    // On create, a receipt must be attached (or already provided via a fulfilled operations request).
+    const hasExistingReceipt = !isNew && (DB.getById('disbursements', this.detailId)?.receiptFilename || null);
+    const hasPrefilledReceipt = isNew && (this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId)?.receiptFilename : null);
+    if (isNew && !receiptFile && !hasPrefilledReceipt) {
+      Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+      return;
+    }
+
+    const record = {
+      category: data.category,
+      description: data.description.trim(),
+      amount: parseFloat(data.amount) || 0,
+      fundSource: data.fundSource,
+      linkedInvoiceId: data.linkedInvoiceId || null,
+      linkedWorkRequestId: data.linkedWorkRequestId || null,
+      linkedTaskId: data.linkedTaskId || null,
+      entity: entity,
+      employeeId: Auth.user.id,
+      requestedBy: Auth.user.id,
+      status: isNew ? 'Draft' : (DB.getById('disbursements', this.detailId)?.status || 'Draft'),
+      submittedAt: new Date().toISOString(),
+      receiptFilename: receiptFile ? receiptFile.name : (isNew ? null : (DB.getById('disbursements', this.detailId)?.receiptFilename || null))
+    };
+
+    if (!isNew) {
+      record.id = this.detailId;
+      const old = DB.getById('disbursements', this.detailId);
+      if (old) {
+        record.createdAt = old.createdAt;
+        record.submittedAt = old.submittedAt;
+        record.requestedBy = old.requestedBy || Auth.user.id;
+        record.paymentHandledBy = old.paymentHandledBy || '';
+        record.paymentDetails = old.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
+      }
+    } else {
+      record.id = generateSequentialId('dis', 'disbursements');
+      record.createdAt = new Date().toISOString();
+    }
+
+    // Clean up old WR link if WR changed or was removed
+    const old = isNew ? null : DB.getById('disbursements', this.detailId);
+    if (old && old.linkedWorkRequestId && old.linkedWorkRequestId !== (record.linkedWorkRequestId || null)) {
+      const oldWr = DB.getById('workRequests', old.linkedWorkRequestId);
+      if (oldWr) {
+        const linkedIds = (oldWr.linkedDisbursementIds || []).filter(id => id !== record.id);
+        DB.update('workRequests', oldWr.id, { linkedDisbursementIds: linkedIds });
+      }
+    }
+
+    // If linked to a WR, update WR's linkedDisbursementIds
+    if (record.linkedWorkRequestId) {
+      const wr = DB.getById('workRequests', record.linkedWorkRequestId);
+      if (wr) {
+        const linkedIds = new Set(wr.linkedDisbursementIds || []);
+        linkedIds.add(record.id);
+        DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
+      }
+    }
+
+    if (isNew) {
+      DB.insert('disbursements', record);
+    } else {
+      DB.update('disbursements', record.id, record);
+    }
+
+    // Fulfill pending operations request if any
+    const reqId = this.prefilledRequestId || (record.linkedWorkRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.linkedWorkRequestId && r.type === 'disbursement' && r.status === 'pending')[0]?.id : null);
+    if (reqId) {
+      DB.update('operationsRequests', reqId, {
+        status: 'fulfilled',
+        fulfilledBy: Auth.user.id,
+        fulfilledAt: new Date().toISOString(),
+        linkedRecordId: record.id
+      });
+    }
+    this.prefilledRequestId = null;
+    this.prefilledWrId = null;
+    this.prefilledClientId = null;
+
+    const msgConfig = {
+      title: isNew ? 'Expense Submitted' : 'Expense Updated',
+      message: 'Disbursement expense has been ' + (isNew ? 'submitted' : 'updated') + ' successfully.',
+      type: 'success'
+    };
+    const targetRoute = isResubmitting ? '#admin' : '#disbursement';
+    closeFormPanelAndRoute(targetRoute, msgConfig);
+  },
+
+  showRequestDisbursementModal() {
+    const entity = Auth.activeEntity;
+    let wrs = DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      return wrEnt === entity.toUpperCase();
+    });
+
+    wrs = wrs.filter(wr => Auth.canViewWr(wr));
+
+    const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
+    const selectGroup = el('div', { class: 'form-group' });
+    selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
+    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
+    wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
+    wrs.forEach(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'disbursement' && r.status === 'pending');
+      if (pending.length === 0) {
+        wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
+      }
+    });
+    selectGroup.appendChild(wrSelect);
+    wrapper.appendChild(selectGroup);
+
+    const notesGroup = el('div', { class: 'form-group' });
+    notesGroup.appendChild(el('label', { text: 'Additional Notes (Optional)' }));
+    notesGroup.appendChild(el('textarea', { id: 'disb-opreq-notes', class: 'form-control', style: 'width: 100%; min-height: 80px;', placeholder: 'Provide any details for Accounting staff...' }));
+    wrapper.appendChild(notesGroup);
+
+    wrapper.appendChild(el('div', { style: 'display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;' }, [
+      el('button', { id: 'btn-cancel-disb-opreq', class: 'btn btn-ghost', text: 'Cancel' }),
+      el('button', { id: 'btn-save-disb-opreq', class: 'btn btn-primary', text: 'Submit Request' })
+    ]));
+
+    const overlay = Workflow.showModal('Request Disbursement', wrapper);
+
+    overlay.querySelector('#btn-cancel-disb-opreq').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', () => {
+      const wrId = wrSelect.value;
+      if (!wrId) { alert('Please select a work request.'); return; }
+      const wr = DB.getById('workRequests', wrId);
+      const notes = overlay.querySelector('#disb-opreq-notes').value.trim();
+      const record = {
+        id: generateId('opreq'),
+        type: 'disbursement',
+        workRequestId: wrId,
+        clientId: wr.clientId,
+        requestedBy: Auth.user.id,
+        requestedAt: new Date().toISOString(),
+        status: 'pending',
+        rejectionReason: '',
+        notes
+      };
+      DB.insert('operationsRequests', record);
+      overlay.remove();
+      Workflow.showMessage('Request Submitted', 'Your disbursement request has been submitted to Accounting for review.', 'success');
+      App.handleRoute();
+    });
+  },
+
+  // ============================================================
+  // Detail View (with approval actions)
+  // ============================================================
+  renderDetail() {
+    const d = DB.getById('disbursements', this.detailId);
+    if (!d) { location.hash = '#disbursement'; return el('div'); }
+
+    if (!Auth.canViewDisbursement(d)) {
+      location.hash = '#disbursement';
+      return el('div');
+    }
+    const emp = DB.getById('users', this.getEmployeeId(d));
+    const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
+    const client = wr ? DB.getById('clients', wr.clientId) : null;
+
+    const container = el('div', { class: 'invoice-detail' });
+
+    // Breadcrumb handled by render()
+    
+    // Status and badges
+    const statusWrap = el('div', { style: 'display:flex; gap:8px; align-items:center; margin-bottom: var(--spacing-lg);' });
+    statusWrap.appendChild(this.statusBadge(d.status));
+    if (d.fromTemplate) statusWrap.appendChild(this.recurringBadge(d));
+    container.appendChild(statusWrap);
+
+    // Meta Info
+    const meta = el('div', { class: 'invoice-meta' });
+    meta.appendChild(el('p', { text: 'Client: ' + (client?.name || '—') }));
+    meta.appendChild(el('p', { text: 'Date Submitted: ' + formatDate(d.submittedAt) }));
+    meta.appendChild(el('p', { text: 'Fund Source: ' + this.getFundSource(d) }));
+    container.appendChild(meta);
+
+    // Linked Work Request / Task info card
+    if (d.linkedWorkRequestId) {
+      const linkedWr = DB.getById('workRequests', d.linkedWorkRequestId);
+      if (linkedWr) {
+        const linkCard = el('div', {
+          style: 'background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
+        });
+        const linkHeader = el('div', {
+          style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px;color:#1e40af;font-weight:600;'
+        });
+        linkHeader.appendChild(el('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' }));
+        linkHeader.appendChild(el('span', { text: 'Linked Work Request' }));
+        linkCard.appendChild(linkHeader);
+
+        const wrLink = el('a', {
+          href: 'javascript:void(0)',
+          text: linkedWr.title,
+          style: 'color:#2563eb;font-weight:500;text-decoration:none;'
+        });
+        wrLink.addEventListener('click', () => {
+          location.hash = '#operations/detail/' + linkedWr.id;
+        });
+        wrLink.addEventListener('mouseenter', () => { wrLink.style.textDecoration = 'underline'; });
+        wrLink.addEventListener('mouseleave', () => { wrLink.style.textDecoration = 'none'; });
+        linkCard.appendChild(wrLink);
+
+        if (d.linkedTaskId) {
+          const linkedTask = DB.getById('tasks', d.linkedTaskId);
+          if (linkedTask) {
+            linkCard.appendChild(el('div', {
+              text: '↳ Scope: Task — ' + linkedTask.title,
+              style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
+            }));
+          }
+        } else {
+          linkCard.appendChild(el('div', {
+            text: '↳ Scope: Entire Work Request / Project',
+            style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
+          }));
+        }
+
+        linkCard.appendChild(el('div', {
+          text: 'Status: ' + (linkedWr.status || '—'),
+          style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
+        }));
+        container.appendChild(linkCard);
+      }
+    }
+
+    // Items table (Single row for disbursement)
+    const table = el('table', { class: 'data-table' });
+    table.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Category' }),
+        el('th', { text: 'Description' }),
+        el('th', { text: 'Amount' })
+      ])
+    ]));
+    const tbody = el('tbody');
+    tbody.appendChild(el('tr', {}, [
+      el('td', { text: d.category }),
+      el('td', { text: d.description }),
+      el('td', { text: formatPHP(d.amount) })
+    ]));
+    table.appendChild(tbody);
+    container.appendChild(table);
+
+    // Totals / Summary Box
+    const totals = el('div', { class: 'invoice-totals' });
+    totals.appendChild(el('div', { class: 'total-row total-grand' }, [
+      el('span', { text: 'Total Amount:' }), 
+      el('span', { text: formatPHP(d.amount) })
+    ]));
+    
+    if (d.status === 'Released') {
+      totals.appendChild(el('div', { class: 'total-row' }, [el('span', { text: 'Released:' }), el('span', { text: formatPHP(d.amount) })]));
+      totals.appendChild(el('div', { class: 'total-row' }, [el('span', { text: 'Balance:' }), el('span', { text: formatPHP(0) })]));
+    } else {
+      totals.appendChild(el('div', { class: 'total-row' }, [el('span', { text: 'Status:' }), el('span', { text: 'Pending Release', style: 'color: #94a3b8;' })]));
+    }
+    container.appendChild(totals);
+
+    // Payment details (shown if released)
+    if (d.status === 'Released' && d.paymentDetails) {
+      const payHist = el('div', { class: 'form-section' });
+      payHist.appendChild(el('h3', { text: 'Payment Details' }));
+      
+      const pd = d.paymentDetails;
+      const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
+      
+      const pCard = el('div', { class: 'card', style: 'margin-bottom:12px; padding:16px; border:1px solid #e2e8f0; border-radius: 12px;' });
+
+      // Header row
+      const header = el('div', { style: 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;' });
+      const amtBlock = el('div');
+      amtBlock.appendChild(el('span', { text: formatPHP(d.amount), style: 'display:block; font-weight:700; font-size:1.25rem; color:#1e293b; line-height:1.2;' }));
+      amtBlock.appendChild(el('span', { text: formatDate(pd.date || d.releasedAt), style: 'display:block; font-size:0.75rem; color:#94a3b8; margin-top:2px;' }));
+      header.appendChild(amtBlock);
+      header.appendChild(this.methodIcon(pd.method));
+      pCard.appendChild(header);
+
+      pCard.appendChild(el('div', { style: 'height:1px; background:#e2e8f0; margin:0 0 12px;' }));
+
+      const rows = el('div', { style: 'display:flex; flex-direction:column; gap:6px;' });
+      const addRow = (label, value) => {
+        if (!value) return;
+        const row = el('div', { style: 'display:flex; justify-content:space-between; align-items:baseline; font-size:0.8125rem;' });
+        row.appendChild(el('span', { text: label, style: 'color:#94a3b8; font-weight:500;' }));
+        row.appendChild(el('span', { text: value, style: 'color:#334155; font-weight:600; text-align:right;' }));
+        rows.appendChild(row);
+      };
+
+      if (pd.reference) addRow('Reference', pd.reference);
+      if (pd.bank) addRow('Bank', pd.bank);
+      addRow('Requested By', emp ? emp.name : '—');
+      addRow('Released By', handler ? handler.name : '—');
+
+      pCard.appendChild(rows);
+      payHist.appendChild(pCard);
+      container.appendChild(payHist);
+    }
+
+    // Approval Actions
+    const canApprove = Auth.can('disbursement:approve');
+    const isPending = this.PENDING_APPROVAL_STATUSES.includes(d.status);
+
+    if (isPending && canApprove) {
+      const isRequester = Auth.isSelfApprover(this.getEmployeeId(d));
+      if (isRequester) {
+        container.appendChild(el('p', { class: 'field-error', text: 'You cannot approve your own expense. Wait for another Admin.' }));
+      } else {
+        const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+
+        const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Expense' });
+        approveBtn.addEventListener('click', () => {
+          this.showApproveDialog(d.id);
+        });
+        actions.appendChild(approveBtn);
+
+        const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject', style: 'margin-left: 8px;' });
+        rejectBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Reject Expense', 'Are you sure you want to reject this request?', () => {
+            const reason = prompt('Enter rejection reason:');
+            if (reason) { this.reject(d.id, reason); App.handleRoute(); }
+          }, 'danger');
+        });
+        actions.appendChild(rejectBtn);
+        container.appendChild(actions);
+      }
+    } else if (d.status === 'Approved') {
+        const isHandler = d.paymentHandledBy === Auth.user.id;
+        const canMarkReleased = Auth.can('disbursement:mark_released');
+
+        if (isHandler) {
+          // Assigned handler can authorize & release funds
+          const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+          const releaseBtn = el('button', { class: 'btn btn-primary', text: 'Authorize & Release Funds' });
+          releaseBtn.addEventListener('click', () => { this.showReleaseDialog(d.id); });
+          actions.appendChild(releaseBtn);
+          container.appendChild(actions);
+        } else if (canMarkReleased) {
+          // Manager can mark as released (pending Admin approval)
+          const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+          actions.appendChild(el('p', { style: 'font-size:0.875rem;color:#64748b;margin-bottom:var(--spacing-sm);', text: 'As a Manager, you can mark this for release. This will require Admin approval.' }));
+          const markReleaseBtn = el('button', { class: 'btn btn-warning', text: 'Mark as Released (Pending Admin Approval)' });
+          markReleaseBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Mark as Released', 'This will submit a release request to Admin for final approval. Continue?', () => {
+              DB.update('disbursements', d.id, {
+                status: 'Release Pending Approval',
+                releaseRequestedBy: Auth.user.id,
+                releaseRequestedAt: new Date().toISOString()
+              });
+              Workflow.showMessage('Release Requested', 'This disbursement has been marked for release. An Admin will need to approve and finalize the release.', 'info');
+              App.handleRoute();
+            });
+          });
+          actions.appendChild(markReleaseBtn);
+          container.appendChild(actions);
+        } else {
+          const handler = DB.getById('users', d.paymentHandledBy);
+          container.appendChild(renderEmptyState(`Waiting for release authorization from ${handler?.name || 'assigned handler'}`));
+        }
+    } else if (d.status === 'Released' && (canApprove || Auth.can('disbursement:release') || Auth.user?.departments?.includes('Accounting'))) {
+      // Final funding step after release.
+      const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+      const fundBtn = el('button', { class: 'btn btn-success', text: 'Mark as Funded' });
+      fundBtn.addEventListener('click', () => {
+        Workflow.showConfirm('Mark as Funded', `Confirm that funds for "${d.category}" have been credited?`, () => {
+          DB.update('disbursements', d.id, { status: 'Funded', fundedBy: Auth.user.id, fundedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+          Workflow.showMessage('Funded', 'Disbursement marked as funded.', 'success');
+          App.handleRoute();
+        }, 'success');
+      });
+      actions.appendChild(fundBtn);
+      container.appendChild(actions);
+    } else if (d.status === 'Funded' && !d.archived) {
+      const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+      const archiveBtn = el('button', { class: 'btn btn-primary', text: 'Archive Disbursement', style: 'margin-right:8px;' });
+      archiveBtn.addEventListener('click', () => this.archiveDisbursement(d.id));
+      actions.appendChild(archiveBtn);
+      container.appendChild(actions);
+    }
+
+    return container;
+  },
+
+  showApproveDialog(id) {
+    const d = DB.getById('disbursements', id);
+    if (!d) return;
+    if (!this.PENDING_APPROVAL_STATUSES.includes(d.status)) {
+      Workflow.showMessage('Error', 'This disbursement is not pending approval.', 'danger');
+      return;
+    }
+    if (Auth.isSelfApprover(this.getEmployeeId(d))) {
+      Workflow.showMessage('Conflict', 'You cannot approve your own expense.', 'warning');
+      return;
+    }
+
+    const form = el('form', { class: 'form-stacked' });
+
+    const handlerGroup = el('div', { class: 'form-group' });
+    handlerGroup.appendChild(el('label', { text: 'Assign Release Handler *' }));
+    const handlerSel = el('select', { name: 'handlerId', required: true, class: 'form-select' });
+    handlerSel.appendChild(el('option', { value: '', text: '— Select Handler —' }));
+    DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role) && u.id !== d.requestedBy).forEach(u => {
+      handlerSel.appendChild(el('option', { value: u.id, text: u.name + ' (' + u.role + ')' }));
+    });
+    handlerGroup.appendChild(handlerSel);
+    form.appendChild(handlerGroup);
+
+    const submitBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Approve & Assign' });
+    form.appendChild(submitBtn);
+
+    const overlay = Workflow.showModal('Approve Expense & Assign Handler', form);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!validateRequiredFields(form)) return;
+      const handlerId = handlerSel.value;
+      if (handlerId === d.requestedBy) {
+        Workflow.showMessage('Conflict', 'The requester cannot be assigned as their own release handler.', 'warning');
+        return;
+      }
+      DB.update('disbursements', d.id, {
+        status: 'Approved',
+        paymentHandledBy: handlerId,
+        approvedBy: Auth.user.id,
+        approvedAt: new Date().toISOString()
+      });
+      overlay.remove();
+      App.handleRoute();
+    });
+  },
+
+  showReleaseDialog(id, adminRelease) {
+    const d = DB.getById('disbursements', id);
+    if (!d) return;
+    if (adminRelease && !Auth.can('disbursement:approve')) {
+      Workflow.showMessage('Unauthorized', 'You do not have permission to approve release requests.', 'danger');
+      return;
+    }
+    // Admin release flow: status is 'Release Pending Approval' (Manager marked for release)
+    const validStatuses = adminRelease ? ['Approved', 'Release Pending Approval'] : ['Approved'];
+    if (!validStatuses.includes(d.status)) {
+      Workflow.showMessage('Error', 'This disbursement is not approved for release.', 'danger');
+      return;
+    }
+    if (!adminRelease && d.paymentHandledBy !== Auth.user.id) {
+      Workflow.showMessage('Unauthorized', 'You are not assigned to release this disbursement.', 'danger');
+      return;
+    }
+
+    const form = el('form', { class: 'form-stacked' });
+
+    const methodGroup = el('div', { class: 'form-group' });
+    methodGroup.appendChild(el('label', { text: 'Payment Method *' }));
+    const methodSel = el('select', { name: 'method', required: true, class: 'form-select' });
+    ['Cash', 'Check', 'Bank Transfer', 'GCash', 'Maya', 'Other Digital'].forEach(m => methodSel.appendChild(el('option', { value: m, text: m })));
+    methodGroup.appendChild(methodSel);
+    form.appendChild(methodGroup);
+
+    const refGroup = el('div', { class: 'form-group' });
+    refGroup.appendChild(el('label', { text: 'Reference / Check Number *' }));
+    refGroup.appendChild(el('input', { type: 'text', name: 'reference', required: true }));
+    form.appendChild(refGroup);
+
+    const dateGroup = el('div', { class: 'form-group' });
+    dateGroup.appendChild(el('label', { text: 'Date of Release *' }));
+    dateGroup.appendChild(el('input', { type: 'date', name: 'date', required: true, value: new Date().toISOString().slice(0, 10) }));
+    form.appendChild(dateGroup);
+
+    // Document Requirement
+    const docGroup = el('div', { class: 'form-group' });
+    docGroup.appendChild(el('label', { text: 'Attached Scanned Document (Required) *' }));
+    docGroup.appendChild(el('input', { type: 'file', name: 'releaseDoc', required: true }));
+    form.appendChild(docGroup);
+
+    const submitBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Confirm & Release Funds' });
+    form.appendChild(submitBtn);
+
+    const overlay = Workflow.showModal('Authorize Fund Release', form);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!validateRequiredFields(form)) return;
+      const fd = new FormData(form);
+      const file = form.querySelector('input[name="releaseDoc"]').files[0];
+      
+      this.release(id, {
+        method: fd.get('method'),
+        reference: fd.get('reference'),
+        date: fd.get('date'),
+        processedBy: Auth.user.id,
+        filename: file?.name || 'Authorized_Release.pdf'
+      });
+      overlay.remove();
+      App.handleRoute();
+    });
+  },
+
+  release(id, pd) {
+    DB.update('disbursements', id, {
+      status: 'Released',
+      releasedBy: Auth.user.id,
+      releasedAt: new Date().toISOString(),
+      paymentDetails: pd,
+      releaseFilename: pd.filename
+    });
+  },
+
+  reject(id, reason) {
+    DB.update('disbursements', id, {
+      status: 'Rejected',
+      rejectedBy: Auth.user.id,
+      rejectionReason: reason
+    });
+  },
+
+  // ============================================================
+  // Expense PDF & Voucher Generation (adopts billing.js format)
+  // ============================================================
+  _numberToWords(num) {
+    const ones = ['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+    const tens = ['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+    const convert = (n) => {
+      if (n < 20) return ones[n];
+      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 ? ' ' + ones[n % 10] : '');
+      if (n < 1000) return ones[Math.floor(n / 100)] + ' Hundred' + (n % 100 ? ' and ' + convert(n % 100) : '');
+      if (n < 1000000) return convert(Math.floor(n / 1000)) + ' Thousand' + (n % 1000 ? ' ' + convert(n % 1000) : '');
+      if (n < 1000000000) return convert(Math.floor(n / 1000000)) + ' Million' + (n % 1000000 ? ' ' + convert(n % 1000000) : '');
+      return '';
+    };
+    const whole = Math.floor(num);
+    const dec = Math.round((num - whole) * 100);
+    let result = convert(whole) || 'Zero';
+    if (dec > 0) result += ' and ' + convert(dec) + ' Centavos';
+    return result.toUpperCase();
+  },
+
+  _getSanitizedViewModel(d) {
+    const emp = DB.getById('users', this.getEmployeeId(d));
+    const requester = DB.getById('users', d.requestedBy);
+    let approverId = d.approvedBy || d.accountingApprovedBy;
+    if (!approverId && (d.status === 'Approved' || d.status === 'Released')) {
+      const adminUser = DB.getWhere('users', u => u.role === 'Admin' || (u.departments || []).includes('Management'))[0];
+      if (adminUser) approverId = adminUser.id;
+    }
+    const approver = approverId ? DB.getById('users', approverId) : null;
+    const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
+    const releaser = d.releasedBy ? DB.getById('users', d.releasedBy) : null;
+    const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
+
+    return {
+      empName: escapeHtml(emp?.name || '—'),
+      requesterEmail: escapeHtml(requester?.email || '—'),
+      requesterName: escapeHtml(requester?.name || '—'),
+      wrTitle: escapeHtml(wr?.title || '—'),
+      category: escapeHtml(d.category || '—'),
+      description: escapeHtml(d.description || '—'),
+      approverName: escapeHtml(approver?.name || '—'),
+      releaserName: escapeHtml(releaser ? releaser.name : (handler ? handler.name : '________________________')),
+      receiptFilename: escapeHtml(d.receiptFilename || '_________________'),
+      releaseFilename: escapeHtml(d.releaseFilename || '_________________'),
+      approver,
+      handler,
+      releaser,
+      wr,
+      emp
+    };
+  },
+
+  generateExpensePDF(d, noLogo = false) {
+    const safe = this._getSanitizedViewModel(d);
+    const entity = d.entity || 'ATA';
+    const w = window.open('', '_blank');
+    if (!w) return;
+    const doc = w.document;
+
+    const baseHref = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+    const base = doc.createElement('base');
+    base.href = baseHref;
+    doc.head.appendChild(base);
+
+    const title = doc.createElement('title');
+    title.textContent = 'Expense Report ' + d.id;
+    doc.head.appendChild(title);
+
+    const style = doc.createElement('style');
+    style.textContent = `
+      @page { size: A4; margin: 15mm 20mm; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
+      .header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px; }
+      .logo-box { display: flex; align-items: center; gap: 12px; max-height: 55px; }
+      .logo-img { ${entity === 'LTA' ? 'height: 42px; margin-bottom: 5px;' : 'height: 55px;'} display: block; }
+      .title-box { text-align: right; }
+      .doc-title { font-size: 18pt; font-weight: 700; letter-spacing: 4px; text-transform: uppercase; color: #0f172a; margin: 0; }
+      
+      .two-col { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+      .col-left { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 12px; background: #fff; }
+      .col-left h3 { font-size: 8.5pt; text-transform: uppercase; color: #64748b; margin: 0 0 6px 0; font-weight: 700; letter-spacing: 0.5px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+      .col-left p { margin: 2px 0; font-size: 10pt; }
+      
+      .col-right { flex: 0.8; display: flex; flex-direction: column; justify-content: center; font-size: 9.5pt; border: 1.5px dashed #cbd5e1; padding: 12px; border-radius: 12px; }
+      .meta-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .meta-row:last-child { margin-bottom: 0; }
+      .meta-label { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 8pt; letter-spacing: 0.5px; }
+      .meta-val { font-weight: 700; color: #0f172a; }
+      
+      table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; }
+      th { background: #f8fafc; border-top: 1.5px solid #1e293b; border-bottom: 1.5px solid #1e293b; padding: 10px 8px; text-align: left; font-weight: 700; text-transform: uppercase; font-size: 8.5pt; color: #334155; letter-spacing: 0.5px; }
+      td { padding: 10px 8px; border-bottom: 1px solid #e2e8f0; color: #0f172a; }
+      .num { text-align: right; }
+      
+      .totals-container { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 16px; gap: 20px; }
+      .amount-words-box { flex: 1.2; font-size: 9pt; color: #475569; padding: 10px 0; }
+      .amount-words-box strong { color: #0f172a; text-transform: uppercase; font-size: 8pt; display: block; margin-bottom: 4px; letter-spacing: 0.5px; }
+      .amount-val-box { flex: 0.8; display: flex; justify-content: flex-end; align-items: center; font-weight: 700; font-size: 11pt; color: #0f172a; }
+      .total-label { margin-right: 12px; font-size: 8.5pt; text-transform: uppercase; color: #475569; letter-spacing: 0.5px; }
+      .total-amount-box { display: flex; border: 1.5px solid #1e293b; border-radius: 12px; }
+      .total-currency { padding: 6px 12px; background: #f1f5f9; border-right: 1.5px solid #1e293b; font-size: 10pt; }
+      .total-val { padding: 6px 18px; font-size: 11.5pt; min-width: 120px; text-align: right; font-family: monospace; }
+      
+      .bottom-layout { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 30px; gap: 24px; }
+      .payment-details-box { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 12px; font-size: 9pt; background: #fff; }
+      .payment-details-box h4 { margin: 0 0 8px 0; font-size: 8.5pt; text-transform: uppercase; color: #475569; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; font-weight: 700; letter-spacing: 0.5px; }
+      .payment-details-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+      .payment-details-grid .lbl { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 7.5pt; }
+      .payment-details-grid .val { color: #0f172a; font-weight: 700; }
+      .payment-details-line { border-bottom: 1px solid #94a3b8; width: 120px; height: 14px; display: inline-block; }
+      
+      .signature-row { display: flex; justify-content: space-between; margin-top: 40px; gap: 30px; }
+      .signature-box { flex: 1; text-align: center; }
+      .signature-box .line { border-top: 1.5px solid #1e293b; padding-top: 6px; font-size: 9.5pt; font-weight: 700; color: #0f172a; }
+      .signature-box .line span { font-size: 8pt; color: #64748b; font-weight: 500; display: block; margin-top: 2px; }
+      
+      .footer { margin-top: 35px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1.5px solid #e2e8f0; padding-top: 12px; }
+      .thank-you { font-weight: 700; font-size: 10pt; color: #334155; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+    `;
+    doc.head.appendChild(style);
+
+    const isReleased = d.status === 'Released';
+    const pd = d.paymentDetails || {};
+
+    let paymentDetailsHtml = '';
+    if (isReleased && pd.method) {
+      paymentDetailsHtml = `
+        <div class="payment-details-grid">
+          <span class="lbl">Date:</span>
+          <span class="val">${formatDate(pd.date || d.releasedAt)}</span>
+          <span class="lbl">Method:</span>
+          <span class="val">${escapeHtml(pd.method)}</span>
+          <span class="lbl">Ref/Check No.:</span>
+          <span class="val" style="font-family:monospace;">${escapeHtml(pd.reference || '—')}</span>
+          <span class="lbl">Bank/Branch:</span>
+          <span class="val">${escapeHtml(pd.bank || '—')}</span>
+        </div>
+      `;
+    } else {
+      paymentDetailsHtml = `
+        <div class="payment-details-grid">
+          <span class="lbl">Date:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Method:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Check/Ref No.:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Bank/Branch:</span>
+          <span class="payment-details-line"></span>
+        </div>
+      `;
+    }
+
+    const amountInWords = this._numberToWords(d.amount) + ' PESOS ONLY';
+    const cleanAmountString = formatPHP(d.amount).replace('₱', '').trim();
+
+    doc.body.innerHTML = `
+      <div class="header-container" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px;">
+        <div class="logo-box">
+          ${noLogo ? '' : `<img class="logo-img" src="ERP_Assets/${entity === 'LTA' ? 'LTA-LOGO.jpg' : 'ATA-LOGO.jpg'}" alt="${entity} Logo">`}
+          <span style="font-size: 14pt; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; white-space: nowrap;">${entity} Accounting Services Firm</span>
+        </div>
+        <div class="title-box">
+          <h1 class="doc-title">Expense Report</h1>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="col-left">
+          <h3>Employee / Requester</h3>
+          <p><strong>${safe.empName}</strong></p>
+          <p style="color: #475569; font-size: 9pt; margin-top: 4px;">${safe.requesterEmail}</p>
+          <p style="color: #64748b; font-size: 8.5pt; margin-top: 2px;">Requested By: ${safe.requesterName}</p>
+        </div>
+        <div class="col-right">
+          <div class="meta-row">
+            <span class="meta-label">Ref No.:</span>
+            <span class="meta-val">${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Date Submitted:</span>
+            <span class="meta-val">${formatDate(d.submittedAt)}</span>
+          </div>
+          ${safe.wr ? `
+          <div class="meta-row" style="margin-top: 6px; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+            <span class="meta-label">Project Code:</span>
+            <span class="meta-val" style="font-size: 8.5pt;">${safe.wrTitle}</span>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Fund Source</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="font-weight: 600;">${safe.category}</td>
+            <td>${safe.description}</td>
+            <td>${this.getFundSource(d)}</td>
+            <td class="num" style="font-weight: 700; font-family: monospace;">${formatPHP(d.amount)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="totals-container">
+        <div class="amount-words-box">
+          <strong>Amount in Words</strong>
+          ${amountInWords}
+        </div>
+        <div class="amount-val-box">
+          <span class="total-label">Total Amount:</span>
+          <div class="total-amount-box">
+            <div class="total-currency">PHP</div>
+            <div class="total-val">${cleanAmountString}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-layout">
+        <div class="payment-details-box">
+          <h4>Payment Details</h4>
+          ${paymentDetailsHtml}
+        </div>
+      </div>
+
+      <div class="signature-row">
+        <div class="signature-box">
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.empName}
+            <span>Prepared By / Date</span>
+          </div>
+        </div>
+        <div class="signature-box">
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.approverName}
+            <span>Approved By / Date</span>
+          </div>
+        </div>
+        <div class="signature-box">
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.releaserName}
+            <span>Released By / Date</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => w.print(), 300);
+  },
+
+  generateVoucher(d) {
+    const noLogo = true;
+    const safe = this._getSanitizedViewModel(d);
+    const entity = d.entity || 'ATA';
+    const w = window.open('', '_blank');
+    if (!w) return;
+    const doc = w.document;
+
+    const baseHref = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+    const base = doc.createElement('base');
+    base.href = baseHref;
+    doc.head.appendChild(base);
+
+    const title = doc.createElement('title');
+    title.textContent = 'Payment Voucher ' + d.id;
+    doc.head.appendChild(title);
+
+    const style = doc.createElement('style');
+    style.textContent = `
+      @page { size: A4; margin: 15mm 20mm; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
+      .header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px; }
+      .logo-box { display: flex; align-items: center; gap: 12px; max-height: 55px; }
+      .logo-img { ${entity === 'LTA' ? 'height: 42px; margin-bottom: 5px;' : 'height: 55px;'} display: block; }
+      .title-box { text-align: right; }
+      .doc-title { font-size: 18pt; font-weight: 700; letter-spacing: 4px; text-transform: uppercase; color: #0f172a; margin: 0; }
+      
+      .page-break { page-break-before: always; }
+      
+      .two-col { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+      .col-left { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 12px; background: #fff; }
+      .col-left h3 { font-size: 8.5pt; text-transform: uppercase; color: #64748b; margin: 0 0 6px 0; font-weight: 700; letter-spacing: 0.5px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+      .col-left p { margin: 2px 0; font-size: 10pt; }
+      
+      .col-right { flex: 0.8; display: flex; flex-direction: column; justify-content: center; font-size: 9.5pt; border: 1.5px dashed #cbd5e1; padding: 12px; border-radius: 12px; }
+      .meta-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .meta-row:last-child { margin-bottom: 0; }
+      .meta-label { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 8pt; letter-spacing: 0.5px; }
+      .meta-val { font-weight: 700; color: #0f172a; }
+      
+      .section { margin-bottom: 20px; }
+      .section h3 { font-size: 9pt; text-transform: uppercase; color: #475569; margin: 0 0 8px; letter-spacing: 0.5px; border-bottom: 1.5px solid #cbd5e1; padding-bottom: 4px; font-weight: 700; }
+      .section p { margin: 4px 0; font-size: 9.5pt; }
+      
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 9.5pt; }
+      th { background: #f8fafc; border-top: 1.5px solid #1e293b; border-bottom: 1.5px solid #1e293b; padding: 8px 6px; text-align: left; font-weight: 700; text-transform: uppercase; font-size: 8pt; color: #334155; letter-spacing: 0.5px; }
+      td { padding: 8px 6px; border-bottom: 1px solid #e2e8f0; color: #0f172a; }
+      .num { text-align: right; }
+      
+      .grid-2 { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
+      .box { border: 1.5px solid #1e293b; padding: 10px; border-radius: 12px; background: #fff; }
+      .amount-words { font-size: 8.5pt; color: #475569; line-height: 1.4; margin-top: 4px; text-transform: uppercase; }
+      
+      .payment-status-box { border: 1.5px solid #cbd5e1; border-radius: 12px; background: #f8fafc; padding: 10px; margin-top: 8px; color: #1e293b; font-size: 9pt; }
+      
+      .approval-row { display: flex; justify-content: space-between; margin-top: 40px; gap: 20px; }
+      .approval-box { flex: 1; text-align: center; }
+      .approval-box .line { border-top: 1.5px solid #1e293b; padding-top: 6px; font-size: 9pt; font-weight: 700; color: #0f172a; }
+      .approval-box .line span { font-size: 8pt; color: #64748b; font-weight: 500; display: block; margin-top: 2px; }
+      
+      .footer { margin-top: 30px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1.5px solid #e2e8f0; padding-top: 10px; }
+      .thank-you { font-weight: 700; font-size: 10pt; color: #334155; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+    `;
+    doc.head.appendChild(style);
+
+    const amountWords = this._numberToWords(d.amount) + ' PESOS ONLY';
+    const isReleased = d.status === 'Released';
+    const pd = d.paymentDetails || {};
+    const cleanAmountString = formatPHP(d.amount).replace('₱', '').trim();
+
+    let paymentDetailsHtml = '';
+    if (isReleased && pd.method) {
+      const methodCfg = PaymentIcons;
+      const def = methodCfg['Other Digital'];
+      const cfg = methodCfg[pd.method] || def;
+
+      let detailRows = '';
+      const addRow = (label, value) => {
+        if (!value) return '';
+        return `<div style="display:flex; justify-content:space-between; align-items:baseline; font-size:8.5pt; padding:3px 0; border-bottom: 1px dashed #f1f5f9;">
+          <span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">${label}</span>
+          <span style="color:#0f172a; font-weight:700;">${escapeHtml(value)}</span>
+        </div>`;
+      };
+
+      if (pd.reference) detailRows += addRow('Reference / Check No.', pd.reference);
+      if (pd.bank) detailRows += addRow('Bank', pd.bank);
+      detailRows += addRow('Released By', safe.releaser ? safe.releaser.name : (safe.handler ? safe.handler.name : '—'));
+      detailRows += addRow('Date of Release', formatDate(pd.date || d.releasedAt));
+
+      paymentDetailsHtml = `
+        <div class="section">
+          <h3>Payment Record</h3>
+          <div class="grid-2">
+            <div class="box" style="display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div>
+                  <div style="font-weight:700; font-size:1.15rem; color:#0f172a; line-height:1.2; font-family: monospace;">${formatPHP(d.amount)}</div>
+                  <div style="font-size:7.5pt; color:#64748b; margin-top:2px;">Released on ${formatDate(pd.date || d.releasedAt)}</div>
+                </div>
+                <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius: 12px; font-size:7.5pt; font-weight:700; color:${cfg.color}; background:${cfg.bg}; letter-spacing:0.3px; border: 1px solid ${cfg.color}33;">
+                  ${cfg.label}
+                </span>
+              </div>
+              <div style="height:1px; background:#e2e8f0; margin:4px 0 8px;"></div>
+              <div style="display:flex; flex-direction:column; gap:4px;">${detailRows}</div>
+            </div>
+            <div class="payment-status-box" style="display: flex; flex-direction: column; justify-content: center; height: 100%; box-sizing: border-box;">
+              <p style="margin: 0; font-size:9.5pt; line-height: 1.5; color: #1e293b;">Payment has been authorized by <strong>${safe.approverName}</strong> and released by <strong>${safe.releaserName}</strong>.</p>
+            </div>
+          </div>
+        </div>`;
+    } else {
+      paymentDetailsHtml = `
+        <div class="section">
+          <h3>Payment Details</h3>
+          <div class="grid-2">
+            <div class="box" style="display: flex; flex-direction: column; justify-content: space-between;">
+              <p style="margin: 0 0 8px 0; font-size: 9.5pt;"><strong>Amount in Figures:</strong> <span style="font-family: monospace; font-weight: 700;">${formatPHP(d.amount)}</span></p>
+              <p class="amount-words" style="margin: 0;"><strong>Amount in Words:</strong> <span style="font-weight: 600;">${amountWords}</span></p>
+            </div>
+            <div class="box" style="display: flex; flex-direction: column; gap: 4px; font-size: 8.5pt;">
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Payment Mode:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Check / Ref No.:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Bank / Platform:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Date:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    const thankYouText = 'THANK YOU !!!';
+    const entityFooterContact = entity === 'LTA' 
+      ? 'Should you have any enquiries concerning this statement, please contact us on 742-8582/404-4928.<br>' 
+      : '';
+
+    doc.body.innerHTML = `
+      <div class="header-container" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px;">
+        <div class="logo-box">
+          ${noLogo ? '' : `<img class="logo-img" src="ERP_Assets/${entity === 'LTA' ? 'LTA-LOGO.jpg' : 'ATA-LOGO.jpg'}" alt="${entity} Logo">`}
+          <span style="font-size: 14pt; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; white-space: nowrap;">${entity} Accounting Services Firm</span>
+        </div>
+        <div class="title-box">
+          <h1 class="doc-title">Payment Voucher</h1>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="col-left">
+          <h3>Payee Information</h3>
+          <p><strong>${safe.empName}</strong></p>
+          <p style="color: #475569; font-size: 9pt; margin-top: 4px;">${safe.requesterEmail}</p>
+          <p style="color: #64748b; font-size: 8.5pt; margin-top: 2px;">Fund Source: ${this.getFundSource(d)}</p>
+        </div>
+        <div class="col-right">
+          <div class="meta-row">
+            <span class="meta-label">Voucher No.:</span>
+            <span class="meta-val">PV-${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Date:</span>
+            <span class="meta-val">${formatDate(new Date().toISOString().slice(0, 10))}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Expense Ref:</span>
+            <span class="meta-val">${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Category:</span>
+            <span class="meta-val">${safe.category}</span>
+          </div>
+        </div>
+      </div>
+
+      ${paymentDetailsHtml}
+
+      <div class="section">
+        <h3>Account Distribution (PFRS Chart of Accounts)</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Account Code</th>
+              <th>Account Title</th>
+              <th class="num">Debit</th>
+              <th class="num">Credit</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="font-family: monospace;">61010</td>
+              <td>${safe.category} Expense</td>
+              <td class="num" style="font-family: monospace;">${formatPHP(d.amount)}</td>
+              <td class="num">—</td>
+            </tr>
+            <tr>
+              <td style="font-family: monospace;">11010</td>
+              <td>Cash in Bank / Petty Cash</td>
+              <td class="num">—</td>
+              <td class="num" style="font-family: monospace;">${formatPHP(d.amount)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section page-break">
+        <h3>Supporting Documents</h3>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Expense Report Ref. ${d.id} dated ${formatDate(d.submittedAt)}</p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Receipt / Proof of Payment: <span style="font-family: monospace; font-weight: 600;">${safe.receiptFilename}</span></p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Work Request: <span style="font-weight: 600;">${safe.wrTitle}</span></p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Release Document: <span style="font-family: monospace; font-weight: 600;">${safe.releaseFilename}</span></p>
+      </div>
+
+      <div class="approval-row">
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.empName}
+            <span>Prepared By / Date</span>
+          </div>
+        </div>
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            HENRY WONG
+            <span>Reviewed By / Date</span>
+          </div>
+        </div>
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.approverName}
+            <span>Approved By / Date</span>
+          </div>
+        </div>
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.releaserName}
+            <span>Released By / Date</span>
+          </div>
+        </div>
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ________________________
+            <span>Received By / Date</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div class="thank-you">${thankYouText}</div>
+        ${noLogo ? '' : entityFooterContact}
+        This Payment Voucher is prepared in accordance with PFRS, RR No. 9-2009, and RMO No. 29-2002.<br>
+        Retain for BIR audit trail. ${noLogo ? '' : `Original copy retained by ${entity} Accounting Services Firm.<br>`}
+        <span style="font-weight: 600; text-transform: uppercase; font-size: 7.5pt; letter-spacing: 0.5px; color: #475569; display: block; margin-top: 4px;">This document is not valid for claim of input tax.</span>
+      </div>
+    `;
+
+    setTimeout(() => w.print(), 300);
+  },
+
+  // ============================================================
+  // Templates View
+  // ============================================================
+  renderTemplates() {
+    const entity = Auth.activeEntity;
+    const templates = DB.getWhere('disbursementTemplates', t => t.entity === entity);
+
+    const wrapper = el('div', { class: 'page-content-section' });
+
+    const backlogItems = templates.map(t => {
+      return {
+        id: t.id,
+        name: t.name,
+        iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+        tags: [
+          { text: t.category || 'Other', type: 'category' },
+          { text: t.fundSource || 'Firm Fund', type: 'fund', value: t.fundSource },
+          { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
+          { text: formatPHP(t.amount || 0), type: 'amount' }
+        ]
+      };
+    });
+
+    const backlog = JiraBacklogList.render({
+      title: 'Disbursement Templates',
+      subtitle: 'recurring expense presets, fund source categories, and schedule billing configurations',
+      items: backlogItems,
+      emptyText: 'No templates found',
+      rowIdPrefix: 'DT',
+      headerActions: [
+        {
+          text: '+ New Template',
+          className: 'btn btn-primary btn-sm',
+          onClick: () => this.showTemplateForm()
+        }
+      ],
+      rowActions: (item) => {
+        const t = templates.find(temp => temp.id === item.id);
+        return [
+          {
+            text: 'Generate',
+            className: 'btn btn-primary btn-xs',
+            onClick: () => this.generateFromTemplate(t)
+          },
+          {
+            text: 'Edit',
+            className: 'btn btn-secondary btn-xs',
+            onClick: () => this.showTemplateForm(t)
+          },
+          {
+            text: 'Delete',
+            className: 'btn btn-danger btn-xs',
+            onClick: () => {
+              Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, () => {
+                DB.delete('disbursementTemplates', t.id);
+                App.handleRoute();
+              }, 'danger');
+            }
+          }
+        ];
+      },
+      bulkActions: (selectedIds) => [
+        {
+          text: selectedIds.length === 1 ? '⚡ Generate Disbursement' : '⚡ Bulk Generate Disbursements',
+          className: 'btn btn-primary btn-sm',
+          onClick: (ids) => {
+            const title = ids.length === 1 ? 'Generate Disbursement' : 'Bulk Generate Disbursements';
+            const message = ids.length === 1
+              ? 'Are you sure you want to generate a disbursement for this selected template?'
+              : `Are you sure you want to generate disbursements for all ${ids.length} selected templates?`;
+            Workflow.showConfirm(title, message, () => {
+              let count = 0;
+              ids.forEach(id => {
+                const t = templates.find(temp => temp.id === id);
+                if (t) {
+                  const record = {
+                    id: generateSequentialId('dis', 'disbursements'),
+                    category: t.category,
+                    description: t.description || t.name,
+                    amount: t.amount,
+                    fundSource: t.fundSource,
+                    linkedInvoiceId: t.linkedInvoiceId || null,
+                    linkedWorkRequestId: t.linkedWorkRequestId || null,
+                    entity: t.entity,
+                    fromTemplate: t.id,
+                    employeeId: Auth.user.id,
+                    requestedBy: Auth.user.id,
+                    status: 'Draft',
+                    submittedAt: new Date().toISOString(),
+                    createdAt: new Date().toISOString(),
+                    receiptFilename: null,
+                    paymentHandledBy: '',
+                    paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
+                  };
+                  DB.insert('disbursements', record);
+
+                  if (record.linkedWorkRequestId) {
+                    const wr = DB.getById('workRequests', record.linkedWorkRequestId);
+                    if (wr) {
+                      const linkedIds = new Set(wr.linkedDisbursementIds || []);
+                      linkedIds.add(record.id);
+                      DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
+                    }
+                  }
+                  count++;
+                }
+              });
+              Workflow.showMessage('Success', `Generated ${count} disbursement${count === 1 ? '' : 's'} successfully.`, 'success');
+              this.view = 'list';
+              App.handleRoute();
+            });
+          }
+        },
+        {
+          text: 'Delete',
+          className: 'btn btn-danger btn-sm',
+          onClick: (ids) => {
+            const title = ids.length === 1 ? 'Delete Template' : 'Delete Templates';
+            const message = ids.length === 1
+              ? 'Are you sure you want to delete this selected template?'
+              : `Are you sure you want to delete these ${ids.length} selected templates?`;
+            Workflow.showConfirm(title, message, () => {
+              ids.forEach(id => {
+                DB.delete('disbursementTemplates', id);
+              });
+              App.handleRoute();
+            }, 'danger');
+          }
+        }
+      ]
+    });
+
+    wrapper.appendChild(backlog);
+    return wrapper;
+  },
+
+  renderTemplateForm(opts = {}) {
+    const { hideHeader = false } = opts;
+    const entity = Auth.activeEntity;
+    const template = this.templateEditingId ? DB.getById('disbursementTemplates', this.templateEditingId) : null;
+    const container = el('div', { class: 'page' });
+
+    const form = el('form', { id: 'disb-tpl-form', class: 'form-stacked notion-form' });
+
+    if (!hideHeader) {
+      const headerBar = el('div', { class: 'form-header-bar' });
+      const topActions = el('div', { class: 'form-actions-top' });
+      topActions.appendChild(el('button', { type: 'submit', form: 'disb-tpl-form', class: 'btn btn-primary', text: 'Save Template' }));
+      if (template) {
+        const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
+        delBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, () => {
+            DB.delete('disbursementTemplates', template.id);
+            this.view = 'templates';
+            this.templateEditingId = null;
+            closeFormPanelAndRoute('#disbursement');
+          }, 'danger');
+        });
+        topActions.appendChild(delBtn);
+      }
+      headerBar.appendChild(topActions);
+      form.appendChild(headerBar);
+    }
+
+    // ── Title free-form ──
+    const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
+    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Template Name' }));
+    const nameInput = el('input', {
+      type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input',
+      placeholder: 'New Disbursement Template', required: true, value: template?.name || ''
+    });
+    titleSection.appendChild(nameInput);
+    form.appendChild(titleSection);
+
+    const catGroup = el('div', { class: 'form-group' });
+    catGroup.appendChild(el('label', { text: 'Category *' }));
+    const catSel = el('select', { name: 'category', required: true, class: 'form-select' });
+    this.STANDARD_CATEGORIES.forEach(c => {
+      catSel.appendChild(el('option', { value: c, text: c }));
+    });
+    if (template) catSel.value = template.category || '';
+    catGroup.appendChild(catSel);
+    form.appendChild(catGroup);
+
+    const amtGroup = el('div', { class: 'form-group' });
+    amtGroup.appendChild(el('label', { text: 'Amount (₱) *' }));
+    const amtInput = el('input', { type: 'number', name: 'amount', min: 0, step: 0.01, required: true, value: template?.amount || '' });
+    amtGroup.appendChild(amtInput);
+    form.appendChild(amtGroup);
+
+    const fundGroup = el('div', { class: 'form-group' });
+    fundGroup.appendChild(el('label', { text: 'Fund Source *' }));
+    const fundWrap = el('div', { class: 'radio-group' });
+    ['Firm Fund', 'Client Fund'].forEach(f => {
+      const label = el('label', { class: 'radio-label' });
+      const radio = el('input', { type: 'radio', name: 'fundSource', value: f, required: true });
+      if (!template && f === 'Firm Fund') radio.checked = true;
+      if (template && f === template.fundSource) radio.checked = true;
+      label.appendChild(radio);
+      label.appendChild(document.createTextNode(' ' + f));
+      fundWrap.appendChild(label);
+    });
+    fundGroup.appendChild(fundWrap);
+    form.appendChild(fundGroup);
+
+    const scheduleGroup = el('div', { class: 'form-group' });
+    scheduleGroup.appendChild(el('label', { text: 'Schedule' }));
+    const schedInput = el('input', { type: 'text', name: 'schedule', placeholder: 'e.g. Monthly, Weekly, Quarterly', value: template?.schedule || '' });
+    scheduleGroup.appendChild(schedInput);
+    form.appendChild(scheduleGroup);
+
+    const descGroup = el('div', { class: 'form-group' });
+    descGroup.appendChild(el('label', { text: 'Description' }));
+    const descInput = el('textarea', { name: 'description', rows: 3, text: template?.description || '' });
+    descGroup.appendChild(descInput);
+    form.appendChild(descGroup);
+
+    const wrGroup = el('div', { class: 'form-group' });
+    wrGroup.appendChild(el('label', { text: 'Linked Work Request (optional)' }));
+    const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
+    wrSel.appendChild(el('option', { value: '', text: '— None —' }));
+    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      wrSel.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
+    });
+    if (template) wrSel.value = template.linkedWorkRequestId || '';
+    wrGroup.appendChild(wrSel);
+    form.appendChild(wrGroup);
+
+    const invGroup = el('div', { class: 'form-group' });
+    invGroup.appendChild(el('label', { text: 'Linked Invoice (optional)' }));
+    const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
+    invSel.appendChild(el('option', { value: '', text: '— None —' }));
+    DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
+      const client = DB.getById('clients', inv.clientId);
+      invSel.appendChild(el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') }));
+    });
+    if (template) invSel.value = template.linkedInvoiceId || '';
+    invGroup.appendChild(invSel);
+    form.appendChild(invGroup);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!validateRequiredFields(form)) return;
+      const data = Object.fromEntries(new FormData(form).entries());
+      const templateData = {
+        id: template ? template.id : generateId('dtpl'),
+        entity: entity,
+        name: data.name.trim(),
+        category: data.category,
+        amount: parseFloat(data.amount) || 0,
+        fundSource: data.fundSource,
+        schedule: data.schedule || '',
+        description: data.description || '',
+        linkedWorkRequestId: data.linkedWorkRequestId || null,
+        linkedInvoiceId: data.linkedInvoiceId || null,
+        createdAt: template ? template.createdAt : new Date().toISOString(),
+        createdBy: template ? template.createdBy : Auth.user.id
+      };
+      if (template) {
+        DB.update('disbursementTemplates', template.id, templateData);
+      } else {
+        DB.insert('disbursementTemplates', templateData);
+      }
+      this.view = 'templates';
+      this.templateEditingId = null;
+      closeFormPanelAndRoute('#disbursement');
+    });
+
+    container.appendChild(form);
+    return container;
+  },
+
+  showTemplateForm(existing = null, mode = null) {
+    this.templateEditingId = existing ? existing.id : null;
+    const fullPageRoute = this.templateEditingId ? `#disbursement/templateForm/${this.templateEditingId}` : '#disbursement/templateForm/new';
+    openFormPanel({
+      icon: '📋',
+      title: ' ',
+      formContent: this.renderTemplateForm(),
+      formId: 'disb-tpl-form',
+      mode,
+      viewContext: 'disbursement-template-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: 'Save Template', class: 'btn btn-primary', type: 'submit', form: 'disb-tpl-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement') }
+      ]
+    });
+  },
+
+  generateFromTemplate(template) {
+    const record = {
+      id: generateSequentialId('dis', 'disbursements'),
+      category: template.category,
+      description: template.description || template.name,
+      amount: template.amount,
+      fundSource: template.fundSource,
+      linkedInvoiceId: template.linkedInvoiceId || null,
+      linkedWorkRequestId: template.linkedWorkRequestId || null,
+      entity: template.entity,
+      fromTemplate: template.id,
+      employeeId: Auth.user.id,
+      requestedBy: Auth.user.id,
+      status: 'Draft',
+      submittedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      receiptFilename: null,
+      paymentHandledBy: '',
+      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
+    };
+
+    DB.insert('disbursements', record);
+
+    // Link to WR if applicable
+    if (record.linkedWorkRequestId) {
+      const wr = DB.getById('workRequests', record.linkedWorkRequestId);
+      if (wr) {
+        const linkedIds = new Set(wr.linkedDisbursementIds || []);
+        linkedIds.add(record.id);
+        DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
+      }
+    }
+
+    Workflow.showMessage('Template Success', 'Disbursement generated from template: ' + template.name, 'success');
+    this.view = 'list';
+    App.handleRoute();
+  },
+
+  archiveDisbursement(id) {
+    const d = DB.getById('disbursements', id);
+    if (!d || d.status !== 'Funded' || d.archived) return;
+    DB.update('disbursements', id, { archived: true, updatedAt: new Date().toISOString() });
+    Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
+    App.handleRoute();
+  },
+
+  bulkArchiveDisbursements(ids) {
+    const eligible = (ids || [])
+      .map(id => DB.getById('disbursements', id))
+      .filter(d => d && d.status === 'Funded' && !d.archived);
+
+    if (eligible.length === 0) {
+      Workflow.showMessage('No eligible records', 'Only Funded disbursements can be archived.', 'info');
+      return;
+    }
+
+    Workflow.showConfirm('Bulk Archive',
+      `Are you sure you want to archive ${eligible.length} funded disbursement(s)?`,
+      () => {
+        const now = new Date().toISOString();
+        eligible.forEach(d => DB.update('disbursements', d.id, { archived: true, updatedAt: now }));
+        Workflow.showMessage('Archived', `${eligible.length} disbursement(s) archived.`, 'success');
+        App.handleRoute();
+      },
+      'warning'
+    );
+  },
+
+  unarchiveDisbursement(id) {
+    const d = DB.getById('disbursements', id);
+    if (!d || d.status !== 'Funded' || !d.archived) return;
+    DB.update('disbursements', id, { archived: false, updatedAt: new Date().toISOString() });
+    Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
+    App.handleRoute();
+  },
+
+  permanentDeleteDisbursement(id) {
+    const d = DB.getById('disbursements', id);
+    if (!d) return;
+    if (Auth.user?.role !== 'Admin' && !Auth.can('disbursement:delete') && !Auth.isManagerial()) {
+      Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete disbursements.', 'danger');
+      return;
+    }
+    Workflow.showConfirm('Permanently Delete Disbursement',
+      `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
+      () => {
+        if (d.linkedWorkRequestId) {
+          const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+          if (wr) {
+            const linkedIds = (wr.linkedDisbursementIds || []).filter(x => x !== d.id);
+            DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
+          }
+        }
+        DB.delete('disbursements', id);
+        App.handleRoute();
+        Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+      },
+      'danger'
+    );
+  },
+
+  renderArchive() {
+    const entity = Auth.activeEntity;
+    const self = this;
+    const isManagerial = Auth.isManagerial();
+
+    const entFilter = ent => {
+      const uEnt = (ent || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
+      return uEnt === entity.toUpperCase();
+    };
+
+    const funded = DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Funded' && d.archived === true);
+    const cancelled = DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Cancelled');
+
+    const rejectedDisbursementChanges = DB.getWhere('pendingChanges', pc => {
+      if (pc.table !== 'disbursements' || pc.status !== 'rejected') return false;
+      const data = pc.proposedData || {};
+      if (!entFilter(data.entity)) return false;
+      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const rejectedDisbursementRequests = DB.getWhere('operationsRequests', r => {
+      if (r.type !== 'disbursement' || r.status !== 'rejected') return false;
+      if (!entFilter(r.entity)) return false;
+      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const buildItem = (d, category) => {
+      const emp = DB.getById('users', this.getEmployeeId(d));
+      return {
+        id: d.id,
+        category,
+        title: d.description || d.category || '(untitled)',
+        meta: [
+          { icon: ArchivePage.icons.client, text: emp?.name || '—' },
+          { icon: ArchivePage.icons.amount, text: formatPHP(d.amount) },
+          { icon: ArchivePage.icons.date, text: formatDate(d.updatedAt) }
+        ],
+        actions: [
+          {
+            label: 'View',
+            icon: ArchivePage.icons.view,
+            onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+          },
+          ...(category === 'accomplished' ? [{
+            label: 'Unarchive',
+            icon: ArchivePage.icons.unarchive,
+            className: 'primary',
+            onClick: () => self.unarchiveDisbursement(d.id)
+          }] : []),
+          ...(isManagerial || Auth.can('disbursement:delete') ? [{
+            label: 'Delete Permanently',
+            icon: ArchivePage.icons.delete,
+            className: 'danger',
+            onClick: () => self.permanentDeleteDisbursement(d.id)
+          }] : [])
+        ]
+      };
+    };
+
+    const buildRejectedItem = record => {
+      const isOpReq = record.hasOwnProperty('requestedBy');
+      const data = isOpReq ? record : (record.proposedData || {});
+      const title = isOpReq
+        ? `Disbursement Request ${record.workRequestId ? 'for WR' : ''}`
+        : `Disbursement Change: ${data.description || data.category || '(untitled)'}`;
+      const reason = data.rejectionReason || record.rejectionReason || 'Rejected';
+      return {
+        id: record.id,
+        category: 'rejected',
+        title,
+        meta: [
+          { icon: ArchivePage.icons.client, text: (DB.getById('users', isOpReq ? record.requestedBy : data.requestedBy)?.name) || '—' },
+          { icon: ArchivePage.icons.date, text: formatDate(record.reviewedAt || record.updatedAt || record.requestedAt) },
+          { icon: ArchivePage.icons.status, text: `Reason: ${reason}` }
+        ],
+        actions: [
+          ...(data.id || record.workRequestId ? [{
+            label: 'View Related',
+            icon: ArchivePage.icons.view,
+            onClick: () => {
+              if (data.id) location.hash = '#disbursement/detail/' + data.id;
+              else if (record.workRequestId) location.hash = '#operations/detail/' + record.workRequestId;
+            }
+          }] : [])
+        ]
+      };
+    };
+
+    return ArchivePage.render({
+      module: 'disbursement',
+      categoryLabels: { accomplished: 'Funded', cancelled: 'Cancelled', rejected: 'Rejected' },
+      categories: {
+        accomplished: funded.map(d => buildItem(d, 'accomplished')),
+        cancelled: cancelled.map(d => buildItem(d, 'cancelled')),
+        rejected: [
+          ...rejectedDisbursementChanges.map(buildRejectedItem),
+          ...rejectedDisbursementRequests.map(buildRejectedItem)
+        ]
+      },
+      emptyText: 'Archive is empty.',
+      renderCallback: () => self.renderArchive()
+    });
+  },
+
+  // ============================================================
+  // Reimbursement Summary Report
+  // ============================================================
+  renderReport() {
+    const entity = Auth.activeEntity;
+    const items = DB.getWhere('disbursements', d => {
+      const dEnt = (d.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(dEnt);
+      }
+      return dEnt === entity.toUpperCase();
+    }).filter(d => d.status === 'Released');
+
+    const container = el('div');
+
+    container.appendChild(el('h2', { text: 'Reimbursement Summary', style: 'margin-bottom: var(--spacing-lg);' }));
+
+    const grid = el('div', { class: 'bento-grid' });
+
+    // By Employee
+    const byEmployee = {};
+    items.forEach(d => {
+      const empName = DB.getById('users', this.getEmployeeId(d))?.name || 'Unknown';
+      if (!byEmployee[empName]) byEmployee[empName] = { count: 0, total: 0 };
+      byEmployee[empName].count++;
+      byEmployee[empName].total += d.amount;
+    });
+
+    const empCard = el('div', { class: 'bento-item bento-half report-card' });
+    empCard.appendChild(el('h3', { text: 'By Employee', style: 'margin-top:0;' }));
+    const empTable = el('table', { class: 'report-table' });
+    empTable.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Employee' }),
+        el('th', { text: 'Count', class: 'text-center' }),
+        el('th', { text: 'Total', class: 'text-center' })
+      ])
+    ]));
+    const empBody = el('tbody');
+    Object.entries(byEmployee).forEach(([name, data]) => {
+      empBody.appendChild(el('tr', {}, [
+        el('td', { text: name }),
+        el('td', { text: String(data.count), class: 'text-center' }),
+        el('td', { text: formatPHP(data.total), class: 'text-center' })
+      ]));
+    });
+    empTable.appendChild(empBody);
+    empCard.appendChild(empTable);
+    grid.appendChild(empCard);
+
+    // By Category
+    const byCategory = {};
+    items.forEach(d => {
+      if (!byCategory[d.category]) byCategory[d.category] = { count: 0, total: 0 };
+      byCategory[d.category].count++;
+      byCategory[d.category].total += d.amount;
+    });
+
+    const catCard = el('div', { class: 'bento-item bento-half report-card' });
+    catCard.appendChild(el('h3', { text: 'By Category', style: 'margin-top:0;' }));
+    const catTable = el('table', { class: 'report-table' });
+    catTable.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Category' }),
+        el('th', { text: 'Count', class: 'text-center' }),
+        el('th', { text: 'Total', class: 'text-center' })
+      ])
+    ]));
+    const catBody = el('tbody');
+    Object.entries(byCategory).forEach(([cat, data]) => {
+      catBody.appendChild(el('tr', {}, [
+        el('td', { text: cat }),
+        el('td', { text: String(data.count), class: 'text-center' }),
+        el('td', { text: formatPHP(data.total), class: 'text-center' })
+      ]));
+    });
+    catTable.appendChild(catBody);
+    catCard.appendChild(catTable);
+    grid.appendChild(catCard);
+
+    // Fund split
+    const firmItems = items.filter(d => this.getFundSource(d) === 'Firm Fund');
+    const clientItems = items.filter(d => this.getFundSource(d) === 'Client Fund');
+    const firmTotal = firmItems.reduce((s, d) => s + d.amount, 0);
+    const clientTotal = clientItems.reduce((s, d) => s + d.amount, 0);
+
+    const fundCard = el('div', { class: 'bento-item bento-full report-card' });
+    fundCard.appendChild(el('h3', { text: 'By Fund Source', style: 'margin-top:0;' }));
+    const fundSplitWrap = el('div', { class: 'fund-split', style: 'margin-bottom: var(--spacing-md);' });
+    fundSplitWrap.appendChild(el('div', { class: 'fund-box' }, [
+      el('div', { class: 'fund-label', text: 'Firm Fund' }),
+      el('div', { class: 'fund-value', text: formatPHP(firmTotal) }),
+      el('div', { style: 'font-size: 0.8rem; color: var(--color-text-muted);', text: firmItems.length + ' items' })
+    ]));
+    fundSplitWrap.appendChild(el('div', { class: 'fund-box' }, [
+      el('div', { class: 'fund-label', text: 'Client Fund' }),
+      el('div', { class: 'fund-value', text: formatPHP(clientTotal) }),
+      el('div', { style: 'font-size: 0.8rem; color: var(--color-text-muted);', text: clientItems.length + ' items' })
+    ]));
+    fundCard.appendChild(fundSplitWrap);
+    grid.appendChild(fundCard);
+
+    container.appendChild(grid);
+    return container;
+  }
+};

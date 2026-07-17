@@ -1,0 +1,1545 @@
+/**
+ * Client Management Module
+ * List, search, create, edit clients scoped to active entity.
+ */
+
+function formatJiraDate(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const date = d.getDate();
+    const year = d.getFullYear();
+    let hours = d.getHours();
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${month} ${date}, ${year}, ${hours}:${minutes} ${ampm}`;
+  } catch (e) {
+    return dateStr;
+  }
+}
+
+function getInitials(name) {
+  if (!name) return 'U';
+  return name.split(' ').map(n => n.charAt(0)).slice(0, 2).join('').toUpperCase();
+}
+
+function getUserColor(userId) {
+  if (!userId) return '#7a869a';
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = userId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const colors = ['#0052cc', '#36b37e', '#ffab00', '#de350b', '#5243aa', '#00875a'];
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+}
+
+const Clients = {
+  editingId: null,
+  activeTab: 'active',
+
+  render() {
+    if (!this.activeTab) this.activeTab = 'active';
+    const container = el('div', { class: 'page clients-tab-page' });
+
+    // Full-page form route (#clients/form/new or #clients/form/:id) renders inline
+    // with its own breadcrumb header and right-aligned Save/Cancel actions.
+    if (this.editingId) {
+      const isNew = this.editingId === 'new';
+      const client = isNew ? null : DB.getById('clients', this.editingId);
+      const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
+
+      const viewSwitcher = buildFormViewSwitcher({
+        currentMode: PaneMode.FULL_PAGE,
+        viewContext: 'client-form',
+        onSidePeek: () => {
+          const clientId = this.editingId === 'new' ? null : this.editingId;
+          closeFormPanelAndRoute('#clients');
+          this.showForm(clientId, PaneMode.SIDE_PEEK);
+        },
+        onCenterPeek: () => {
+          const clientId = this.editingId === 'new' ? null : this.editingId;
+          closeFormPanelAndRoute('#clients');
+          this.showForm(clientId, PaneMode.CENTER_PEEK);
+        },
+        onNewTab: () => {
+          window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
+        }
+      });
+
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Clients',
+        baseHash: '#clients',
+        currentText: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
+        viewSwitcher,
+        actions: [
+          {
+            text: isNew ? 'Save Client' : 'Save Changes',
+            class: 'btn btn-primary btn-sm',
+            type: 'submit',
+            form: 'client-form'
+          },
+          {
+            text: 'Cancel',
+            class: 'btn btn-secondary btn-sm',
+            onClick: () => { this.showList(); }
+          }
+        ]
+      }));
+      container.appendChild(this.renderForm(el('div'), this.editingId, null, true));
+      setTimeout(() => this.updateStickyOffsets(), 0);
+      return container;
+    }
+
+    const titleBar = el('div', { class: 'page-title-bar-v2' });
+    titleBar.appendChild(el('h1', { text: 'Clients' }));
+
+    if (Auth.user?.role === 'Admin' && typeof window.apiClient !== 'undefined') {
+      const migrateBtn = el('button', {
+        class: 'btn btn-outline-secondary btn-sm',
+        style: 'margin-left: auto;',
+        text: 'Migrate Clients'
+      });
+      migrateBtn.addEventListener('click', () => this.migrateClientsFromLocalStorage());
+      titleBar.appendChild(migrateBtn);
+    }
+
+    container.appendChild(titleBar);
+    container.appendChild(this.renderTabNav());
+
+    // Toolbar (Sticky Container)
+    const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
+    const filters = el('div', { class: 'filters-bar' });
+    const searchWrapper = el('div', { style: 'position: relative; display: flex; align-items: center; width: 100%; max-width: 320px;' });
+
+    const searchIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    searchIcon.setAttribute('width', '14');
+    searchIcon.setAttribute('height', '14');
+    searchIcon.setAttribute('viewBox', '0 0 24 24');
+    searchIcon.setAttribute('fill', 'none');
+    searchIcon.setAttribute('stroke', 'currentColor');
+    searchIcon.setAttribute('stroke-width', '2.5');
+    searchIcon.setAttribute('stroke-linecap', 'round');
+    searchIcon.setAttribute('stroke-linejoin', 'round');
+    searchIcon.setAttribute('style', 'position: absolute; left: 12px; color: var(--color-text-muted); pointer-events: none;');
+    searchIcon.innerHTML = '<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>';
+
+    const search = el('input', {
+      type: 'text',
+      placeholder: 'Search client...',
+      class: 'form-control search-input',
+      style: 'width: 100%; padding-left: 36px; max-width: 320px;'
+    });
+
+    searchWrapper.appendChild(searchIcon);
+    searchWrapper.appendChild(search);
+    filters.appendChild(searchWrapper);
+    stickyContainer.appendChild(filters);
+    container.appendChild(stickyContainer);
+
+    const content = el('div', { class: 'page-content-section' });
+
+    const listContainer = el('div', { class: 'list-container' + (this.activeTab === 'archived' ? ' hidden' : '') });
+    content.appendChild(listContainer);
+    if (this.activeTab === 'active') {
+      this.renderList(listContainer, '');
+    }
+
+    const archiveContainer = el('div', { class: 'archive-container' + (this.activeTab === 'active' ? ' hidden' : '') });
+    content.appendChild(archiveContainer);
+    if (this.activeTab === 'archived') {
+      archiveContainer.appendChild(this.renderArchive(''));
+    }
+
+    container.appendChild(content);
+
+    search.addEventListener('input', debounce(() => {
+      const q = search.value.trim();
+      if (this.activeTab === 'active') {
+        this.renderList(listContainer, q);
+      } else {
+        this.clearNode(archiveContainer);
+        archiveContainer.appendChild(this.renderArchive(q));
+      }
+    }, 200));
+
+    setTimeout(() => this.updateStickyOffsets(), 0);
+    return container;
+  },
+
+  init() {
+    this.updateStickyOffsets();
+  },
+
+  updateStickyOffsets() {
+    App.updateStickyOffsets();
+  },
+
+  renderTabNav() {
+    const entity = Auth.activeEntity;
+    const activeCount = DB.getWhere('clients', c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+      return matchesEntity && c.status !== 'Archived';
+    }).length;
+
+    const isAdmin = Auth.user?.role === 'Admin';
+    const isManagerial = Auth.isManagerial();
+
+    const archivedCount = DB.getWhere('clients', c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+      return matchesEntity && c.status === 'Archived';
+    }).length;
+
+    const entFilter = ent => {
+      const uEnt = (ent || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
+      return uEnt === entity.toUpperCase();
+    };
+
+    const rejectedClientChanges = DB.getWhere('pendingChanges', pc => {
+      if (pc.table !== 'clients' || pc.status !== 'rejected') return false;
+      const data = pc.proposedData || {};
+      if (!entFilter(data.entity)) return false;
+      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const rejectedClientRequests = DB.getWhere('operationsRequests', r => {
+      if (r.type !== 'client' || r.status !== 'rejected') return false;
+      if (!entFilter(r.entity)) return false;
+      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const rejectedCount = rejectedClientChanges.length + rejectedClientRequests.length;
+    const archiveCount = archivedCount + rejectedCount;
+
+    const tabs = [
+      { key: 'active', label: 'Active Clients', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>', count: activeCount },
+      { key: 'archived', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
+    ];
+
+    const tabNav = renderModuleTabNav(tabs, this.activeTab, (key) => {
+      this.activeTab = key;
+      App.handleRoute();
+    });
+
+    if (Auth.can('clients:edit') && this.activeTab === 'active') {
+      const addBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
+        html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Client'
+      });
+      addBtn.addEventListener('click', () => this.showForm());
+      tabNav.appendChild(addBtn);
+    }
+
+    return tabNav;
+  },
+
+  clearNode(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  },
+
+  async getFilteredClients(query) {
+    try {
+      const res = await window.apiClient.clients.list(query ? { search: query, status: 'Active' } : { status: 'Active' });
+      let clients = res.data || [];
+      const entity = Auth.activeEntity;
+      clients = clients.filter(c => {
+        const cEnt = (c.entity || '').toUpperCase();
+        return (entity === 'ALL' ? Auth.user.entities.includes(cEnt) : cEnt === entity);
+      });
+      return clients;
+    } catch (e) {
+      // Fallback to local data if API is unavailable.
+      const entity = Auth.activeEntity;
+      let clients = DB.getWhere('clients', c => {
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(c.entity) : c.entity === entity);
+        return matchesEntity && c.status !== 'Archived';
+      });
+      if (query) {
+        const q = query.toLowerCase();
+        clients = clients.filter(c =>
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.tradeName || '').toLowerCase().includes(q) ||
+          (c.tin || '').toLowerCase().includes(q)
+        );
+      }
+      return clients;
+    }
+  },
+
+  async renderList(container, query) {
+    this.clearNode(container);
+    const clients = this.getFilteredClients(query);
+
+    if (clients.length === 0) {
+      container.appendChild(renderEmptyState('No clients found', null, { variant: 'zero-state' }));
+      return;
+    }
+
+    const isAdmin = Auth.user?.role === 'Admin';
+
+    // Floating Bulk Action Bar (Jira backlog style, only for admins)
+    let bulkBar = null, countInfo = null, actionsContainer = null, closeBtn = null;
+    if (isAdmin) {
+      bulkBar = el('div', { class: 'jira-backlog-bulk-bar hidden' });
+      countInfo = el('span', { class: 'jira-backlog-bulk-count', text: '0 selected' });
+      bulkBar.appendChild(countInfo);
+      const divider1 = el('span', { class: 'jira-backlog-bulk-divider', text: '|' });
+      bulkBar.appendChild(divider1);
+      actionsContainer = el('div', { class: 'jira-backlog-bulk-actions' });
+      bulkBar.appendChild(actionsContainer);
+      const divider2 = el('span', { class: 'jira-backlog-bulk-divider', text: '|' });
+      bulkBar.appendChild(divider2);
+      closeBtn = el('button', { class: 'jira-backlog-bulk-close', html: '&times;', title: 'Clear selection' });
+      bulkBar.appendChild(closeBtn);
+      container.appendChild(bulkBar);
+    }
+
+    // Table Container
+    const tableContainer = el('div', { class: 'jira-table-container' });
+    const table = el('table', { class: 'jira-table' });
+    tableContainer.appendChild(table);
+    container.appendChild(tableContainer);
+
+    // Thead
+    const thead = el('thead');
+    const headerRow = el('tr');
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    // Checkbox column header (only for admins)
+    let selectAllCheckbox = null;
+    if (isAdmin) {
+      selectAllCheckbox = el('input', {
+        type: 'checkbox',
+        style: 'cursor: pointer; accent-color: var(--color-primary); width: 14px; height: 14px;'
+      });
+      const thCheckbox = el('th', { style: 'width: 40px; text-align: center;' });
+      thCheckbox.appendChild(selectAllCheckbox);
+      headerRow.appendChild(thCheckbox);
+    }
+
+    // Work column header (labeled "Client")
+    const thWork = el('th', { class: 'jira-backlog-col-header', style: 'width: 260px;' });
+    const workHeaderDiv = el('div', { class: 'jira-th-work' });
+    workHeaderDiv.appendChild(el('span', { class: 'jira-header-chevron', text: '▶' }));
+    workHeaderDiv.appendChild(el('span', { text: 'Client' }));
+    thWork.appendChild(workHeaderDiv);
+    headerRow.appendChild(thWork);
+
+    // Client columns headers
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Entity', style: 'width: 80px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Retainer', style: 'width: 80px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'TIN', style: 'width: 140px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'RDO Code', style: 'width: 90px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Point of Contact', style: 'width: 160px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Trade Name', style: 'width: 140px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Address', style: 'width: 180px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Related Companies', style: 'width: 180px;' }));
+    headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Contact Details', style: 'width: 180px;' }));
+
+    // Trash bin header (only for admins)
+    if (isAdmin) {
+      const thTrash = el('th', { style: 'width: 45px; text-align: center;' });
+      const trashHeaderIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      trashHeaderIcon.setAttribute('viewBox', '0 0 24 24');
+      trashHeaderIcon.setAttribute('width', '14');
+      trashHeaderIcon.setAttribute('height', '14');
+      trashHeaderIcon.setAttribute('fill', 'none');
+      trashHeaderIcon.setAttribute('stroke', 'currentColor');
+      trashHeaderIcon.setAttribute('stroke-width', '2');
+      trashHeaderIcon.setAttribute('stroke-linecap', 'round');
+      trashHeaderIcon.setAttribute('stroke-linejoin', 'round');
+      trashHeaderIcon.innerHTML = '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>';
+      thTrash.appendChild(trashHeaderIcon);
+      headerRow.appendChild(thTrash);
+    }
+
+    // Tbody
+    const tbody = el('tbody');
+    table.appendChild(tbody);
+
+    const checkBoxes = [];
+    const rows = [];
+
+    const updateSelection = () => {
+      if (!isAdmin) return;
+      const selectedIds = [];
+      checkBoxes.forEach((chk, idx) => {
+        if (chk.checked) {
+          selectedIds.push(chk.dataset.id);
+          rows[idx].classList.add('selected');
+        } else {
+          rows[idx].classList.remove('selected');
+        }
+      });
+
+      if (selectedIds.length > 0 && bulkBar && actionsContainer) {
+        countInfo.textContent = `${selectedIds.length} selected`;
+        actionsContainer.innerHTML = '';
+        const btn = el('button', {
+          class: 'btn btn-outline-danger btn-sm',
+          text: 'Archive Selected'
+        });
+        btn.addEventListener('click', () => {
+          this.bulkArchiveClients(selectedIds);
+        });
+        actionsContainer.appendChild(btn);
+        bulkBar.classList.remove('hidden');
+      } else if (bulkBar) {
+        bulkBar.classList.add('hidden');
+      }
+
+      if (selectAllCheckbox) {
+        const allChecked = checkBoxes.length > 0 && checkBoxes.every(c => c.checked);
+        const someChecked = checkBoxes.some(c => c.checked);
+        selectAllCheckbox.checked = allChecked;
+        selectAllCheckbox.indeterminate = someChecked && !allChecked;
+      }
+    };
+
+    if (isAdmin && selectAllCheckbox) {
+      selectAllCheckbox.addEventListener('change', () => {
+        checkBoxes.forEach(c => {
+          c.checked = selectAllCheckbox.checked;
+        });
+        updateSelection();
+      });
+
+      if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+          checkBoxes.forEach(c => {
+            c.checked = false;
+          });
+          updateSelection();
+        });
+      }
+    }
+
+    // Close dropdowns on document click
+    const onDocClick = () => {
+      document.querySelectorAll('.jira-status-dropdown-menu').forEach(m => {
+        m.classList.add('hidden');
+      });
+    };
+    document.addEventListener('click', onDocClick);
+
+    // Render client rows
+    clients.forEach((client, idx) => {
+      const isRetainer = client.retainer || client.isRetainer;
+      const tr = el('tr', { class: 'jira-row', 'data-item-id': client.id });
+      rows.push(tr);
+
+      // 1. Checkbox (only for admins)
+      if (isAdmin) {
+        const tdChk = el('td', { style: 'text-align: center;' });
+        const chk = el('input', {
+          type: 'checkbox',
+          style: 'cursor: pointer; accent-color: var(--color-primary); width: 14px; height: 14px;',
+          'data-id': client.id
+        });
+        checkBoxes.push(chk);
+        chk.addEventListener('change', updateSelection);
+        tdChk.appendChild(chk);
+        tr.appendChild(tdChk);
+      }
+
+      // 2. Work (Client Key & Name)
+      const tdWork = el('td');
+      const workDiv = el('div', { class: 'jira-work-cell-content' });
+      tdWork.appendChild(workDiv);
+
+      const chevBtn = el('button', { class: 'jira-row-chevron-btn', text: '▶' });
+      workDiv.appendChild(chevBtn);
+
+      const typeIcon = el('span', {
+        class: isRetainer ? 'jira-epic-icon' : 'jira-task-icon',
+        text: isRetainer ? '⚡' : '✓'
+      });
+      workDiv.appendChild(typeIcon);
+
+      const keyVal = 'CL-' + String(idx + 1).padStart(2, '0');
+      const keyLink = el('a', { class: 'jira-key-link', href: '#clients', text: keyVal });
+      keyLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.showForm(client.id);
+      });
+      workDiv.appendChild(keyLink);
+
+      const nameText = el('span', { class: 'jira-name-text', text: client.name });
+      workDiv.appendChild(nameText);
+      tr.appendChild(tdWork);
+
+      // 3. Entity
+      const tdEntity = el('td');
+      const entityBadge = el('span', {
+        class: 'badge badge-' + (client.entity === 'ATA' ? 'info' : 'success'),
+        text: client.entity
+      });
+      tdEntity.appendChild(entityBadge);
+      tr.appendChild(tdEntity);
+
+      // 4. Retainer
+      const tdRetainer = el('td', { style: 'text-align: center;' });
+      if (isRetainer) {
+        const retainerIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        retainerIcon.setAttribute('width', '14');
+        retainerIcon.setAttribute('height', '14');
+        retainerIcon.setAttribute('viewBox', '0 0 24 24');
+        retainerIcon.setAttribute('fill', 'none');
+        retainerIcon.setAttribute('stroke', '#006644');
+        retainerIcon.setAttribute('stroke-width', '3');
+        retainerIcon.setAttribute('stroke-linecap', 'round');
+        retainerIcon.setAttribute('stroke-linejoin', 'round');
+        retainerIcon.innerHTML = '<polyline points="20 6 9 17 4 12"></polyline>';
+        tdRetainer.appendChild(retainerIcon);
+      }
+      tr.appendChild(tdRetainer);
+
+      // 5. TIN
+      const tdTin = el('td', { text: client.tin || '—' });
+      tr.appendChild(tdTin);
+
+      // 6. RDO Code
+      const tdRdo = el('td', { text: client.rdoCode || '—' });
+      tr.appendChild(tdRdo);
+
+      // 7. Point of Contact
+      const tdAssignee = el('td');
+      const pocUser = client.contactUserId ? DB.getById('users', client.contactUserId) : null;
+      if (pocUser) {
+        const avatarCell = el('div', { class: 'jira-avatar-cell' });
+        const initials = getInitials(pocUser.name);
+        const color = getUserColor(pocUser.id);
+        const avatarCircle = el('span', { class: 'jira-avatar-circle', text: initials, style: `background: ${color};` });
+        const nameSpan = el('span', { text: pocUser.name });
+        avatarCell.appendChild(avatarCircle);
+        avatarCell.appendChild(nameSpan);
+        tdAssignee.appendChild(avatarCell);
+      } else if (client.contactPerson) {
+        const avatarCell = el('div', { class: 'jira-avatar-cell' });
+        const initials = getInitials(client.contactPerson);
+        const avatarCircle = el('span', { class: 'jira-avatar-circle', text: initials, style: 'background: #7a869a;' });
+        const nameSpan = el('span', { text: client.contactPerson });
+        avatarCell.appendChild(avatarCircle);
+        avatarCell.appendChild(nameSpan);
+        tdAssignee.appendChild(avatarCell);
+      } else {
+        const avatarCell = el('div', { class: 'jira-avatar-cell' });
+        const avatarCircle = el('span', { class: 'jira-avatar-unassigned', text: '👤' });
+        const nameSpan = el('span', { text: 'Unassigned', style: 'color: var(--color-text-muted);' });
+        avatarCell.appendChild(avatarCircle);
+        avatarCell.appendChild(nameSpan);
+        tdAssignee.appendChild(avatarCell);
+      }
+      tr.appendChild(tdAssignee);
+
+      // 8. Trade Name
+      const tdTradeName = el('td', { text: client.tradeName || '—' });
+      tr.appendChild(tdTradeName);
+
+      // 9. Address
+      const tdAddress = el('td', { text: client.address || '—' });
+      tr.appendChild(tdAddress);
+
+      // 10. Related Companies
+      const rcList = (client.relatedCompanies || []).map(rc => {
+        const rcClient = DB.getById('clients', rc.clientId);
+        return (rcClient?.name || '—') + ' (' + rc.relationType + ')';
+      }).join(', ') || '—';
+      const tdRc = el('td', { text: rcList });
+      tr.appendChild(tdRc);
+
+      // 11. Contact Details
+      const cdList = (client.contactDetails || []).map(cd => cd.type + ': ' + cd.value).join(', ') || '—';
+      const tdCd = el('td', { text: cdList });
+      tr.appendChild(tdCd);
+
+      // 12. Trash (Archive Action, only for admins)
+      if (isAdmin) {
+        const tdTrash = el('td', { style: 'text-align: center;' });
+        const trashBtn = el('button', { class: 'jira-trash-btn', title: 'Archive Client' });
+        const trashSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        trashSvg.setAttribute('viewBox', '0 0 24 24');
+        trashSvg.setAttribute('width', '14');
+        trashSvg.setAttribute('height', '14');
+        trashSvg.setAttribute('fill', 'none');
+        trashSvg.setAttribute('stroke', 'currentColor');
+        trashSvg.setAttribute('stroke-width', '2');
+        trashSvg.setAttribute('stroke-linecap', 'round');
+        trashSvg.setAttribute('stroke-linejoin', 'round');
+        trashSvg.innerHTML = '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>';
+        trashBtn.appendChild(trashSvg);
+        tdTrash.appendChild(trashBtn);
+        tr.appendChild(tdTrash);
+
+        trashBtn.addEventListener('click', () => {
+          this.archiveClientDirectly(client.id);
+        });
+      }
+
+      tbody.appendChild(tr);
+
+      // Accordion Row
+      const accordionRow = el('tr', { class: 'jira-accordion-tr hidden' });
+      const accordionTd = el('td', { colspan: isAdmin ? '12' : '10', class: 'jira-accordion-td' });
+      accordionRow.appendChild(accordionTd);
+      tbody.appendChild(accordionRow);
+
+      // Build accordion content
+      const detailsContainer = el('div', { class: 'jira-accordion-details-container' });
+      accordionTd.appendChild(detailsContainer);
+
+      // Left section (Client details)
+      const leftSec = el('div', { class: 'jira-accordion-details-section' });
+      leftSec.appendChild(el('div', { class: 'jira-accordion-details-title', text: 'Client Details' }));
+      const leftGrid = el('div', { class: 'jira-details-grid' });
+      leftSec.appendChild(leftGrid);
+
+      // Helper to add grid row
+      const addGridRow = (label, val) => {
+        leftGrid.appendChild(el('div', { class: 'jira-details-lbl', text: label }));
+        leftGrid.appendChild(el('div', { class: 'jira-details-val', text: val || '—' }));
+      };
+
+      addGridRow('Trade Name', client.tradeName);
+      addGridRow('TIN', client.tin);
+      addGridRow('RDO Code', client.rdoCode);
+      addGridRow('Entity', client.entity);
+      addGridRow('Business Address', client.address);
+
+      const relCos = (client.relatedCompanies || []).map(rc => {
+        const rcClient = DB.getById('clients', rc.clientId);
+        return (rcClient?.name || '—') + ' (' + rc.relationType + ')';
+      }).join(', ');
+      addGridRow('Related Companies', relCos);
+
+      const contactDets = (client.contactDetails || []).map(cd => cd.type + ': ' + cd.value + (cd.label ? ` (${cd.label})` : '')).join(', ');
+      addGridRow('Contact Details', contactDets);
+
+      detailsContainer.appendChild(leftSec);
+
+      // Right section (Work requests)
+      const rightSec = el('div', { class: 'jira-accordion-details-section' });
+      const clientWrs = DB.getWhere('workRequests', wr => wr.clientId === client.id);
+      rightSec.appendChild(el('div', { class: 'jira-accordion-details-title', text: `Work Requests (${clientWrs.length})` }));
+      detailsContainer.appendChild(rightSec);
+
+      if (clientWrs.length === 0) {
+        rightSec.appendChild(el('div', { style: 'color: var(--color-text-muted); font-size: 13px;', text: 'No work requests assigned.' }));
+      } else {
+        const childWrsList = el('div', { class: 'jira-details-list' });
+        const seqMap = getChronologicalSequenceMap('workRequests');
+        clientWrs.forEach((wr, wrIdx) => {
+          const wrItem = el('div', { class: 'jira-details-list-item' });
+          const wrSeq = seqMap.get(wr.id) || (wrIdx + 1);
+          const wrKey = 'WR-' + String(wrSeq).padStart(2, '0');
+          const wrLink = el('a', { class: 'jira-details-list-item-key', href: `#operations/detail/${wr.id}`, text: wrKey });
+          const wrTitle = el('span', { class: 'jira-details-list-item-title', text: wr.title });
+          const wrStatus = el('span', { class: 'badge badge-info jira-details-list-item-status', text: wr.status });
+
+          wrItem.appendChild(wrLink);
+          wrItem.appendChild(wrTitle);
+          wrItem.appendChild(wrStatus);
+          childWrsList.appendChild(wrItem);
+        });
+        rightSec.appendChild(childWrsList);
+      }
+
+      // Chevron expand event
+      let expanded = false;
+      chevBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        expanded = !expanded;
+        if (expanded) {
+          chevBtn.classList.add('expanded');
+          chevBtn.textContent = '▼';
+          accordionRow.classList.remove('hidden');
+        } else {
+          chevBtn.classList.remove('expanded');
+          chevBtn.textContent = '▶';
+          accordionRow.classList.add('hidden');
+        }
+      });
+    });
+
+    // Footer
+    const footer = el('div', { class: 'jira-table-footer' });
+    container.appendChild(footer);
+
+    const footerLeft = el('button', { class: 'jira-footer-create-btn', html: '<span style="font-size:14px; font-weight:bold;">+</span> Create' });
+    footerLeft.addEventListener('click', () => {
+      this.showForm();
+    });
+    footer.appendChild(footerLeft);
+
+    const footerCenter = el('div', { class: 'jira-footer-center' });
+    const countText = `${clients.length} of ${clients.length}`;
+    footerCenter.appendChild(el('span', { text: countText }));
+
+    const refreshBtn = el('button', { class: 'jira-footer-refresh-btn', title: 'Refresh list' });
+    const refreshSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    refreshSvg.setAttribute('viewBox', '0 0 24 24');
+    refreshSvg.setAttribute('width', '14');
+    refreshSvg.setAttribute('height', '14');
+    refreshSvg.setAttribute('fill', 'none');
+    refreshSvg.setAttribute('stroke', 'currentColor');
+    refreshSvg.setAttribute('stroke-width', '2');
+    refreshSvg.setAttribute('stroke-linecap', 'round');
+    refreshSvg.setAttribute('stroke-linejoin', 'round');
+    refreshSvg.innerHTML = '<path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>';
+    refreshBtn.appendChild(refreshSvg);
+    footerCenter.appendChild(refreshBtn);
+    footer.appendChild(footerCenter);
+
+    refreshBtn.addEventListener('click', () => {
+      this.renderList(container, query);
+    });
+  },
+
+  async showForm(clientId, mode = null) {
+    this.editingId = clientId || 'new';
+    const isNew = this.editingId === 'new';
+    let client = null;
+    if (!isNew) {
+      try {
+        const res = await window.apiClient.clients.get(clientId);
+        client = res.data;
+      } catch (e) {
+        client = DB.getById('clients', this.editingId);
+      }
+    }
+    const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;
+
+    const formContainer = el('div', { class: 'form-container' });
+    this.renderForm(formContainer, this.editingId, client);
+
+    openFormPanel({
+      icon: '🏢',
+      title: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
+      formContent: formContainer,
+      formId: 'client-form',
+      mode,
+      viewContext: 'client-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
+      ]
+    });
+  },
+
+  renderForm(container, clientId, clientOrNull = null, hideHeader = false) {
+    const client = clientOrNull || (clientId && clientId !== 'new' ? DB.getById('clients', clientId) : null);
+    this.clearNode(container);
+
+    // Inline action bar for embedded/list views. Full-page forms render their own
+    // Save/Cancel actions in the breadcrumb, so suppress this internal header.
+    if (!hideHeader) {
+      const headerBar = el('div', { class: 'form-header-bar' });
+      const headerActions = el('div', { class: 'form-actions-top' });
+      const saveBtnTop = el('button', { type: 'submit', form: 'client-form', class: 'btn btn-primary', text: client ? 'Save Changes' : 'Save Client' });
+      headerActions.appendChild(saveBtnTop);
+      const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+      cancelBtn.addEventListener('click', () => this.showList());
+      headerActions.appendChild(cancelBtn);
+      headerBar.appendChild(headerActions);
+      container.appendChild(headerBar);
+    }
+
+    const form = el('form', { id: 'client-form', class: 'form-stacked notion-form' });
+
+    // ── Identity free-form block ──
+    const identitySection = el('div', { class: 'notion-freeform notion-freeform--title' });
+    identitySection.appendChild(el('label', { class: 'notion-section-label', text: 'Client Name' }));
+    const nameInput = el('input', { type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input', placeholder: 'Taxpayer / company name', required: true, value: client ? (client.name || '') : '' });
+    identitySection.appendChild(nameInput);
+    if (!client) {
+      setTimeout(() => { nameInput.focus(); nameInput.select(); }, 60);
+    }
+    form.appendChild(identitySection);
+
+    // ── Property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
+
+    const tinProp = el('div', { class: 'notion-prop' });
+    tinProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> TIN' }));
+    const tinInput = el('input', { type: 'text', name: 'tin', class: 'notion-prop-input', placeholder: 'XXX-XXX-XXX-XXXXX', required: true, value: client ? (client.tin || '') : '' });
+    tinInput.addEventListener('input', (e) => {
+      let value = e.target.value.replace(/\D/g, '');
+      if (value.length > 14) {
+        value = value.substring(0, 14);
+      }
+      let formatted = '';
+      if (value.length > 0) {
+        formatted += value.substring(0, 3);
+      }
+      if (value.length > 3) {
+        formatted += '-' + value.substring(3, 6);
+      }
+      if (value.length > 6) {
+        formatted += '-' + value.substring(6, 9);
+      }
+      if (value.length > 9) {
+        formatted += '-' + value.substring(9, 14);
+      }
+      e.target.value = formatted;
+    });
+    tinProp.appendChild(tinInput);
+    propsGrid.appendChild(tinProp);
+
+    const tradeProp = el('div', { class: 'notion-prop' });
+    tradeProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 22h20M2 6h20M2 10h20M2 14h20"/></svg> Trade Name' }));
+    tradeProp.appendChild(el('input', { type: 'text', name: 'tradeName', class: 'notion-prop-input', placeholder: 'e.g. DBA name', value: client ? (client.tradeName || '') : '' }));
+    propsGrid.appendChild(tradeProp);
+
+    const entityProp = el('div', { class: 'notion-prop' });
+    entityProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Entity' }));
+    const entitySel = el('select', { name: 'entity', class: 'notion-prop-select', required: true });
+    ['ATA', 'LTA'].forEach(e => {
+      const opt = el('option', { value: e, text: e });
+      if (client ? client.entity === e : Auth.activeEntity === e) opt.selected = true;
+      entitySel.appendChild(opt);
+    });
+    entityProp.appendChild(entitySel);
+    propsGrid.appendChild(entityProp);
+
+    const rdoProp = el('div', { class: 'notion-prop' });
+    rdoProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> RDO Code' }));
+    const rdoInput = el('input', { type: 'text', name: 'rdoCode', class: 'notion-prop-input', placeholder: 'e.g. 034A', maxlength: '4', value: client ? (client.rdoCode || '') : '' });
+    rdoInput.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+    });
+    rdoProp.appendChild(rdoInput);
+    propsGrid.appendChild(rdoProp);
+
+    const pocProp = el('div', { class: 'notion-prop' });
+    pocProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Point of Contact' }));
+    const pocInput = el('input', { type: 'text', name: 'pointOfContactInput', class: 'notion-prop-input', list: 'staff-list', placeholder: '— Select or type Staff —' });
+    const datalist = el('datalist', { id: 'staff-list' });
+    DB.getWhere('users', u => {
+      const userEntities = (u.entities || []).map(e => e.toUpperCase());
+      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(Auth.activeEntity);
+    }).forEach(u => { datalist.appendChild(el('option', { value: u.name + ' (' + u.role + ')' })); });
+    if (client) {
+      if (client.contactUserId) {
+        const u = DB.getById('users', client.contactUserId);
+        if (u) pocInput.value = u.name + ' (' + u.role + ')';
+      } else if (client.contactPerson) {
+        pocInput.value = client.contactPerson;
+      }
+    }
+    pocProp.appendChild(pocInput);
+    pocProp.appendChild(datalist);
+    propsGrid.appendChild(pocProp);
+
+    const retainerProp = el('div', { class: 'notion-prop notion-prop-checkbox' });
+    const retainerLabel = el('label', { class: 'checkbox-label' });
+    const retainerCb = el('input', { type: 'checkbox', name: 'retainer' });
+    if (client && (client.retainer || client.isRetainer)) retainerCb.checked = true;
+    retainerLabel.appendChild(retainerCb);
+    retainerLabel.appendChild(document.createTextNode(' On retainer'));
+    retainerProp.appendChild(retainerLabel);
+    propsGrid.appendChild(retainerProp);
+
+    form.appendChild(propsGrid);
+
+    // Address free-form
+    const addrSection = el('div', { class: 'notion-freeform' });
+    addrSection.appendChild(el('label', { class: 'notion-section-label', text: 'Business Address' }));
+    addrSection.appendChild(el('input', { type: 'text', name: 'address', class: 'notion-freeform-input', placeholder: 'Enter business address', value: client ? (client.address || '') : '' }));
+    form.appendChild(addrSection);
+
+    // Contact Details (multi-entry) — Notion-style
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Contact Details' }));
+    const cdSection = el('div', { class: 'notion-line-items' });
+    const cdContainer = el('div', { id: 'contact-details-container' });
+    const contactDetails = client && Array.isArray(client.contactDetails) ? client.contactDetails : [];
+    contactDetails.forEach((cd, idx) => this.addContactDetailRow(cdContainer, cd, idx));
+    cdSection.appendChild(cdContainer);
+    const addCdBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Contact Detail' });
+    addCdBtn.addEventListener('click', () => this.addContactDetailRow(cdContainer, null, cdContainer.childElementCount));
+    cdSection.appendChild(addCdBtn);
+    form.appendChild(cdSection);
+
+    // Related Companies (multi-entry) — Notion-style
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Related Companies' }));
+    const rcSection = el('div', { class: 'notion-line-items' });
+    const rcContainer = el('div', { id: 'related-companies-container' });
+    const relatedCompanies = client && Array.isArray(client.relatedCompanies) ? client.relatedCompanies : [];
+    relatedCompanies.forEach((rc, idx) => this.addRelatedCompanyRow(rcContainer, rc, idx));
+    rcSection.appendChild(rcContainer);
+    const addRcBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Related Company' });
+    addRcBtn.addEventListener('click', () => this.addRelatedCompanyRow(rcContainer, null, rcContainer.childElementCount));
+    rcSection.appendChild(addRcBtn);
+    form.appendChild(rcSection);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.submitForm(form);
+    });
+
+    container.appendChild(form);
+    return container;
+  },
+
+  addContactDetailRow(container, data, idx) {
+    const row = el('div', { class: 'notion-line-item-row notion-sub-row' });
+
+    const dragHandle = el('div', {
+      class: 'notion-line-item-drag',
+      title: 'Drag to reorder',
+      html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>'
+    });
+    row.appendChild(dragHandle);
+
+    const typeSel = el('select', { class: 'notion-line-item-type', name: 'cd-type-' + idx, style: 'flex: 0 0 100px;' });
+    ['mobile', 'landline', 'email'].forEach(t => {
+      typeSel.appendChild(el('option', { value: t, text: t.charAt(0).toUpperCase() + t.slice(1) }));
+    });
+    if (data && data.type) typeSel.value = data.type;
+    const valueInput = el('input', { type: 'text', class: 'notion-line-item-desc', placeholder: 'Value', name: 'cd-value-' + idx, value: data ? (data.value || '') : '' });
+
+    const updatePlaceholder = () => {
+      if (typeSel.value === 'mobile') {
+        valueInput.placeholder = 'e.g. 09123456789 (11 digits)';
+        valueInput.maxLength = 11;
+      } else if (typeSel.value === 'landline') {
+        valueInput.placeholder = 'e.g. 123456789 (9 digits)';
+        valueInput.maxLength = 9;
+      } else if (typeSel.value === 'email') {
+        valueInput.placeholder = 'e.g. user@theiremail.com';
+        valueInput.removeAttribute('maxLength');
+      }
+      if (valueInput.value) valueInput.dispatchEvent(new Event('input'));
+    };
+
+    valueInput.addEventListener('input', (e) => {
+      if (typeSel.value === 'mobile' || typeSel.value === 'landline') {
+        e.target.value = e.target.value.replace(/\D/g, '');
+      }
+    });
+
+    typeSel.addEventListener('change', updatePlaceholder);
+    updatePlaceholder();
+
+    const labelInput = el('input', { type: 'text', class: 'notion-line-item-desc', style: 'flex: 0 0 140px;', placeholder: 'Label', name: 'cd-label-' + idx, value: data ? (data.label || '') : '' });
+    const removeBtn = el('button', {
+      type: 'button',
+      class: 'notion-line-item-remove',
+      title: 'Remove',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    });
+    removeBtn.addEventListener('click', () => row.remove());
+    row.appendChild(typeSel);
+    row.appendChild(valueInput);
+    row.appendChild(labelInput);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  },
+
+  addRelatedCompanyRow(container, data, idx) {
+    const row = el('div', { class: 'notion-line-item-row notion-sub-row' });
+
+    const dragHandle = el('div', {
+      class: 'notion-line-item-drag',
+      title: 'Drag to reorder',
+      html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>'
+    });
+    row.appendChild(dragHandle);
+
+    const entity = Auth.activeEntity;
+    const clientSel = el('select', { class: 'notion-line-item-type', name: 'rc-client-' + idx, style: 'flex: 1 1 auto; min-width: 160px;' });
+    clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
+    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+      if (this.editingId && c.id === this.editingId) return;
+      clientSel.appendChild(el('option', { value: c.id, text: c.name }));
+    });
+    if (data && data.clientId) clientSel.value = data.clientId;
+    const relSel = el('select', { class: 'notion-line-item-type', name: 'rc-relation-' + idx, style: 'flex: 0 0 150px;' });
+    ['Parent', 'Subsidiary', 'Sister Company', 'Affiliate'].forEach(r => {
+      relSel.appendChild(el('option', { value: r, text: r }));
+    });
+    if (data && data.relationType) relSel.value = data.relationType;
+    const removeBtn = el('button', {
+      type: 'button',
+      class: 'notion-line-item-remove',
+      title: 'Remove',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    });
+    removeBtn.addEventListener('click', () => row.remove());
+    row.appendChild(clientSel);
+    row.appendChild(relSel);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  },
+
+  showList() {
+    this.editingId = null;
+    closeFormPanelAndRoute('#clients');
+  },
+
+  async submitForm(form) {
+    if (!validateRequiredFields(form)) return;
+    const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
+
+    const data = Object.fromEntries(new FormData(form).entries());
+
+    if (!data.tin || !/^\d{3}-\d{3}-\d{3}-\d{5}$/.test(data.tin)) {
+      const tinField = form.querySelector('[name="tin"]');
+      showFieldError(tinField, 'TIN must be in format XXX-XXX-XXX-XXXXX.');
+      return;
+    }
+
+    if (data.rdoCode && !/^[a-zA-Z0-9]{1,4}$/.test(data.rdoCode)) {
+      const rdoField = form.querySelector('[name="rdoCode"]');
+      showFieldError(rdoField, 'RDO Code must be up to 4 alphanumeric characters.');
+      return;
+    }
+
+    const entityRadio = form.querySelector('[name="entity"]:checked, select[name="entity"]');
+    if (!entityRadio || !entityRadio.value) {
+      showFieldError(entityRadio || form.querySelector('[name="entity"]'), 'Entity is required.');
+      return;
+    }
+    // Collect contact details
+    const contactDetails = [];
+    let hasContactError = false;
+    const cdContainer = document.getElementById('contact-details-container');
+    if (cdContainer) {
+      cdContainer.querySelectorAll('.notion-sub-row').forEach(row => {
+        const valueInput = row.querySelector('input[name^="cd-value-"]');
+        const labelInput = row.querySelector('input[name^="cd-label-"]');
+        if (!valueInput || !labelInput) return;
+
+        const type = row.querySelector('select[name^="cd-type-"]')?.value;
+        const value = valueInput.value.trim();
+        const label = labelInput.value.trim();
+
+        if (value || label) {
+          if (!label) {
+            showFieldError(labelInput, 'Label is required.');
+            hasContactError = true;
+          }
+          if (!value) {
+            showFieldError(valueInput, 'Value is required.');
+            hasContactError = true;
+          } else {
+            if (type === 'mobile' && !/^\d{11}$/.test(value)) {
+              showFieldError(valueInput, 'Mobile must be exactly 11 digits.');
+              hasContactError = true;
+            } else if (type === 'landline' && !/^\d{9}$/.test(value)) {
+              showFieldError(valueInput, 'Landline must be exactly 9 digits.');
+              hasContactError = true;
+            } else if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+              showFieldError(valueInput, 'Please enter a valid email address.');
+              hasContactError = true;
+            }
+          }
+          contactDetails.push({ type, value, label });
+        }
+      });
+    }
+
+    if (hasContactError) return;
+
+    // Collect related companies
+    const relatedCompanies = [];
+    const rcContainer = document.getElementById('related-companies-container');
+    if (rcContainer) {
+      rcContainer.querySelectorAll('.notion-sub-row').forEach(row => {
+        const clientId = row.querySelector('select[name^="rc-client-"]')?.value;
+        const relationType = row.querySelector('select[name^="rc-relation-"]')?.value;
+        if (clientId && relationType) {
+          relatedCompanies.push({ clientId, relationType });
+        }
+      });
+    }
+
+    const pocInputValue = (data.pointOfContactInput || '').trim();
+    let contactUserId = '';
+    let contactPerson = '';
+
+    if (pocInputValue) {
+      const matchedUser = DB.getWhere('users', u => (u.name + ' (' + u.role + ')') === pocInputValue)[0];
+      if (matchedUser) {
+        contactUserId = matchedUser.id;
+      } else {
+        contactPerson = pocInputValue;
+      }
+    }
+
+    const record = {
+      name: data.name.trim(),
+      tin: data.tin.trim(),
+      rdoCode: data.rdoCode ? data.rdoCode.trim().toUpperCase() : '',
+      address: data.address ? data.address.trim() : '',
+      tradeName: data.tradeName ? data.tradeName.trim() : '',
+      contactUserId,
+      entity: data.entity || (Auth.activeEntity !== 'ALL' ? Auth.activeEntity : 'ATA'),
+      retainer: !!form.querySelector('input[name="retainer"]:checked'),
+      contactDetails,
+      relatedCompanies
+    };
+
+    const isNew = !this.editingId || this.editingId === 'new';
+    const canEditDirectly = Auth.can('clients:edit');
+
+    try {
+      if (isNew) {
+        await window.apiClient.clients.create(record);
+      } else {
+        await window.apiClient.clients.update(this.editingId, record);
+      }
+    } catch (e) {
+      // Fallback to local persistence when API is unavailable.
+      if (isNew) {
+        record.id = generateId('c');
+        record.createdAt = new Date().toISOString();
+        DB.insert('clients', record);
+      } else {
+        const old = DB.getById('clients', this.editingId);
+        if (old) {
+          record.createdAt = old.createdAt;
+          record.phone = old.phone || '';
+          record.email = old.email || '';
+        }
+        DB.update('clients', this.editingId, record);
+      }
+    }
+
+    const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
+    const msgConfig = {
+      title: isNew ? 'Client Created' : 'Client Updated',
+      message: isApproved 
+        ? `Client ${record.name} has been successfully ${isNew ? 'created' : 'updated'}.` 
+        : `Client ${record.name} ${isNew ? 'creation' : 'update'} request has been submitted for Admin approval.`,
+      type: 'success'
+    };
+    const targetRoute = isResubmitting ? '#admin' : '#clients';
+    closeFormPanelAndRoute(targetRoute, msgConfig);
+  },
+
+  async archiveClientDirectly(clientId) {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can archive clients.');
+      return;
+    }
+    if (!confirm('Are you sure you want to archive this client? This will cancel all related work requests and archive all associated documents.')) return;
+
+    try {
+      await window.apiClient.clients.remove(clientId);
+    } catch (e) {
+      // Fallback to local persistence.
+      const client = DB.getById('clients', clientId);
+      if (!client) return;
+      client.status = 'Archived';
+      client.updatedAt = new Date().toISOString();
+      DB.update('clients', clientId, client);
+
+      const wrs = DB.getWhere('workRequests', wr => wr.clientId === clientId);
+      wrs.forEach(wr => {
+        DB.update('workRequests', wr.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
+        const docs = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
+        docs.forEach(doc => {
+          DB.update('documents', doc.id, { status: 'Archived', archived: true });
+        });
+      });
+    }
+
+    alert('Client archived successfully.');
+    App.handleRoute();
+  },
+
+  archiveClientRequest(clientId) {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can archive clients.');
+      return;
+    }
+    // Check if there is already a pending change to archive this client
+    const pending = DB.getWhere('pendingChanges', pc => 
+      pc.table === 'clients' && 
+      pc.parentRecordId === clientId && 
+      pc.status === 'pending' && 
+      pc.proposedData && 
+      pc.proposedData.status === 'Archived'
+    );
+    if (pending.length > 0) {
+      alert('An archive request for this client is already pending approval.');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to request archiving this client? This requires Admin approval.')) return;
+
+    const client = DB.getById('clients', clientId);
+    if (!client) return;
+
+    const proposed = deepClone(client);
+    proposed.status = 'Archived';
+    proposed.updatedAt = new Date().toISOString();
+
+    const pc = {
+      id: generateId('pc'),
+      table: 'clients',
+      parentRecordId: clientId,
+      proposedData: proposed,
+      submittedBy: Auth.user.id,
+      submittedAt: new Date().toISOString(),
+      status: 'pending',
+      rejectionReason: '',
+      reviewedBy: '',
+      reviewedAt: ''
+    };
+    DB.insert('pendingChanges', pc);
+
+    alert('Archive request submitted for Admin approval.');
+    App.handleRoute();
+  },
+
+  async bulkArchiveClients(clientIds) {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can archive clients.');
+      return;
+    }
+    if (!clientIds || clientIds.length === 0) return;
+    await this.archiveClientsDirectly(clientIds);
+  },
+
+  async migrateClientsFromLocalStorage() {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can migrate clients.');
+      return;
+    }
+
+    const raw = localStorage.getItem('erp_clients');
+    if (!raw) {
+      alert('No prototype client data found in localStorage.');
+      return;
+    }
+
+    let source;
+    try {
+      source = JSON.parse(raw);
+    } catch (e) {
+      alert('Unable to parse localStorage client data.');
+      return;
+    }
+
+    const clients = Array.isArray(source) ? source : [];
+    if (!clients.length) {
+      alert('No clients to migrate.');
+      return;
+    }
+
+    if (!confirm(`Migrate ${clients.length} prototype client(s) to the backend?`)) return;
+
+    let migrated = 0;
+    let skipped = 0;
+    for (const c of clients) {
+      const payload = {
+        name: c.name || c.companyName || 'Unnamed Client',
+        tin: c.tin || '000-000-000-00000',
+        rdoCode: c.rdoCode || c.rdo_code || '',
+        address: c.address || '',
+        tradeName: c.tradeName || c.trade_name || '',
+        entity: (c.entity || Auth.activeEntity || 'ATA').toUpperCase(),
+        retainer: !!(c.retainer || c.isRetainer),
+        contactDetails: (c.contactDetails || c.contact_details || []).map(cd => ({
+          type: cd.type || 'other',
+          value: cd.value || '',
+          label: cd.label || ''
+        })),
+        relatedCompanies: (c.relatedCompanies || c.related_companies || []).map(rc => ({
+          relatedClientId: rc.clientId || rc.related_client_id || rc.relatedClientId,
+          relationship: rc.relationType || rc.relationship || ''
+        }))
+      };
+
+      try {
+        await window.apiClient.clients.create(payload);
+        migrated++;
+      } catch (e) {
+        if (e.message && e.message.includes('already exists')) {
+          skipped++;
+        } else {
+          console.error('Migration client failed', c, e);
+        }
+      }
+    }
+
+    alert(`Migration complete. Migrated ${migrated}, skipped ${skipped}.`);
+    App.handleRoute();
+  },
+
+  async archiveClientsDirectly(clientIds) {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can archive clients.');
+      return;
+    }
+    if (!clientIds || clientIds.length === 0) return;
+    const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
+    if (!confirm(`Are you sure you want to archive ${label}? This will cancel all related work requests and archive all associated documents.`)) return;
+
+    let archivedCount = 0;
+    for (const clientId of clientIds) {
+      try {
+        await window.apiClient.clients.remove(clientId);
+        archivedCount++;
+      } catch (e) {
+        // Fallback to local persistence.
+        const client = DB.getById('clients', clientId);
+        if (!client) continue;
+        client.status = 'Archived';
+        client.updatedAt = new Date().toISOString();
+        DB.update('clients', clientId, client);
+
+        const wrs = DB.getWhere('workRequests', wr => wr.clientId === clientId);
+        wrs.forEach(wr => {
+          DB.update('workRequests', wr.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
+          const docs = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
+          docs.forEach(doc => {
+            DB.update('documents', doc.id, { status: 'Archived', archived: true });
+          });
+        });
+        archivedCount++;
+      }
+    }
+
+    alert(archivedCount === 1 ? 'Client archived successfully.' : `${archivedCount} clients archived successfully.`);
+    App.handleRoute();
+  },
+
+  archiveClientsRequest(clientIds) {
+    if (Auth.user?.role !== 'Admin') {
+      alert('Permission denied. Only Admins can archive clients.');
+      return;
+    }
+    if (!clientIds || clientIds.length === 0) return;
+    const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
+    if (!confirm(`Are you sure you want to request archiving ${label}? This requires Admin approval.`)) return;
+
+    let requestedCount = 0;
+    clientIds.forEach(clientId => {
+      const pending = DB.getWhere('pendingChanges', pc =>
+        pc.table === 'clients' &&
+        pc.parentRecordId === clientId &&
+        pc.status === 'pending' &&
+        pc.proposedData &&
+        pc.proposedData.status === 'Archived'
+      );
+      if (pending.length > 0) return;
+
+      const client = DB.getById('clients', clientId);
+      if (!client) return;
+
+      const proposed = deepClone(client);
+      proposed.status = 'Archived';
+      proposed.updatedAt = new Date().toISOString();
+
+      const pc = {
+        id: generateId('pc'),
+        table: 'clients',
+        parentRecordId: clientId,
+        proposedData: proposed,
+        submittedBy: Auth.user.id,
+        submittedAt: new Date().toISOString(),
+        status: 'pending',
+        rejectionReason: '',
+        reviewedBy: '',
+        reviewedAt: ''
+      };
+      DB.insert('pendingChanges', pc);
+      requestedCount++;
+    });
+
+    if (requestedCount === 0) {
+      alert('Archive requests for the selected clients are already pending approval.');
+    } else {
+      alert(requestedCount === 1 ? 'Archive request submitted for Admin approval.' : `${requestedCount} archive requests submitted for Admin approval.`);
+    }
+    App.handleRoute();
+  },
+
+  async unarchiveClient(id) {
+    try {
+      await window.apiClient.clients.update(id, { status: 'Active' });
+    } catch (e) {
+      const client = DB.getById('clients', id);
+      if (!client || client.status !== 'Archived') return;
+      DB.update('clients', id, { status: 'Active', archived: false, updatedAt: new Date().toISOString() });
+    }
+    App.handleRoute();
+  },
+
+  async bulkUnarchiveClients(clientIds) {
+    if (!clientIds || clientIds.length === 0) return;
+    const validIds = clientIds.filter(id => {
+      const client = DB.getById('clients', id);
+      return client && client.status === 'Archived';
+    });
+    if (validIds.length === 0) return;
+
+    const label = validIds.length === 1 ? 'this client' : `these ${validIds.length} clients`;
+    if (!confirm(`Are you sure you want to restore ${label} to Active Clients?`)) return;
+
+    for (const id of validIds) {
+      try {
+        await window.apiClient.clients.update(id, { status: 'Active' });
+      } catch (e) {
+        DB.update('clients', id, { status: 'Active', archived: false, updatedAt: new Date().toISOString() });
+      }
+    }
+
+    alert(validIds.length === 1 ? 'Client restored successfully.' : `${validIds.length} clients restored successfully.`);
+    App.handleRoute();
+  },
+
+  async getArchivedClients(query) {
+    try {
+      const res = await window.apiClient.clients.list(query ? { search: query, status: 'Archived' } : { status: 'Archived' });
+      let clients = res.data || [];
+      const entity = Auth.activeEntity;
+      clients = clients.filter(c => {
+        const cEnt = (c.entity || '').toUpperCase();
+        return (entity === 'ALL' ? Auth.user.entities.includes(cEnt) : cEnt === entity);
+      });
+      return clients;
+    } catch (e) {
+      const entity = Auth.activeEntity;
+      let clients = DB.getWhere('clients', c => {
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(c.entity) : c.entity === entity);
+        return matchesEntity && c.status === 'Archived';
+      });
+      if (query) {
+        const q = query.toLowerCase();
+        clients = clients.filter(c =>
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.tradeName || '').toLowerCase().includes(q) ||
+          (c.tin || '').toLowerCase().includes(q)
+        );
+      }
+      return clients;
+    }
+  },
+
+  async renderArchive(query = '') {
+    const entity = Auth.activeEntity;
+    const self = this;
+    const isManagerial = Auth.isManagerial();
+
+    const entFilter = ent => {
+      const uEnt = (ent || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
+      return uEnt === entity.toUpperCase();
+    };
+
+    let archived = await this.getArchivedClients(query);
+
+    const rejectedClientChanges = DB.getWhere('pendingChanges', pc => {
+      if (pc.table !== 'clients' || pc.status !== 'rejected') return false;
+      const data = pc.proposedData || {};
+      if (!entFilter(data.entity)) return false;
+      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const rejectedClientRequests = DB.getWhere('operationsRequests', r => {
+      if (r.type !== 'client' || r.status !== 'rejected') return false;
+      if (!entFilter(r.entity)) return false;
+      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+      return true;
+    });
+
+    const canEdit = Auth.can('clients:edit');
+
+    const buildItem = (c, category) => {
+      const pocUser = DB.getById('users', c.contactUserId);
+      return {
+        id: c.id,
+        category,
+        title: c.name || '(untitled)',
+        description: `TIN: ${c.tin || '—'}`,
+        meta: [
+          { icon: ArchivePage.icons.client, text: pocUser?.name || c.contactPerson || '—' },
+          { icon: ArchivePage.icons.status, text: c.tradeName || '—' },
+          { icon: ArchivePage.icons.date, text: formatDate(c.updatedAt) }
+        ],
+        actions: [
+          {
+            label: 'View',
+            icon: ArchivePage.icons.view,
+            onClick: () => { location.hash = '#clients/form/' + c.id; }
+          },
+          ...(category === 'accomplished' && canEdit ? [{
+            label: 'Restore',
+            icon: ArchivePage.icons.restore,
+            className: 'primary',
+            onClick: () => self.unarchiveClient(c.id)
+          }] : [])
+        ]
+      };
+    };
+
+    const buildRejectedItem = record => {
+      const isOpReq = record.hasOwnProperty('requestedBy');
+      const data = isOpReq ? record : (record.proposedData || {});
+      const clientId = isOpReq ? record.clientId : data.id;
+      const client = clientId ? DB.getById('clients', clientId) : null;
+      const title = isOpReq
+        ? `Client Request ${client ? '— ' + (client.name || '') : ''}`
+        : `Client Change: ${data.name || '(untitled)'}`;
+      const reason = data.rejectionReason || record.rejectionReason || 'Rejected';
+      return {
+        id: record.id,
+        category: 'rejected',
+        title,
+        meta: [
+          { icon: ArchivePage.icons.client, text: client ? (client.name || '—') : '—' },
+          { icon: ArchivePage.icons.date, text: formatDate(record.reviewedAt || record.updatedAt || record.requestedAt) },
+          { icon: ArchivePage.icons.status, text: `Reason: ${reason}` }
+        ],
+        actions: [
+          ...(clientId ? [{
+            label: 'View Client',
+            icon: ArchivePage.icons.view,
+            onClick: () => { location.hash = '#clients/form/' + clientId; }
+          }] : [])
+        ]
+      };
+    };
+
+    return ArchivePage.render({
+      module: 'clients',
+      categoryLabels: { accomplished: 'Archived', cancelled: 'Cancelled', rejected: 'Rejected' },
+      categories: {
+        accomplished: archived.map(c => buildItem(c, 'accomplished')),
+        cancelled: [],
+        rejected: [
+          ...rejectedClientChanges.map(buildRejectedItem),
+          ...rejectedClientRequests.map(buildRejectedItem)
+        ]
+      },
+      emptyText: 'Archive is empty.',
+      bulkActions: (ids) => [
+        {
+          text: 'Restore Selected',
+          className: 'btn btn-primary btn-sm',
+          onClick: (selectedIds) => {
+            this.bulkUnarchiveClients(selectedIds);
+          }
+        }
+      ]
+    });
+  }
+};
