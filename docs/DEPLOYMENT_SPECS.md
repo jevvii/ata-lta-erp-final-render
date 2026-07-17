@@ -516,51 +516,69 @@ smoke-uat:
 ### 9.4 Render Blueprint (`render.yaml`) — Free Tier UAT Only
 
 ```yaml
-services:
-  # ─── UAT Backend ────────────────────────────────────────────────
-  - type: web
-    name: ata-lta-erp-api-uat
-    runtime: docker
-    plan: free
-    repo: https://github.com/<org>/ata-lta-erp
-    branch: uat
-    rootDir: backend
-    dockerfilePath: Dockerfile
-    healthCheckPath: /health
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: info
-      - key: FRONTEND_URL
-        fromService:
-          name: ata-lta-erp-spa-uat
-          type: web
-          property: host
-      - fromGroup: erp-uat-secrets
+projects:
+  - name: ata-lta-erp
+    environments:
+      - name: uat
+        services:
+          # ─── UAT Backend ────────────────────────────────────────────────
+          - type: web
+            name: ata-lta-erp-api-uat
+            runtime: docker
+            plan: free
+            repo: https://github.com/<org>/ata-lta-erp
+            branch: uat
+            rootDir: backend
+            dockerfilePath: Dockerfile
+            healthCheckPath: /health
+            envVars:
+              - key: NODE_ENV
+                value: production
+              - key: LOG_LEVEL
+                value: info
+              - key: FRONTEND_URL
+                fromService:
+                  name: ata-lta-erp-spa-uat
+                  type: web
+                  property: host
+              - fromGroup: erp-uat-secrets
 
-  # ─── UAT Frontend Static Site ──────────────────────────────────
-  - type: web
-    name: ata-lta-erp-spa-uat
-    runtime: static
-    plan: free
-    repo: https://github.com/<org>/ata-lta-erp
-    branch: uat
-    rootDir: erp_prototype
-    buildCommand: npm run build
-    staticPublishPath: .
-    envVars:
-      - key: ERP_API_BASE_URL
-        fromService:
-          name: ata-lta-erp-api-uat
-          type: web
-          property: host
+          # ─── UAT Frontend Static Site ──────────────────────────────────
+          - type: web
+            name: ata-lta-erp-spa-uat
+            runtime: static
+            repo: https://github.com/<org>/ata-lta-erp
+            branch: uat
+            rootDir: erp_prototype
+            buildCommand: npm run build
+            staticPublishPath: .
+            envVars:
+              - key: ERP_API_BASE_URL
+                fromService:
+                  name: ata-lta-erp-api-uat
+                  type: web
+                  property: host
+
+        envVarGroups:
+          - name: erp-uat-secrets
+            envVars:
+              - key: SUPABASE_URL
+                value: REPLACE_WITH_UAT_SUPABASE_URL
+              - key: SUPABASE_SERVICE_KEY
+                value: REPLACE_WITH_UAT_SUPABASE_SERVICE_KEY
+              - key: SUPABASE_STORAGE_BUCKET
+                value: ata-lta-erp-documents-uat
+              - key: DATABASE_URL
+                value: REPLACE_WITH_UAT_DATABASE_URL
 ```
 
 > Notes:
+> - Both services and the env group live inside a `projects` → `uat` environment so `fromGroup` can link them.
 > - `fromGroup` is a bare list item under `envVars`; it injects every variable from `erp-uat-secrets`.
 > - `fromService.property: host` returns a bare hostname; the backend and build script prepend `https://` and the build script appends `/v1`.
-> - Production services are not included in this Blueprint because multiple services or production-grade plans trigger Render's payment wall on the free tier.
+> - Static sites are free by default — **do not** set `plan: free` on them.
+> - Replace the placeholder env group values after the Blueprint creates the group, or set them in the Render dashboard.
+> - Production services are not included because multiple services or production-grade plans trigger Render's payment wall on the free tier.
 
 ---
 

@@ -124,7 +124,16 @@ Production secrets are added later when upgrading to a paid Render plan.
 
 The `production` environment is created later when upgrading to a paid Render plan.
 
-### 2.3 Verify CI Works
+### 2.3 Push the `uat` Branch
+
+Render reads `render.yaml` from the `uat` branch. It must exist on GitHub before creating the Blueprint.
+
+```bash
+git checkout uat
+git push -u origin uat
+```
+
+### 2.4 Verify CI Works
 
 1. Push any trivial change to the `uat` branch (or create a test PR).
 2. Confirm `ci.yml` runs:
@@ -142,8 +151,7 @@ The `production` environment is created later when upgrading to a paid Render pl
 
 ### 3.2 Create Environment Group
 
-1. Go to **Dashboard → Environment Groups**.
-2. Create `erp-uat-secrets` with values from `docs/ENVIRONMENT_CONFIGURATION.md`.
+> **Note**: The current `render.yaml` creates the environment group `erp-uat-secrets` inside the Blueprint's `uat` environment. You do **not** need to create it manually in the Render dashboard beforehand. If you already created one manually, delete it first to avoid the "different environment" error.
 
 The `erp-prod-secrets` group is created later when upgrading to a paid Render plan.
 
@@ -154,13 +162,18 @@ The `erp-prod-secrets` group is created later when upgrading to a paid Render pl
 1. In Render dashboard, click **New → Blueprint**.
 2. Connect the GitHub repository `jevvii/ata-lta-erp-final-render`.
 3. Render will detect `render.yaml`.
-4. On first deploy, it creates two free-tier services:
-   - `ata-lta-erp-api-uat` (Web Service, Free plan)
-   - `ata-lta-erp-spa-uat` (Static Site, Free plan)
-5. Wait for both services to deploy.
+4. On first deploy, it creates:
+   - A `uat` environment inside the `ata-lta-erp` project.
+   - `ata-lta-erp-api-uat` (Web Service, Free plan).
+   - `ata-lta-erp-spa-uat` (Static Site; static sites are free by default and do **not** declare `plan: free`).
+   - The `erp-uat-secrets` environment group with placeholder values.
+5. After creation, update `erp-uat-secrets` in the Render dashboard with real Supabase values.
+6. Redeploy the `ata-lta-erp-api-uat` service to pick up the updated secrets.
+7. Wait for both services to deploy.
 
 If Render still shows a payment wall, verify:
-- `render.yaml` declares `plan: free` on both services.
+- Only the backend service declares `plan: free`.
+- The Static Site does **not** declare `plan`.
 - You are creating the Blueprint from a personal Render account (not a team that requires billing).
 - No other paid features (e.g., disks, custom domains, paid databases) are requested.
 
