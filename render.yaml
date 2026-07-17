@@ -52,10 +52,10 @@ projects:
           - name: erp-uat-secrets
             envVars:
               - key: SUPABASE_URL
-                value: REPLACE_WITH_UAT_SUPABASE_URL
+                value: https://nohelmujoswmmqedgern.supabase.co
               - key: SUPABASE_SERVICE_KEY
-                value: REPLACE_WITH_UAT_SUPABASE_SERVICE_KEY
+                value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vaGVsbXVqb3N3bW1xZWRnZXJuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDI4MDc2MSwiZXhwIjoyMDk5ODU2NzYxfQ.7JeXIvZtRAyQSNTk4CAhSmNTEJZinrTntn7PHi3IWZ0
               - key: SUPABASE_STORAGE_BUCKET
                 value: ata-lta-erp-documents-uat
               - key: DATABASE_URL
-                value: REPLACE_WITH_UAT_DATABASE_URL
+                value: postgresql://postgres.nohelmujoswmmqedgern:zzcMqgTAFXwQkcnh@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
