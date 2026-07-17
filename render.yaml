@@ -1,0 +1,113 @@
+# ATA & LTA ERP — Render Blueprint
+# Declares UAT and Production services for auto-deploy from Git branches.
+
+services:
+  # ─── UAT Backend ────────────────────────────────────────────────
+  - type: web
+    name: ata-lta-erp-api-uat
+    runtime: docker
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: uat
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: SUPABASE_URL
+        fromGroup: erp-uat-secrets
+      - key: SUPABASE_SERVICE_KEY
+        fromGroup: erp-uat-secrets
+      - key: DATABASE_URL
+        fromGroup: erp-uat-secrets
+      - key: AWS_REGION
+        fromGroup: erp-uat-secrets
+      - key: AWS_ACCESS_KEY_ID
+        fromGroup: erp-uat-secrets
+      - key: AWS_SECRET_ACCESS_KEY
+        fromGroup: erp-uat-secrets
+      - key: S3_DOCUMENT_BUCKET
+        fromGroup: erp-uat-secrets
+      - key: CLOUDFRONT_KEY_ID
+        fromGroup: erp-uat-secrets
+      - key: CLOUDFRONT_PRIVATE_KEY
+        fromGroup: erp-uat-secrets
+      - key: CLOUDFRONT_DOCUMENT_DOMAIN
+        fromGroup: erp-uat-secrets
+      - key: FRONTEND_URL
+        fromService:
+          name: ata-lta-erp-spa-uat
+          type: static_site
+          property: url
+
+  # ─── UAT Frontend Static Site ──────────────────────────────────
+  - type: static_site
+    name: ata-lta-erp-spa-uat
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: uat
+    rootDir: erp_prototype
+    buildCommand: npm run build
+    publishDir: .
+    envVars:
+      - key: ERP_API_BASE_URL
+        fromService:
+          name: ata-lta-erp-api-uat
+          type: web
+          property: url
+
+  # ─── Production Backend ────────────────────────────────────────
+  - type: web
+    name: ata-lta-erp-api-prod
+    runtime: docker
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: main
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: SUPABASE_URL
+        fromGroup: erp-prod-secrets
+      - key: SUPABASE_SERVICE_KEY
+        fromGroup: erp-prod-secrets
+      - key: DATABASE_URL
+        fromGroup: erp-prod-secrets
+      - key: AWS_REGION
+        fromGroup: erp-prod-secrets
+      - key: AWS_ACCESS_KEY_ID
+        fromGroup: erp-prod-secrets
+      - key: AWS_SECRET_ACCESS_KEY
+        fromGroup: erp-prod-secrets
+      - key: S3_DOCUMENT_BUCKET
+        fromGroup: erp-prod-secrets
+      - key: CLOUDFRONT_KEY_ID
+        fromGroup: erp-prod-secrets
+      - key: CLOUDFRONT_PRIVATE_KEY
+        fromGroup: erp-prod-secrets
+      - key: CLOUDFRONT_DOCUMENT_DOMAIN
+        fromGroup: erp-prod-secrets
+      - key: FRONTEND_URL
+        fromService:
+          name: ata-lta-erp-spa-prod
+          type: static_site
+          property: url
+
+  # ─── Production Frontend Static Site ───────────────────────────
+  - type: static_site
+    name: ata-lta-erp-spa-prod
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: main
+    rootDir: erp_prototype
+    buildCommand: npm run build
+    publishDir: .
+    envVars:
+      - key: ERP_API_BASE_URL
+        fromService:
+          name: ata-lta-erp-api-prod
+          type: web
+          property: url

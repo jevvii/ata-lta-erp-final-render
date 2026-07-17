@@ -1,0 +1,24 @@
+name: Nightly Production Backup
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup-prod:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y postgresql-client
+      - run: |
+          pg_dump "$DATABASE_URL" --no-owner --no-acl --clean --if-exists \
+            --file ata-lta-erp-prod-$(date +%Y%m%d-%H%M%S).sql
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prod-db-backup
+          path: ata-lta-erp-prod-*.sql
+          retention-days: 30

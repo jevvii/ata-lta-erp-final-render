@@ -6,6 +6,7 @@
 
 const AppError = require('../lib/AppError');
 const env = require('../config/env');
+const logger = require('../lib/logger');
 
 const errorHandler = (err, req, res, _next) => {
   const isOperational = err instanceof AppError;
@@ -25,8 +26,20 @@ const errorHandler = (err, req, res, _next) => {
     ...(err.code && { code: err.code }),
   };
 
-  // eslint-disable-next-line no-console
-  console.error('[ERROR]', err);
+  logger.error('unhandled error', {
+    status,
+    title,
+    detail,
+    stack: env.isDevelopment ? err.stack : undefined,
+    requestId: req.id,
+    name: err.name,
+    error: {
+      name: err.name,
+      message: err.message,
+      code: err.code,
+      raw: env.isDevelopment ? err : undefined,
+    },
+  });
 
   res.status(status).json(response);
 };

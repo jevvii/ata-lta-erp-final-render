@@ -1,0 +1,24 @@
+name: Nightly UAT Backup
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup-uat:
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y postgresql-client
+      - run: |
+          pg_dump "$DATABASE_URL" --no-owner --no-acl --clean --if-exists \
+            --file ata-lta-erp-uat-$(date +%Y%m%d-%H%M%S).sql
+        env:
+          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uat-db-backup
+          path: ata-lta-erp-uat-*.sql
+          retention-days: 7

@@ -1,4 +1,11 @@
 {
+  "name": "ata-lta-erp-spa",
+  "version": "0.1.0",
+  "description": "Frontend SPA for the ATA & LTA Accounting Firm ERP",
+  "scripts": {
+    "build": "node build.js",
+    "smoke": "node smoke-test.js"
+  },
   "dependencies": {
     "playwright": "^1.61.1"
   }
