@@ -27,17 +27,18 @@ services:
       - key: FRONTEND_URL
         fromService:
           name: ata-lta-erp-spa-uat
-          type: static_site
+          type: web
           property: url
 
   # ─── UAT Frontend Static Site ──────────────────────────────────
-  - type: static_site
+  - type: web
     name: ata-lta-erp-spa-uat
+    runtime: static
     repo: https://github.com/jevvii/ata-lta-erp-final-render.git
     branch: uat
     rootDir: erp_prototype
     buildCommand: npm run build
-    publishDir: .
+    staticPublishPath: .
     envVars:
       - key: ERP_API_BASE_URL
         fromService:
@@ -70,17 +71,18 @@ services:
       - key: FRONTEND_URL
         fromService:
           name: ata-lta-erp-spa-prod
-          type: static_site
+          type: web
           property: url
 
   # ─── Production Frontend Static Site ───────────────────────────
-  - type: static_site
+  - type: web
     name: ata-lta-erp-spa-prod
+    runtime: static
     repo: https://github.com/jevvii/ata-lta-erp-final-render.git
     branch: main
     rootDir: erp_prototype
     buildCommand: npm run build
-    publishDir: .
+    staticPublishPath: .
     envVars:
       - key: ERP_API_BASE_URL
         fromService:
