@@ -50,7 +50,7 @@ app.use((req, res, next) => {
   res.on('finish', () => {
     logger.info('request', {
       method: req.method,
-      path: req.path,
+      originalUrl: req.originalUrl,
       status: res.statusCode,
       durationMs: Date.now() - start,
       requestId: req.id,
@@ -83,27 +83,50 @@ app.use(rateLimit({
   },
 }));
 
-// Extended health check with dependency verification
+// Extended health check with dependency verification.
+// Cached for 30 s to avoid hammering dependencies under load;
+// each probe has a 5 s timeout so partial outages don't stall the endpoint.
+const HEALTH_CACHE_TTL_MS = 30_000;
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+let healthCache = null;
+let healthCacheExpiry = 0;
+
 app.get('/health', async (req, res) => {
+  const now = Date.now();
+  if (healthCache && now < healthCacheExpiry) {
+    return res.status(healthCache.ok ? 200 : 503).json(healthCache.body);
+  }
+
   const checks = { supabase: false, s3: false };
   try {
-    await supabaseAdmin.from('entities').select('id').limit(1);
+    await Promise.race([
+      supabaseAdmin.from('entities').select('id').limit(1),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)),
+    ]);
     checks.supabase = true;
   } catch (e) {
     logger.warn('health check failed: supabase', { error: e.message, requestId: req.id });
   }
   try {
-    await s3Client.send(new HeadBucketCommand({ Bucket: env.s3.documentBucket }));
+    await Promise.race([
+      s3Client.send(new HeadBucketCommand({ Bucket: env.s3.documentBucket })),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)),
+    ]);
     checks.s3 = true;
   } catch (e) {
     logger.warn('health check failed: s3', { error: e.message, requestId: req.id });
   }
   const ok = checks.supabase && checks.s3;
-  res.status(ok ? 200 : 503).json({
+  const body = {
     status: ok ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     checks,
-  });
+  };
+
+  healthCache = { ok, body };
+  healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
+
+  res.status(ok ? 200 : 503).json(body);
 });
 
 // Public routes

@@ -37,6 +37,6 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm run migrate up -- --dry-run
+      - run: npm run migrate:up -- --dry-run
         env:
           DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PROD_DATABASE_URL || secrets.UAT_DATABASE_URL }}

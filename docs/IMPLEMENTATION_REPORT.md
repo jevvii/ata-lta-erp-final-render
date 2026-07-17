@@ -63,6 +63,19 @@ All phases from [IMPLEMENTATION_PLAN.md](file:///home/deutz/Migration_Final-rend
 
 ---
 
+## Phase 6 — Monitoring and Alerting ⏳
+
+| Task | Status | Details |
+|------|--------|---------|
+| Render health checks | ✅ | Configured via `healthCheckPath: /health` in [render.yaml](file:///home/deutz/Migration_Final-render/ata-lta-erp-final-render/render.yaml) |
+| External uptime monitor | ⏳ | Manual: set up UptimeRobot for `/health` at 5-min intervals |
+| Production error tracking | ⏳ | Manual: integrate Sentry/Logtail after UAT sign-off |
+
+> [!NOTE]
+> Phase 6 tasks are partially code-driven (health check path in `render.yaml`) and partially manual (dashboard configuration for UptimeRobot and Sentry).
+
+---
+
 ## Phase 7 — Production Deployment ✅
 
 | Task | Status | File |

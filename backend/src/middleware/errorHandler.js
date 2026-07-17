@@ -32,6 +32,13 @@ const errorHandler = (err, req, res, _next) => {
     detail,
     stack: env.isDevelopment ? err.stack : undefined,
     requestId: req.id,
+    name: err.name,
+    error: {
+      name: err.name,
+      message: err.message,
+      code: err.code,
+      raw: env.isDevelopment ? err : undefined,
+    },
   });
 
   res.status(status).json(response);
