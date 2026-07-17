@@ -1,8 +1,13 @@
 # ATA & LTA ERP — Render Blueprint (Free Tier UAT Only)
-# Deploys the UAT backend and SPA on Render's free plan.
-# IMPORTANT: Replace the placeholder values in erp-uat-secrets after the
-# Blueprint creates the environment group, or set them here only if this file
-# will never be committed with real secrets.
+# Deploys the UAT backend and SPA into the existing "My project".
+#
+# PREREQUISITE: Create the "erp-uat-secrets" environment group in the Render
+# dashboard under My project → uat, using these exact key names (no UAT_ prefix):
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_KEY
+#   SUPABASE_STORAGE_BUCKET
+#   DATABASE_URL
+# Do NOT store real secret values in this file.
 
 projects:
   - name: My project
@@ -47,15 +52,3 @@ projects:
                   name: ata-lta-erp-api-uat
                   type: web
                   property: host
-
-        envVarGroups:
-          - name: erp-uat-secrets
-            envVars:
-              - key: SUPABASE_URL
-                value: https://nohelmujoswmmqedgern.supabase.co
-              - key: SUPABASE_SERVICE_KEY
-                value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5vaGVsbXVqb3N3bW1xZWRnZXJuIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NDI4MDc2MSwiZXhwIjoyMDk5ODU2NzYxfQ.7JeXIvZtRAyQSNTk4CAhSmNTEJZinrTntn7PHi3IWZ0
-              - key: SUPABASE_STORAGE_BUCKET
-                value: ata-lta-erp-documents-uat
-              - key: DATABASE_URL
-                value: postgresql://postgres.nohelmujoswmmqedgern:zzcMqgTAFXwQkcnh@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres

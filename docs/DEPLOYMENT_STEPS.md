@@ -151,7 +151,18 @@ git push -u origin uat
 
 ### 3.2 Create Environment Group
 
-> **Note**: The current `render.yaml` creates the environment group `erp-uat-secrets` inside the Blueprint's `uat` environment. You do **not** need to create it manually in the Render dashboard beforehand. If you already created one manually, delete it first to avoid the "different environment" error.
+1. Go to **My project → uat → Environment Groups**.
+2. Create a new group named `erp-uat-secrets`.
+3. Add the keys using the **exact names** the backend expects (no `UAT_` prefix):
+
+| Key | Value |
+|-----|-------|
+| `SUPABASE_URL` | Your UAT Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Your UAT Supabase service-role key |
+| `SUPABASE_STORAGE_BUCKET` | `ata-lta-erp-documents-uat` |
+| `DATABASE_URL` | Your UAT Supabase pooled connection string |
+
+> **Why no prefix?** The environment group is already scoped to the `uat` environment, so the `UAT_` prefix is unnecessary. The backend reads `SUPABASE_URL`, not `UAT_SUPABASE_URL`.
 
 The `erp-prod-secrets` group is created later when upgrading to a paid Render plan.
 

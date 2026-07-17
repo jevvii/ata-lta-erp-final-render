@@ -93,27 +93,24 @@ For simplicity, the recommended setup is to use the service role key for backend
 
 ## 3. Render Environment Groups
 
-Create two environment groups in the Render dashboard:
+Environment groups must be created in the Render dashboard **before** creating the Blueprint. The Blueprint references them by name and does **not** contain secret values.
 
-- `erp-uat-secrets`
-- `erp-prod-secrets`
+Create the group under **My project → uat** environment.
 
 ### 3.1 UAT Environment Group (`erp-uat-secrets`)
 
+Use these exact key names (no `UAT_` prefix — the group is already scoped to the uat environment):
+
 | Key | Source | Example |
 |-----|--------|---------|
-| `NODE_ENV` | Render (hardcoded in `render.yaml`) | `production` |
-| `PORT` | Render auto-injected | `10000` |
-| `LOG_LEVEL` | Render (hardcoded in `render.yaml`) | `info` |
 | `SUPABASE_URL` | Supabase UAT project settings | `https://xxxx.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | Supabase UAT project settings | `eyJ...` |
 | `SUPABASE_STORAGE_BUCKET` | Supabase UAT Storage | `ata-lta-erp-documents-uat` |
 | `DATABASE_URL` | Supabase UAT connection pooler | `postgresql://postgres.xxx:...@...pooler.supabase.com:6543/postgres?pgbouncer=true` |
-| `FRONTEND_URL` | Render Static Site URL | `https://ata-lta-erp-spa-uat.onrender.com` |
 
 ### 3.2 Production Environment Group (`erp-prod-secrets`) — Paid Plan
 
-Same keys as UAT, but pointing to the production Supabase project and the production Render Static Site URL. Created only after upgrading to a paid Render plan.
+Same keys as UAT, but pointing to the production Supabase project. Created only after upgrading to a paid Render plan.
 
 | Key | Source | Example |
 |-----|--------|---------|
@@ -121,7 +118,6 @@ Same keys as UAT, but pointing to the production Supabase project and the produc
 | `SUPABASE_SERVICE_KEY` | Supabase prod project settings | `eyJ...` |
 | `SUPABASE_STORAGE_BUCKET` | Supabase prod Storage | `ata-lta-erp-documents-prod` |
 | `DATABASE_URL` | Supabase prod connection pooler | `postgresql://postgres.yyy:...@...pooler.supabase.com:6543/postgres?pgbouncer=true` |
-| `FRONTEND_URL` | Render Static Site URL | `https://ata-lta-erp-spa-prod.onrender.com` |
 
 ### 3.3 Render Static Site Env Vars
 
