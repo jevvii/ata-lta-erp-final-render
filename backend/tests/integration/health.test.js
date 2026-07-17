@@ -2,6 +2,11 @@
  * Health check integration test.
  */
 
+jest.mock('../../src/services/supabaseClient', () => {
+  const { supabaseAdmin } = require('../fixtures/supabaseMock');
+  return { supabaseAdmin };
+});
+
 const request = require('supertest');
 const { app } = require('../helpers/testServer');
 
@@ -10,5 +15,9 @@ describe('GET /health', () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
+    expect(res.body.checks).toEqual({
+      supabase: true,
+      storage: true,
+    });
   });
 });

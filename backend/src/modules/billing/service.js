@@ -7,7 +7,7 @@
  */
 
 const { supabaseAdmin } = require('../../services/supabaseClient');
-const { getSignedUploadUrl, getSignedDownloadUrl } = require('../../services/s3Service');
+const { uploadBuffer } = require('../../services/storageService');
 const { generatePdf } = require('../../services/pdfService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
@@ -390,21 +390,13 @@ const generateInvoicePdf = async ({ entityId, entityCode, id }) => {
   const html = buildInvoiceHtml(invoice, code);
   const pdfBuffer = await generatePdf({ html, options: { format: 'A4' } });
 
-  const s3Key = `entities/${code}/invoices/${id}/pdf/${invoice.invoice_number}.pdf`;
-  const uploadUrl = await getSignedUploadUrl({
-    key: s3Key,
+  const storagePath = `entities/${code}/invoices/${id}/pdf/${invoice.invoice_number}.pdf`;
+  const downloadUrl = await uploadBuffer({
+    path: storagePath,
+    buffer: pdfBuffer,
     contentType: 'application/pdf',
-    expiresInSeconds: 120,
   });
 
-  // Upload the PDF to S3
-  await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/pdf' },
-    body: pdfBuffer,
-  });
-
-  const downloadUrl = await getSignedDownloadUrl({ key: s3Key, expiresInSeconds: 300 });
   return { url: downloadUrl };
 };
 
@@ -422,20 +414,13 @@ const generateVoucherPdf = async ({ entityId, entityCode, id }) => {
   const html = buildVoucherHtml(invoice, code);
   const pdfBuffer = await generatePdf({ html, options: { format: 'A4' } });
 
-  const s3Key = `entities/${code}/invoices/${id}/voucher/${invoice.invoice_number}-voucher.pdf`;
-  const uploadUrl = await getSignedUploadUrl({
-    key: s3Key,
+  const storagePath = `entities/${code}/invoices/${id}/voucher/${invoice.invoice_number}-voucher.pdf`;
+  const downloadUrl = await uploadBuffer({
+    path: storagePath,
+    buffer: pdfBuffer,
     contentType: 'application/pdf',
-    expiresInSeconds: 120,
   });
 
-  await fetch(uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/pdf' },
-    body: pdfBuffer,
-  });
-
-  const downloadUrl = await getSignedDownloadUrl({ key: s3Key, expiresInSeconds: 300 });
   return { url: downloadUrl };
 };
 

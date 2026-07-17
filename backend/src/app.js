@@ -17,8 +17,6 @@ const { randomUUID } = require('crypto');
 const env = require('./config/env');
 const logger = require('./lib/logger');
 const { supabaseAdmin } = require('./services/supabaseClient');
-const { s3Client } = require('./config/aws');
-const { HeadBucketCommand } = require('@aws-sdk/client-s3');
 const errorHandler = require('./middleware/errorHandler');
 const { auth } = require('./middleware/auth');
 const { entityScope } = require('./middleware/entityScope');
@@ -97,7 +95,7 @@ app.get('/health', async (req, res) => {
     return res.status(healthCache.ok ? 200 : 503).json(healthCache.body);
   }
 
-  const checks = { supabase: false, s3: false };
+  const checks = { supabase: false, storage: false };
   try {
     await Promise.race([
       supabaseAdmin.from('entities').select('id').limit(1),
@@ -109,14 +107,14 @@ app.get('/health', async (req, res) => {
   }
   try {
     await Promise.race([
-      s3Client.send(new HeadBucketCommand({ Bucket: env.s3.documentBucket })),
+      supabaseAdmin.storage.listBuckets(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)),
     ]);
-    checks.s3 = true;
+    checks.storage = true;
   } catch (e) {
-    logger.warn('health check failed: s3', { error: e.message, requestId: req.id });
+    logger.warn('health check failed: storage', { error: e.message, requestId: req.id });
   }
-  const ok = checks.supabase && checks.s3;
+  const ok = checks.supabase && checks.storage;
   const body = {
     status: ok ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),

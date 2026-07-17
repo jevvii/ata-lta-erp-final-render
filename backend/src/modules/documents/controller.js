@@ -134,7 +134,7 @@ const deleteDocument = async (req, res, next) => {
 };
 
 /**
- * Confirm that an S3 upload has completed.
+ * Confirm that a storage upload has completed.
  * @param {import('express').Request} req
  * @param {import('express').Response} res
  * @param {import('express').NextFunction} next

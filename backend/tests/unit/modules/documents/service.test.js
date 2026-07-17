@@ -1,8 +1,8 @@
 /**
  * Document service unit tests.
- * Tests for S3 key generation and file name sanitization (pure functions).
+ * Tests for storage path generation and file name sanitization (pure functions).
  *
- * These tests mock out the Supabase/S3 dependencies to isolate
+ * These tests mock out the Supabase/storage dependencies to isolate
  * the pure logic in the service module.
  */
 
@@ -23,9 +23,9 @@ jest.mock('../../../../src/services/supabaseClient', () => ({
   },
 }));
 
-jest.mock('../../../../src/services/s3Service', () => ({
-  getSignedUploadUrl: jest.fn().mockResolvedValue('https://s3.example.com/upload'),
-  getSignedDownloadUrl: jest.fn().mockResolvedValue('https://s3.example.com/download'),
+jest.mock('../../../../src/services/storageService', () => ({
+  getSignedUploadUrl: jest.fn().mockResolvedValue('https://storage.example.com/upload'),
+  getSignedDownloadUrl: jest.fn().mockResolvedValue('https://storage.example.com/download'),
   deleteObject: jest.fn().mockResolvedValue(undefined),
 }));
 
@@ -35,7 +35,7 @@ jest.mock('../../../../src/services/auditService', () => ({
 
 const {
   sanitizeFileName,
-  generateS3Key,
+  generateStoragePath,
 } = require('../../../../src/modules/documents/service');
 
 describe('Documents Service', () => {
@@ -66,48 +66,48 @@ describe('Documents Service', () => {
     });
   });
 
-  describe('generateS3Key', () => {
+  describe('generateStoragePath', () => {
     const baseParams = {
       entityCode: 'ATA',
       documentId: '123e4567-e89b-12d3-a456-426614174000',
       fileName: 'Test File.pdf',
     };
 
-    it('generates client-based key when clientId is provided', () => {
-      const key = generateS3Key({
+    it('generates client-based path when clientId is provided', () => {
+      const path = generateStoragePath({
         ...baseParams,
         clientId: 'client-uuid',
         workRequestId: null,
       });
-      expect(key).toBe('entities/ATA/clients/client-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe('entities/ATA/clients/client-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
     });
 
-    it('generates work-request-based key when workRequestId is provided', () => {
-      const key = generateS3Key({
+    it('generates work-request-based path when workRequestId is provided', () => {
+      const path = generateStoragePath({
         ...baseParams,
         clientId: null,
         workRequestId: 'wr-uuid',
       });
-      expect(key).toBe('entities/ATA/work-requests/wr-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe('entities/ATA/work-requests/wr-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
     });
 
-    it('generates general key when neither clientId nor workRequestId', () => {
-      const key = generateS3Key({
+    it('generates general path when neither clientId nor workRequestId', () => {
+      const path = generateStoragePath({
         ...baseParams,
         clientId: null,
         workRequestId: null,
       });
-      expect(key).toBe('entities/ATA/general/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe('entities/ATA/general/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
     });
 
     it('prefers clientId over workRequestId when both provided', () => {
-      const key = generateS3Key({
+      const path = generateStoragePath({
         ...baseParams,
         clientId: 'client-uuid',
         workRequestId: 'wr-uuid',
       });
-      expect(key).toContain('/clients/');
-      expect(key).not.toContain('/work-requests/');
+      expect(path).toContain('/clients/');
+      expect(path).not.toContain('/work-requests/');
     });
   });
 });

@@ -19,7 +19,7 @@
 ## Upload Flow
 
 1. `POST /v1/documents` — creates metadata, returns `{ document, uploadUrl }`
-2. Client PUTs file bytes directly to S3 using `uploadUrl`
+2. Client PUTs file bytes directly to Supabase Storage using `uploadUrl`
 3. `POST /v1/documents/:id/confirm-upload` — marks status as `active`
 
 ## Download Flow
@@ -31,7 +31,7 @@
 
 `collected` → `with_documentations` → `scanned` → `in_envelope` → `stored`
 
-## S3 Key Layout
+## Storage Path Layout
 
 ```
 entities/{entity_id}/clients/{client_id}/documents/{document_id}/{filename}

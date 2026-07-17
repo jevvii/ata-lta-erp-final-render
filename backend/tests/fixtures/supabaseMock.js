@@ -218,6 +218,15 @@ const supabaseAdmin = {
   },
   from: (tableName) => tableQuery(tableName),
   rpc: () => Promise.resolve({ data: null, error: null }),
+  storage: {
+    listBuckets: () => Promise.resolve({ data: [{ name: 'test-bucket' }], error: null }),
+    from: () => ({
+      createSignedUploadUrl: () => Promise.resolve({ data: { signedUrl: 'https://storage.example.com/upload' }, error: null }),
+      createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://storage.example.com/download' }, error: null }),
+      remove: () => Promise.resolve({ data: null, error: null }),
+      upload: () => Promise.resolve({ data: { path: 'test-path' }, error: null }),
+    }),
+  },
 };
 
 const resetMock = () => {

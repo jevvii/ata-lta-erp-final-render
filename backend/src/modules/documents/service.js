@@ -1,6 +1,6 @@
 /**
  * Document service.
- * Business logic for document management — S3-backed storage with
+ * Business logic for document management — Supabase Storage-backed
  * metadata in PostgreSQL and pre-signed URL upload/download flow.
  *
  * Phase 3 — Agent B
@@ -8,12 +8,13 @@
 
 const { randomUUID } = require('crypto');
 const { supabaseAdmin } = require('../../services/supabaseClient');
-const { getSignedUploadUrl, getSignedDownloadUrl, deleteObject } = require('../../services/s3Service');
+const { getSignedUploadUrl, getSignedDownloadUrl, deleteObject } = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const logger = require('../../lib/logger');
 
 /**
- * Sanitize a file name for safe S3 storage.
+ * Sanitize a file name for safe storage.
  * @param {string} fileName - Original file name
  * @returns {string} Sanitized file name
  */
@@ -27,16 +28,16 @@ const sanitizeFileName = (fileName) => {
 };
 
 /**
- * Generate an S3 key for a document.
+ * Generate a storage path for a document.
  * @param {object} params
- * @param {string} params.entityCode - Entity code (ATA or LTA) for the S3 path
+ * @param {string} params.entityCode - Entity code (ATA or LTA) for the path
  * @param {string} [params.clientId] - Client UUID
  * @param {string} [params.workRequestId] - Work request UUID
  * @param {string} params.documentId - Document UUID
  * @param {string} params.fileName - Sanitized file name
- * @returns {string} S3 object key
+ * @returns {string} Storage path
  */
-const generateS3Key = ({ entityCode, clientId, workRequestId, documentId, fileName }) => {
+const generateStoragePath = ({ entityCode, clientId, workRequestId, documentId, fileName }) => {
   const safeName = sanitizeFileName(fileName);
   const code = entityCode || 'UNKNOWN';
 
@@ -107,7 +108,7 @@ const listDocuments = async ({ entityId, filters = {} }) => {
 const createDocument = async ({ entityId, entityCode, userId, data }) => {
   const documentId = randomUUID();
 
-  const s3Key = generateS3Key({
+  const storagePath = generateStoragePath({
     entityCode: entityCode || entityId,
     clientId: data.clientId || null,
     workRequestId: data.workRequestId || null,
@@ -130,7 +131,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     document_lifecycle: 'collected',
     file_size: data.fileSize,
     content_type: data.contentType,
-    s3_key: s3Key,
+    storage_path: storagePath,
     created_by: userId,
     updated_by: userId,
   };
@@ -150,7 +151,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
   }
 
   const uploadUrl = await getSignedUploadUrl({
-    key: s3Key,
+    path: storagePath,
     contentType: data.contentType,
     expiresInSeconds: 300,
   });
@@ -241,7 +242,7 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
 };
 
 /**
- * Soft-delete a document and remove its S3 object.
+ * Soft-delete a document and remove its storage object.
  * @param {object} params
  * @param {string} params.entityId - Entity code
  * @param {string} params.id - Document UUID
@@ -269,14 +270,16 @@ const deleteDocument = async ({ entityId, id, userId }) => {
     });
   }
 
-  // Clean up S3 object if it exists
-  if (doc.s3_key) {
+  // Clean up storage object if it exists
+  if (doc.storage_path) {
     try {
-      await deleteObject(doc.s3_key);
-    } catch (s3Err) {
+      await deleteObject(doc.storage_path);
+    } catch (storageErr) {
       // Log but don't fail — metadata is already soft-deleted
-      // eslint-disable-next-line no-console
-      console.error('[WARN] Failed to delete S3 object:', doc.s3_key, s3Err.message);
+      logger.warn('failed to delete storage object', {
+        path: doc.storage_path,
+        error: storageErr.message,
+      });
     }
   }
 
@@ -291,7 +294,7 @@ const deleteDocument = async ({ entityId, id, userId }) => {
 };
 
 /**
- * Confirm that a file upload to S3 has completed.
+ * Confirm that a file upload to storage has completed.
  * Transitions document status from pending_upload to active.
  * @param {object} params
  * @param {string} params.entityId - Entity code
@@ -342,7 +345,7 @@ const confirmUpload = async ({ entityId, id }) => {
 const getDownloadUrl = async ({ entityId, id }) => {
   const doc = await getDocumentById({ entityId, id });
 
-  if (!doc.s3_key) {
+  if (!doc.storage_path) {
     throw new AppError({
       statusCode: 404,
       title: 'Not Found',
@@ -359,7 +362,7 @@ const getDownloadUrl = async ({ entityId, id }) => {
   }
 
   const url = await getSignedDownloadUrl({
-    key: doc.s3_key,
+    path: doc.storage_path,
     expiresInSeconds: 300,
   });
 
@@ -412,7 +415,7 @@ const updateLifecycle = async ({ entityId, id, userId, lifecycle }) => {
 
 module.exports = {
   sanitizeFileName,
-  generateS3Key,
+  generateStoragePath,
   listDocuments,
   createDocument,
   getDocumentById,

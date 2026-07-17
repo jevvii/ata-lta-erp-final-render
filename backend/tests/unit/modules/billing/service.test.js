@@ -23,9 +23,8 @@ jest.mock('../../../../src/services/supabaseClient', () => ({
   },
 }));
 
-jest.mock('../../../../src/services/s3Service', () => ({
-  getSignedUploadUrl: jest.fn().mockResolvedValue('https://s3.example.com/upload'),
-  getSignedDownloadUrl: jest.fn().mockResolvedValue('https://s3.example.com/download'),
+jest.mock('../../../../src/services/storageService', () => ({
+  uploadBuffer: jest.fn().mockResolvedValue('https://storage.example.com/download'),
 }));
 
 jest.mock('../../../../src/services/pdfService', () => ({

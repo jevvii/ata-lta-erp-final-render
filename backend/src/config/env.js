@@ -11,25 +11,10 @@ const env = {
   supabase: {
     url: process.env.SUPABASE_URL || '',
     serviceKey: process.env.SUPABASE_SERVICE_KEY || '',
-    jwtSecret: process.env.SUPABASE_JWT_SECRET || '',
   },
 
-  aws: {
-    region: process.env.AWS_REGION || 'ap-southeast-1',
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
-    endpoint: process.env.AWS_ENDPOINT_URL || '',
-  },
-
-  s3: {
-    documentBucket: process.env.S3_DOCUMENT_BUCKET || '',
-    spaBucket: process.env.S3_SPA_BUCKET || '',
-  },
-
-  cloudfront: {
-    keyId: process.env.CLOUDFRONT_KEY_ID || '',
-    privateKey: (process.env.CLOUDFRONT_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-    documentDomain: process.env.CLOUDFRONT_DOCUMENT_DOMAIN || '',
+  storage: {
+    bucket: process.env.SUPABASE_STORAGE_BUCKET || '',
   },
 
   databaseUrl: process.env.DATABASE_URL || '',

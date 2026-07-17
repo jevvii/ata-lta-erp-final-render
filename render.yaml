@@ -20,21 +20,9 @@ services:
         fromGroup: erp-uat-secrets
       - key: SUPABASE_SERVICE_KEY
         fromGroup: erp-uat-secrets
+      - key: SUPABASE_STORAGE_BUCKET
+        fromGroup: erp-uat-secrets
       - key: DATABASE_URL
-        fromGroup: erp-uat-secrets
-      - key: AWS_REGION
-        fromGroup: erp-uat-secrets
-      - key: AWS_ACCESS_KEY_ID
-        fromGroup: erp-uat-secrets
-      - key: AWS_SECRET_ACCESS_KEY
-        fromGroup: erp-uat-secrets
-      - key: S3_DOCUMENT_BUCKET
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_KEY_ID
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_PRIVATE_KEY
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_DOCUMENT_DOMAIN
         fromGroup: erp-uat-secrets
       - key: FRONTEND_URL
         fromService:
@@ -75,21 +63,9 @@ services:
         fromGroup: erp-prod-secrets
       - key: SUPABASE_SERVICE_KEY
         fromGroup: erp-prod-secrets
+      - key: SUPABASE_STORAGE_BUCKET
+        fromGroup: erp-prod-secrets
       - key: DATABASE_URL
-        fromGroup: erp-prod-secrets
-      - key: AWS_REGION
-        fromGroup: erp-prod-secrets
-      - key: AWS_ACCESS_KEY_ID
-        fromGroup: erp-prod-secrets
-      - key: AWS_SECRET_ACCESS_KEY
-        fromGroup: erp-prod-secrets
-      - key: S3_DOCUMENT_BUCKET
-        fromGroup: erp-prod-secrets
-      - key: CLOUDFRONT_KEY_ID
-        fromGroup: erp-prod-secrets
-      - key: CLOUDFRONT_PRIVATE_KEY
-        fromGroup: erp-prod-secrets
-      - key: CLOUDFRONT_DOCUMENT_DOMAIN
         fromGroup: erp-prod-secrets
       - key: FRONTEND_URL
         fromService:

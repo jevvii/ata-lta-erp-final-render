@@ -48,7 +48,7 @@ router.delete('/:id',
   documentsController.deleteDocument,
 );
 
-// Confirm S3 upload completed
+// Confirm storage upload completed
 router.post('/:id/confirm-upload',
   requirePermission('dms:edit'),
   audit('document.confirm-upload', { table: 'documents' }),
