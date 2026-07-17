@@ -12,7 +12,11 @@ if (!apiUrl) {
   process.exit(1);
 }
 
-const normalizedUrl = apiUrl.endsWith('/v1') ? apiUrl : `${apiUrl.replace(/\/$/, '')}/v1`;
+// Render Blueprint fromService gives us a bare hostname; ensure a full https origin.
+const withProtocol = apiUrl.startsWith('http://') || apiUrl.startsWith('https://')
+  ? apiUrl
+  : `https://${apiUrl}`;
+const normalizedUrl = withProtocol.endsWith('/v1') ? withProtocol : `${withProtocol.replace(/\/$/, '')}/v1`;
 const output = `window.__ERP_API_BASE_URL__ = ${JSON.stringify(normalizedUrl)};\n`;
 
 fs.writeFileSync(path.join(__dirname, 'env.js'), output);

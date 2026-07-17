@@ -16,19 +16,12 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
-      - key: SUPABASE_URL
-        fromGroup: erp-uat-secrets
-      - key: SUPABASE_SERVICE_KEY
-        fromGroup: erp-uat-secrets
-      - key: SUPABASE_STORAGE_BUCKET
-        fromGroup: erp-uat-secrets
-      - key: DATABASE_URL
-        fromGroup: erp-uat-secrets
       - key: FRONTEND_URL
         fromService:
           name: ata-lta-erp-spa-uat
           type: web
-          property: url
+          property: host
+      - fromGroup: erp-uat-secrets
 
   # ─── UAT Frontend Static Site ──────────────────────────────────
   - type: web
@@ -44,7 +37,7 @@ services:
         fromService:
           name: ata-lta-erp-api-uat
           type: web
-          property: url
+          property: host
 
   # ─── Production Backend ────────────────────────────────────────
   - type: web
@@ -60,19 +53,12 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
-      - key: SUPABASE_URL
-        fromGroup: erp-prod-secrets
-      - key: SUPABASE_SERVICE_KEY
-        fromGroup: erp-prod-secrets
-      - key: SUPABASE_STORAGE_BUCKET
-        fromGroup: erp-prod-secrets
-      - key: DATABASE_URL
-        fromGroup: erp-prod-secrets
       - key: FRONTEND_URL
         fromService:
           name: ata-lta-erp-spa-prod
           type: web
-          property: url
+          property: host
+      - fromGroup: erp-prod-secrets
 
   # ─── Production Frontend Static Site ───────────────────────────
   - type: web
@@ -88,4 +74,4 @@ services:
         fromService:
           name: ata-lta-erp-api-prod
           type: web
-          property: url
+          property: host
