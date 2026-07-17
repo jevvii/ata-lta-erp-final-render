@@ -39,29 +39,18 @@ Before starting, ensure:
 
 > **Responsibility split**: the project lead initializes the canonical repository on this machine. Teammates who execute these specs from their own machines will fork the canonical repo and work from their personal forks, opening pull requests back to the canonical `uat`/`main` branches.
 
-#### On this machine (canonical repository)
 
-```bash
-cd /home/javvii/FreelanceProject/Project4_Final-Render
-git init
-git add .
-git commit -m "Initial commit: backend and erp_prototype"
-git branch -M main
-git remote add origin https://github.com/<org>/ata-lta-erp.git
-git push -u origin main
-git checkout -b uat
-git push -u origin uat
-```
-
-#### On a teammate's machine (fork-based workflow)
+#### On a teammate's machine (fork-based workflow) (This is the teammate's machine)
 
 1. Fork the canonical repository on GitHub.
 2. Clone the fork locally:
 
 ```bash
-git clone https://github.com/<teammate>/ata-lta-erp.git
-cd ata-lta-erp
-git remote add upstream https://github.com/<org>/ata-lta-erp.git
+git clone https://github.com/deutzgalila/ata-lta-erp-final-render.git
+cd ata-lta-erp-final-render
+git remote remove origin
+git remote add origin git@github.com:deutzgalila/ata-lta-erp-final-render.git
+git remote add upstream https://github.com/jevvii/ata-lta-erp-final-render.git
 ```
 
 3. Keep the fork in sync before starting work:
