@@ -517,7 +517,7 @@ smoke-uat:
 
 ```yaml
 projects:
-  - name: ata-lta-erp
+  - name: My project
     environments:
       - name: uat
         services:

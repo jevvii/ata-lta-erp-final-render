@@ -5,7 +5,7 @@
 # will never be committed with real secrets.
 
 projects:
-  - name: ata-lta-erp
+  - name: My project
     environments:
       - name: uat
         services:

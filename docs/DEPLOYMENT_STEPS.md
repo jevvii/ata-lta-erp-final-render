@@ -162,8 +162,8 @@ The `erp-prod-secrets` group is created later when upgrading to a paid Render pl
 1. In Render dashboard, click **New → Blueprint**.
 2. Connect the GitHub repository `jevvii/ata-lta-erp-final-render`.
 3. Render will detect `render.yaml`.
-4. On first deploy, it creates:
-   - A `uat` environment inside the `ata-lta-erp` project.
+4. On first deploy, it creates inside the existing **My project**:
+   - A `uat` environment.
    - `ata-lta-erp-api-uat` (Web Service, Free plan).
    - `ata-lta-erp-spa-uat` (Static Site; static sites are free by default and do **not** declare `plan: free`).
    - The `erp-uat-secrets` environment group with placeholder values.
