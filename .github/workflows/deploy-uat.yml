@@ -1,0 +1,57 @@
+name: Deploy UAT
+
+on:
+  push:
+    branches: [uat]
+
+jobs:
+  backup-before-migrate:
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get install -y postgresql-client
+      - run: |
+          pg_dump "$DATABASE_URL" --no-owner --no-acl --clean --if-exists \
+            --file backup-before-migration-$(date +%Y%m%d-%H%M%S).sql
+        env:
+          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uat-pre-migration-backup
+          path: backup-before-migration-*.sql
+          retention-days: 7
+
+  migrate-uat:
+    needs: backup-before-migrate
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm run migrate:up
+        env:
+          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+
+  smoke-uat:
+    needs: migrate-uat
+    runs-on: ubuntu-latest
+    environment: uat
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: erp_prototype/package-lock.json
+      - run: npm ci
+        working-directory: erp_prototype
+      - run: node smoke-test.js
+        env:
+          BASE_URL: ${{ secrets.UAT_SPA_URL }}

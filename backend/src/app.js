@@ -10,11 +10,15 @@ require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const morgan = require('morgan');
+
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
 const env = require('./config/env');
+const logger = require('./lib/logger');
+const { supabaseAdmin } = require('./services/supabaseClient');
+const { s3Client } = require('./config/aws');
+const { HeadBucketCommand } = require('@aws-sdk/client-s3');
 const errorHandler = require('./middleware/errorHandler');
 const { auth } = require('./middleware/auth');
 const { entityScope } = require('./middleware/entityScope');
@@ -40,8 +44,20 @@ app.use(cors({
   exposedHeaders: ['X-Request-Id'],
 }));
 
-// Request logging
-app.use(morgan(env.isDevelopment ? 'dev' : 'combined'));
+// Structured request logging
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    logger.info('request', {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      durationMs: Date.now() - start,
+      requestId: req.id,
+    });
+  });
+  next();
+});
 
 // Body parsing
 app.use(express.json({ limit: '100kb' }));
@@ -67,9 +83,27 @@ app.use(rateLimit({
   },
 }));
 
-// Public health check
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+// Extended health check with dependency verification
+app.get('/health', async (req, res) => {
+  const checks = { supabase: false, s3: false };
+  try {
+    await supabaseAdmin.from('entities').select('id').limit(1);
+    checks.supabase = true;
+  } catch (e) {
+    logger.warn('health check failed: supabase', { error: e.message, requestId: req.id });
+  }
+  try {
+    await s3Client.send(new HeadBucketCommand({ Bucket: env.s3.documentBucket }));
+    checks.s3 = true;
+  } catch (e) {
+    logger.warn('health check failed: s3', { error: e.message, requestId: req.id });
+  }
+  const ok = checks.supabase && checks.s3;
+  res.status(ok ? 200 : 503).json({
+    status: ok ? 'ok' : 'degraded',
+    timestamp: new Date().toISOString(),
+    checks,
+  });
 });
 
 // Public routes
@@ -103,8 +137,7 @@ app.use((req, res, _next) => {
 app.use(errorHandler);
 
 const server = app.listen(env.port, () => {
-  // eslint-disable-next-line no-console
-  console.log(`ERP API listening on port ${env.port} in ${env.nodeEnv} mode`);
+  logger.info('server started', { port: env.port, env: env.nodeEnv });
 });
 
 module.exports = { app, server };

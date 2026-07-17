@@ -1,5 +1,5 @@
 # ATA & LTA ERP Backend
-# Multi-stage build for production deployment on AWS ECS Fargate.
+# Multi-stage build for production deployment on Render.
 
 FROM node:20-alpine AS builder
 WORKDIR /app
