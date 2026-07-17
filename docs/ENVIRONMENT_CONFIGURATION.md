@@ -111,9 +111,9 @@ Create two environment groups in the Render dashboard:
 | `DATABASE_URL` | Supabase UAT connection pooler | `postgresql://postgres.xxx:...@...pooler.supabase.com:6543/postgres?pgbouncer=true` |
 | `FRONTEND_URL` | Render Static Site URL | `https://ata-lta-erp-spa-uat.onrender.com` |
 
-### 3.2 Production Environment Group (`erp-prod-secrets`)
+### 3.2 Production Environment Group (`erp-prod-secrets`) — Paid Plan
 
-Same keys as UAT, but pointing to the production Supabase project and the production Render Static Site URL.
+Same keys as UAT, but pointing to the production Supabase project and the production Render Static Site URL. Created only after upgrading to a paid Render plan.
 
 | Key | Source | Example |
 |-----|--------|---------|
@@ -151,7 +151,7 @@ Go to **GitHub Repository → Settings → Secrets and variables → Actions** a
 | `UAT_FRONTEND_URL` | `https://ata-lta-erp-spa-uat.onrender.com` | Optional: CORS verification |
 | `UAT_SPA_URL` | `https://ata-lta-erp-spa-uat.onrender.com` | `deploy-uat.yml` smoke tests |
 
-### 4.2 Production Secrets
+### 4.2 Production Secrets — Paid Plan
 
 | Secret Name | Value | Used By |
 |-------------|-------|---------|
@@ -164,12 +164,10 @@ Go to **GitHub Repository → Settings → Secrets and variables → Actions** a
 
 ### 4.3 GitHub Environments
 
-Create two GitHub environments to enable required reviewers:
-
-| Environment | Required Reviewers | Protection Rules |
-|-------------|-------------------|------------------|
-| `uat` | 1 reviewer (optional for UAT) | Wait timer: 0 |
-| `production` | At least 1 lead reviewer | Prevent self-review |
+| Environment | Required Reviewers | Protection Rules | When to create |
+|-------------|-------------------|------------------|--------------|
+| `uat` | Optional | Wait timer: 0 | Now |
+| `production` | At least 1 lead reviewer | Prevent self-review | After upgrading to paid Render plan |
 
 ---
 

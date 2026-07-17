@@ -78,29 +78,29 @@ Render was chosen for the **initial UAT/test run** to reduce infrastructure fric
 - Moving the database would require a migration project of its own.
 - Render does not provide a managed Postgres with Auth out of the box; keeping Supabase preserves existing security and user-management investments.
 
-### 3.3 Why Keep AWS S3 + CloudFront?
+### 3.3 Object Storage with Supabase Storage
 
-- Documents are pre-signed directly between the browser and S3; the API never streams file bytes.
-- CloudFront signed URLs provide low-latency downloads with access control.
-- Lifecycle rules (`infra/s3-lifecycle-rules.json`) already tier documents to STANDARD_IA → GLACIER_IR → DEEP_ARCHIVE.
-- For UAT, a separate S3 bucket is used; production keeps the original bucket.
+- Documents are stored in **Supabase Storage** buckets.
+- Uploads and downloads use Supabase signed URLs; the API never streams file bytes.
+- The backend service role key manages bucket access; backend RBAC controls document permissions.
+- Bucket RLS policies restrict uploads to authenticated users and entity-scoped paths.
 
 ---
 
 ## 4. Render Deployment Topology
 
-### 4.1 Services
+### 4.1 Services (Free Tier UAT)
 
 | Service | Render Type | Source | Notes |
 |---------|-------------|--------|-------|
-| `ata-lta-erp-api-uat` | Web Service (Docker) | `backend/Dockerfile`, `uat` branch | Free tier; sleeps after inactivity |
-| `ata-lta-erp-spa-uat` | Static Site | `erp_prototype/` | Injects backend URL at build time |
-| `ata-lta-erp-api-prod` | Web Service (Docker) | `backend/Dockerfile`, `main` branch | Paid tier (deployed after UAT) |
-| `ata-lta-erp-spa-prod` | Static Site | `erp_prototype/` | Paid tier (deployed after UAT) |
+| `ata-lta-erp-api-uat` | Web Service (Docker) | `backend/Dockerfile`, `uat` branch | Free plan; sleeps after inactivity |
+| `ata-lta-erp-spa-uat` | Static Site | `erp_prototype/` | Free plan; injects backend URL at build time |
+
+Production services (`ata-lta-erp-api-prod`, `ata-lta-erp-spa-prod`) require a paid Render plan and are not included in the free-tier Blueprint.
 
 ### 4.2 Render Blueprint (`render.yaml`)
 
-A single Blueprint declares both UAT and production services. Environment groups keep secrets DRY. See section 9 for the full file.
+The free-tier Blueprint declares **only the UAT services**, each with `plan: free`. Production services are added later when upgrading to a paid plan.
 
 ### 4.3 Dockerfile Compatibility
 
@@ -169,33 +169,16 @@ Create two groups in the Render dashboard:
 | `PORT` | Render | Injected automatically |
 | `SUPABASE_URL` | Supabase UAT project settings | Project URL |
 | `SUPABASE_SERVICE_KEY` | Supabase UAT project settings | Service-role key; never in browser |
+| `SUPABASE_STORAGE_BUCKET` | Supabase UAT Storage | e.g. `ata-lta-erp-documents-uat` |
 | `DATABASE_URL` | Supabase UAT project settings | Pooled connection string (`?pgbouncer=true`) |
-| `AWS_REGION` | AWS | e.g. `ap-southeast-1` |
-| `AWS_ACCESS_KEY_ID` | AWS IAM user | Limited to UAT S3 bucket |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM user | Limited to UAT S3 bucket |
-| `S3_DOCUMENT_BUCKET` | AWS | e.g. `ata-lta-erp-documents-uat` |
-| `S3_SPA_BUCKET` | AWS | Optional; not used by Render Static Site |
-| `CLOUDFRONT_KEY_ID` | AWS CloudFront | Trusted signer key pair ID |
-| `CLOUDFRONT_PRIVATE_KEY` | AWS CloudFront | Newlines escaped as `\n` |
-| `CLOUDFRONT_DOCUMENT_DOMAIN` | CloudFront | e.g. `https://docs-uat.ata-lta.ph` |
 | `FRONTEND_URL` | Render Static Site | UAT SPA URL |
 | `LOG_LEVEL` | Render | `info` |
 
-**`erp-prod-secrets`** (same keys, production values; deployed later).
+**`erp-prod-secrets`** (same keys, production values; created after upgrading to a paid Render plan).
 
-### 5.2 CloudFront Private Key Encoding
+### 5.2 Supabase Storage Bucket
 
-The key must be a single-line value. `env.js` already performs:
-
-```js
-privateKey: (process.env.CLOUDFRONT_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-```
-
-Therefore set the env var with literal `\n` sequences, e.g.:
-
-```
------BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC...\n-----END PRIVATE KEY-----
-```
+The bucket must be created in Supabase Storage and referenced by `SUPABASE_STORAGE_BUCKET`. The backend uses the service role key, which bypasses RLS by default. Keep the bucket private and rely on signed URLs for access.
 
 ### 5.3 Supabase Pooler vs Direct Connection
 
@@ -530,13 +513,15 @@ smoke-uat:
         BASE_URL: ${{ secrets.UAT_SPA_URL }}
 ```
 
-### 9.4 Render Blueprint (`render.yaml`)
+### 9.4 Render Blueprint (`render.yaml`) — Free Tier UAT Only
 
 ```yaml
 services:
+  # ─── UAT Backend ────────────────────────────────────────────────
   - type: web
     name: ata-lta-erp-api-uat
     runtime: docker
+    plan: free
     repo: https://github.com/<org>/ata-lta-erp
     branch: uat
     rootDir: backend
@@ -547,49 +532,35 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
-      - key: SUPABASE_URL
-        fromGroup: erp-uat-secrets
-      - key: SUPABASE_SERVICE_KEY
-        fromGroup: erp-uat-secrets
-      - key: DATABASE_URL
-        fromGroup: erp-uat-secrets
-      - key: AWS_REGION
-        fromGroup: erp-uat-secrets
-      - key: AWS_ACCESS_KEY_ID
-        fromGroup: erp-uat-secrets
-      - key: AWS_SECRET_ACCESS_KEY
-        fromGroup: erp-uat-secrets
-      - key: S3_DOCUMENT_BUCKET
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_KEY_ID
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_PRIVATE_KEY
-        fromGroup: erp-uat-secrets
-      - key: CLOUDFRONT_DOCUMENT_DOMAIN
-        fromGroup: erp-uat-secrets
       - key: FRONTEND_URL
         fromService:
           name: ata-lta-erp-spa-uat
-          type: static_site
-          property: url
+          type: web
+          property: host
+      - fromGroup: erp-uat-secrets
 
-  - type: static_site
+  # ─── UAT Frontend Static Site ──────────────────────────────────
+  - type: web
     name: ata-lta-erp-spa-uat
+    runtime: static
+    plan: free
     repo: https://github.com/<org>/ata-lta-erp
     branch: uat
     rootDir: erp_prototype
-    buildCommand: node build.js
-    publishDir: .
+    buildCommand: npm run build
+    staticPublishPath: .
     envVars:
       - key: ERP_API_BASE_URL
         fromService:
           name: ata-lta-erp-api-uat
           type: web
-          property: url
-        value: /v1
+          property: host
 ```
 
-> Note: the `fromService` URL interpolation for the SPA may require appending `/v1` manually in `build.js`. Adjust as Render’s Blueprint syntax evolves.
+> Notes:
+> - `fromGroup` is a bare list item under `envVars`; it injects every variable from `erp-uat-secrets`.
+> - `fromService.property: host` returns a bare hostname; the backend and build script prepend `https://` and the build script appends `/v1`.
+> - Production services are not included in this Blueprint because multiple services or production-grade plans trigger Render's payment wall on the free tier.
 
 ---
 
@@ -621,14 +592,14 @@ For this project, the simpler two-branch model (`uat` → `main`) is sufficient 
 |-------|-----------------|
 | Application | Revert merge commit; Render auto-deploys previous image |
 | Database | Restore from pre-migration `pg_dump` or Supabase backup |
-| Documents | Revert S3 object versions |
+| Documents | Restore from Supabase Storage backups or re-upload from local copies |
 | Config | Roll back env group values in Render dashboard |
 
 Rollback SLA:
 
 - Application: < 10 minutes via git revert.
 - Database: < 1 hour via `pg_dump` restore.
-- Documents: < 30 minutes via S3 version restore.
+- Documents: < 1 hour via Supabase Storage restore or re-upload.
 
 ---
 
@@ -637,9 +608,8 @@ Rollback SLA:
 ### 11.1 Secrets
 
 - All secrets live in Render environment groups or GitHub Actions secrets.
-- `SUPABASE_SERVICE_KEY` and `AWS_SECRET_ACCESS_KEY` are never committed.
-- CloudFront private key is stored with escaped newlines.
-- Rotate keys every 90 days; track rotation in a runbook.
+- `SUPABASE_SERVICE_KEY` is never committed.
+- Rotate Supabase keys every 90 days; track rotation in a runbook.
 
 ### 11.2 CORS
 
@@ -678,12 +648,13 @@ All state mutations are logged to `audit_logs` via `src/middleware/audit.js`. Ba
 
 ## 13. Open Questions / Future Work
 
-- [ ] Convert repository to Git and connect to GitHub.
-- [ ] Create UAT Supabase project and S3 bucket.
+- [x] Convert repository to Git and connect to GitHub.
+- [ ] Create UAT Supabase project and Storage bucket.
 - [ ] Add `erp_prototype/build.js` and update `index.html` to load `env.js`.
-- [ ] Replace Morgan with structured logger and extend `/health`.
-- [ ] Write `render.yaml` and commit to repo root.
-- [ ] Create GitHub Actions workflows.
+- [x] Replace Morgan with structured logger and extend `/health`.
+- [x] Write `render.yaml` and commit to repo root.
+- [x] Create GitHub Actions workflows.
+- [ ] Upgrade to paid Render plan and add production services.
 - [ ] Configure UptimeRobot or Render health check notifications.
 - [ ] Add Sentry integration for production.
 - [ ] Document password reset / invite email flow.

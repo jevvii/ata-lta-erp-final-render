@@ -1,11 +1,13 @@
-# ATA & LTA ERP — Render Blueprint
-# Declares UAT and Production services for auto-deploy from Git branches.
+# ATA & LTA ERP — Render Blueprint (Free Tier UAT Only)
+# Deploys the UAT backend and SPA on Render's free plan.
+# Production services must be created separately when upgrading to a paid plan.
 
 services:
   # ─── UAT Backend ────────────────────────────────────────────────
   - type: web
     name: ata-lta-erp-api-uat
     runtime: docker
+    plan: free
     repo: https://github.com/jevvii/ata-lta-erp-final-render.git
     branch: uat
     rootDir: backend
@@ -27,6 +29,7 @@ services:
   - type: web
     name: ata-lta-erp-spa-uat
     runtime: static
+    plan: free
     repo: https://github.com/jevvii/ata-lta-erp-final-render.git
     branch: uat
     rootDir: erp_prototype
@@ -36,42 +39,5 @@ services:
       - key: ERP_API_BASE_URL
         fromService:
           name: ata-lta-erp-api-uat
-          type: web
-          property: host
-
-  # ─── Production Backend ────────────────────────────────────────
-  - type: web
-    name: ata-lta-erp-api-prod
-    runtime: docker
-    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-    branch: main
-    rootDir: backend
-    dockerfilePath: Dockerfile
-    healthCheckPath: /health
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: LOG_LEVEL
-        value: info
-      - key: FRONTEND_URL
-        fromService:
-          name: ata-lta-erp-spa-prod
-          type: web
-          property: host
-      - fromGroup: erp-prod-secrets
-
-  # ─── Production Frontend Static Site ───────────────────────────
-  - type: web
-    name: ata-lta-erp-spa-prod
-    runtime: static
-    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-    branch: main
-    rootDir: erp_prototype
-    buildCommand: npm run build
-    staticPublishPath: .
-    envVars:
-      - key: ERP_API_BASE_URL
-        fromService:
-          name: ata-lta-erp-api-prod
           type: web
           property: host
