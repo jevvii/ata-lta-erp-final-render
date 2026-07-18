@@ -62,6 +62,31 @@ npm run lint
 
 ### 6. Run migrations
 
+#### Local/development (remote Supabase)
+
+With `backend/.env.development` configured for your remote Supabase project:
+
+```bash
+npm run migrate:remote
+```
+
+This applies all `.js` and `.sql` migrations in order plus seed files, and tracks
+state in a `remote_migrations` table.
+
+#### UAT
+
+```bash
+npm run migrate:remote:uat
+```
+
+#### Reset remote dev database (DANGER — data loss)
+
+```bash
+npm run reset:remote
+```
+
+#### Local Docker / Supabase CLI
+
 ```bash
 npm run migrate:up
 ```
@@ -70,6 +95,12 @@ When using Supabase CLI local, override `DATABASE_URL`:
 
 ```bash
 DATABASE_URL=postgresql://postgres:postgres@localhost:54322/postgres npm run migrate:up
+```
+
+### 7. Create the storage bucket
+
+```bash
+npm run create-bucket
 ```
 
 ## Project Structure

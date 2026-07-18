@@ -36,12 +36,28 @@ describe('GET /v1/me', () => {
     expect(res.body.data.permissions).toContain('users:manage');
   });
 
-  it('rejects requests without an entity header', async () => {
+  it('defaults to the first available entity when entity header is missing', async () => {
     const token = registerUser({
       email: 'noentity@ata-lta.ph',
       name: 'No Entity',
       role: 'Admin',
       entities: ['ATA'],
+    });
+
+    const res = await request(app)
+      .get('/v1/me')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.activeEntity).toBe('ATA');
+  });
+
+  it('rejects requests without an entity header if user has no valid entities', async () => {
+    const token = registerUser({
+      email: 'novalidentities@ata-lta.ph',
+      name: 'No Valid Entities',
+      role: 'Admin',
+      entities: ['XYZ'],
     });
 
     const res = await request(app)

@@ -100,7 +100,11 @@ const Auth = {
       this.updateSessionClasses(true);
       return true;
     } catch (e) {
-      // Demo/local fallback removed: authentication always goes through the API.
+      // Log the real error in dev so we can distinguish
+      // wrong password, missing profile, network issues, etc.
+      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+        console.error('[Auth.login] failed:', e);
+      }
       return false;
     }
   },

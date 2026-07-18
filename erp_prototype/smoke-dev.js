@@ -17,6 +17,7 @@ const https = require('https');
 
 const BASE = process.env.BASE_URL || process.argv[2] || 'http://localhost:8080';
 const TIMEOUT_MS = 5000;
+const BACKEND_TIMEOUT_MS = 10000; // backend /health can wait up to 5s for Supabase/storage probes
 
 let results = [];
 let discoveredApiUrl = null;
@@ -31,9 +32,9 @@ function log(label, passed, detail) {
   console.log(`${status} ${label}${detail ? ': ' + detail : ''}`);
 }
 
-function fetchJson(url) {
+function fetchJson(url, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    const req = request(url, { timeout: TIMEOUT_MS }, (res) => {
+    const req = request(url, { timeout: timeoutMs }, (res) => {
       let body = '';
       res.on('data', (chunk) => (body += chunk));
       res.on('end', () => {
@@ -102,19 +103,28 @@ async function runTests() {
   }
 
   // ─── Backend health (only when pointing at localhost backend) ─────
-  const isLocalBackend = (discoveredApiUrl || '').includes('localhost:3000');
-  if (isLocalBackend) {
+  let backendHealthUrl = null;
+  if (discoveredApiUrl) {
     try {
-      const backendHealth = await fetchJson('http://localhost:3000/health');
+      // Strip the /v1 suffix to reach the root health endpoint.
+      backendHealthUrl = discoveredApiUrl.replace(/\/v1\/?$/, '/health');
+    } catch (e) {
+      backendHealthUrl = null;
+    }
+  }
+
+  if (backendHealthUrl && backendHealthUrl.includes('localhost')) {
+    try {
+      const backendHealth = await fetchJson(backendHealthUrl, BACKEND_TIMEOUT_MS);
       // In dev the backend may be "degraded" if a dummy/test Supabase URL is used;
       // we accept 200 "ok" or 503 "degraded" as evidence the API is reachable.
       const reachable = [200, 503].includes(backendHealth.status);
       log('Local backend health', reachable, `status=${backendHealth.status} body=${JSON.stringify(backendHealth.body)}`);
     } catch (e) {
-      log('Local backend health', false, e.message);
+      log('Local backend health', false, `Could not reach ${backendHealthUrl}: ${e.message}`);
     }
   } else {
-    log('Local backend health', true, 'skipped — not targeting localhost:3000');
+    log('Local backend health', true, 'skipped — not targeting a localhost backend');
   }
 
   // ─── Summary ────────────────────────────────────────────────────

@@ -5,6 +5,7 @@
 
 const { supabaseAdmin } = require('../services/supabaseClient');
 const AppError = require('../lib/AppError');
+const logger = require('../lib/logger');
 
 /**
  * Load a user profile plus department names from PostgreSQL.
@@ -59,6 +60,7 @@ const auth = async (req, res, next) => {
     const { data, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !data?.user) {
+      logger.warn('token verification failed', { error: error?.message, statusCode: error?.status });
       throw new AppError({
         statusCode: 401,
         title: 'Unauthorized',
@@ -67,6 +69,9 @@ const auth = async (req, res, next) => {
     }
 
     const profile = await loadUserProfile(data.user.id);
+    if (!profile) {
+      logger.warn('no matching ERP profile for authenticated user', { authUserId: data.user.id });
+    }
 
     if (!profile) {
       throw new AppError({

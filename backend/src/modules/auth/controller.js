@@ -5,6 +5,7 @@
 
 const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
+const logger = require('../../lib/logger');
 
 /**
  * POST /v1/auth/signin
@@ -21,6 +22,7 @@ const signIn = async (req, res, next) => {
     const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });
 
     if (error || !data?.session) {
+      logger.warn('signin failed', { email, error: error?.message, statusCode: error?.status });
       throw new AppError({
         statusCode: 401,
         title: 'Unauthorized',

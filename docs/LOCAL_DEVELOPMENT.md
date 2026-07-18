@@ -68,14 +68,31 @@ environment group if you want to share the project for dev work.
 
 ### 4. Apply migrations and seed data
 
+With `backend/.env.development` pointing at your remote Supabase database:
+
 ```bash
 cd backend
-npm run migrate:up
+npm run migrate:remote
 ```
 
-Seed SQL files live in `backend/seeds/`.
+This applies all `.js` and `.sql` migrations in numeric order, then applies the
+SQL files in `backend/seeds/`. Progress is tracked in a `remote_migrations` table
+so reruns are idempotent.
 
-### 5. Start the full local stack
+### 5. Create the Supabase Storage bucket
+
+The app stores documents and generated PDFs in Supabase Storage. Create the
+bucket from the terminal:
+
+```bash
+cd backend
+npm run create-bucket
+```
+
+Then open the Supabase dashboard, go to Storage → Policies, and add a policy
+that lets authenticated users upload/download objects in the bucket.
+
+### 6. Start the full local stack
 
 From the repository root:
 
@@ -85,10 +102,15 @@ npm run dev
 
 This starts:
 
-- Backend API at `http://localhost:3000`
-- SPA dev server at `http://localhost:8080` (already pointed at the local API)
+- Backend API at the port configured in `backend/.env.development` (default 3000)
+- SPA dev server at `http://localhost:8080`, automatically pointed at the backend's actual port
 
 Both processes are prefixed in the terminal. Press `Ctrl+C` once to stop both.
+
+If your backend uses a non-default port (e.g., `PORT=3001`), the orchestrator
+reads it from `backend/.env.development` and injects the matching
+`ERP_API_BASE_URL` into the SPA dev server, so the frontend and smoke test both
+target the correct backend.
 
 ## Targeting other environments
 

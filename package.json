@@ -11,6 +11,8 @@
     "dev:stack": "docker compose -f docker-compose.dev.yml up --build",
     "dev:stack:stop": "docker compose -f docker-compose.dev.yml down",
     "setup": "node scripts/setup-env.js",
+    "migrate:remote": "cd backend && npm run migrate:remote",
+    "create-bucket": "cd backend && npm run create-bucket",
     "smoke": "cd erp_prototype && node smoke-dev.js",
     "smoke:uat": "cd erp_prototype && npm run smoke:dev:uat",
     "build:spa": "cd erp_prototype && npm run build",
