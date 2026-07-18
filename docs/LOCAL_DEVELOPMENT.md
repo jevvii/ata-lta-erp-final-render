@@ -189,9 +189,39 @@ but locally you must supply them.
 
 ### Port conflicts
 
-Both services print the ports they bind to. To override:
+If you see `EADDRINUSE: address already in use 127.0.0.1:8080`, another process
+is using port 8080. Common culprits are another `dev-server.js` instance, a
+Docker container, or a different project.
+
+To use a different port for the SPA:
 
 ```bash
-PORT=4000 npm run dev:backend       # backend
-PORT=8090 npm run dev:frontend      # frontend
+PORT=8081 npm run dev
+```
+
+The orchestrator forwards `PORT` to the SPA dev server. The backend stays on
+port 3000 unless you also override it:
+
+```bash
+PORT=8081 npm run dev              # SPA on 8081, backend on 3000
+PORT=8081 PORT_API=4000 npm run dev # not supported; start services separately
+```
+
+If you need both ports changed, start the services individually:
+
+```bash
+# Terminal 1
+PORT=4000 npm run dev:backend
+
+# Terminal 2
+PORT=8081 ERP_API_BASE_URL=http://localhost:4000/v1 npm run dev:frontend
+```
+
+To find what is using a port:
+
+```bash
+# Linux
+lsof -i :8080
+# or
+ss -tlnp | grep :8080
 ```

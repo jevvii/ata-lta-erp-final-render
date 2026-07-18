@@ -117,3 +117,13 @@ server.listen(PORT, HOST, () => {
   console.log(`SPA dev server running at http://${HOST}:${PORT}`);
   console.log(`API base URL (injected into env.js): ${API_BASE_URL}`);
 });
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use.`);
+    console.error(`Run with a different port: PORT=${PORT + 1} npm run dev`);
+    process.exit(1);
+  }
+  console.error('Dev server error:', err);
+  process.exit(1);
+});
