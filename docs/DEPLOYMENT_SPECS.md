@@ -104,15 +104,15 @@ The free-tier Blueprint declares **only the UAT services**, each with `plan: fre
 
 ### 4.3 Dockerfile Compatibility
 
-The existing `backend/Dockerfile` is already Render-compatible:
+The `backend/Dockerfile` uses Node.js 22 because `@supabase/supabase-js` requires the native `WebSocket` API available in Node 22+:
 
 ```dockerfile
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app/node_modules ./node_modules
