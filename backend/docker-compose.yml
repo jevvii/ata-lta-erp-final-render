@@ -1,5 +1,11 @@
 version: '3.8'
 
+# Local backend-only development stack.
+# This starts the API and a local PostgreSQL container. Supabase Auth/Storage
+# must still be available — either via `npx supabase start` (recommended) or a
+# dedicated free-tier Supabase project. Copy .env.development.example to
+# .env.development and adjust the Supabase URL/key before running.
+
 services:
   api:
     build:
@@ -7,14 +13,12 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
+    env_file:
+      - .env.development
     environment:
       NODE_ENV: development
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ata_lta_erp
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
-      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET:-ata-lta-erp-documents-dev}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
     depends_on:
       postgres:
         condition: service_healthy

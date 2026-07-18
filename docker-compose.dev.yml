@@ -1,0 +1,62 @@
+version: '3.8'
+
+# Optional fully-containerized local development stack.
+# For most day-to-day development the root `npm run dev` command is faster and
+# more convenient. Use this file when you want Docker isolation or need to
+# reproduce the exact container environment before pushing to Render.
+#
+# Prerequisites:
+#   1. Copy backend/.env.development.example to backend/.env.development
+#      and fill in a local/dev Supabase URL + service key.
+#   2. Run: docker compose -f docker-compose.dev.yml up --build
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ata_lta_erp
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ata_lta_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./backend/.env.development
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ata_lta_erp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/src:/app/src:ro
+    command: ["npm", "run", "dev"]
+
+  spa:
+    image: node:22-alpine
+    working_dir: /app
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: 8080
+      ERP_API_BASE_URL: http://localhost:3000/v1
+    volumes:
+      - ./erp_prototype:/app:ro
+    command: ["npm", "run", "dev"]
+
+volumes:
+  postgres_dev_data:

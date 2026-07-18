@@ -28,9 +28,20 @@ cp .env.example .env
 # Fill in Supabase and AWS credentials.
 ```
 
-### 3. Run locally with Docker Compose
+### 3. Run locally (non-Docker)
 
 ```bash
+# Local dev environment (uses .env.development)
+npm run dev:local
+
+# UAT spot-check (uses .env.uat)
+npm run dev:uat
+```
+
+### 4. Run locally with Docker Compose
+
+```bash
+# Ensure backend/.env.development is created from .env.development.example first.
 docker compose up
 ```
 
@@ -38,19 +49,27 @@ This starts:
 
 - Express API on http://localhost:3000
 - PostgreSQL on localhost:5432
-- LocalStack S3 on localhost:4566
 
-### 4. Run tests
+Supabase Auth/Storage must be provided separately (Supabase CLI local or a
+dedicated free-tier Supabase project).
+
+### 5. Run tests
 
 ```bash
 npm test
 npm run lint
 ```
 
-### 5. Run migrations
+### 6. Run migrations
 
 ```bash
 npm run migrate:up
+```
+
+When using Supabase CLI local, override `DATABASE_URL`:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@localhost:54322/postgres npm run migrate:up
 ```
 
 ## Project Structure
@@ -63,4 +82,5 @@ Module README files live under `/backend/src/modules/{module}/README.md`.
 
 ## Deployment
 
-The `Dockerfile` is built and pushed to Amazon ECR via CI/CD. ECS Fargate runs the container behind an ALB and API Gateway.
+The backend is deployed to Render as a Docker web service. See the root
+`render.yaml` and `docs/LOCAL_DEVELOPMENT.md` for environment details.

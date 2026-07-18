@@ -4,9 +4,15 @@
   "description": "Frontend SPA for the ATA & LTA Accounting Firm ERP",
   "scripts": {
     "build": "node build.js",
-    "smoke": "node smoke-test.js"
+    "build:uat": "ERP_API_BASE_URL=https://ata-lta-erp-api-uat.onrender.com node build.js",
+    "dev": "node dev-server.js",
+    "dev:uat": "ERP_API_BASE_URL=https://ata-lta-erp-api-uat.onrender.com node dev-server.js",
+    "smoke": "node smoke-test.js",
+    "smoke:dev": "node smoke-dev.js",
+    "smoke:dev:uat": "ERP_API_BASE_URL=https://ata-lta-erp-api-uat.onrender.com node smoke-dev.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "playwright": "^1.61.1"
   }
 }

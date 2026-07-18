@@ -5,7 +5,13 @@
   "main": "src/app.js",
   "scripts": {
     "dev": "nodemon src/app.js",
+    "dev:local": "node scripts/run.js local",
+    "dev:uat": "node scripts/run.js uat",
+    "dev:prod": "node scripts/run.js prod",
     "start": "node src/app.js",
+    "start:local": "node scripts/run.js local",
+    "start:uat": "node scripts/run.js uat",
+    "start:prod": "node scripts/run.js prod",
     "test": "PORT=0 jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
@@ -15,7 +21,8 @@
     "migrate": "node-pg-migrate",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
-    "migrate:create": "node-pg-migrate create"
+    "migrate:create": "node-pg-migrate create",
+    "setup:env": "cp .env.example .env"
   },
   "engines": {
     "node": ">=22.0.0"

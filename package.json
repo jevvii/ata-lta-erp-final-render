@@ -1,0 +1,23 @@
+{
+  "name": "ata-lta-erp-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ATA & LTA ERP monorepo — backend API and SPA frontend",
+  "scripts": {
+    "dev": "node scripts/dev.js local",
+    "dev:uat": "node scripts/dev.js uat",
+    "dev:backend": "cd backend && npm run dev:local",
+    "dev:frontend": "cd erp_prototype && npm run dev",
+    "dev:stack": "docker compose -f docker-compose.dev.yml up --build",
+    "dev:stack:stop": "docker compose -f docker-compose.dev.yml down",
+    "setup": "node scripts/setup-env.js",
+    "smoke": "cd erp_prototype && node smoke-dev.js",
+    "smoke:uat": "cd erp_prototype && npm run smoke:dev:uat",
+    "build:spa": "cd erp_prototype && npm run build",
+    "build:spa:uat": "cd erp_prototype && npm run build:uat",
+    "install:all": "npm install && cd backend && npm install && cd ../erp_prototype && npm install"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

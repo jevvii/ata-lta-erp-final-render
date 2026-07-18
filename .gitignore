@@ -11,5 +11,11 @@ build/
 *.log
 .DS_Store
 
-# Generated SPA runtime config (built by erp_prototype/build.js)
+# Runtime environment configs copied from .env.*.example templates
+backend/.env.development
+backend/.env.uat
+backend/.env.production
+erp_prototype/.env
+
+# Generated SPA runtime config (built by erp_prototype/build.js or dev-server.js)
 erp_prototype/env.js
