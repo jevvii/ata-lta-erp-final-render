@@ -1,13 +1,19 @@
 # ATA & LTA ERP — Render Blueprint (Free Tier UAT Only)
 # Deploys the UAT backend and SPA into the existing "My project".
 #
-# PREREQUISITE: Create the "erp-uat-secrets" environment group in the Render
-# dashboard under My project → uat, using these exact key names (no UAT_ prefix):
+# PREREQUISITE: Create the "erp-uat-secrets" environment group manually in the
+# Render dashboard under My project -> uat -> Environment Groups, using these
+# exact key names:
 #   SUPABASE_URL
 #   SUPABASE_SERVICE_KEY
 #   SUPABASE_STORAGE_BUCKET
 #   DATABASE_URL
-# Do NOT store real secret values in this file.
+#
+# If an "erp-uat-secrets" group already exists anywhere else (including the
+# default Production environment), delete it first to avoid the
+# "same environment" linking error.
+#
+# Do NOT store secret values in this file.
 
 projects:
   - name: My project

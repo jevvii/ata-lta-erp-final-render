@@ -93,9 +93,9 @@ For simplicity, the recommended setup is to use the service role key for backend
 
 ## 3. Render Environment Groups
 
-Environment groups must be created in the Render dashboard **before** creating the Blueprint. The Blueprint references them by name and does **not** contain secret values.
+Create the `erp-uat-secrets` environment group manually under **My project → uat** before syncing the Blueprint. This avoids the environment mismatch error that occurs when a group of the same name exists in the default Production environment.
 
-Create the group under **My project → uat** environment.
+If a conflicting group already exists, delete it first.
 
 ### 3.1 UAT Environment Group (`erp-uat-secrets`)
 

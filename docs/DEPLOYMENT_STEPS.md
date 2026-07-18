@@ -149,11 +149,14 @@ git push -u origin uat
 1. Go to [render.com](https://render.com) and sign up/log in.
 2. Create a team if needed for shared access.
 
-### 3.2 Create Environment Group
+### 3.2 Create Environment Group (Required)
+
+You must create `erp-uat-secrets` **manually** before syncing the Blueprint. This avoids the environment mismatch error that happens when an old group exists in the Production environment.
 
 1. Go to **My project → uat → Environment Groups**.
-2. Create a new group named `erp-uat-secrets`.
-3. Add the keys using the **exact names** the backend expects (no `UAT_` prefix):
+2. Click **New Environment Group**.
+3. Name it exactly `erp-uat-secrets`.
+4. Add the keys using the **exact names** the backend expects (no `UAT_` prefix):
 
 | Key | Value |
 |-----|-------|
@@ -162,7 +165,9 @@ git push -u origin uat
 | `SUPABASE_STORAGE_BUCKET` | `ata-lta-erp-documents-uat` |
 | `DATABASE_URL` | Your UAT Supabase pooled connection string |
 
-> **Why no prefix?** The environment group is already scoped to the `uat` environment, so the `UAT_` prefix is unnecessary. The backend reads `SUPABASE_URL`, not `UAT_SUPABASE_URL`.
+> **Why no prefix?** The environment group is scoped to the `uat` environment, so the `UAT_` prefix is unnecessary. The backend reads `SUPABASE_URL`, not `UAT_SUPABASE_URL`.
+
+5. If an old `erp-uat-secrets` group exists anywhere else (check under **My project → Production → Environment Groups** or the global **Environment Groups** list), delete it.
 
 The `erp-prod-secrets` group is created later when upgrading to a paid Render plan.
 
@@ -177,10 +182,7 @@ The `erp-prod-secrets` group is created later when upgrading to a paid Render pl
    - A `uat` environment.
    - `ata-lta-erp-api-uat` (Web Service, Free plan).
    - `ata-lta-erp-spa-uat` (Static Site; static sites are free by default and do **not** declare `plan: free`).
-   - The `erp-uat-secrets` environment group with placeholder values.
-5. After creation, update `erp-uat-secrets` in the Render dashboard with real Supabase values.
-6. Redeploy the `ata-lta-erp-api-uat` service to pick up the updated secrets.
-7. Wait for both services to deploy.
+5. Wait for both services to deploy.
 
 If Render still shows a payment wall, verify:
 - Only the backend service declares `plan: free`.
