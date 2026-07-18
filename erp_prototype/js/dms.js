@@ -1,12 +1,68 @@
 /**
  * Document Management System (DMS)
  * Upload, version tracking, handover log, comments, lifecycle, filters, view modes.
+ *
+ * Migrated from localStorage/DB.* to the Node.js backend API.
  */
 
 const DMS = {
   view: 'list',
   detailId: null,
   listViewMode: 'table',
+  searchQuery: '',
+
+  // In-memory cache for work-request title / client lookups.
+  workRequestCache: {
+    _wrs: null,
+    _promise: null,
+    async ensure() {
+      if (this._wrs) return this._wrs;
+      if (this._promise) return this._promise;
+      this._promise = (async () => {
+        try {
+          if (window.apiClient && window.apiClient.workRequests && window.apiClient.workRequests.list) {
+            const res = await window.apiClient.workRequests.list();
+            this._wrs = res.data || [];
+          } else {
+            // Minimal fallback if apiClient.workRequests is unavailable.
+            this._wrs = await this._fetchDirect('/work-requests').then(r => r.data || []);
+          }
+        } catch (e) {
+          console.error('Failed to load work requests for DMS', e);
+          this._wrs = [];
+        }
+        return this._wrs;
+      })().finally(() => { this._promise = null; });
+      return this._promise;
+    },
+    getById(id) {
+      if (!id || !this._wrs) return null;
+      return this._wrs.find(wr => wr.id === id) || null;
+    },
+    getByEntity(entity) {
+      if (!this._wrs) return [];
+      return this._wrs.filter(wr => {
+        const wrEnt = (wr.entity || '').toUpperCase();
+        return entity === 'ALL' ? Auth.user.entities.map(e => e.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
+      });
+    },
+    invalidate() {
+      this._wrs = null;
+    },
+    async _fetchDirect(path) {
+      const baseUrl = window.__ERP_API_BASE_URL__ || 'http://localhost:3000/v1';
+      const token = (() => {
+        try { return sessionStorage.getItem('erp_access_token'); } catch (e) { return null; }
+      })();
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (Auth.activeEntity && Auth.activeEntity !== 'ALL') headers['X-Active-Entity'] = Auth.activeEntity;
+      const res = await fetch(`${baseUrl}${path}`, { headers });
+      if (res.status === 204) return null;
+      if (!res.ok) throw new Error(`Failed to fetch ${path}: ${res.status}`);
+      return res.json();
+    }
+  },
 
   render() {
     this.listViewMode = App.getPreferredViewMode('documents');
@@ -27,6 +83,80 @@ const DMS = {
   // ============================================================
   // Helpers
   // ============================================================
+
+  /**
+   * Convert backend snake_case document shape to the camelCase shape the UI expects.
+   */
+  normalizeDocument(doc, entityCode) {
+    if (!doc) return doc;
+    return {
+      ...doc,
+      id: doc.id,
+      fileName: doc.file_name || doc.fileName,
+      originalName: doc.original_name || doc.originalName,
+      workRequestId: doc.work_request_id || doc.workRequestId,
+      clientId: doc.client_id || doc.clientId,
+      document_type: doc.document_type,
+      category: doc.category,
+      uploader: doc.uploader_id || doc.uploader,
+      documentLifecycle: doc.document_lifecycle || doc.documentLifecycle,
+      uploadDate: doc.upload_date || doc.uploadDate || doc.created_at || doc.createdAt,
+      handover_log: doc.handover_log || doc.handoverLog || [],
+      scannedBy: doc.scanned_by || doc.scannedBy,
+      envelopeId: doc.envelope_id || doc.envelopeId,
+      storedLocation: doc.stored_location || doc.storedLocation,
+      archived: doc.archived,
+      status: doc.status,
+      comments: doc.comments || [],
+      versions: doc.versions || [],
+      entity: entityCode || Auth.activeEntity,
+      createdAt: doc.created_at || doc.createdAt,
+      updatedAt: doc.updated_at || doc.updatedAt,
+    };
+  },
+
+  async ensureCaches() {
+    return Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      this.workRequestCache.ensure()
+    ]);
+  },
+
+  /**
+   * List documents for the active entity. Supports 'ALL' by merging per-entity results.
+   */
+  async fetchDocuments() {
+    const entity = Auth.activeEntity;
+    if (entity === 'ALL' && Auth.user && Auth.user.entities && Auth.user.entities.length) {
+      const results = [];
+      for (const e of Auth.user.entities) {
+        try {
+          const res = await this._listDocumentsForEntity(e);
+          results.push(...(res.data || []).map(d => this.normalizeDocument(d, e)));
+        } catch (err) {
+          console.error(`Failed to fetch documents for entity ${e}`, err);
+        }
+      }
+      return results;
+    }
+    const res = await window.apiClient.documents.list();
+    return (res.data || []).map(d => this.normalizeDocument(d, entity));
+  },
+
+  async _listDocumentsForEntity(entity) {
+    const baseUrl = window.__ERP_API_BASE_URL__ || 'http://localhost:3000/v1';
+    const token = (() => {
+      try { return sessionStorage.getItem('erp_access_token'); } catch (e) { return null; }
+    })();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    headers['X-Active-Entity'] = entity;
+    const res = await fetch(`${baseUrl}/documents`, { headers });
+    if (!res.ok) throw new Error(`Failed to fetch documents: ${res.status}`);
+    return res.json();
+  },
+
   docTypeBadge(type) {
     const map = {
       'original_scan': { cls: 'badge doc-type-badge-original', text: 'Original Scan' },
@@ -80,23 +210,6 @@ const DMS = {
     addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
     actions.appendChild(addBtn);
 
-    // View mode toggle (saveCurrentFilters assigned after filter elements are created)
-    let saveCurrentFilters;
-    const viewToggle = el('div', { class: 'view-mode-toggle' });
-    const viewIcons = { 'Table': ViewIcons.table, 'Board': ViewIcons.board, 'List': ViewIcons.list };
-    [['Table', 'table'], ['Board', 'board'], ['List', 'list']].forEach(([label, mode]) => {
-      const btn = el('button', { html: (viewIcons[label] || '') + ' ' + label });
-      if (this.listViewMode === mode) btn.classList.add('active');
-      btn.addEventListener('click', () => {
-        saveCurrentFilters();
-        App.setPreferredViewMode('documents', mode);
-        this.listViewMode = mode;
-        this.refreshList(listContainer, activeFilters, groupBy);
-      });
-      viewToggle.appendChild(btn);
-    });
-    actions.appendChild(viewToggle);
-
     // Entity-scope filter — intentional direct check (entity-scope, not permission)
     const canCrossEntity = Auth.isManagerial() && Auth.user.entities.length > 1;
 
@@ -114,8 +227,66 @@ const DMS = {
     toolbarStickyWrap.appendChild(actions);
     wrapper.appendChild(toolbarStickyWrap);
 
+    const listContainer = el('div');
+    wrapper.appendChild(listContainer);
+
+    // Show loading state while caches and document list load, then render toolbar + list.
+    toolbarStickyWrap.appendChild(el('div', { class: 'text-muted', text: 'Loading filters...' }));
+    listContainer.appendChild(el('div', { class: 'text-muted', text: 'Loading documents...' }));
+
+    this._buildListContent(wrapper, toolbarStickyWrap, listContainer);
+
+    return wrapper;
+  },
+
+  async _buildListContent(wrapper, toolbarStickyWrap, listContainer) {
+    await this.ensureCaches();
+
+    // Clear loading placeholders.
+    while (toolbarStickyWrap.firstChild) toolbarStickyWrap.removeChild(toolbarStickyWrap.firstChild);
+    while (listContainer.firstChild) listContainer.removeChild(listContainer.firstChild);
+
+    const entity = Auth.activeEntity;
+
+    // Rebuild the actions bar after clearing.
+    const actions = el('div', { class: 'actions-bar' });
+    const addBtn = el('button', { class: 'btn btn-primary', text: 'Upload Document' });
+    addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
+    actions.appendChild(addBtn);
+
+    const canCrossEntity = Auth.isManagerial() && Auth.user.entities.length > 1;
+    if (canCrossEntity) {
+      const entityFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
+      entityFilter.appendChild(el('option', { value: '', text: 'All Entities' }));
+      Auth.user.entities.forEach(e => entityFilter.appendChild(el('option', { value: e, text: e })));
+      entityFilter.value = entity;
+      entityFilter.addEventListener('change', () => {
+        Auth.activeEntity = entityFilter.value || Auth.user.entities[0];
+        localStorage.setItem('erp_session', JSON.stringify({ activeEntity: Auth.activeEntity }));
+        App.handleRoute();
+      });
+      actions.appendChild(entityFilter);
+    }
+    toolbarStickyWrap.appendChild(actions);
+
+    // View mode toggle (saveCurrentFilters assigned after filter elements are created)
+    let saveCurrentFilters;
+    const viewToggle = el('div', { class: 'view-mode-toggle' });
+    const viewIcons = { 'Table': ViewIcons.table, 'Board': ViewIcons.board, 'List': ViewIcons.list };
+    [['Table', 'table'], ['Board', 'board'], ['List', 'list']].forEach(([label, mode]) => {
+      const btn = el('button', { html: (viewIcons[label] || '') + ' ' + label });
+      if (this.listViewMode === mode) btn.classList.add('active');
+      btn.addEventListener('click', () => {
+        saveCurrentFilters();
+        App.setPreferredViewMode('documents', mode);
+        this.listViewMode = mode;
+        this.refreshList(listContainer, activeFilters, groupBy, toolbarStickyWrap);
+      });
+      viewToggle.appendChild(btn);
+    });
+    actions.appendChild(viewToggle);
+
     // Filters bar
-    // Jira Filter Toolbar & Active Filters State
     let groupBy = App.restoreGroupBy('documents') || 'none';
     const activeFilters = {
       workRequest: new Set(),
@@ -144,24 +315,23 @@ const DMS = {
       });
     };
 
-    const getWorkRequestOptions = () => DB.getWhere('workRequests', wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
-    }).map(wr => ({ value: wr.id, label: wr.title }));
+    const getWorkRequestOptions = () => this.workRequestCache.getByEntity(entity).map(wr => ({ value: wr.id, label: wr.title }));
 
-    const getClientOptions = () => DB.getWhere('clients', c => {
-      const clientEnt = (c.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
-    }).map(c => ({ value: c.id, label: c.name }));
+    const getClientOptions = () => {
+      const clients = window.apiClient.clientCache._clients || [];
+      return clients.filter(c => {
+        const cEnt = (c.entity || '').toUpperCase();
+        return entity === 'ALL' ? Auth.user.entities.map(e => e.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase();
+      }).map(c => ({ value: c.id, label: c.name }));
+    };
 
     const getEmployeeOptions = () => {
-      const set = new Set();
-      DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role)).forEach(u => set.add(u.name));
-      (DB.getAll('tasks') || []).forEach(t => {
-        const name = (t.assigneeName || '').trim();
-        if (name) set.add(name);
+      const users = window.apiClient.userCache._users || [];
+      const names = new Set();
+      users.forEach(u => {
+        if (Auth.ALL_ROLES.includes(u.role) && u.name) names.add(u.name);
       });
-      return Array.from(set).map(n => ({ value: n, label: n }));
+      return Array.from(names).map(n => ({ value: n, label: n }));
     };
 
     const getDueDateOptions = () => [
@@ -182,16 +352,23 @@ const DMS = {
     const self = this;
     const groupOptions = [
       { key: 'workRequest', label: 'Work Request', getName: doc => {
-        const wr = DB.getById('workRequests', doc.workRequestId);
+        const wr = self.workRequestCache.getById(doc.workRequestId);
         return wr ? wr.title : 'No Work Request';
       }},
       { key: 'client', label: 'Client', getName: doc => {
-        const wr = DB.getById('workRequests', doc.workRequestId);
-        const client = wr && DB.getById('clients', wr.clientId);
-        return client ? client.name : 'No Client';
+        if (doc.clientId) {
+          const client = window.apiClient.clientCache.getById(doc.clientId);
+          if (client) return client.name;
+        }
+        const wr = self.workRequestCache.getById(doc.workRequestId);
+        if (wr && wr.clientId) {
+          const client = window.apiClient.clientCache.getById(wr.clientId);
+          if (client) return client.name;
+        }
+        return 'No Client';
       }},
       { key: 'employee', label: 'Uploader', getName: doc => {
-        const u = doc.uploader ? DB.getById('users', doc.uploader) : null;
+        const u = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
         return u ? u.name : 'No Uploader';
       }},
       { key: 'status', label: 'Lifecycle', getName: doc => self.lifecycleLabel(doc.documentLifecycle || 'collected') }
@@ -221,20 +398,25 @@ const DMS = {
 
     toolbarStickyWrap.appendChild(toolbarContainer);
 
-    const listContainer = el('div');
-    wrapper.appendChild(listContainer);
-
     const updateFilters = () => this.refreshList(listContainer, activeFilters, groupBy, toolbarStickyWrap);
     updateFilters();
-    return wrapper;
   },
 
-  refreshList(container, activeFilters, groupBy = 'none', toolbarContainer = null) {
+  async refreshList(container, activeFilters, groupBy = 'none', toolbarContainer = null) {
     while (container.firstChild) container.removeChild(container.firstChild);
     toolbarContainer?.classList.remove('grouped-board-active');
     const entity = Auth.activeEntity;
 
-    let docs = DB.getWhere('documents', d => {
+    let docs;
+    try {
+      docs = await this.fetchDocuments();
+    } catch (e) {
+      console.error('Failed to load documents', e);
+      container.appendChild(renderEmptyState('Unable to load documents', e.message, { variant: 'zero-state' }));
+      return;
+    }
+
+    docs = docs.filter(d => {
       if (!d.fileName) return false;
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity);
       if (!matchesEntity) return false;
@@ -248,13 +430,14 @@ const DMS = {
     }
     if (activeFilters && activeFilters.client && activeFilters.client.size > 0) {
       docs = docs.filter(d => {
-        const wr = DB.getById('workRequests', d.workRequestId);
-        return wr && activeFilters.client.has(wr.clientId);
+        if (d.clientId && activeFilters.client.has(d.clientId)) return true;
+        const wr = this.workRequestCache.getById(d.workRequestId);
+        return wr && wr.clientId && activeFilters.client.has(wr.clientId);
       });
     }
     if (activeFilters && activeFilters.employee && activeFilters.employee.size > 0) {
       docs = docs.filter(d => {
-        const u = d.uploader ? DB.getById('users', d.uploader) : null;
+        const u = d.uploader ? window.apiClient.userCache.getById(d.uploader) : null;
         return u && activeFilters.employee.has(u.name);
       });
     }
@@ -283,12 +466,20 @@ const DMS = {
     // Text search filter
     if (this.searchQuery) {
       docs = docs.filter(d => {
-        const wr = d.workRequestId ? DB.getById('workRequests', d.workRequestId) : null;
-        const client = wr ? DB.getById('clients', wr.clientId) : null;
+        const wr = d.workRequestId ? this.workRequestCache.getById(d.workRequestId) : null;
+        let clientName = '';
+        if (d.clientId) {
+          const client = window.apiClient.clientCache.getById(d.clientId);
+          if (client) clientName = client.name;
+        } else if (wr && wr.clientId) {
+          const client = window.apiClient.clientCache.getById(wr.clientId);
+          if (client) clientName = client.name;
+        }
         const hay = [
           d.fileName || '',
           d.documentType || '',
-          client?.name || '',
+          d.document_type || '',
+          clientName,
           wr?.title || '',
         ].join(' ').toLowerCase();
         return hay.includes(this.searchQuery);
@@ -336,7 +527,7 @@ const DMS = {
       const tr = el('tr');
       tr.appendChild(el('td', { text: doc.fileName }));
 
-      const wr = DB.getById('workRequests', doc.workRequestId);
+      const wr = this.workRequestCache.getById(doc.workRequestId);
       const tdWr = el('td');
       if (wr) {
         const wrLink = el('a', { href: '#operations/detail/' + wr.id, text: wr.title });
@@ -354,7 +545,7 @@ const DMS = {
       tdType.appendChild(this.docTypeBadge(doc.document_type));
       tr.appendChild(tdType);
 
-      const uploader = DB.getById('users', doc.uploader);
+      const uploader = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
       tr.appendChild(el('td', { text: uploader?.name || '—' }));
 
       tr.appendChild(el('td', { text: formatDate(doc.uploadDate) }));
@@ -397,23 +588,30 @@ const DMS = {
 
     const groupOptions = [
       { key: 'workRequest', label: 'Work Request', getName: doc => {
-        const wr = DB.getById('workRequests', doc.workRequestId);
+        const wr = self.workRequestCache.getById(doc.workRequestId);
         return wr ? wr.title : 'No Work Request';
       }},
       { key: 'client', label: 'Client', getName: doc => {
-        const wr = DB.getById('workRequests', doc.workRequestId);
-        const client = wr && DB.getById('clients', wr.clientId);
-        return client ? client.name : 'No Client';
+        if (doc.clientId) {
+          const client = window.apiClient.clientCache.getById(doc.clientId);
+          if (client) return client.name;
+        }
+        const wr = self.workRequestCache.getById(doc.workRequestId);
+        if (wr && wr.clientId) {
+          const client = window.apiClient.clientCache.getById(wr.clientId);
+          if (client) return client.name;
+        }
+        return 'No Client';
       }},
       { key: 'employee', label: 'Uploader', getName: doc => {
-        const u = doc.uploader ? DB.getById('users', doc.uploader) : null;
+        const u = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
         return u ? u.name : 'No Uploader';
       }},
       { key: 'status', label: 'Lifecycle', getName: doc => self.lifecycleLabel(doc.documentLifecycle || 'collected') }
     ];
 
     const renderCard = (doc) => {
-      const uploader = DB.getById('users', doc.uploader);
+      const uploader = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
       const badge = self.docTypeBadge(doc.document_type);
       return buildCompactBoardCard({
         key: 'DOC-' + (doc.id || ''),
@@ -439,13 +637,7 @@ const DMS = {
           className: 'primary',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
           onClick: () => {
-            const updates = { documentLifecycle: nextState };
-            if (nextState === 'with_documentations') updates.receivedByDocumentationAt = new Date().toISOString();
-            if (nextState === 'scanned') updates.scannedAt = new Date().toISOString();
-            if (nextState === 'in_envelope') updates.storedInEnvelopeAt = new Date().toISOString();
-            if (nextState === 'stored') updates.storedAt = new Date().toISOString();
-            DB.update('documents', doc.id, updates);
-            App.handleRoute();
+            self.advanceLifecycle(doc.id, nextState);
           }
         });
       }
@@ -469,25 +661,9 @@ const DMS = {
       return;
     }
 
-    // Normalize boardOrder within each lifecycle column.
-    states.forEach(state => {
-      const stateDocs = docs.filter(d => (d.documentLifecycle || 'collected') === state);
-      stateDocs.sort((a, b) => {
-        const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
-        const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
-        if (oa !== null && ob !== null) return oa - ob;
-        if (oa !== null) return -1;
-        if (ob !== null) return 1;
-        return new Date(a.uploadDate || 0) - new Date(b.uploadDate || 0);
-      });
-      stateDocs.forEach((doc, idx) => {
-        const newOrder = (idx + 1) * 1000;
-        if (doc.boardOrder !== newOrder) {
-          doc.boardOrder = newOrder;
-          DB.update('documents', doc.id, { boardOrder: newOrder });
-        }
-      });
-    });
+    // Note: board ordering is not persisted because the backend documents table
+    // has no board_order column. Cards are sorted by upload date within each column.
+    docs.forEach(doc => { doc.boardOrder = new Date(doc.uploadDate || 0).getTime(); });
 
     KanbanBoard.render({
       container,
@@ -512,20 +688,14 @@ const DMS = {
         onDrop({ item, targetStatus, newOrder, fromStatus }) {
           const currentState = item.documentLifecycle || 'collected';
           if (currentState === targetStatus) {
-            DB.update('documents', item.id, { boardOrder: newOrder });
-            App.handleRoute();
+            // Board order is not persisted in the backend; only update local state.
+            item.boardOrder = newOrder;
             return;
           }
 
           const stageLabel = self.lifecycleLabel(targetStatus) || targetStatus;
           const applyMove = () => {
-            const changes = { boardOrder: newOrder, documentLifecycle: targetStatus };
-            if (targetStatus === 'with_documentations') changes.receivedByDocumentationAt = new Date().toISOString();
-            if (targetStatus === 'scanned') changes.scannedAt = new Date().toISOString();
-            if (targetStatus === 'in_envelope') changes.storedInEnvelopeAt = new Date().toISOString();
-            if (targetStatus === 'stored') changes.storedAt = new Date().toISOString();
-            DB.update('documents', item.id, changes);
-            App.handleRoute();
+            self.advanceLifecycle(item.id, targetStatus);
           };
 
           Workflow.showConfirm('Confirm Lifecycle Change', `Move "${item.fileName}" to "${stageLabel}"?`, applyMove, 'success');
@@ -537,7 +707,7 @@ const DMS = {
   renderCompactListView(container, docs) {
     const list = el('div', { class: 'list-view' });
     docs.forEach(doc => {
-      const uploader = DB.getById('users', doc.uploader);
+      const uploader = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
       const item = el('div', { class: 'list-item' });
       const left = el('div');
       left.appendChild(el('div', { class: 'list-item-title', text: doc.fileName }));
@@ -596,11 +766,16 @@ const DMS = {
     wrGroup.appendChild(el('label', { text: 'Work Request *' }));
     const wrSel = el('select', { name: 'workRequestId', required: true });
     wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
-      wrSel.appendChild(el('option', { value: wr.id, text: wr.title }));
-    });
     wrGroup.appendChild(wrSel);
     form.appendChild(wrGroup);
+
+    // Populate work requests async from API cache.
+    this.workRequestCache.ensure().then(() => {
+      const wrs = this.workRequestCache.getByEntity(entity);
+      wrs.forEach(wr => {
+        wrSel.appendChild(el('option', { value: wr.id, text: wr.title }));
+      });
+    }).catch(e => console.error('Failed to load work requests for upload form', e));
 
     // Document Type
     const typeGroup = el('div', { class: 'form-group' });
@@ -619,12 +794,12 @@ const DMS = {
     typeGroup.appendChild(typeWrap);
     form.appendChild(typeGroup);
 
-    // Category
+    // Category — aligned with backend DOCUMENT_CATEGORIES values.
     const catGroup = el('div', { class: 'form-group' });
     catGroup.appendChild(el('label', { text: 'Category *' }));
     const catSel = el('select', { name: 'category', required: true });
     catSel.appendChild(el('option', { value: '', text: '— Select Category —' }));
-    ['Requirement Docs', 'Processed Forms', 'Government Receipts', 'Final Deliverables', 'Other'].forEach(c => {
+    ['SEC', 'BIR', 'CONTRACT', 'PERMIT', 'FINANCIAL', 'CORRESPONDENCE', 'LEGAL', 'HR', 'OTHER'].forEach(c => {
       catSel.appendChild(el('option', { value: c, text: c }));
     });
     catGroup.appendChild(catSel);
@@ -647,7 +822,7 @@ const DMS = {
     return container;
   },
 
-  submitUpload(form) {
+  async submitUpload(form) {
     if (!validateRequiredFields(form)) return;
 
     const fileInput = form.querySelector('input[name="file"]');
@@ -657,79 +832,48 @@ const DMS = {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target.result;
-      this.saveDocument(form, file.name, dataUrl);
-    };
-    reader.onerror = () => {
-      Workflow.showMessage('Read Error', 'Failed to read file.', 'danger');
-    };
-    reader.readAsDataURL(file);
-  },
-
-  saveDocument(form, fileName, dataUrl) {
-    const entity = Auth.activeEntity;
     const data = Object.fromEntries(new FormData(form).entries());
-    const now = new Date().toISOString();
+    const wr = this.workRequestCache.getById(data.workRequestId);
+    const clientId = wr?.clientId || null;
 
-    const existing = DB.getWhere('documents', d =>
-      d.fileName === fileName && d.workRequestId === data.workRequestId
-    )[0];
-
-    if (existing) {
-      const versionEntry = {
-        version: (existing.versions || []).length + 1,
-        fileName: existing.fileName,
-        uploader: existing.uploader,
-        uploadDate: existing.uploadDate,
-        dataUrl: existing.dataUrl
-      };
-      const versions = [...(existing.versions || []), versionEntry];
-
-      DB.update('documents', existing.id, {
-        fileName,
-        workRequestId: data.workRequestId,
-        document_type: data.document_type,
+    try {
+      const createRes = await window.apiClient.documents.create({
+        fileName: file.name,
+        contentType: file.type || 'application/octet-stream',
+        fileSize: file.size,
+        originalName: file.name,
+        workRequestId: data.workRequestId || null,
+        clientId: clientId,
+        documentType: data.document_type,
         category: data.category,
-        uploader: Auth.user.id,
-        uploadDate: now,
         description: data.description || '',
-        dataUrl,
-        versions,
-        handover_log: existing.handover_log || [],
-        comments: existing.comments || [],
-        documentLifecycle: existing.documentLifecycle || 'collected',
-        scannedBy: existing.scannedBy || '',
-        envelopeId: existing.envelopeId || '',
-        storedLocation: existing.storedLocation || ''
       });
-    } else {
-      const record = {
-        id: generateId('doc'),
-        fileName,
-        workRequestId: data.workRequestId,
-        document_type: data.document_type,
-        category: data.category,
-        uploader: Auth.user.id,
-        uploadDate: now,
-        description: data.description || '',
-        handover_log: [],
-        entity,
-        dataUrl,
-        versions: [],
-        comments: [],
-        documentLifecycle: 'collected',
-        scannedBy: '',
-        envelopeId: '',
-        storedLocation: ''
-      };
-      DB.insert('documents', record);
-    }
 
-    this.view = 'list';
-    this.detailId = null;
-    App.handleRoute();
+      const { document, uploadUrl } = createRes.data || {};
+      if (!document || !uploadUrl) {
+        throw new Error('Backend did not return document metadata or upload URL.');
+      }
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        body: file,
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+      });
+      if (!uploadRes.ok) {
+        throw new Error(`File upload failed: ${uploadRes.status}`);
+      }
+
+      await window.apiClient.documents.confirmUpload(document.id);
+
+      this.view = 'list';
+      this.detailId = null;
+      App.handleRoute();
+    } catch (e) {
+      console.error('Document upload failed', e);
+      Workflow.showMessage('Upload Failed', e.message || 'Unable to upload document.', 'danger');
+    }
   },
 
   // ============================================================
@@ -743,14 +887,35 @@ const DMS = {
       return el('div');
     }
 
-    const doc = DB.getById('documents', this.detailId);
+    const container = el('div', { class: 'invoice-detail' });
+    container.appendChild(el('div', { class: 'text-muted', text: 'Loading document details...' }));
+
+    this._buildDetailContent(container);
+
+    return container;
+  },
+
+  async _buildDetailContent(container) {
+    await this.ensureCaches();
+
+    let doc;
+    try {
+      const res = await window.apiClient.documents.get(this.detailId);
+      doc = this.normalizeDocument(res.data);
+    } catch (e) {
+      console.error('Failed to load document detail', e);
+      while (container.firstChild) container.removeChild(container.firstChild);
+      container.appendChild(el('div', { class: 'alert alert-danger', text: 'Failed to load document details.' }));
+      return;
+    }
+
     if (!doc || !doc.fileName) {
       this.view = 'list';
       App.handleRoute();
-      return el('div');
+      return;
     }
 
-    const container = el('div', { class: 'invoice-detail' });
+    while (container.firstChild) container.removeChild(container.firstChild);
 
     // Top actions bar
     const topActions = el('div', { class: 'actions-bar', style: 'margin-bottom: var(--spacing-lg);' });
@@ -759,7 +924,7 @@ const DMS = {
     topActions.appendChild(topBackBtn);
     container.appendChild(topActions);
 
-    const uploader = DB.getById('users', doc.uploader);
+    const uploader = doc.uploader ? window.apiClient.userCache.getById(doc.uploader) : null;
 
     // Document info
     container.appendChild(el('h2', { text: doc.fileName }));
@@ -770,14 +935,14 @@ const DMS = {
     container.appendChild(headerRow);
 
     const meta = el('div', { class: 'invoice-meta' });
-    const wr = DB.getById('workRequests', doc.workRequestId);
+    const wr = this.workRequestCache.getById(doc.workRequestId);
     meta.appendChild(el('p', { text: 'Work Request: ' + (wr?.title || '—') }));
     meta.appendChild(el('p', { text: 'Category: ' + (doc.category || '—') }));
     meta.appendChild(el('p', { text: 'Uploader: ' + (uploader?.name || '—') }));
     meta.appendChild(el('p', { text: 'Upload Date: ' + formatDate(doc.uploadDate) }));
     if (doc.description) meta.appendChild(el('p', { text: 'Description: ' + doc.description }));
     if (doc.scannedBy) {
-      const scannedBy = DB.getById('users', doc.scannedBy);
+      const scannedBy = window.apiClient.userCache.getById(doc.scannedBy);
       meta.appendChild(el('p', { text: 'Scanned By: ' + (scannedBy?.name || '—') }));
     }
     if (doc.envelopeId) meta.appendChild(el('p', { text: 'Envelope ID: ' + doc.envelopeId }));
@@ -808,7 +973,7 @@ const DMS = {
 
     const vTbody = el('tbody');
     (doc.versions || []).forEach(v => {
-      const vUploader = DB.getById('users', v.uploader);
+      const vUploader = v.uploader ? window.apiClient.userCache.getById(v.uploader) : null;
       const vTr = el('tr');
       vTr.appendChild(el('td', { text: String(v.version) }));
       vTr.appendChild(el('td', { text: v.fileName }));
@@ -834,7 +999,7 @@ const DMS = {
     if (comments.length > 0) {
       const thread = el('div', { class: 'comments-thread', style: 'display:flex; flex-direction:column; gap: var(--spacing-md); margin-bottom: var(--spacing-md);' });
       comments.forEach(c => {
-        const commentUser = DB.getById('users', c.userId);
+        const commentUser = c.userId ? window.apiClient.userCache.getById(c.userId) : null;
         const entry = el('div', { style: 'background: var(--color-bg); padding: var(--spacing-md); border-radius: var(--radius-md);' });
         const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom: var(--spacing-xs); font-size:0.8125rem;' });
         header.appendChild(el('span', { style: 'font-weight:600;', text: commentUser?.name || 'Unknown' }));
@@ -957,61 +1122,79 @@ const DMS = {
       }
       container.appendChild(handoverSection);
     }
-
-    return container;
   },
 
-  addComment(docId, text) {
-    const doc = DB.getById('documents', docId);
-    if (!doc) return;
-    const entry = {
-      userId: Auth.user.id,
-      date: new Date().toISOString(),
-      text
-    };
-    const comments = [...(doc.comments || []), entry];
-    DB.update('documents', docId, { comments });
-    App.handleRoute();
+  async addComment(docId, text) {
+    try {
+      const res = await window.apiClient.documents.get(docId);
+      const doc = this.normalizeDocument(res.data);
+      const entry = {
+        userId: Auth.user.id,
+        date: new Date().toISOString(),
+        text
+      };
+      const comments = [...(doc.comments || []), entry];
+      await window.apiClient.documents.update(docId, { comments });
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to add comment', e);
+      Workflow.showMessage('Comment Failed', e.message || 'Unable to post comment.', 'danger');
+    }
   },
 
-  advanceLifecycle(docId, nextState) {
-    const doc = DB.getById('documents', docId);
-    if (!doc) return;
+  async advanceLifecycle(docId, nextState) {
+    try {
+      const res = await window.apiClient.documents.get(docId);
+      const doc = this.normalizeDocument(res.data);
 
-    const updates = { documentLifecycle: nextState };
+      const updates = {};
 
-    if (nextState === 'scanned') {
-      updates.scannedBy = Auth.user.id;
-    }
-    if (nextState === 'in_envelope') {
-      const wr = DB.getById('workRequests', doc.workRequestId);
-      const clientId = wr?.clientId || 'unknown';
-      const existingEnvelopes = DB.getWhere('documents', d => d.envelopeId && d.envelopeId.startsWith('ENVELOPE-' + clientId + '-'));
-      const seq = String(existingEnvelopes.length + 1).padStart(3, '0');
-      updates.envelopeId = 'ENVELOPE-' + clientId + '-' + seq;
-    }
-    if (nextState === 'stored') {
-      const loc = prompt('Enter storage location:');
-      if (!loc) return;
-      updates.storedLocation = loc;
-    }
+      if (nextState === 'scanned') {
+        updates.scannedBy = Auth.user.id;
+      }
+      if (nextState === 'in_envelope') {
+        const clientId = doc.clientId || (this.workRequestCache.getById(doc.workRequestId)?.clientId) || 'unknown';
+        const existingRes = await window.apiClient.documents.list();
+        const existingEnvelopes = (existingRes.data || [])
+          .map(d => this.normalizeDocument(d))
+          .filter(d => d.envelopeId && String(d.envelopeId).startsWith('ENVELOPE-' + clientId + '-'));
+        const seq = String(existingEnvelopes.length + 1).padStart(3, '0');
+        updates.envelopeId = 'ENVELOPE-' + clientId + '-' + seq;
+      }
+      if (nextState === 'stored') {
+        const loc = prompt('Enter storage location:');
+        if (!loc) return;
+        updates.storedLocation = loc;
+      }
 
-    DB.update('documents', docId, updates);
-    App.handleRoute();
+      if (Object.keys(updates).length > 0) {
+        await window.apiClient.documents.update(docId, updates);
+      }
+      await window.apiClient.documents.updateLifecycle(docId, { lifecycle: nextState });
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to advance lifecycle', e);
+      Workflow.showMessage('Lifecycle Change Failed', e.message || 'Unable to move document.', 'danger');
+    }
   },
 
-  recordHandover(docId, formData) {
-    const doc = DB.getById('documents', docId);
-    if (!doc) return;
+  async recordHandover(docId, formData) {
+    try {
+      const res = await window.apiClient.documents.get(docId);
+      const doc = this.normalizeDocument(res.data);
 
-    const entry = {
-      handed_to: formData.get('recipient'),
-      handed_date: formData.get('handoverDate'),
-      method: formData.get('method')
-    };
+      const entry = {
+        handed_to: formData.get('recipient'),
+        handed_date: formData.get('handoverDate'),
+        method: formData.get('method')
+      };
 
-    const handover_log = [...(doc.handover_log || []), entry];
-    DB.update('documents', docId, { handover_log });
-    App.handleRoute();
+      const handover_log = [...(doc.handover_log || []), entry];
+      await window.apiClient.documents.update(docId, { handoverLog: handover_log });
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to record handover', e);
+      Workflow.showMessage('Handover Failed', e.message || 'Unable to record handover.', 'danger');
+    }
   }
 };

@@ -21,6 +21,7 @@ const Billing = {
         inv.pendingChangeId = pc.id;
       }
     }
+    if (inv) inv = this.normalizeInvoice(inv);
     return inv;
   },
 
@@ -281,6 +282,171 @@ const Billing = {
     return 0;
   },
 
+  getInvoiceSequenceMap(invoices) {
+    const sorted = [...(invoices || [])].sort((a, b) => {
+      const ta = new Date(a.createdAt || a.issueDate || 0).getTime();
+      const tb = new Date(b.createdAt || b.issueDate || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+    const map = new Map();
+    sorted.forEach((item, idx) => map.set(item.id, idx + 1));
+    return map;
+  },
+
+  normalizeInvoice(doc) {
+    if (!doc) return doc;
+    const normLineItem = item => ({
+      id: item.id,
+      invoiceId: item.invoice_id || item.invoiceId,
+      description: item.description || '',
+      amount: parseFloat(item.amount) || 0,
+      type: item.type || 'Professional Fee',
+      sortOrder: item.sort_order,
+      createdAt: item.created_at
+    });
+    const normPayment = p => ({
+      id: p.id,
+      invoiceId: p.invoice_id || p.invoiceId,
+      amount: parseFloat(p.amount) || 0,
+      method: p.method || '',
+      reference: p.reference || '',
+      date: p.payment_date || p.date,
+      notes: p.notes || '',
+      recordedBy: p.recorded_by || p.recordedBy,
+      recordedAt: p.created_at || p.recordedAt,
+      collectedBy: p.collected_by || p.collectedBy || '',
+      checkNumber: p.check_number || p.checkNumber || '',
+      bankName: p.bank_name || p.bankName || '',
+      bankAccount: p.bank_account || p.bankAccount || '',
+      transactionId: p.transaction_id || p.transactionId || '',
+      digitalAccount: p.digital_account || p.digitalAccount || '',
+      cardLast4: p.card_last4 || p.cardLast4 || ''
+    });
+    return {
+      id: doc.id,
+      invoiceNumber: doc.invoice_number || doc.invoiceNumber,
+      clientId: doc.client_id || doc.clientId,
+      workRequestId: doc.work_request_id || doc.workRequestId,
+      linkedTaskId: doc.linked_task_id || doc.linkedTaskId || null,
+      entity: doc.entity_id || doc.entity,
+      issueDate: doc.issue_date || doc.issueDate,
+      dueDate: doc.due_date || doc.dueDate,
+      status: doc.status || 'Draft',
+      subtotal: parseFloat(doc.subtotal) || 0,
+      vat: parseFloat(doc.tax_amount) || parseFloat(doc.vat) || 0,
+      total: parseFloat(doc.total) || 0,
+      paidAmount: parseFloat(doc.amount_paid) || parseFloat(doc.paidAmount) || 0,
+      balance: parseFloat(doc.balance) || (parseFloat(doc.total || 0) - parseFloat(doc.amount_paid || 0)),
+      notes: doc.notes || null,
+      terms: doc.terms || null,
+      archived: !!doc.archived,
+      createdBy: doc.created_by || doc.createdBy,
+      updatedBy: doc.updated_by || doc.updatedBy,
+      createdAt: doc.created_at || doc.createdAt,
+      updatedAt: doc.updated_at || doc.updatedAt,
+      deletedAt: doc.deleted_at || doc.deletedAt,
+      boardOrder: doc.board_order || doc.boardOrder,
+      fromTemplate: doc.from_template || doc.fromTemplate,
+      lineItems: doc.line_items ? (doc.line_items || []).map(normLineItem) : (doc.lineItems || []).map(normLineItem),
+      payments: (doc.payments || []).map(normPayment),
+      clientName: doc.clients?.name || doc.clientName || null
+    };
+  },
+
+  toApiInvoice(record) {
+    return {
+      clientId: record.clientId,
+      workRequestId: record.workRequestId || null,
+      invoiceNumber: record.invoiceNumber,
+      issueDate: record.issueDate,
+      dueDate: record.dueDate,
+      status: record.status,
+      lineItems: (record.lineItems || []).map(item => ({
+        description: item.description,
+        amount: parseFloat(item.amount) || 0,
+        type: item.type || 'Professional Fee'
+      })),
+      notes: record.notes || null,
+      terms: record.terms || null,
+      archived: record.archived
+    };
+  },
+
+  normalizeTemplate(doc) {
+    if (!doc) return doc;
+    return {
+      id: doc.id,
+      name: doc.name,
+      entity: doc.entity_id || doc.entity,
+      clientId: doc.client_id || doc.clientId,
+      schedule: doc.schedule,
+      pfAmount: parseFloat(doc.pf_amount) || 0,
+      lineItems: (doc.line_items || doc.lineItems || []).map(item => ({
+        description: item.description || '',
+        amount: parseFloat(item.amount) || 0,
+        type: item.type || 'Professional Fee'
+      })),
+      active: doc.active !== false,
+      createdAt: doc.created_at || doc.createdAt,
+      updatedAt: doc.updated_at || doc.updatedAt,
+      clientName: doc.clients?.name || doc.clientName || null
+    };
+  },
+
+  toApiTemplate(record) {
+    return {
+      name: record.name,
+      clientId: record.clientId || null,
+      schedule: record.schedule,
+      pfAmount: parseFloat(record.pfAmount) || 0,
+      lineItems: (record.lineItems || []).map(item => ({
+        description: item.description,
+        amount: parseFloat(item.amount) || 0,
+        type: item.type || 'Professional Fee'
+      }))
+    };
+  },
+
+  async fetchInvoices() {
+    try {
+      const res = await window.apiClient.invoices.list({ limit: 1000 });
+      return (res.data || []).map(inv => this.normalizeInvoice(inv));
+    } catch (e) {
+      console.error('Failed to fetch invoices', e);
+      Workflow.showMessage('Invoices', e.message || 'Unable to load invoices.', 'error');
+      return [];
+    }
+  },
+
+  async fetchTemplates() {
+    try {
+      const res = await window.apiClient.invoices.listTemplates();
+      return (res.data || []).map(t => this.normalizeTemplate(t));
+    } catch (e) {
+      console.error('Failed to fetch billing templates', e);
+      return [];
+    }
+  },
+
+  async nextInvoiceNumber(entity) {
+    const year = new Date().getFullYear();
+    const prefix = entity + '-SI-' + year + '-';
+    try {
+      const res = await window.apiClient.invoices.list({ limit: 1000 });
+      const existing = (res.data || []).map(inv => this.normalizeInvoice(inv)).filter(inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix));
+      const maxNum = existing.reduce((max, inv) => {
+        const parts = inv.invoiceNumber.split('-');
+        const num = parseInt(parts[parts.length - 1], 10);
+        return !isNaN(num) && num > max ? num : max;
+      }, 0);
+      return prefix + String(maxNum + 1).padStart(3, '0');
+    } catch (e) {
+      console.error('Failed to compute next invoice number', e);
+      return prefix + '001';
+    }
+  },
+
   // ============================================================
   // List View
   // ============================================================
@@ -288,8 +454,6 @@ const Billing = {
     const entity = Auth.activeEntity;
     const wrapper = el('div');
     const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
-
-
 
     // Jira Filter Toolbar & Active Filters State
     const activeFilters = {
@@ -325,26 +489,29 @@ const Billing = {
       });
     };
 
-    const getWorkRequestOptions = () => DB.getWhere('workRequests', wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
-    }).map(wr => ({ value: wr.id, label: wr.title }));
+    const entMatches = (val) => {
+      const u = (val || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(u);
+      return u === entity.toUpperCase();
+    };
 
-    const getClientOptions = () => DB.getWhere('clients', c => {
-      const clientEnt = (c.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
-    }).map(c => ({ value: c.id, label: c.name }));
+    const getWorkRequestOptions = () => {
+      const wrs = window.apiClient.workRequestCache._wrs || [];
+      return wrs.filter(wr => entMatches(wr.entity)).map(wr => ({ value: wr.id, label: wr.title }));
+    };
+
+    const getClientOptions = () => {
+      const clients = window.apiClient.clientCache._clients || [];
+      return clients.filter(c => entMatches(c.entity)).map(c => ({ value: c.id, label: c.name }));
+    };
 
     const getEmployeeOptions = () => {
       const set = new Set();
-      DB.getWhere('users', u => {
+      const users = window.apiClient.userCache._users || [];
+      users.filter(u => {
         const userEnts = (u.entities || []).map(e => e.toUpperCase());
         return entity === 'ALL' ? userEnts.some(e => Auth.user.entities.map(ae => ae.toUpperCase()).includes(e)) : userEnts.includes(entity.toUpperCase());
       }).forEach(u => set.add(u.name));
-      (DB.getAll('tasks') || []).forEach(t => {
-        const name = (t.assigneeName || '').trim();
-        if (name) set.add(name);
-      });
       return Array.from(set).map(n => ({ value: n, label: n }));
     };
 
@@ -381,64 +548,34 @@ const Billing = {
     const groupOptions = [
       { key: 'none', label: 'None' },
       { key: 'client', label: 'Client', getName: inv => {
-        const client = DB.getById('clients', inv.clientId);
+        const client = window.apiClient.clientCache.getById(inv.clientId);
         return client?.name || 'No Client';
       }},
       { key: 'employee', label: 'Employee', getName: inv => {
-        const creator = inv.createdBy ? DB.getById('users', inv.createdBy) : null;
+        const creator = inv.createdBy ? window.apiClient.userCache.getById(inv.createdBy) : null;
         return creator?.name || 'Unassigned';
       }},
       { key: 'workRequest', label: 'Work Request', getName: inv => {
-        const wr = DB.getById('workRequests', inv.workRequestId);
+        const wr = window.apiClient.workRequestCache.getById(inv.workRequestId);
         return wr?.title || 'No Work Request';
       }}
     ];
 
-    const toolbarContainer = createJiraFilterToolbar({
-      moduleName: 'billing',
-      searchConfig: {
-        placeholder: 'Search billing...',
-        onSearch: (q) => { searchQuery = q; refresh(); }
-      },
-      categories,
-      activeFilters,
-      onFilterChange: () => {
-        saveCurrentFilters();
-        refresh();
-      },
-      viewMode,
-      onViewModeChange: (newMode) => {
-        viewMode = newMode;
-        App.setPreferredViewMode('billing', newMode);
-        saveCurrentFilters();
-        refresh();
-      },
-      groupByOptions: groupOptions,
-      currentGroupBy: groupBy,
-      onGroupByChange: (newGroupBy) => {
-        groupBy = newGroupBy;
-        App.saveGroupBy('billing', groupBy);
-        refresh();
-      }
-    });
-
-    stickyContainer.appendChild(toolbarContainer);
-    wrapper.appendChild(stickyContainer);
-
     const contentContainer = el('div');
     wrapper.appendChild(contentContainer);
 
-    const refresh = () => {
+    const refresh = async () => {
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
-      const baseInvoices = DB.getWhere('invoices', inv => {
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(inv.entity) : inv.entity === entity);
+      const apiInvoices = await this.fetchInvoices();
+      const baseInvoices = apiInvoices.filter(inv => {
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
         return matchesEntity && inv.status !== 'Cancelled' && !inv.archived;
       });
 
       const pendingInvs = DB.getWhere('pendingChanges', pc => {
         if (pc.table !== 'invoices' || pc.status !== 'pending') return false;
         const inv = pc.proposedData;
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(inv.entity) : inv.entity === entity);
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
         if (!matchesEntity) return false;
         if (!Auth.can('billing:approve') && pc.submittedBy !== Auth.user?.id) return false;
         return true;
@@ -460,11 +597,12 @@ const Billing = {
       }
       if (activeFilters.employee.size > 0) {
         invoices = invoices.filter(inv => {
-          const creator = inv.createdBy ? DB.getById('users', inv.createdBy) : null;
+          const creator = inv.createdBy ? window.apiClient.userCache.getById(inv.createdBy) : null;
           if (creator && activeFilters.employee.has(creator.name)) return true;
-          const tasks = inv.workRequestId ? DB.getWhere('tasks', t => t.workRequestId === inv.workRequestId) : [];
+          const wr = inv.workRequestId ? window.apiClient.workRequestCache.getById(inv.workRequestId) : null;
+          const tasks = wr?.tasks || [];
           return tasks.some(t => {
-            const u = t.assigneeId ? DB.getById('users', t.assigneeId) : null;
+            const u = t.assigneeId ? window.apiClient.userCache.getById(t.assigneeId) : null;
             return (u && activeFilters.employee.has(u.name)) || activeFilters.employee.has(t.assigneeName);
           });
         });
@@ -497,7 +635,7 @@ const Billing = {
       // Text search filter
       if (searchQuery) {
         invoices = invoices.filter(inv => {
-          const client = DB.getById('clients', inv.clientId);
+          const client = window.apiClient.clientCache.getById(inv.clientId);
           const hay = [
             inv.invoiceNumber || '',
             client?.name || '',
@@ -525,7 +663,39 @@ const Billing = {
       }
     };
 
-    refresh();
+    (async () => {
+      await Promise.all([window.apiClient.userCache.ensure(), window.apiClient.clientCache.ensure(), window.apiClient.workRequestCache.ensure()]);
+      const toolbarContainer = createJiraFilterToolbar({
+        moduleName: 'billing',
+        searchConfig: {
+          placeholder: 'Search billing...',
+          onSearch: (q) => { searchQuery = q; refresh(); }
+        },
+        categories,
+        activeFilters,
+        onFilterChange: () => {
+          saveCurrentFilters();
+          refresh();
+        },
+        viewMode,
+        onViewModeChange: (newMode) => {
+          viewMode = newMode;
+          App.setPreferredViewMode('billing', newMode);
+          saveCurrentFilters();
+          refresh();
+        },
+        groupByOptions: groupOptions,
+        currentGroupBy: groupBy,
+        onGroupByChange: (newGroupBy) => {
+          groupBy = newGroupBy;
+          App.saveGroupBy('billing', groupBy);
+          refresh();
+        }
+      });
+      stickyContainer.appendChild(toolbarContainer);
+      wrapper.insertBefore(stickyContainer, contentContainer);
+      await refresh();
+    })();
 
     return wrapper;
   },
@@ -572,12 +742,12 @@ const Billing = {
           if (inv.fromTemplate) line.appendChild(this.recurringBadge(inv));
           cell.appendChild(line);
           if (inv.workRequestId) {
-            const wr = DB.getById('workRequests', inv.workRequestId);
+            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId);
             if (wr) {
               const sub = el('div', { style: 'font-size: 0.725rem; color: var(--color-text-muted);' });
               let suffix = ' (Entire WR)';
               if (inv.linkedTaskId) {
-                const task = DB.getById('tasks', inv.linkedTaskId);
+                const task = (wr.tasks || []).find(t => t.id === inv.linkedTaskId);
                 if (task) suffix = ` (Task: ${task.title})`;
               }
               sub.appendChild(el('span', { text: '🔗 ' + wr.title + suffix, style: 'font-weight: 500;' }));
@@ -587,7 +757,7 @@ const Billing = {
           return cell;
         }
       },
-      { key: 'clientId', label: 'Client', render: (inv) => DB.getById('clients', inv.clientId)?.name || '—' },
+      { key: 'clientId', label: 'Client', render: (inv) => window.apiClient.clientCache.getById(inv.clientId)?.name || '—' },
       { key: 'issueDate', label: 'Issue Date', render: (inv) => formatDate(inv.issueDate), width: '110px' },
       { key: 'total', label: 'Total', render: (inv) => formatPHP(inv.total || 0), align: 'right', width: '100px' },
       { key: 'paid', label: 'Paid', render: (inv) => formatPHP(this.getPaidAmount(inv)), align: 'right', width: '100px' },
@@ -601,7 +771,7 @@ const Billing = {
       columns,
       selectable: true,
       bulkActions: (ids) => {
-        const rows = ids.map(id => DB.getById('invoices', id)).filter(Boolean);
+        const rows = ids.map(id => invoices.find(inv => inv.id === id)).filter(Boolean);
         const canArchive = rows.filter(inv => inv.status === 'Paid' && !inv.archived).length;
         const canTrash = rows.filter(inv => inv.status === 'Draft' && Auth.can('billing:edit')).length;
         const actions = [];
@@ -711,7 +881,7 @@ const Billing = {
         const newOrder = (idx + 1) * 1000;
         if (inv.boardOrder !== newOrder) {
           inv.boardOrder = newOrder;
-          DB.update('invoices', inv.id, { boardOrder: newOrder });
+          window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => console.error('Failed to update board order', e));
         }
       });
       const colPendingInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && inv.pendingChangeId);
@@ -730,10 +900,10 @@ const Billing = {
       return col;
     });
 
-    const seqMap = getChronologicalSequenceMap('invoices');
+    const seqMap = this.getInvoiceSequenceMap(invoices);
 
     const renderCard = (inv) => {
-      const client = DB.getById('clients', inv.clientId);
+      const client = window.apiClient.clientCache.getById(inv.clientId);
       const paid = self.getPaidAmount(inv);
       const balance = inv.total - paid;
       const progress = inv.total > 0 ? Math.round((paid / inv.total) * 100) : 0;
@@ -750,7 +920,7 @@ const Billing = {
 
       const descParts = [inv.invoiceNumber];
       if (inv.workRequestId) {
-        const wr = DB.getById('workRequests', inv.workRequestId);
+        const wr = window.apiClient.workRequestCache.getById(inv.workRequestId);
         if (wr) descParts.push(wr.title);
       }
       if (inv.fromTemplate) descParts.push('Recurring');
@@ -860,8 +1030,10 @@ const Billing = {
       },
       onDrop({ item, targetStatus, newOrder, fromStatus }) {
         if (fromStatus === targetStatus) {
-          DB.update('invoices', item.id, { boardOrder: newOrder });
-          App.handleRoute();
+          window.apiClient.invoices.update(item.id, { boardOrder: newOrder }).then(() => App.handleRoute()).catch(e => {
+            console.error('Failed to update board order', e);
+            Workflow.showMessage('Update Failed', e.message || 'Unable to move invoice.', 'error');
+          });
           return;
         }
 
@@ -879,20 +1051,24 @@ const Billing = {
 
         // Block Draft → beyond Pending if no line items
         if (fromStatus === 'Draft' && targetStatus !== 'Pending') {
-          const hasItems = item.items && item.items.length > 0;
+          const hasItems = item.lineItems && item.lineItems.length > 0;
           if (!hasItems && (!item.total || item.total <= 0)) {
             Workflow.showMessage('Incomplete Invoice', 'Cannot advance — invoice has no line items or amount.', 'warning');
             return;
           }
         }
 
-        const applyMove = () => {
+        const applyMove = async () => {
           const isRelease = targetStatus === 'Sent';
           const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
           const nextStatus = (isRelease && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
-          const changes = { boardOrder: newOrder, status: nextStatus, updatedAt: new Date().toISOString() };
-          DB.update('invoices', item.id, changes);
-          App.handleRoute();
+          try {
+            await window.apiClient.invoices.update(item.id, { boardOrder: newOrder, status: nextStatus });
+            App.handleRoute();
+          } catch (e) {
+            console.error('Failed to move invoice', e);
+            Workflow.showMessage('Update Failed', e.message || 'Unable to move invoice.', 'error');
+          }
         };
 
         // Confirm critical transitions
@@ -947,17 +1123,17 @@ const Billing = {
     }
     const list = el('div', { class: 'list-view' });
     invoices.forEach(inv => {
-      const client = DB.getById('clients', inv.clientId);
+      const client = window.apiClient.clientCache.getById(inv.clientId);
       const row = el('div', { class: 'list-item' });
       const paid = this.getPaidAmount(inv);
       const balance = inv.total - paid;
       let wrMeta = '';
       if (inv.workRequestId) {
-        const wr = DB.getById('workRequests', inv.workRequestId);
+        const wr = window.apiClient.workRequestCache.getById(inv.workRequestId);
         if (wr) {
           wrMeta = ' | WR: ' + wr.title;
           if (inv.linkedTaskId) {
-            const task = DB.getById('tasks', inv.linkedTaskId);
+            const task = (wr.tasks || []).find(t => t.id === inv.linkedTaskId);
             if (task) wrMeta += ` (Task: ${task.title})`;
           } else {
             wrMeta += ' (Entire WR)';
@@ -1063,7 +1239,8 @@ const Billing = {
     if (prefill) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+    const wrs = window.apiClient.workRequestCache._wrs || DB.getWhere('workRequests', wr => wr.entity === entity);
+    wrs.forEach(wr => {
       const opt = el('option', { value: wr.id, text: wr.title });
       if (inv && inv.workRequestId === wr.id) opt.selected = true;
       else if (!inv && prefill && prefill.workRequestId === wr.id) opt.selected = true;
@@ -1086,7 +1263,9 @@ const Billing = {
       taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
       const wrId = wrSel.value;
       if (wrId) {
-        DB.getWhere('tasks', t => t.workRequestId === wrId).forEach(t => {
+        const wr = window.apiClient.workRequestCache.getById(wrId);
+        const tasks = (wr?.tasks || []).length ? wr.tasks : DB.getWhere('tasks', t => t.workRequestId === wrId);
+        tasks.forEach(t => {
           const opt = el('option', { value: t.id, text: t.title });
           if (inv && inv.linkedTaskId === t.id) opt.selected = true;
           else if (!inv && opReq && opReq.linkedTaskId === t.id) opt.selected = true;
@@ -1161,7 +1340,7 @@ const Billing = {
     // Recalculate totals on input changes
     form.addEventListener('input', () => this.recalcTotals(form));
 
-    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form); });
+    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form).catch(err => console.error('submitForm error', err)); });
 
     container.appendChild(form);
     this.recalcTotals(form);
@@ -1234,7 +1413,7 @@ const Billing = {
     return prefix + String(maxNum + 1).padStart(3, '0');
   },
 
-  submitForm(form) {
+  async submitForm(form) {
     if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
@@ -1298,56 +1477,60 @@ const Billing = {
     };
     if (inv) {
       // Preserve fields not in form
+      record.id = inv.id;
       record.status = inv.status;
       record.payments = inv.payments || [];
       record.paidAmount = inv.paidAmount || 0;
       record.createdBy = inv.createdBy || Auth.user.id;
+      record.createdAt = inv.createdAt;
     } else {
       record.createdBy = Auth.user.id;
     }
 
-    if (isNew) {
-      record.id = generateSequentialId('inv', 'invoices');
-      record.createdAt = new Date().toISOString();
-      record.updatedAt = record.createdAt;
-    } else {
+    if (!isNew) {
       record.id = this.detailId;
-      record.updatedAt = new Date().toISOString();
     }
 
     let result = { approved: true };
-    if (isNew || record.status === 'Draft') {
+    const apiPayload = this.toApiInvoice(record);
+    const isApprover = Auth.canBypassReview('invoices');
+    const requiresApproval = !isApprover;
+
+    try {
       if (isNew) {
+        const res = await window.apiClient.invoices.create(apiPayload);
+        record.id = res.data.id;
+        record.createdAt = res.data.created_at || res.data.createdAt;
+        record.updatedAt = res.data.updated_at || res.data.updatedAt;
+        record.status = res.data.status;
         DB.insert('invoices', record);
       } else {
-        DB.update('invoices', record.id, record);
-      }
-      // Link to WR if selected
-      if (data.workRequestId) {
-        const wr = DB.getById('workRequests', data.workRequestId);
-        if (wr) {
-          DB.update('workRequests', wr.id, { linkedInvoiceId: record.id });
-        }
-      }
-    } else {
-      result = PendingChanges.submit('invoices', record, isNew);
-
-      if (result.approved) {
-        // Clean up old WR back-link if WR changed during edit
-        if (!isNew && inv && inv.workRequestId && inv.workRequestId !== (data.workRequestId || null)) {
-          const oldWr = DB.getById('workRequests', inv.workRequestId);
-          if (oldWr && oldWr.linkedInvoiceId === record.id) {
-            DB.update('workRequests', oldWr.id, { linkedInvoiceId: null });
+        if (record.status === 'Draft' || !requiresApproval) {
+          const res = await window.apiClient.invoices.update(record.id, apiPayload);
+          record.updatedAt = res.data.updated_at || res.data.updatedAt;
+          record.status = res.data.status;
+          DB.update('invoices', record.id, record);
+        } else {
+          result = PendingChanges.submit('invoices', record, false);
+          if (result.approved) {
+            const res = await window.apiClient.invoices.update(record.id, apiPayload);
+            record.updatedAt = res.data.updated_at || res.data.updatedAt;
+            record.status = res.data.status;
+            DB.update('invoices', record.id, record);
           }
         }
+      }
+    } catch (e) {
+      console.error('Failed to save invoice', e);
+      Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
+      return;
+    }
 
-        // Link to WR if selected (only if approved)
-        if (data.workRequestId) {
-          const wr = DB.getById('workRequests', data.workRequestId);
-          if (wr) {
-            DB.update('workRequests', wr.id, { linkedInvoiceId: record.id });
-          }
-        }
+    // Link to WR if selected
+    if (data.workRequestId) {
+      const wr = window.apiClient.workRequestCache.getById(data.workRequestId) || DB.getById('workRequests', data.workRequestId);
+      if (wr) {
+        DB.update('workRequests', wr.id, { linkedInvoiceId: record.id });
       }
     }
 
@@ -1366,7 +1549,7 @@ const Billing = {
     this.prefilledClientId = null;
 
     const isApproved = result ? result.approved : true;
-    const wrName = data.workRequestId ? (DB.getById('workRequests', data.workRequestId)?.title || '') : '';
+    const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
     const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
     const msgConfig = {
       title: 'Invoice ' + (isNew ? 'Created' : 'Updated'),
@@ -1405,7 +1588,12 @@ const Billing = {
 
   showRequestInvoiceModal() {
     const entity = Auth.activeEntity;
-    const wrs = DB.getWhere('workRequests', wr => {
+    const allWrs = window.apiClient.workRequestCache._wrs || DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      return wrEnt === entity.toUpperCase();
+    });
+    const wrs = allWrs.filter(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
       return wrEnt === entity.toUpperCase();
@@ -1420,7 +1608,7 @@ const Billing = {
     const wrSelect = el('select', { name: 'workRequestId', class: 'form-select', required: true });
     wrSelect.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     wrs.forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'billing' && r.status === 'pending');
       if (pending.length === 0) {
         wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
@@ -1442,7 +1630,8 @@ const Billing = {
       taskSelect.appendChild(el('option', { value: '', text: '— Whole Project —' }));
       const wrId = wrSelect.value;
       if (wrId) {
-        const tasks = DB.getWhere('tasks', t => t.workRequestId === wrId) || [];
+        const wr = window.apiClient.workRequestCache.getById(wrId);
+        const tasks = (wr?.tasks || []).length ? wr.tasks : (DB.getWhere('tasks', t => t.workRequestId === wrId) || []);
         tasks.forEach(t => {
           taskSelect.appendChild(el('option', { value: t.id, text: t.title }));
         });
@@ -1494,7 +1683,7 @@ const Billing = {
         Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
         return;
       }
-      const wr = DB.getById('workRequests', wrId);
+      const wr = window.apiClient.workRequestCache.getById(wrId) || DB.getById('workRequests', wrId);
 
       const amtStr = amtIn.value;
       const amount = parseFloat(amtStr.replace(/[₱$,\s]/g, '')) || 0;
@@ -1541,7 +1730,7 @@ const Billing = {
   renderDetail() {
     const inv = this.getInvoiceById(this.detailId);
     if (!inv) { location.hash = '#billing'; return el('div'); }
-    const client = DB.getById('clients', inv.clientId);
+    const client = window.apiClient.clientCache.getById(inv.clientId);
 
     const container = el('div', { class: 'invoice-detail' });
 
@@ -1579,7 +1768,7 @@ const Billing = {
 
     // Linked Work Request / Task info card
     if (inv.workRequestId) {
-      const linkedWr = DB.getById('workRequests', inv.workRequestId);
+      const linkedWr = window.apiClient.workRequestCache.getById(inv.workRequestId);
       if (linkedWr) {
         const linkCard = el('div', {
           style: 'background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
@@ -1692,8 +1881,8 @@ const Billing = {
         if (p.digitalAccount) addRow('Wallet / Account', p.digitalAccount);
         if (p.cardLast4) addRow('Card Number', '**** ' + p.cardLast4);
 
-        const recorder = p.recordedBy ? DB.getById('users', p.recordedBy) : null;
-        const collector = p.collectedBy ? DB.getById('users', p.collectedBy) : null;
+        const recorder = p.recordedBy ? window.apiClient.userCache.getById(p.recordedBy) : null;
+        const collector = p.collectedBy ? window.apiClient.userCache.getById(p.collectedBy) : null;
         addRow('Recorded By', recorder ? recorder.name : '—');
         addRow('Collected By', collector ? collector.name : '—');
 
@@ -1798,7 +1987,7 @@ const Billing = {
       collectorGroup.appendChild(el('label', { text: 'Payment Collected By' }));
       const collectorSel = el('select', { name: 'payCollectedBy' });
       collectorSel.appendChild(el('option', { value: '', text: '— Select User —' }));
-      DB.getAll('users').forEach(u => {
+      (window.apiClient.userCache._users || DB.getAll('users')).forEach(u => {
         const opt = el('option', { value: u.id, text: u.name });
         collectorSel.appendChild(opt);
       });
@@ -1807,7 +1996,7 @@ const Billing = {
 
       const payBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Record Payment' });
       payForm.appendChild(payBtn);
-      payForm.addEventListener('submit', e => {
+      payForm.addEventListener('submit', async e => {
         e.preventDefault();
         const fd = new FormData(payForm);
         const method = fd.get('payMethod');
@@ -1852,13 +2041,21 @@ const Billing = {
         if (newPaid >= inv.total) newStatus = 'Paid';
         else if (newPaid > 0 && newPaid < inv.total) newStatus = 'Partially Paid';
 
-        // Manager (billing:mark_paid without billing:edit) routes through Admin approval
-        if (Auth.can('billing:mark_paid') && !Auth.can('billing:edit')) {
-          const proposedInv = { ...inv, payments, paidAmount: newPaid, status: newStatus, updatedAt: new Date().toISOString() };
-          PendingChanges.submit('invoices', proposedInv, false);
-          Workflow.showMessage('Submitted', 'Payment has been submitted for administrative approval.', 'success');
-        } else {
-          DB.update('invoices', inv.id, { payments, paidAmount: newPaid, status: newStatus, updatedAt: new Date().toISOString() });
+        try {
+          await window.apiClient.invoices.recordPayment(inv.id, {
+            amount: payAmount,
+            method,
+            reference: paymentRecord.reference,
+            date: paymentRecord.date,
+            notes: paymentRecord.notes,
+          });
+          // Refresh invoice from server so totals/status reflect DB state
+          const refreshed = await window.apiClient.invoices.get(inv.id);
+          DB.update('invoices', inv.id, this.normalizeInvoice(refreshed.data));
+        } catch (e) {
+          console.error('Failed to record payment', e);
+          Workflow.showMessage('Payment Failed', e.message || 'Unable to record payment.', 'error');
+          return;
         }
         App.handleRoute();
       });
@@ -1896,14 +2093,18 @@ const Billing = {
       // Approve — only billing:approve (Admin)
       if (canApprove) {
         const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve' });
-        approveBtn.addEventListener('click', () => {
-          DB.update('invoices', inv.id, { status: 'Approved', updatedAt: new Date().toISOString() });
-          // Link to WR if selected
-          if (inv.workRequestId) {
-            const wr = DB.getById('workRequests', inv.workRequestId);
-            if (wr) {
-              DB.update('workRequests', wr.id, { linkedInvoiceId: inv.id });
+        approveBtn.addEventListener('click', async () => {
+          try {
+            const res = await window.apiClient.invoices.update(inv.id, { status: 'Approved' });
+            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+            if (inv.workRequestId) {
+              const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
+              if (wr) DB.update('workRequests', wr.id, { linkedInvoiceId: inv.id });
             }
+          } catch (e) {
+            console.error('Failed to approve invoice', e);
+            Workflow.showMessage('Approval Failed', e.message || 'Unable to approve invoice.', 'error');
+            return;
           }
           App.handleRoute();
         });
@@ -1911,12 +2112,16 @@ const Billing = {
       } else if (canEdit) {
         // Send for Approval — billing:edit without billing:approve (Accounting)
         const sendBtn = el('button', { class: 'btn btn-primary', text: 'Send for Approval' });
-        sendBtn.addEventListener('click', () => {
-          // Set local status to Pending
-          DB.update('invoices', inv.id, { status: 'Pending', updatedAt: new Date().toISOString() });
-          // Submit pending change to set status to Approved
-          PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
-          
+        sendBtn.addEventListener('click', async () => {
+          try {
+            const res = await window.apiClient.invoices.update(inv.id, { status: 'Pending' });
+            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+            PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
+          } catch (e) {
+            console.error('Failed to submit invoice for approval', e);
+            Workflow.showMessage('Submit Failed', e.message || 'Unable to submit invoice.', 'error');
+            return;
+          }
           Workflow.showMessage('Submitted', 'Invoice has been sent for administrative approval.', 'success');
           App.handleRoute();
         });
@@ -1926,12 +2131,16 @@ const Billing = {
       // Mark as Released — billing:edit (Accounting), pending Admin approval
       const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
       const sentBtn = el('button', { class: 'btn btn-primary', text: canReleaseDirectly ? 'Release Invoice' : 'Submit for Release' });
-      sentBtn.addEventListener('click', () => {
-        if (isAdmin) {
-          DB.update('invoices', inv.id, { status: 'Sent', updatedAt: new Date().toISOString() });
-        } else {
-          DB.update('invoices', inv.id, { status: 'Release Pending Approval', updatedAt: new Date().toISOString() });
-          Workflow.showMessage('Submitted', 'Invoice release has been submitted for administrative approval.', 'success');
+      sentBtn.addEventListener('click', async () => {
+        try {
+          const targetStatus = isAdmin ? 'Sent' : 'Release Pending Approval';
+          const res = await window.apiClient.invoices.update(inv.id, { status: targetStatus });
+          DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+          if (!isAdmin) Workflow.showMessage('Submitted', 'Invoice release has been submitted for administrative approval.', 'success');
+        } catch (e) {
+          console.error('Failed to update invoice status', e);
+          Workflow.showMessage('Update Failed', e.message || 'Unable to update invoice status.', 'error');
+          return;
         }
         App.handleRoute();
       });
@@ -1947,7 +2156,7 @@ const Billing = {
   },
 
   generateInvoice(inv, noLogo = false) {
-    const client = DB.getById('clients', inv.clientId);
+    const client = window.apiClient.clientCache.getById(inv.clientId);
     const entity = inv.entity || 'ATA';
     const w = window.open('', '_blank');
     if (!w) return;
@@ -2575,7 +2784,7 @@ const Billing = {
   },
 
   generateVoucher(inv) {
-    const client = DB.getById('clients', inv.clientId);
+    const client = window.apiClient.clientCache.getById(inv.clientId);
     const entity = inv.entity || 'ATA';
     const w = window.open('', '_blank');
     if (!w) return;
@@ -2811,7 +3020,7 @@ const Billing = {
     const templates = DB.getWhere('billingTemplates', t => t.entity === entity);
 
     const backlogItems = templates.map(t => {
-      const client = DB.getById('clients', t.clientId);
+      const client = window.apiClient.clientCache.getById(t.clientId);
       return {
         id: t.id,
         name: t.name,
@@ -2871,36 +3080,33 @@ const Billing = {
             const message = ids.length === 1
               ? 'Are you sure you want to generate an invoice for this selected template?'
               : `Are you sure you want to generate invoices for all ${ids.length} selected templates?`;
-            Workflow.showConfirm(title, message, () => {
+            Workflow.showConfirm(title, message, async () => {
               let count = 0;
-              ids.forEach(id => {
+              for (const id of ids) {
                 const t = templates.find(temp => temp.id === id);
                 if (t) {
                   const entity = Auth.activeEntity;
                   const now = new Date();
-                  const inv = {
-                    id: generateSequentialId('inv', 'invoices'),
-                    clientId: t.clientId,
-                    entity: entity,
+                  const payload = {
                     invoiceNumber: this.nextInvoiceNumber(entity),
+                    clientId: t.clientId,
+                    workRequestId: null,
                     issueDate: now.toISOString().slice(0, 10),
                     dueDate: new Date(now.getFullYear(), now.getMonth() + 1, now.getDate()).toISOString().slice(0, 10),
                     status: 'Draft',
-                    lineItems: deepClone(t.lineItems || []),
-                    subtotal: t.pfAmount || 0,
-                    vat: 0,
-                    total: t.pfAmount || 0,
-                    paidAmount: 0,
-                    payments: [],
-                    fromTemplate: t.id,
-                    createdBy: Auth.user.id,
-                    createdAt: now.toISOString(),
-                    updatedAt: now.toISOString()
+                    lineItems: (t.lineItems || []).map(item => ({ ...item, amount: parseFloat(item.amount) || 0, type: item.type || 'Professional Fee' })),
+                    notes: null,
+                    terms: null,
                   };
-                  DB.insert('invoices', inv);
-                  count++;
+                  try {
+                    const res = await window.apiClient.invoices.create(payload);
+                    DB.insert('invoices', this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity }));
+                    count++;
+                  } catch (e) {
+                    console.error('Failed to generate invoice from template', e);
+                  }
                 }
-              });
+              }
               Workflow.showMessage('Success', `Generated ${count} invoice${count === 1 ? '' : 's'} successfully.`, 'success');
               this.view = 'list';
               App.handleRoute();
@@ -2977,7 +3183,11 @@ const Billing = {
     clientGroup.appendChild(el('label', { text: 'Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    const clients = window.apiClient.clientCache._clients || DB.getWhere('clients', c => c.entity === entity);
+    clients.filter(c => {
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes((c.entity || '').toUpperCase());
+      return (c.entity || '').toUpperCase() === entity.toUpperCase();
+    }).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (template && template.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
@@ -3051,48 +3261,54 @@ const Billing = {
     });
   },
 
-  generateFromTemplate(t) {
+  async generateFromTemplate(t) {
     const entity = Auth.activeEntity;
     const now = new Date();
-    const inv = {
-      id: generateSequentialId('inv', 'invoices'),
-      clientId: t.clientId,
-      entity: entity,
+    const payload = {
       invoiceNumber: this.nextInvoiceNumber(entity),
+      clientId: t.clientId,
+      workRequestId: null,
       issueDate: now.toISOString().slice(0, 10),
       dueDate: new Date(now.getFullYear(), now.getMonth() + 1, now.getDate()).toISOString().slice(0, 10),
       status: 'Draft',
-      lineItems: deepClone(t.lineItems || []),
-      subtotal: t.pfAmount || 0,
-      vat: 0,
-      total: t.pfAmount || 0,
-      paidAmount: 0,
-      payments: [],
-      fromTemplate: t.id,
-      createdBy: Auth.user.id,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString()
+      lineItems: (t.lineItems || []).map(item => ({ ...item, amount: parseFloat(item.amount) || 0, type: item.type || 'Professional Fee' })),
+      notes: null,
+      terms: null,
     };
-    DB.insert('invoices', inv);
-    Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
-    this.view = 'list';
-    App.handleRoute();
+    try {
+      const res = await window.apiClient.invoices.create(payload);
+      const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity });
+      DB.insert('invoices', inv);
+      Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
+      this.view = 'list';
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to generate invoice from template', e);
+      Workflow.showMessage('Generation Failed', e.message || 'Unable to generate invoice.', 'error');
+    }
   },
 
   trashInvoice(id) {
-    const inv = DB.getById('invoices', id);
+    const inv = this.getInvoiceById(id);
     if (!inv || inv.status !== 'Draft') return;
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to move invoice "${inv.invoiceNumber}" to trash? Only Draft invoices can be trashed.`,
-      () => {
-        // Clean up WR backlink
-        if (inv.workRequestId) {
-          const wr = DB.getById('workRequests', inv.workRequestId);
-          if (wr && wr.linkedInvoiceId === inv.id) {
-            DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+      async () => {
+        try {
+          await window.apiClient.invoices.remove(id);
+          // Clean up WR backlink
+          if (inv.workRequestId) {
+            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
+            if (wr && wr.linkedInvoiceId === inv.id) {
+              DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+            }
           }
+          DB.update('invoices', id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
+        } catch (e) {
+          console.error('Failed to trash invoice', e);
+          Workflow.showMessage('Trash Failed', e.message || 'Unable to trash invoice.', 'error');
+          return;
         }
-        DB.update('invoices', id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
         App.handleRoute();
       },
       'danger'
@@ -3100,30 +3316,54 @@ const Billing = {
   },
 
   restoreInvoice(id) {
-    const inv = DB.getById('invoices', id);
+    const inv = this.getInvoiceById(id);
     if (!inv || inv.status !== 'Cancelled') return;
-    DB.update('invoices', id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
-    if (inv.workRequestId) {
-      const wr = DB.getById('workRequests', inv.workRequestId);
-      if (wr) {
-        DB.update('workRequests', wr.id, { linkedInvoiceId: inv.id });
-      }
-    }
-    Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
-    App.handleRoute();
+    Workflow.showConfirm('Restore Invoice',
+      `Are you sure you want to restore invoice "${inv.invoiceNumber}"?`,
+      async () => {
+        try {
+          const res = await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+          DB.update('invoices', id, this.normalizeInvoice(res.data));
+          if (inv.workRequestId) {
+            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
+            if (wr) DB.update('workRequests', wr.id, { linkedInvoiceId: id });
+          }
+        } catch (e) {
+          console.error('Failed to restore invoice', e);
+          Workflow.showMessage('Restore Failed', e.message || 'Unable to restore invoice.', 'error');
+          return;
+        }
+        Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
+        App.handleRoute();
+      },
+      'warning'
+    );
   },
 
   archiveInvoice(id) {
-    const inv = DB.getById('invoices', id);
+    const inv = this.getInvoiceById(id);
     if (!inv || inv.status !== 'Paid' || inv.archived) return;
-    DB.update('invoices', id, { archived: true, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
-    App.handleRoute();
+    Workflow.showConfirm('Archive Invoice',
+      `Are you sure you want to archive invoice "${inv.invoiceNumber}"?`,
+      async () => {
+        try {
+          const res = await window.apiClient.invoices.update(id, { archived: true });
+          DB.update('invoices', id, this.normalizeInvoice(res.data));
+        } catch (e) {
+          console.error('Failed to archive invoice', e);
+          Workflow.showMessage('Archive Failed', e.message || 'Unable to archive invoice.', 'error');
+          return;
+        }
+        Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
+        App.handleRoute();
+      },
+      'warning'
+    );
   },
 
   bulkArchiveInvoices(ids) {
     const eligible = (ids || [])
-      .map(id => DB.getById('invoices', id))
+      .map(id => this.getInvoiceById(id))
       .filter(inv => inv && inv.status === 'Paid' && !inv.archived);
 
     if (eligible.length === 0) {
@@ -3133,10 +3373,18 @@ const Billing = {
 
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} paid invoice(s)?`,
-      () => {
-        const now = new Date().toISOString();
-        eligible.forEach(inv => DB.update('invoices', inv.id, { archived: true, updatedAt: now }));
-        Workflow.showMessage('Archived', `${eligible.length} invoice(s) archived.`, 'success');
+      async () => {
+        let count = 0;
+        for (const inv of eligible) {
+          try {
+            const res = await window.apiClient.invoices.update(inv.id, { archived: true });
+            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+            count++;
+          } catch (e) {
+            console.error('Failed to archive invoice', inv.id, e);
+          }
+        }
+        Workflow.showMessage('Archived', `${count} invoice(s) archived.`, 'success');
         App.handleRoute();
       },
       'warning'
@@ -3150,7 +3398,7 @@ const Billing = {
     }
 
     const eligible = (ids || [])
-      .map(id => DB.getById('invoices', id))
+      .map(id => this.getInvoiceById(id))
       .filter(inv => inv && inv.status === 'Draft');
 
     if (eligible.length === 0) {
@@ -3160,18 +3408,24 @@ const Billing = {
 
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to move ${eligible.length} draft invoice(s) to trash?`,
-      () => {
-        const now = new Date().toISOString();
-        eligible.forEach(inv => {
-          if (inv.workRequestId) {
-            const wr = DB.getById('workRequests', inv.workRequestId);
-            if (wr && wr.linkedInvoiceId === inv.id) {
-              DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+      async () => {
+        let count = 0;
+        for (const inv of eligible) {
+          try {
+            await window.apiClient.invoices.remove(inv.id);
+            if (inv.workRequestId) {
+              const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
+              if (wr && wr.linkedInvoiceId === inv.id) {
+                DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+              }
             }
+            DB.update('invoices', inv.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
+            count++;
+          } catch (e) {
+            console.error('Failed to trash invoice', inv.id, e);
           }
-          DB.update('invoices', inv.id, { status: 'Cancelled', updatedAt: now });
-        });
-        Workflow.showMessage('Moved to Trash', `${eligible.length} invoice(s) moved to trash.`, 'warning');
+        }
+        Workflow.showMessage('Moved to Trash', `${count} invoice(s) moved to trash.`, 'warning');
         App.handleRoute();
       },
       'danger'
@@ -3179,15 +3433,28 @@ const Billing = {
   },
 
   unarchiveInvoice(id) {
-    const inv = DB.getById('invoices', id);
+    const inv = this.getInvoiceById(id);
     if (!inv || inv.status !== 'Paid' || !inv.archived) return;
-    DB.update('invoices', id, { archived: false, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
-    App.handleRoute();
+    Workflow.showConfirm('Unarchive Invoice',
+      `Are you sure you want to unarchive invoice "${inv.invoiceNumber}"?`,
+      async () => {
+        try {
+          const res = await window.apiClient.invoices.update(id, { archived: false });
+          DB.update('invoices', id, this.normalizeInvoice(res.data));
+        } catch (e) {
+          console.error('Failed to unarchive invoice', e);
+          Workflow.showMessage('Unarchive Failed', e.message || 'Unable to unarchive invoice.', 'error');
+          return;
+        }
+        Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
+        App.handleRoute();
+      },
+      'warning'
+    );
   },
 
   permanentDeleteInvoice(id) {
-    const inv = DB.getById('invoices', id);
+    const inv = this.getInvoiceById(id);
     if (!inv) return;
     if (Auth.user?.role !== 'Admin' && !Auth.isManagerial() && !Auth.can('billing:delete')) {
       Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete invoices.', 'danger');
@@ -3195,14 +3462,21 @@ const Billing = {
     }
     Workflow.showConfirm('Permanently Delete Invoice',
       `Are you sure you want to permanently delete invoice "${inv.invoiceNumber}"? This action cannot be undone.`,
-      () => {
-        if (inv.workRequestId) {
-          const wr = DB.getById('workRequests', inv.workRequestId);
-          if (wr && wr.linkedInvoiceId === inv.id) {
-            DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+      async () => {
+        try {
+          await window.apiClient.invoices.remove(id);
+          if (inv.workRequestId) {
+            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
+            if (wr && wr.linkedInvoiceId === inv.id) {
+              DB.update('workRequests', wr.id, { linkedInvoiceId: null });
+            }
           }
+          DB.delete('invoices', id);
+        } catch (e) {
+          console.error('Failed to delete invoice', e);
+          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete invoice.', 'error');
+          return;
         }
-        DB.delete('invoices', id);
         Workflow.showMessage('Deleted', 'Invoice has been permanently deleted.', 'success');
         App.handleRoute();
       },
@@ -3239,7 +3513,7 @@ const Billing = {
     });
 
     const buildInvItem = (inv, category) => {
-      const client = DB.getById('clients', inv.clientId);
+      const client = window.apiClient.clientCache.getById(inv.clientId);
       return {
         id: inv.id,
         category,
@@ -3282,7 +3556,7 @@ const Billing = {
       const pc = isOpReq ? null : record;
       const r = isOpReq ? record : null;
       const data = pc ? (pc.proposedData || {}) : r;
-      const clientName = (DB.getById('clients', data.clientId) || DB.getById('clients', r?.clientId))?.name || '—';
+      const clientName = (window.apiClient.clientCache.getById(data.clientId) || window.apiClient.clientCache.getById(r?.clientId))?.name || '—';
       const title = isOpReq
         ? `Billing Request ${r.workRequestId ? 'for WR' : ''}`
         : `Invoice Change: ${data.invoiceNumber || '(untitled)'}`;

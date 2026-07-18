@@ -701,6 +701,7 @@ const createTemplate = async ({ entityId, userId, data }) => {
     schedule: data.schedule || null,
     pf_amount: data.pfAmount || 0,
     line_items: data.lineItems || [],
+    active: true,
     created_by: userId,
   };
 

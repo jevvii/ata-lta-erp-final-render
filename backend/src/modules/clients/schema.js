@@ -6,13 +6,13 @@
 const { z } = require('zod');
 
 const contactDetailSchema = z.object({
-  type: z.enum(['email', 'mobile', 'phone', 'other']),
+  type: z.enum(['email', 'mobile', 'phone', 'landline', 'other']),
   value: z.string().min(1).max(255),
   label: z.string().max(50).optional(),
 });
 
 const relatedCompanySchema = z.object({
-  name: z.string().min(1).max(255),
+  relatedClientId: z.string().uuid(),
   relationship: z.string().max(100).optional(),
 });
 

@@ -2,6 +2,13 @@
  * Dashboard Module — Firm Overview
  * Redesigned for 2026 with a premium calendar hub, KPI metric strip, Bento layout,
  * natural language command bar, timezone intelligence, and hybrid work coordination buffers.
+ *
+ * Migrated from localStorage (DB.*) to the Node.js backend API.
+ * - KPI widgets use window.apiClient.reports.analytics().
+ * - Calendar events are sourced from window.apiClient.workRequests.list()
+ *   and window.apiClient.disbursements.list(), filtered by due date.
+ * - Task color-coding / overdue counts use window.apiClient.workRequests.listTasks().
+ * - User and client name lookups use window.apiClient.userCache / clientCache.
  */
 
 const Dashboard = {
@@ -11,6 +18,10 @@ const Dashboard = {
   calTimezone: 'local', // 'local' (GMT+8) | 'utc' | 'est' (GMT-5)
   isLoading: false,
   commandFeedback: null,
+
+  // API data cache populated by ensureData().
+  _dataCache: null,
+  _dataPromise: null,
 
   fmtDate(d) {
     if (!d) return '';
@@ -30,9 +41,12 @@ const Dashboard = {
     this.calTimezone = 'local';
     this.isLoading = false;
     this.commandFeedback = null;
+    this._dataCache = null;
+    this._dataPromise = null;
   },
 
-  render() {
+  async render() {
+    await this.ensureData();
     if (Auth.activeEntity === 'ALL') {
       return this.renderConsolidated();
     }
@@ -42,16 +56,16 @@ const Dashboard = {
   renderConsolidated() {
     const ata = this.getEntityMetrics('ATA');
     const lta = this.getEntityMetrics('LTA');
-    
+
     const container = el('div', { class: 'page animate-fade-in' });
-    
+
     // 1. Premium welcome header banner
     container.appendChild(this.renderWelcomeHeader('Firm Overview'));
 
     // Time-log prompt banner (if applicable)
     const timeLogPrompt = this.renderTimeLogPrompt();
     if (timeLogPrompt) container.appendChild(timeLogPrompt);
-    
+
     // 2. Glassmorphic KPI Metric Strip (Horizontal)
     const kpiStrip = el('div', { class: 'kpi-strip' });
     kpiStrip.appendChild(this.premiumKpiCard('ATA Revenue', ata.revenue, 'ata', '+15%', '#2563eb'));
@@ -72,17 +86,17 @@ const Dashboard = {
     const tableSection = el('div', { class: 'bento-item bento-full', style: 'padding: 0; background: transparent; box-shadow: none;' });
     tableSection.appendChild(this.renderComparisonTable(ata, lta));
     container.appendChild(tableSection);
-    
+
     return container;
   },
 
   renderEntityScoped() {
     const metrics = this.getEntityMetrics(Auth.activeEntity);
     const container = el('div', { class: 'page animate-fade-in' });
-    
+
     // 1. Premium welcome header banner
     container.appendChild(this.renderWelcomeHeader(Auth.activeEntity + ' Overview'));
-    
+
     const timeLogPrompt = this.renderTimeLogPrompt();
     if (timeLogPrompt) container.appendChild(timeLogPrompt);
 
@@ -90,7 +104,7 @@ const Dashboard = {
     const kpiStrip = el('div', { class: 'kpi-strip' });
     const isAta = Auth.activeEntity === 'ATA';
     const accent = isAta ? '#2563eb' : '#10b981';
-    
+
     kpiStrip.appendChild(this.premiumKpiCard('Active Work Requests', metrics.activeWR, 'active', '+3%', '#8b5cf6'));
     kpiStrip.appendChild(this.premiumKpiCard('Revenue (Paid)', metrics.revenue, isAta ? 'ata' : 'lta', '+11%', accent));
     kpiStrip.appendChild(this.premiumKpiCard('Outstanding', metrics.outstanding, 'outstanding', '-2%', '#f59e0b'));
@@ -111,33 +125,33 @@ const Dashboard = {
   renderWelcomeHeader(title) {
     const banner = el('div', { class: 'dashboard-welcome-banner' });
     const left = el('div', { class: 'welcome-info' });
-    
+
     const hours = new Date().getHours();
     let salutation = 'Good day';
     if (hours < 12) salutation = 'Good morning';
     else if (hours < 17) salutation = 'Good afternoon';
     else salutation = 'Good evening';
-    
+
     left.appendChild(el('h2', { class: 'welcome-title', text: `${salutation}, ${Auth.user?.name || 'User'}!` }));
-    
-    const contextText = Auth.activeEntity === 'ALL' 
-      ? 'Viewing consolidated overview for ATA Accounting & LTA Accounting.' 
+
+    const contextText = Auth.activeEntity === 'ALL'
+      ? 'Viewing consolidated overview for ATA Accounting & LTA Accounting.'
       : `Viewing dashboard for ${Auth.activeEntity} Accounting Firm.`;
-    
+
     left.appendChild(el('p', { class: 'welcome-subtitle', text: contextText }));
-    
+
     const statusWrap = el('div', { class: 'welcome-status' });
     statusWrap.appendChild(el('span', { class: 'pulse-dot' }));
     statusWrap.appendChild(el('span', { text: `System Active & Synced • 2026 ERP Hub` }));
     left.appendChild(statusWrap);
-    
+
     banner.appendChild(left);
     return banner;
   },
 
   premiumKpiCard(label, value, type, trend, accentColor) {
     const card = el('div', { class: 'premium-kpi-card', style: `--card-accent: ${accentColor || 'var(--color-primary)'};` });
-    
+
     const top = el('div', { class: 'kpi-top' });
     let iconChar = '∑';
     let iconStyle = '';
@@ -157,25 +171,25 @@ const Dashboard = {
       iconChar = '⚡';
       iconStyle = 'background: rgba(139, 92, 246, 0.1); color: #8b5cf6;';
     }
-    
+
     const iconWrap = el('div', { class: 'kpi-icon-wrap', style: iconStyle, text: iconChar });
     top.appendChild(iconWrap);
-    
+
     if (trend) {
       const isPos = trend.startsWith('+');
       const trendClass = `kpi-trend-pill ${isPos ? 'positive' : 'negative'}`;
       top.appendChild(el('span', { class: trendClass, text: trend }));
     }
     card.appendChild(top);
-    
+
     const main = el('div', { class: 'kpi-main' });
     main.appendChild(el('span', { class: 'kpi-title', text: label }));
-    
-    const displayVal = typeof value === 'number' && value > 100 
-      ? formatPHP(value) 
+
+    const displayVal = typeof value === 'number' && value > 100
+      ? formatPHP(value)
       : String(value);
     main.appendChild(el('span', { class: 'kpi-big-num', text: displayVal }));
-    
+
     card.appendChild(main);
     return card;
   },
@@ -184,7 +198,7 @@ const Dashboard = {
     const now = new Date();
     if (now.getHours() < 17) return null;
 
-    const myTasks = DB.getWhere('tasks', t => t.assigneeId === Auth.user.id && t.status !== 'Completed');
+    const myTasks = (this._dataCache?.tasks || []).filter(t => t.assigneeId === Auth.user?.id && t.status !== 'Completed');
     if (myTasks.length === 0) return null;
 
     const todayStr = this.todayStr();
@@ -196,7 +210,7 @@ const Dashboard = {
       class: 'alert-banner',
       style: 'background: var(--color-bg-muted); border: 1px solid var(--color-warning); color: var(--color-text); padding: 12px 16px; border-radius: 12px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);'
     });
-    
+
     const left = el('div', { style: 'display: flex; align-items: center; gap: 12px;' });
     left.innerHTML = `<span style="font-size: 1.25rem;">⏰</span> <div><strong>End of Day Reminder:</strong> You have ${tasksNeedingLogs.length} incomplete assigned task(s) but haven't submitted your daily time log for them yet. Please log your time before finishing your day.</div>`;
     banner.appendChild(left);
@@ -212,30 +226,22 @@ const Dashboard = {
   },
 
   getEntityMetrics(entity) {
-    const wrs = DB.getWhere('workRequests', r => r.entity === entity);
-    const invs = DB.getWhere('invoices', r => r.entity === entity);
-    const tasks = DB.getWhere('tasks', r => {
-      const wr = DB.getById('workRequests', r.workRequestId);
+    const cache = this._dataCache || {};
+    const analytics = cache.analyticsByEntity?.[entity] || {};
+    const wrs = (cache.workRequests || []).filter(r => r.entity === entity);
+    const tasks = (cache.tasks || []).filter(t => {
+      const wr = (cache.workRequests || []).find(r => r.id === t.workRequestId);
       return wr && wr.entity === entity;
     });
+
     return {
       activeWR: wrs.filter(r => r.status !== 'Completed' && r.status !== 'Cancelled').length,
-      revenue: invs
-        .filter(r => r.status === 'Paid' || r.status === 'Partially Paid')
-        .reduce((sum, r) => {
-          const paid = r.paidAmount ?? r.amountPaid ?? r.total ?? 0;
-          return sum + paid;
-        }, 0),
-      outstanding: invs
-        .filter(r => r.status === 'Sent' || r.status === 'Partially Paid' || r.status === 'Overdue')
-        .reduce((sum, r) => {
-          const paid = r.paidAmount ?? r.amountPaid ?? 0;
-          return sum + (r.total - paid);
-        }, 0),
-      overdue: tasks.filter(r => r.status !== 'Completed' && r.status !== 'Cancelled' && new Date(r.dueDate) < new Date()).length
+      revenue: analytics.invoices?.totalCollected || 0,
+      outstanding: analytics.invoices?.totalOutstanding || 0,
+      overdue: tasks.filter(t => t.status !== 'Completed' && t.status !== 'Cancelled' && t.dueDate && new Date(t.dueDate) < new Date()).length
     };
   },
-  
+
   renderComparisonTable(ata, lta) {
     const section = el('div', { class: 'entity-comparison card', style: 'margin-bottom: 0;' });
     const h2 = el('h2', { class: 'card-title' }, ['Entity Comparison']);
@@ -288,7 +294,7 @@ const Dashboard = {
       const now = new Date();
       this.selectedDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     }
-    
+
     if (this.calView === undefined) this.calView = 'week';
     if (this.calTimezone === undefined) this.calTimezone = 'local';
 
@@ -300,19 +306,19 @@ const Dashboard = {
     // Calendar Header
     const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
     const header = el('div', { class: 'calendar-header' });
-    
+
     const headerLeft = el('div', { class: 'calendar-header-left' });
-    
+
     let headerText = `${months[this.calMonth]} ${this.calYear}`;
     let isCurrentlyToday = true;
-    
+
     if (this.calView !== 'month' && this.selectedDay) {
       const d = new Date(this.selectedDay);
       headerText = `${months[d.getMonth()]} ${d.getFullYear()}`;
-      
+
       const todayDate = new Date();
       const todayStr = `${todayDate.getFullYear()}-${String(todayDate.getMonth() + 1).padStart(2, '0')}-${String(todayDate.getDate()).padStart(2, '0')}`;
-      
+
       if (this.calView === 'day') {
         isCurrentlyToday = this.selectedDay === todayStr;
       } else if (this.calView === 'week' || this.calView === 'timeline') {
@@ -322,7 +328,7 @@ const Dashboard = {
         startOfWeek.setDate(selectedDate.getDate() - dayOfWeek);
         const endOfWeek = new Date(startOfWeek);
         endOfWeek.setDate(startOfWeek.getDate() + 6);
-        
+
         const todayTime = todayDate.getTime();
         isCurrentlyToday = todayTime >= startOfWeek.getTime() && todayTime <= endOfWeek.getTime() + 86400000;
       }
@@ -330,15 +336,15 @@ const Dashboard = {
         const todayDate = new Date();
         isCurrentlyToday = this.calMonth === todayDate.getMonth() && this.calYear === todayDate.getFullYear();
     }
-    
+
     headerLeft.appendChild(el('h3', { class: 'calendar-month-year', text: headerText }));
-    
+
     let btnText = 'Today';
     if (!isCurrentlyToday && this.selectedDay && this.calView !== 'month') {
         const d = new Date(this.selectedDay);
         btnText = `${months[d.getMonth()].substring(0, 3)} ${d.getDate()}`;
     }
-    
+
     const todayBtn = el('button', { class: 'calendar-today-btn', text: btnText });
     todayBtn.onclick = (e) => {
       e.stopPropagation();
@@ -401,9 +407,9 @@ const Dashboard = {
     const viewToggle = el('div', { class: 'calendar-view-toggle' });
     ['Day', 'Week', 'Month', 'Timeline'].forEach(v => {
       const mode = v.toLowerCase();
-      const btn = el('button', { 
-        class: `view-btn ${this.calView === mode ? 'active' : ''}`, 
-        text: v 
+      const btn = el('button', {
+        class: `view-btn ${this.calView === mode ? 'active' : ''}`,
+        text: v
       });
       btn.onclick = (e) => {
         e.stopPropagation();
@@ -419,7 +425,7 @@ const Dashboard = {
     });
     headerRight.appendChild(viewToggle);
     header.appendChild(headerRight);
-    
+
     mainView.appendChild(header);
 
 
@@ -427,7 +433,7 @@ const Dashboard = {
     // Grid Container or Timeline Container
     const gridClass = this.calView === 'week' ? 'calendar-week-grid' : (this.calView === 'day' ? 'calendar-day-grid' : 'calendar-grid');
     const grid = el('div', { class: gridClass });
-    
+
     if (this.isLoading) {
       this.renderSkeletonGrid(grid);
       mainView.appendChild(grid);
@@ -460,7 +466,7 @@ const Dashboard = {
           const gridEl = this.calendarCardRef.querySelector('.calendar-week-grid, .calendar-day-grid');
           if (gridEl) {
              const nowHour = new Date().getHours();
-             let targetIdx = nowHour - 9 + 1; 
+             let targetIdx = nowHour - 9 + 1;
              if (targetIdx < 0) targetIdx = 0;
              gridEl.scrollTo({ top: targetIdx * 71, behavior: 'smooth' });
           }
@@ -475,7 +481,7 @@ const Dashboard = {
     this.calView = 'month';
   },
 
-  parseCommand(text) {
+  async parseCommand(text) {
     const input = text.trim();
     if (!input) return null;
 
@@ -542,39 +548,45 @@ const Dashboard = {
     }
 
     if (type === 'wr') {
+      await window.apiClient.clientCache.ensure();
+      const firstClient = (window.apiClient.clientCache._clients || []).find(c => (c.entity || '').toUpperCase() === entity);
       const newWr = {
-        id: 'wr-' + Date.now(),
         title: cleanText,
         description: 'Scheduled via AI Command: "' + input + '"',
-        clientId: DB.getAll('clients')[0]?.id || 'c-1',
+        clientId: firstClient?.id,
         entity: entity,
-        status: 'Processing',
-        requestedBy: Auth.user.id,
-        assignedTo: Auth.user.id,
-        linkedInvoiceId: null,
-        linkedDisbursementIds: [],
-        linkedTransmittalIds: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        status: 'In Progress', // Legacy prototype used 'Processing'; backend operations status is 'In Progress'.
+        requestedBy: Auth.user?.id,
+        assignedTo: Auth.user?.id,
         dueDate: dateStr
       };
-      DB.insert('workRequests', newWr);
-      return { success: true, message: `Scheduled Work Request: "${cleanText}" for ${entity} on ${dateStr}` };
+      try {
+        await window.apiClient.workRequests.create(newWr);
+        this._dataCache = null; // invalidate so the new item appears on next render
+        return { success: true, message: `Scheduled Work Request: "${cleanText}" for ${entity} on ${dateStr}` };
+      } catch (e) {
+        return { success: false, message: e.message || 'Failed to create work request.' };
+      }
     } else {
+      // Backend disbursement create schema does not accept status; creation yields 'Draft'.
+      // Submit immediately so it becomes 'Pending' and appears on the calendar as before.
       const newDb = {
-        id: 'db-' + Date.now(),
         description: cleanText,
-        category: 'Office & Admin',
+        category: 'Miscellaneous', // Legacy 'Office & Admin' is not in backend schema.
         amount: amount,
-        status: 'Submitted',
-        entity: entity,
-        fundSource: 'Petty Cash',
-        dueDate: dateStr,
-        submittedAt: new Date().toISOString(),
-        requestedBy: Auth.user.id
+        fundSource: 'Firm Fund', // Legacy 'Petty Cash' is not in backend schema (allowed: Firm Fund, Client Fund).
+        dueDate: dateStr
       };
-      DB.insert('disbursements', newDb);
-      return { success: true, message: `Scheduled Disbursement: "${cleanText}" (PHP ${amount.toLocaleString()}) for ${entity} on ${dateStr}` };
+      try {
+        const res = await window.apiClient.disbursements.create(newDb);
+        if (res?.data?.id) {
+          await window.apiClient.disbursements.submit(res.data.id);
+        }
+        this._dataCache = null;
+        return { success: true, message: `Scheduled Disbursement: "${cleanText}" (PHP ${amount.toLocaleString()}) for ${entity} on ${dateStr}` };
+      } catch (e) {
+        return { success: false, message: e.message || 'Failed to create disbursement.' };
+      }
     }
   },
 
@@ -591,74 +603,74 @@ const Dashboard = {
   renderTimelineView(container, events) {
     const timeline = el('div', { class: 'timeline-container' });
     const dates = Object.keys(events).sort();
-    
+
     if (dates.length === 0) {
       timeline.appendChild(el('div', { class: 'empty-state', text: 'No scheduled events found.' }));
       container.appendChild(timeline);
       return;
     }
-    
+
     dates.forEach(dateStr => {
       const dayEvents = events[dateStr] || [];
       if (dayEvents.length === 0) return;
-      
+
       const group = el('div', { class: 'timeline-date-group' });
       const header = el('div', { class: 'timeline-date-header' });
       header.appendChild(el('span', { text: formatDate(dateStr) }));
-      
+
       const isToday = dateStr === this.todayStr();
       if (isToday) {
         header.appendChild(el('span', { class: 'badge badge-primary', text: 'TODAY' }));
       }
       group.appendChild(header);
-      
+
       const itemsContainer = el('div', { class: 'timeline-items' });
-      
+
       dayEvents.forEach(ev => {
-        const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ['Released', 'Paid'].includes(ev.data.status);
+        const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ev.data.status === 'Released';
         const card = el('div', { class: 'timeline-card' });
-        
+
         const left = el('div', { class: 'timeline-card-left' });
         const typeIcon = ev.type === 'wr' ? '📋' : '💸';
         const bgStyle = ev.type === 'wr' ? 'background: rgba(139, 92, 246, 0.1); color: #8b5cf6;' : 'background: rgba(16, 185, 129, 0.1); color: var(--color-success);';
-        
+
         const icon = el('div', { class: 'timeline-type-icon', style: bgStyle, text: typeIcon });
         left.appendChild(icon);
-        
+
         const info = el('div', { class: 'timeline-card-info' });
         const titleText = ev.type === 'wr' ? ev.data.title : ev.data.description;
         const entityPrefix = ev.data.entity ? `[${ev.data.entity.toUpperCase()}] ` : '';
         info.appendChild(el('span', { class: 'timeline-card-title', text: entityPrefix + titleText }));
-        
-        const client = ev.data.clientId ? DB.getById('clients', ev.data.clientId) : null;
+
+        const client = ev.data.clientId ? window.apiClient.clientCache.getById(ev.data.clientId) : null;
         const clientName = client ? client.name : 'No client';
-        
-        const metaText = ev.type === 'wr' 
-          ? `Work Request • Client: ${clientName} • Status: ${ev.data.status}` 
+
+        const metaText = ev.type === 'wr'
+          ? `Work Request • Client: ${clientName} • Status: ${ev.data.status}`
           : `Disbursement • Amount: ${formatPHP(ev.data.amount)} • Status: ${ev.data.status}`;
-        
+
         info.appendChild(el('span', { class: 'timeline-card-meta', text: metaText }));
         left.appendChild(info);
         card.appendChild(left);
-        
+
         const right = el('div', { class: 'timeline-card-right' });
         right.appendChild(el('span', { class: `badge ${isCompleted ? 'badge-success' : 'badge-info'}`, text: ev.data.status }));
         card.appendChild(right);
-        
+
         card.onclick = (e) => {
           e.stopPropagation();
           this.selectedDay = dateStr;
           this.expandedItemId = ev.data.id;
           this.refreshCalendarCard();
         };
-        
+
         itemsContainer.appendChild(card);
       });
-      
+
       group.appendChild(itemsContainer);
       timeline.appendChild(group);
     });
-    
+
     container.appendChild(timeline);
   },
 
@@ -834,24 +846,24 @@ const Dashboard = {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
     // Header Row
-    grid.appendChild(el('div', { class: 'week-time-label empty' })); 
-    
+    grid.appendChild(el('div', { class: 'week-time-label empty' }));
+
     const dayHeader = el('div', { class: `week-day-header ${isToday ? 'today' : ''}` });
     dayHeader.innerHTML = `<span class="day-name">${days[d.getDay()]}</span><span class="day-num">${String(d.getDate()).padStart(2, '0')}</span>`;
-    
+
     if (isToday) {
         const now = new Date();
         const nowHour = now.getHours();
         const nowMin = now.getMinutes();
         const percent = ((nowHour * 60 + nowMin) / (24 * 60)) * 100;
-        
-        const timeBubble = el('div', { 
-          class: 'week-vertical-time-bubble', 
+
+        const timeBubble = el('div', {
+          class: 'week-vertical-time-bubble',
           text: `${String(nowHour).padStart(2, '0')}:${String(nowMin).padStart(2, '0')}`,
           style: `left: ${percent}%;`
         });
         dayHeader.appendChild(timeBubble);
-        
+
         const lineWrap = el('div', { class: 'week-vertical-time-line-wrap', style: `left: ${percent}%;` });
         const line = el('div', { class: 'week-vertical-time-line' });
         lineWrap.appendChild(line);
@@ -902,7 +914,7 @@ const Dashboard = {
 
       if (slotEvents.length > 0) {
           slotEvents.forEach(ev => {
-              const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ['Released', 'Paid'].includes(ev.data.status);
+              const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ev.data.status === 'Released';
 
               let colorClass = 'bg-cyan-500';
               let avatarName = 'U';
@@ -913,7 +925,7 @@ const Dashboard = {
 
               if (ev.type === 'wr') {
                   if (!isCompleted) {
-                      const wrTasks = DB.getWhere('tasks', t => t.workRequestId === ev.data.id);
+                      const wrTasks = this._getTasksForWorkRequest(ev.data.id);
                       const total = wrTasks.length;
                       if (total === 0) {
                          colorClass = 'bg-purple-500';
@@ -929,19 +941,20 @@ const Dashboard = {
                   }
 
                   if (ev.data.assignedTo) {
-                      const u = DB.getById('users', ev.data.assignedTo);
+                      const u = window.apiClient.userCache.getById(ev.data.assignedTo);
                       if (u) avatarName = u.name;
                   }
               } else {
                   if (!isCompleted) {
                       const s = ev.data.status;
                       if (s === 'Approved') colorClass = 'bg-blue-500';
-                      else if (s === 'Under Review') colorClass = 'bg-yellow-500';
+                      else if (s === 'Pending') colorClass = 'bg-yellow-500';
+                      else if (s === 'Draft') colorClass = 'bg-purple-500';
                       else colorClass = 'bg-purple-500';
                   }
 
                   if (ev.data.requestedBy) {
-                      const u = DB.getById('users', ev.data.requestedBy);
+                      const u = window.apiClient.userCache.getById(ev.data.requestedBy);
                       if (u) avatarName = u.name;
                   }
               }
@@ -1104,7 +1117,7 @@ const Dashboard = {
     if (this.selectedDay === dateStr) classes.push('selected-day');
 
     const cell = el('div', { class: classes.join(' '), 'data-date': dateStr });
-    
+
     const numWrapper = el('div', { class: 'day-number-wrapper' });
     numWrapper.appendChild(el('span', { class: 'day-number', text: String(dayNum) }));
     cell.appendChild(numWrapper);
@@ -1120,11 +1133,11 @@ const Dashboard = {
       const dbs = dayEvents.filter(e => e.type === 'db' && isSingleDay(e));
 
       const renderBadge = (ev) => {
-        const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ['Released', 'Paid'].includes(ev.data.status);
-        
+        const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ev.data.status === 'Released';
+
         let colorClass = 'bg-cyan-500';
         if (ev.type === 'wr') {
-            const wrTasks = DB.getWhere('tasks', t => t.workRequestId === ev.data.id);
+            const wrTasks = this._getTasksForWorkRequest(ev.data.id);
             const total = wrTasks.length;
             if (total === 0) {
                colorClass = 'bg-purple-500';
@@ -1139,30 +1152,30 @@ const Dashboard = {
             if (ev.data.status === 'Cancelled') colorClass = 'bg-orange-500';
         } else {
             const s = ev.data.status;
-            if (s === 'Paid' || s === 'Released') colorClass = 'bg-green-500';
+            if (s === 'Released') colorClass = 'bg-green-500';
             else if (s === 'Approved') colorClass = 'bg-blue-500';
-            else if (s === 'Under Review') colorClass = 'bg-yellow-500';
+            else if (s === 'Pending') colorClass = 'bg-yellow-500';
             else colorClass = 'bg-purple-500';
         }
 
-        const badge = el('div', { 
+        const badge = el('div', {
           class: `calendar-event-badge ${ev.type}-badge ${isCompleted ? 'completed' : ''}`,
           title: ev.type === 'wr' ? `Work Request: ${ev.data.title}` : `Disbursement: ${ev.data.description}`,
           style: `border-left-color: transparent; background: transparent; padding:0; box-shadow:none;`
         });
-        
+
         const pill = el('div', { class: `week-event-pill ${colorClass}`, style: 'margin-bottom:0; width:100%;' });
 
         const status = (ev.data.status || 'Draft').toLowerCase();
         const dot = el('span', { class: `status-dot status-${status.replace(/\s+/g, '-')}`, style: 'background:#fff; margin-right:4px;' });
         pill.appendChild(dot);
-        
+
         const titleText = ev.type === 'wr' ? ev.data.title : ev.data.description;
         const entityPrefix = ev.data.entity ? `[${ev.data.entity.toUpperCase()}] ` : '';
         pill.appendChild(el('span', { class: 'week-event-title', style: 'color:#fff;', text: entityPrefix + titleText }));
-        
+
         badge.appendChild(pill);
-        
+
         badge.onclick = (e) => {
           e.stopPropagation();
           this.selectedDay = dateStr;
@@ -1200,19 +1213,20 @@ const Dashboard = {
   },
 
   getCalendarEvents() {
-    const userEntities = Auth.user.entities.map(e => e.toUpperCase());
+    const cache = this._dataCache || {};
+    const userEntities = (Auth.user?.entities || []).map(e => e.toUpperCase());
     const active = (Auth.activeEntity || '').toUpperCase();
 
-    let wrs = DB.getAll('workRequests');
-    let disbursements = DB.getAll('disbursements');
+    let wrs = (cache.workRequests || []).slice();
+    let disbursements = (cache.disbursements || []).slice();
 
     // Filter by Entity Access
     if (active === 'ALL') {
-      wrs = wrs.filter(wr => userEntities.includes(wr.entity.toUpperCase()));
-      disbursements = disbursements.filter(d => userEntities.includes(d.entity.toUpperCase()));
+      wrs = wrs.filter(wr => userEntities.includes((wr.entity || '').toUpperCase()));
+      disbursements = disbursements.filter(d => userEntities.includes((d.entity || '').toUpperCase()));
     } else {
-      wrs = wrs.filter(wr => wr.entity.toUpperCase() === active);
-      disbursements = disbursements.filter(d => d.entity.toUpperCase() === active);
+      wrs = wrs.filter(wr => (wr.entity || '').toUpperCase() === active);
+      disbursements = disbursements.filter(d => (d.entity || '').toUpperCase() === active);
     }
 
     const eventsByDate = {};
@@ -1252,10 +1266,10 @@ const Dashboard = {
     });
 
     disbursements.forEach(d => {
-      if (['Submitted', 'Under Review', 'Approved', 'Released', 'Paid'].includes(d.status)) {
+      if (['Draft', 'Pending', 'Approved', 'Released'].includes(d.status)) {
         let dDate = d.dueDate || d.submittedAt;
         if (d.linkedWorkRequestId) {
-          const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+          const wr = wrs.find(w => w.id === d.linkedWorkRequestId);
           if (wr && wr.dueDate) dDate = wr.dueDate;
         }
         if (dDate) {
@@ -1291,7 +1305,7 @@ const Dashboard = {
   },
 
   createWeekEventOverlay(ev, dayIdx, spanDays, slotIdx, topOffset, dateStr) {
-    const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ['Released', 'Paid'].includes(ev.data.status);
+    const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ev.data.status === 'Released';
 
     let colorClass = 'bg-cyan-500';
     let avatarName = 'U';
@@ -1302,7 +1316,7 @@ const Dashboard = {
 
     if (ev.type === 'wr') {
       if (!isCompleted) {
-        const wrTasks = DB.getWhere('tasks', t => t.workRequestId === ev.data.id);
+        const wrTasks = this._getTasksForWorkRequest(ev.data.id);
         const total = wrTasks.length;
         if (total === 0) {
           colorClass = 'bg-purple-500';
@@ -1318,19 +1332,20 @@ const Dashboard = {
       }
 
       if (ev.data.assignedTo) {
-        const u = DB.getById('users', ev.data.assignedTo);
+        const u = window.apiClient.userCache.getById(ev.data.assignedTo);
         if (u) avatarName = u.name;
       }
     } else {
       if (!isCompleted) {
         const s = ev.data.status;
         if (s === 'Approved') colorClass = 'bg-blue-500';
-        else if (s === 'Under Review') colorClass = 'bg-yellow-500';
+        else if (s === 'Pending') colorClass = 'bg-yellow-500';
+        else if (s === 'Draft') colorClass = 'bg-purple-500';
         else colorClass = 'bg-purple-500';
       }
 
       if (ev.data.requestedBy) {
-        const u = DB.getById('users', ev.data.requestedBy);
+        const u = window.apiClient.userCache.getById(ev.data.requestedBy);
         if (u) avatarName = u.name;
       }
     }
@@ -1369,14 +1384,14 @@ const Dashboard = {
   },
 
   createMonthEventOverlay(ev, dayIdx, spanDays, rowIdx, offset, dateStr) {
-    const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ['Released', 'Paid'].includes(ev.data.status);
+    const isCompleted = ev.type === 'wr' ? ev.data.status === 'Completed' : ev.data.status === 'Released';
 
     let colorClass = 'bg-cyan-500';
 
     if (isCompleted) {
       colorClass = 'bg-green-500';
     } else if (ev.type === 'wr') {
-      const wrTasks = DB.getWhere('tasks', t => t.workRequestId === ev.data.id);
+      const wrTasks = this._getTasksForWorkRequest(ev.data.id);
       const total = wrTasks.length;
       if (total === 0) {
         colorClass = 'bg-purple-500';
@@ -1391,9 +1406,9 @@ const Dashboard = {
       if (ev.data.status === 'Cancelled') colorClass = 'bg-orange-500';
     } else {
       const s = ev.data.status;
-      if (s === 'Paid' || s === 'Released') colorClass = 'bg-green-500';
+      if (s === 'Released') colorClass = 'bg-green-500';
       else if (s === 'Approved') colorClass = 'bg-blue-500';
-      else if (s === 'Under Review') colorClass = 'bg-yellow-500';
+      else if (s === 'Pending') colorClass = 'bg-yellow-500';
       else colorClass = 'bg-purple-500';
     }
 
@@ -1481,11 +1496,11 @@ const Dashboard = {
 
   renderSidebarContent(sidebar, events) {
     sidebar.innerHTML = '';
-    
+
     if (this.selectedDay) {
       const headerRow = el('div', { class: 'sidebar-header' });
       headerRow.appendChild(el('h3', { class: 'sidebar-title', text: `Schedule: ${formatDate(this.selectedDay)}` }));
-      
+
       const clearBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Clear' });
       clearBtn.onclick = (e) => {
         e.stopPropagation();
@@ -1518,7 +1533,7 @@ const Dashboard = {
       }
     } else {
       sidebar.appendChild(el('h3', { class: 'sidebar-title', text: 'Upcoming This Week' }));
-      
+
       const now = new Date();
       const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
       const weekEndMidnight = todayMidnight + 7 * 86400000;
@@ -1578,16 +1593,16 @@ const Dashboard = {
 
     if (isExpanded) {
       const details = el('div', { class: 'sidebar-item-details' });
-      
+
       if (type === 'wr') {
-        const client = DB.getById('clients', item.clientId);
-        const assigned = DB.getById('users', item.assignedTo);
+        const client = item.clientId ? window.apiClient.clientCache.getById(item.clientId) : null;
+        const assigned = item.assignedTo ? window.apiClient.userCache.getById(item.assignedTo) : null;
         details.appendChild(this.renderDetailRow('Entity', item.entity.toUpperCase()));
         details.appendChild(this.renderDetailRow('Client', client ? client.name : '—'));
         details.appendChild(this.renderDetailRow('Status', item.status));
         details.appendChild(this.renderDetailRow('Assigned', assigned ? assigned.name : '—'));
-        
-        const myTasks = DB.getWhere('tasks', t => t.workRequestId === item.id && t.assigneeId === Auth.user.id && t.status !== 'Completed');
+
+        const myTasks = (this._dataCache?.tasks || []).filter(t => t.workRequestId === item.id && t.assigneeId === Auth.user?.id && t.status !== 'Completed');
         if (myTasks.length > 0) {
           const taskWrap = el('div', { class: 'detail-desc', style: 'border-left-color: var(--color-warning);' });
           taskWrap.appendChild(el('strong', { text: `My Incomplete Tasks (${myTasks.length}):` }));
@@ -1601,7 +1616,7 @@ const Dashboard = {
           details.appendChild(el('div', { class: 'detail-desc', text: item.description }));
         }
       } else {
-        const emp = DB.getById('users', item.requestedBy || item.employeeId);
+        const emp = item.requestedBy ? window.apiClient.userCache.getById(item.requestedBy || item.employeeId) : null;
         details.appendChild(this.renderDetailRow('Entity', item.entity.toUpperCase()));
         details.appendChild(this.renderDetailRow('Category', item.category));
         details.appendChild(this.renderDetailRow('Amount', formatPHP(item.amount)));
@@ -1641,5 +1656,126 @@ const Dashboard = {
     return row;
   },
 
+  // ============================================================
+  // API data loading and normalization helpers
+  // ============================================================
+
+  async ensureData() {
+    if (this._dataPromise) return this._dataPromise;
+    this._dataPromise = this._loadData().finally(() => { this._dataPromise = null; });
+    return this._dataPromise;
+  },
+
+  async _loadData() {
+    const active = (Auth.activeEntity || '').toUpperCase();
+    const userEntities = (Auth.user?.entities || []).map(e => e.toUpperCase());
+    const entitiesToLoad = active === 'ALL'
+      ? userEntities.filter(e => ['ATA', 'LTA'].includes(e))
+      : [active];
+
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+    ]);
+
+    const results = await Promise.all(entitiesToLoad.map(code => this._loadEntityData(code)));
+
+    const workRequests = [];
+    const disbursements = [];
+    const analyticsByEntity = {};
+
+    results.forEach((res, idx) => {
+      const code = entitiesToLoad[idx];
+      analyticsByEntity[code] = res.analytics;
+      workRequests.push(...res.workRequests);
+      disbursements.push(...res.disbursements);
+    });
+
+    const tasksByWr = await this._loadTasksForWorkRequests(workRequests);
+    const tasks = [];
+    tasksByWr.forEach(list => tasks.push(...list));
+
+    this._dataCache = {
+      analyticsByEntity,
+      workRequests,
+      disbursements,
+      tasksByWr,
+      tasks,
+      loadedAt: Date.now(),
+    };
+  },
+
+  async _loadEntityData(entityCode) {
+    const prevEntity = Auth.activeEntity;
+    Auth.activeEntity = entityCode;
+    try {
+      const [analyticsRes, wrRes, dbRes] = await Promise.all([
+        window.apiClient.reports.analytics().catch(err => {
+          console.warn(`Analytics fetch failed for ${entityCode}:`, err);
+          return { data: null };
+        }),
+        window.apiClient.workRequests.list({ limit: 1000 }).catch(err => {
+          console.warn(`Work requests fetch failed for ${entityCode}:`, err);
+          return { data: [] };
+        }),
+        window.apiClient.disbursements.list({ limit: 1000 }).catch(err => {
+          console.warn(`Disbursements fetch failed for ${entityCode}:`, err);
+          return { data: [] };
+        }),
+      ]);
+
+      return {
+        analytics: analyticsRes.data,
+        workRequests: (wrRes.data || []).map(wr => ({ ...wr, entity: wr.entity || entityCode })),
+        disbursements: (dbRes.data || []).map(d => this._normalizeDisbursement(d, entityCode)),
+      };
+    } finally {
+      Auth.activeEntity = prevEntity;
+    }
+  },
+
+  async _loadTasksForWorkRequests(workRequests) {
+    const tasksByWr = new Map();
+    if (!workRequests || workRequests.length === 0) return tasksByWr;
+
+    // Limit concurrency to avoid hammering the backend with one request per WR.
+    const CONCURRENCY = 5;
+    for (let i = 0; i < workRequests.length; i += CONCURRENCY) {
+      const batch = workRequests.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async (wr) => {
+        try {
+          const res = await window.apiClient.workRequests.listTasks(wr.id);
+          tasksByWr.set(wr.id, res.data || []);
+        } catch (e) {
+          console.warn('Failed to load tasks for work request', wr.id, e);
+          tasksByWr.set(wr.id, []);
+        }
+      }));
+    }
+    return tasksByWr;
+  },
+
+  _normalizeDisbursement(d, entityCode) {
+    if (!d) return d;
+    return {
+      ...d,
+      entity: entityCode,
+      description: d.description,
+      category: d.category,
+      amount: Number(d.amount) || 0,
+      status: d.status,
+      fundSource: d.fund_source || d.fundSource,
+      dueDate: d.due_date || d.dueDate,
+      submittedAt: d.submitted_at || d.submittedAt,
+      requestedBy: d.requested_by || d.requestedBy,
+      employeeId: d.employee_id || d.employeeId,
+      linkedWorkRequestId: d.linked_work_request_id || d.linkedWorkRequestId,
+      linkedInvoiceId: d.linked_invoice_id || d.linkedInvoiceId,
+    };
+  },
+
+  _getTasksForWorkRequest(wrId) {
+    return this._dataCache?.tasksByWr?.get(wrId) || [];
+  },
 
 };

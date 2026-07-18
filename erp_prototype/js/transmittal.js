@@ -1,19 +1,151 @@
 /**
  * Transmittal Module
  * Create, send, and acknowledge transmittal letters with itemized document lists.
+ *
+ * Migrated from localStorage (DB.*) to the Node.js backend API.
+ * Backend transmittal responses are snake_case, so a normalizeTransmittal()
+ * helper maps them to the camelCase shape the UI expects.
  */
 
 const Transmittal = {
   view: 'list',
   detailId: null,
   listViewMode: 'table',
+  prefilledRequestId: null,
+  prefilledWrId: null,
+  prefilledClientId: null,
 
-  render() {
+  // ============================================================
+  // Normalization helpers (backend snake_case -> UI camelCase)
+  // ============================================================
+
+  /**
+   * Convert a backend transmittal row to the local camelCase shape.
+   * @param {object} t
+   * @param {string} [entityCodeHint] - optional 'ATA'/'LTA' when we already know the entity
+   * @returns {object}
+   */
+  normalizeTransmittal(t, entityCodeHint) {
+    if (!t) return t;
+    const entity = entityCodeHint || t.entity || this._entityCodeFromId(t.entity_id) || Auth.activeEntity;
+    return {
+      ...t,
+      id: t.id,
+      trackingNumber: t.tracking_number || t.trackingNumber,
+      entityId: t.entity_id || t.entityId,
+      entity,
+      clientId: t.client_id || t.clientId,
+      workRequestId: t.work_request_id || t.workRequestId,
+      status: t.status,
+      notes: t.notes,
+      recipientName: t.recipient_name || t.recipientName,
+      recipientDetails: t.recipient_details || t.recipientDetails,
+      createdBy: t.created_by || t.createdBy,
+      updatedBy: t.updated_by || t.updatedBy,
+      createdAt: t.created_at || t.createdAt,
+      updatedAt: t.updated_at || t.updatedAt,
+      sentAt: t.sent_at || t.sentAt,
+      sentBy: t.sent_by || t.sentBy,
+      acknowledgedAt: t.acknowledged_at || t.acknowledgedAt,
+      acknowledgedBy: t.acknowledged_by || t.acknowledgedBy,
+      archived: t.archived || false,
+      receivedByName: t.received_by_name || t.receivedByName || '',
+      boardOrder: t.board_order || t.boardOrder,
+      pendingChangeId: t.pending_change_id || t.pendingChangeId,
+      items: (t.items || []).map(i => this.normalizeTransmittalItem(i))
+    };
+  },
+
+  normalizeTransmittalItem(i) {
+    if (!i) return i;
+    return {
+      ...i,
+      id: i.id,
+      transmittalId: i.transmittal_id || i.transmittalId,
+      description: i.description,
+      documentType: i.document_type || i.documentType,
+      quantity: typeof i.quantity === 'number' ? i.quantity : 1,
+      sortOrder: typeof i.sort_order === 'number' ? i.sort_order : (i.sortOrder || 0)
+    };
+  },
+
+  _entityCodeFromId(entityId) {
+    if (!entityId) return null;
+    // Backend returns entity_id as a UUID but does not expose an entity code map.
+    // The active entity is known from the request path, so callers that loop over
+    // entities pass an explicit entityCodeHint. This fallback covers single-entity views.
+    return Auth.activeEntity !== 'ALL' ? Auth.activeEntity : null;
+  },
+
+  /**
+   * Execute an API call while temporarily switching Auth.activeEntity.
+   * Used to support the frontend 'ALL' consolidated view against a backend
+   * that only accepts ATA/LTA in the X-Active-Entity header.
+   */
+  async _callWithEntity(entityCode, fn) {
+    const original = Auth.activeEntity;
+    Auth.activeEntity = entityCode;
+    try {
+      return await fn();
+    } finally {
+      Auth.activeEntity = original;
+    }
+  },
+
+  /**
+   * List transmittals for the active entity, handling 'ALL' by merging per-entity calls.
+   */
+  async _listForActiveEntity() {
+    if (Auth.activeEntity !== 'ALL') {
+      const res = await window.apiClient.transmittals.list();
+      return (res.data || []).map(t => this.normalizeTransmittal(t));
+    }
+    const codes = (Auth.user?.entities || []).filter(c => c !== 'ALL');
+    const all = [];
+    for (const code of codes) {
+      try {
+        const res = await this._callWithEntity(code, () => window.apiClient.transmittals.list());
+        all.push(...(res.data || []).map(t => this.normalizeTransmittal(t, code)));
+      } catch (e) {
+        console.error(`Failed to load transmittals for ${code}`, e);
+      }
+    }
+    return all;
+  },
+
+  /**
+   * Get a single transmittal by id, handling 'ALL' by trying each entity.
+   */
+  async _getByIdAcrossEntities(id) {
+    if (Auth.activeEntity !== 'ALL') {
+      const res = await window.apiClient.transmittals.get(id);
+      return this.normalizeTransmittal(res.data);
+    }
+    const codes = (Auth.user?.entities || []).filter(c => c !== 'ALL');
+    for (const code of codes) {
+      try {
+        const res = await this._callWithEntity(code, () => window.apiClient.transmittals.get(id));
+        if (res.data) return this.normalizeTransmittal(res.data, code);
+      } catch (e) {
+        // not found in this entity; continue
+      }
+    }
+    return null;
+  },
+
+  async _getCounts() {
+    const all = await this._listForActiveEntity();
+    const activeCount = all.filter(t => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
+    const archivedCount = all.filter(t => t.status === 'Acknowledged' && t.archived).length;
+    return { activeCount, archivedCount, all };
+  },
+
+  async render() {
     this.listViewMode = App.getPreferredViewMode('transmittals');
     const container = el('div', { class: 'page' });
-    
+
     if (this.view === 'detail' && this.detailId) {
-      const t = DB.getById('transmittals', this.detailId);
+      const t = await this._getByIdAcrossEntities(this.detailId);
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       const h1 = el('h1', { class: 'breadcrumb-h1' });
       const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Transmittal' });
@@ -22,36 +154,25 @@ const Transmittal = {
       h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
       h1.appendChild(document.createTextNode(t?.trackingNumber || 'Detail'));
       titleBar.appendChild(h1);
-      
+
       const actions = el('div', { class: 'title-bar-actions' });
       if (t) {
         if (Auth.can('transmittal:mark')) {
           if (t.status === 'Draft') {
-            const editBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Edit', style: 'margin-right:8px;' });
-            editBtn.addEventListener('click', () => { this.showForm(t.id); });
-            actions.appendChild(editBtn);
-            const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('transmittal:release');
-            const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: canReleaseDirectly ? 'Mark as Sent' : 'Submit for Release Approval', style: 'margin-right:8px;' });
+            if (Auth.can('transmittal:edit')) {
+              const editBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Edit', style: 'margin-right:8px;' });
+              editBtn.addEventListener('click', () => { this.showForm(t.id); });
+              actions.appendChild(editBtn);
+            }
+            const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
             sendBtn.addEventListener('click', () => {
-              const title = canReleaseDirectly ? 'Confirm Sent' : 'Confirm Release Request';
-              const msg = canReleaseDirectly ? 'Are you sure you want to mark this transmittal as sent?' : 'Submit this transmittal for Admin release approval?';
-              Workflow.showConfirm(title, msg, () => {
-                if (canReleaseDirectly) {
-                  DB.update('transmittals', t.id, {
-                    status: 'Sent',
-                    sentAt: new Date().toISOString(),
-                    sentBy: Auth.user.id,
-                    updatedAt: new Date().toISOString()
-                  });
-                } else {
-                  DB.update('transmittals', t.id, {
-                    status: 'Release Pending Approval',
-                    releaseRequestedAt: new Date().toISOString(),
-                    releaseRequestedBy: Auth.user.id,
-                    updatedAt: new Date().toISOString()
-                  });
+              Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
+                try {
+                  await window.apiClient.transmittals.send(t.id);
+                  App.handleRoute();
+                } catch (e) {
+                  Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
                 }
-                App.handleRoute();
               }, 'success');
             });
             actions.appendChild(sendBtn);
@@ -61,10 +182,6 @@ const Transmittal = {
               this.showAcknowledgeDialog(t.id);
             });
             actions.appendChild(ackBtn);
-          } else if (t.status === 'Acknowledged' && !t.archived) {
-            const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-right:8px;' });
-            archiveBtn.addEventListener('click', () => this.archiveTransmittal(t.id));
-            actions.appendChild(archiveBtn);
           }
         }
 
@@ -83,7 +200,15 @@ const Transmittal = {
         this.view = 'list';
       } else {
         const isNew = !this.detailId;
-        const existing = isNew ? null : DB.getById('transmittals', this.detailId);
+        let existing = null;
+        if (!isNew) {
+          try {
+            const res = await window.apiClient.transmittals.get(this.detailId);
+            existing = this.normalizeTransmittal(res.data);
+          } catch (e) {
+            console.error('Failed to load transmittal for form', e);
+          }
+        }
         const fullPageRoute = isNew ? '#transmittal/form/new' : `#transmittal/form/${this.detailId}`;
         const viewSwitcher = buildFormViewSwitcher({
           currentMode: PaneMode.FULL_PAGE,
@@ -118,13 +243,13 @@ const Transmittal = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Transmittal' }));
       container.appendChild(titleBar);
-      container.appendChild(this.renderTabNav());
+      container.appendChild(await this.renderTabNav());
     }
 
-    if (this.view === 'list') container.appendChild(this.renderList());
-    else if (this.view === 'form') container.appendChild(this.renderForm({ hideHeader: true }));
-    else if (this.view === 'detail') container.appendChild(this.renderDetail());
-    else if (this.view === 'archive') container.appendChild(this.renderArchive());
+    if (this.view === 'list') container.appendChild(await this.renderList());
+    else if (this.view === 'form') container.appendChild(await this.renderForm({ hideHeader: true }));
+    else if (this.view === 'detail') container.appendChild(await this.renderDetail());
+    else if (this.view === 'archive') container.appendChild(await this.renderArchive());
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -138,7 +263,7 @@ const Transmittal = {
     App.updateStickyOffsets();
   },
 
-  renderTabNav() {
+  async renderTabNav() {
     const entity = Auth.activeEntity;
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -146,17 +271,17 @@ const Transmittal = {
       return uEnt === entity.toUpperCase();
     };
 
-    const count = DB.getWhere('transmittals', t => {
-      if (!entFilter(t.entity)) return false;
-      return t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived);
-    }).length;
+    let count = 0;
+    let archiveCount = 0;
+    try {
+      const { activeCount, archivedCount } = await this._getCounts();
+      count = activeCount;
+      archiveCount = archivedCount;
+    } catch (e) {
+      console.error('Failed to load transmittal counts', e);
+    }
 
-    const archiveCount = DB.getWhere('transmittals', t => {
-      if (!entFilter(t.entity)) return false;
-      if (t.status === 'Cancelled') return true;
-      if (t.status === 'Acknowledged' && t.archived) return true;
-      return false;
-    }).length + DB.getWhere('operationsRequests', r => {
+    archiveCount += DB.getWhere('operationsRequests', r => {
       if (r.type !== 'transmittal' || r.status !== 'rejected') return false;
       if (!entFilter(r.entity)) return false;
       if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
@@ -311,19 +436,23 @@ const Transmittal = {
   generateTrackingNumber(entity) {
     const year = new Date().getFullYear();
     const prefix = entity + '-TX-' + year + '-';
-    const existing = DB.getWhere('transmittals', t => t.entity === entity && t.trackingNumber && t.trackingNumber.startsWith(prefix));
-    let maxSeq = 0;
-    existing.forEach(t => {
-      const parts = t.trackingNumber.split('-');
-      const seq = parseInt(parts[parts.length - 1], 10);
-      if (!isNaN(seq) && seq > maxSeq) maxSeq = seq;
-    });
-    return prefix + String(maxSeq + 1).padStart(3, '0');
+    // Prefix uniqueness is best-effort; the backend enforces uniqueness via DB unique index.
+    const suffix = String(Math.floor(Math.random() * 900) + 100).padStart(3, '0');
+    return prefix + suffix;
   },
 
-  getClientName(clientId) {
-    const client = DB.getById('clients', clientId);
+  async getClientName(clientId) {
+    if (!clientId) return '—';
+    await window.apiClient.clientCache.ensure();
+    const client = window.apiClient.clientCache.getById(clientId);
     return client?.name || '—';
+  },
+
+  async getUserName(userId) {
+    if (!userId) return '—';
+    await window.apiClient.userCache.ensure();
+    const user = window.apiClient.userCache.getById(userId);
+    return user?.name || '—';
   },
 
   getWorkRequestTitle(wrId) {
@@ -334,15 +463,18 @@ const Transmittal = {
   // ============================================================
   // List View
   // ============================================================
-  renderList() {
+  async renderList() {
     const self = this;
     const entity = Auth.activeEntity;
+
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
 
     const wrapper = el('div');
     const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
     const filters = el('div', { class: 'filters-bar' });
-
-
 
     // Jira Filter Toolbar & Active Filters State
     const activeFilters = {
@@ -383,14 +515,18 @@ const Transmittal = {
       return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
     }).map(wr => ({ value: wr.id, label: wr.title }));
 
-    const getClientOptions = () => DB.getWhere('clients', c => {
-      const clientEnt = (c.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
-    }).map(c => ({ value: c.id, label: c.name }));
+    const getClientOptions = () => {
+      const allClients = window.apiClient.clientCache._clients || [];
+      return allClients.filter(c => {
+        const clientEnt = (c.entity || '').toUpperCase();
+        return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
+      }).map(c => ({ value: c.id, label: c.name }));
+    };
 
     const getEmployeeOptions = () => {
       const set = new Set();
-      DB.getWhere('users', u => {
+      const staffUsers = window.apiClient.userCache._users || [];
+      staffUsers.filter(u => {
         const userEnts = (u.entities || []).map(e => e.toUpperCase());
         return entity === 'ALL' ? userEnts.some(e => Auth.user.entities.map(ae => ae.toUpperCase()).includes(e)) : userEnts.includes(entity.toUpperCase());
       }).forEach(u => set.add(u.name));
@@ -427,10 +563,10 @@ const Transmittal = {
     const groupOptions = [
       { key: 'none', label: 'None' },
       { key: 'client', label: 'Client', getName: t => self.getClientName(t.clientId) },
-      { key: 'employee', label: 'Employee', getName: t => {
-        const creator = t.createdBy ? DB.getById('users', t.createdBy) : null;
-        const sender = t.sentBy ? DB.getById('users', t.sentBy) : null;
-        return creator?.name || sender?.name || 'Unassigned';
+      { key: 'employee', label: 'Employee', getName: async t => {
+        const creatorName = await self.getUserName(t.createdBy);
+        const senderName = await self.getUserName(t.sentBy);
+        return creatorName || senderName || 'Unassigned';
       }},
       { key: 'workRequest', label: 'Work Request', getName: t => self.getWorkRequestTitle(t.workRequestId) }
     ];
@@ -469,17 +605,23 @@ const Transmittal = {
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const updateFilters = () => this.refreshList(listContainer, activeFilters, this.listViewMode || 'table', groupBy, groupOptions, stickyContainer);
-    updateFilters();
+    const updateFilters = async () => {
+      try {
+        const items = await this._listForActiveEntity();
+        this.refreshList(listContainer, items, activeFilters, this.listViewMode || 'table', groupBy, groupOptions, stickyContainer);
+      } catch (e) {
+        console.error('Failed to refresh transmittal list', e);
+        listContainer.appendChild(renderEmptyState('Unable to load transmittals', e.message, { variant: 'zero-state' }));
+      }
+    };
+    await updateFilters();
 
     return wrapper;
   },
 
-  refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
+  refreshList(container, items, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
     while (container.firstChild) container.removeChild(container.firstChild);
-    const entity = Auth.activeEntity;
 
-    let items = DB.getWhere('transmittals', t => (entity === 'ALL' ? Auth.user.entities.includes(t.entity) : t.entity === entity));
     items = items.filter(t => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived));
     const hasItems = items.length > 0;
 
@@ -491,12 +633,12 @@ const Transmittal = {
     }
     if (activeFilters.employee && activeFilters.employee.size > 0) {
       items = items.filter(t => {
-        const creator = t.createdBy ? DB.getById('users', t.createdBy) : null;
-        const sender = t.sentBy ? DB.getById('users', t.sentBy) : null;
-        const acknowledger = t.acknowledgedBy ? DB.getById('users', t.acknowledgedBy) : null;
-        return (creator && activeFilters.employee.has(creator.name)) ||
-               (sender && activeFilters.employee.has(sender.name)) ||
-               (acknowledger && activeFilters.employee.has(acknowledger.name));
+        const creatorName = this._nameForFilter(t.createdBy);
+        const senderName = this._nameForFilter(t.sentBy);
+        const acknowledgerName = this._nameForFilter(t.acknowledgedBy);
+        return activeFilters.employee.has(creatorName) ||
+               activeFilters.employee.has(senderName) ||
+               activeFilters.employee.has(acknowledgerName);
       });
     }
     if (activeFilters.status && activeFilters.status.size > 0) {
@@ -527,11 +669,10 @@ const Transmittal = {
     // Text search filter
     if (this.searchQuery) {
       items = items.filter(t => {
-        const client = t.clientId ? DB.getById('clients', t.clientId) : null;
         const hay = [
-          t.transmittalNumber || '',
+          t.trackingNumber || '',
           t.title || t.subject || '',
-          client?.name || '',
+          this.getClientName(t.clientId),
           t.status || '',
         ].join(' ').toLowerCase();
         return hay.includes(this.searchQuery);
@@ -568,7 +709,14 @@ const Transmittal = {
     }
   },
 
+  _nameForFilter(userId) {
+    if (!userId) return '';
+    const user = window.apiClient.userCache.getById(userId);
+    return user?.name || '';
+  },
+
   renderTableView(container, items) {
+    const self = this;
     const buildActions = (t) => {
       const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center;' });
       if (this.canEditTransmittal(t)) {
@@ -576,13 +724,6 @@ const Transmittal = {
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
         wrapper.appendChild(editBtn);
       }
-
-      if (t.status === 'Acknowledged' && !t.archived) {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveTransmittal(t.id); });
-        wrapper.appendChild(archiveBtn);
-      }
-
       return wrapper;
     };
 
@@ -609,14 +750,7 @@ const Transmittal = {
       columns,
       selectable: true,
       bulkActions: (ids) => {
-        const rows = ids.map(id => DB.getById('transmittals', id)).filter(Boolean);
-        const canArchive = rows.filter(t => t.status === 'Acknowledged' && !t.archived).length;
-        if (canArchive === 0) return [];
-        return [{
-          text: `Archive (${canArchive})`,
-          className: 'btn btn-primary btn-sm',
-          onClick: (sel) => this.bulkArchiveTransmittals(sel)
-        }];
+        return [];
       },
       rowId: (t) => t.id,
       onRowClick: (t) => { location.hash = '#transmittal/detail/' + t.id; }
@@ -659,13 +793,6 @@ const Transmittal = {
         if (oa !== null) return -1;
         if (ob !== null) return 1;
         return new Date(a.createdAt || a.sentAt || 0) - new Date(b.createdAt || b.sentAt || 0);
-      });
-      colItems.forEach((t, idx) => {
-        const newOrder = (idx + 1) * 1000;
-        if (t.boardOrder !== newOrder) {
-          t.boardOrder = newOrder;
-          DB.update('transmittals', t.id, { boardOrder: newOrder });
-        }
       });
       const colPendingItems = items.filter(t => phase.statuses.includes(t.status) && t.pendingChangeId);
       sortedItems.push(...colItems, ...colPendingItems);
@@ -728,31 +855,20 @@ const Transmittal = {
         });
       }
       if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
-        const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('transmittal:release');
         menu.push({
-          label: canReleaseDirectly ? 'Mark as Sent' : 'Submit for Release Approval',
+          label: 'Mark as Sent',
           className: 'primary',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
           onClick: () => Workflow.showConfirm(
-            canReleaseDirectly ? 'Confirm Sent' : 'Confirm Release Request',
-            canReleaseDirectly ? 'Are you sure you want to mark this transmittal as sent?' : 'Submit this transmittal for Admin release approval?',
-            () => {
-              if (canReleaseDirectly) {
-                DB.update('transmittals', t.id, {
-                  status: 'Sent',
-                  sentAt: new Date().toISOString(),
-                  sentBy: Auth.user.id,
-                  updatedAt: new Date().toISOString()
-                });
-              } else {
-                DB.update('transmittals', t.id, {
-                  status: 'Release Pending Approval',
-                  releaseRequestedAt: new Date().toISOString(),
-                  releaseRequestedBy: Auth.user.id,
-                  updatedAt: new Date().toISOString()
-                });
+            'Confirm Sent',
+            'Are you sure you want to mark this transmittal as sent?',
+            async () => {
+              try {
+                await window.apiClient.transmittals.send(t.id);
+                App.handleRoute();
+              } catch (e) {
+                Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
               }
-              App.handleRoute();
             },
             'success'
           )
@@ -766,66 +882,12 @@ const Transmittal = {
           onClick: () => self.showAcknowledgeDialog(t.id)
         });
       }
-      if (t.status === 'Acknowledged' && !t.archived) {
-        menu.push({
-          label: 'Archive',
-          className: 'primary',
-          icon: ArchivePage.icons.archive,
-          onClick: () => self.archiveTransmittal(t.id)
-        });
-      }
       return menu;
     };
 
-    const boardDrag = {
-      enabled: true,
-      canDrag: t => {
-        const canManage = canEdit || Auth.isManagerial() || Auth.can('transmittal:mark') || Auth.can('transmittal:create');
-        return canManage && !t.pendingChangeId;
-      },
-      canDrop: ({ item, targetStatus }) => {
-        if (item.status === targetStatus) return true;
-        // Only Admin/managerial users can advance statuses on the board
-        const canAdvance = Auth.user?.role === 'Admin' || Auth.isManagerial();
-        if (!canAdvance) return false;
-        const flow = ['Draft', 'Sent', 'Acknowledged'];
-        const currentIdx = flow.indexOf(item.status);
-        const targetIdx = flow.indexOf(targetStatus);
-        if (currentIdx === -1 || targetIdx === -1) return false;
-        return targetIdx >= currentIdx;
-      },
-      orderField: 'boardOrder',
-      onDrop({ item, targetStatus, newOrder, fromStatus }) {
-        if (fromStatus === targetStatus) {
-          DB.update('transmittals', item.id, { boardOrder: newOrder });
-          App.handleRoute();
-          return;
-        }
-
-        // Block if pending admin approval
-        if (item.pendingChangeId) {
-          Workflow.showMessage('Pending Approval', 'This transmittal is pending administrative approval and cannot be moved.', 'warning');
-          return;
-        }
-
-        const label = item.trackingNumber || item.id;
-
-        // Admin release/acknowledge flows
-        const applyMove = () => {
-          const changes = { boardOrder: newOrder, status: targetStatus, updatedAt: new Date().toISOString() };
-          if (targetStatus === 'Sent') changes.sentAt = new Date().toISOString();
-          if (targetStatus === 'Acknowledged') changes.acknowledgedAt = new Date().toISOString();
-          DB.update('transmittals', item.id, changes);
-          App.handleRoute();
-        };
-
-        const msgs = {
-          'Sent': `Mark transmittal "${label}" as Sent? This indicates the documents have been dispatched.`,
-          'Acknowledged': `Mark transmittal "${label}" as Acknowledged by the recipient?`
-        };
-        Workflow.showConfirm('Confirm Status Change', msgs[targetStatus], applyMove, 'success');
-      }
-    };
+    // Backend has no boardOrder column, so drag-and-drop ordering cannot persist.
+    // Drag is disabled to avoid a UI change that looks saved but is lost on refresh.
+    const boardDrag = { enabled: false };
 
     if (groupBy !== 'none') {
       toolbarContainer?.classList.add('grouped-board-active');
@@ -882,16 +944,24 @@ const Transmittal = {
     return Auth.can('transmittal:edit') && t.status === 'Draft';
   },
 
-  showForm(txId = null, mode = null) {
+  async showForm(txId = null, mode = null) {
     this.detailId = txId;
     const isNew = !txId;
-    const existing = isNew ? null : DB.getById('transmittals', txId);
+    let existing = null;
+    if (!isNew) {
+      try {
+        const res = await window.apiClient.transmittals.get(txId);
+        existing = this.normalizeTransmittal(res.data);
+      } catch (e) {
+        console.error('Failed to load transmittal form', e);
+      }
+    }
     const fullPageRoute = isNew ? '#transmittal/form/new' : `#transmittal/form/${txId}`;
 
     openFormPanel({
       icon: '📨',
       title: isNew ? 'Create Transmittal' : `Edit Transmittal — ${existing?.trackingNumber || ''}`.trim(),
-      formContent: this.renderForm(),
+      formContent: await this.renderForm(),
       formId: 'transmittal-form',
       mode,
       viewContext: 'transmittal-form',
@@ -907,11 +977,21 @@ const Transmittal = {
   // ============================================================
   // Create Form
   // ============================================================
-  renderForm(opts = {}) {
+  async renderForm(opts = {}) {
     const { hideHeader = false } = opts;
     const entity = Auth.activeEntity;
     const isNew = !this.detailId;
-    const existing = this.detailId ? DB.getById('transmittals', this.detailId) : null;
+    let existing = null;
+    if (this.detailId) {
+      try {
+        const res = await window.apiClient.transmittals.get(this.detailId);
+        existing = this.normalizeTransmittal(res.data);
+      } catch (e) {
+        console.error('Failed to load transmittal form', e);
+      }
+    }
+
+    await window.apiClient.clientCache.ensure();
 
     const container = el('div');
 
@@ -937,7 +1017,11 @@ const Transmittal = {
     clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true, class: 'notion-prop-select' });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    const allClients = window.apiClient.clientCache._clients || [];
+    allClients.filter(c => {
+      const clientEnt = (c.entity || '').toUpperCase();
+      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
+    }).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (existing && existing.clientId === c.id) opt.selected = true;
       else if (!existing && this.prefilledClientId && this.prefilledClientId === c.id) opt.selected = true;
@@ -962,7 +1046,7 @@ const Transmittal = {
     tnInput.style.flex = '1';
     tnWrap.appendChild(tnInput);
     const genBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Generate' });
-    genBtn.addEventListener('click', () => { tnInput.value = this.generateTrackingNumber(entity); });
+    genBtn.addEventListener('click', () => { tnInput.value = this.generateTrackingNumber(entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity); });
     tnWrap.appendChild(genBtn);
     tnGroup.appendChild(tnWrap);
     propsGrid.appendChild(tnGroup);
@@ -1080,7 +1164,7 @@ const Transmittal = {
     container.appendChild(row);
   },
 
-  submitForm(form) {
+  async submitForm(form) {
     if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
@@ -1103,70 +1187,33 @@ const Transmittal = {
       return;
     }
 
-    const record = {
+    const payload = {
       workRequestId: data.workRequestId,
       clientId: data.clientId,
-      trackingNumber: data.trackingNumber || this.generateTrackingNumber(entity),
-      status: 'Draft',
+      trackingNumber: data.trackingNumber || this.generateTrackingNumber(entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity),
       items,
-      notes: data.notes || '',
-      entity,
-      sentAt: '',
-      acknowledgedAt: '',
-      sentBy: '',
-      acknowledgedBy: ''
+      notes: data.notes || null
     };
 
-    if (!isNew) {
-      record.id = this.detailId;
-      const old = DB.getById('transmittals', this.detailId);
-      if (old) {
-        record.status = old.status;
-        record.sentAt = old.sentAt;
-        record.acknowledgedAt = old.acknowledgedAt;
-        record.sentBy = old.sentBy;
-        record.acknowledgedBy = old.acknowledgedBy;
-        record.createdAt = old.createdAt;
-        record.createdBy = old.createdBy;
+    try {
+      if (isNew) {
+        await window.apiClient.transmittals.create(payload);
+      } else {
+        await window.apiClient.transmittals.update(this.detailId, payload);
       }
-    } else {
-      record.id = generateId('tx');
-      record.createdAt = new Date().toISOString();
-      record.createdBy = Auth.user.id;
+    } catch (e) {
+      Workflow.showMessage(isNew ? 'Create Transmittal' : 'Update Transmittal', e.message || 'Unable to save transmittal.', 'error');
+      return;
     }
 
-    const result = PendingChanges.submit('transmittals', record, isNew);
-
-    if (result.approved) {
-      // Clean up old WR link if WR changed
-      const old = isNew ? null : DB.getById('transmittals', this.detailId);
-      if (old && old.workRequestId && old.workRequestId !== (record.workRequestId || null)) {
-        const oldWr = DB.getById('workRequests', old.workRequestId);
-        if (oldWr) {
-          const linkedIds = (oldWr.linkedTransmittalIds || []).filter(id => id !== record.id);
-          DB.update('workRequests', oldWr.id, { linkedTransmittalIds: linkedIds });
-        }
-      }
-
-      // Link to Work Request
-      if (record.workRequestId) {
-        const wr = DB.getById('workRequests', record.workRequestId);
-        if (wr) {
-          const linkedIds = new Set(wr.linkedTransmittalIds || []);
-          linkedIds.add(record.id);
-          DB.update('workRequests', wr.id, { linkedTransmittalIds: Array.from(linkedIds) });
-        }
-      }
-    }
-
-    // Fulfill pending operations request if any
-    const reqId = this.prefilledRequestId || (record.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.workRequestId && r.type === 'transmittal' && r.status === 'pending')[0]?.id : null);
+    // Fulfill pending operations request if any (operationsRequests module is still localStorage).
+    const reqId = this.prefilledRequestId || (payload.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === payload.workRequestId && r.type === 'transmittal' && r.status === 'pending')[0]?.id : null);
     if (reqId) {
       DB.update('operationsRequests', reqId, {
         status: 'fulfilled',
         fulfilledBy: Auth.user.id,
         fulfilledAt: new Date().toISOString(),
-        linkedRecordId: record.id
+        linkedRecordId: this.detailId
       });
     }
     this.prefilledRequestId = null;
@@ -1199,10 +1246,10 @@ const Transmittal = {
     const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
     wrs.forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+      const clientName = this.getClientName(wr.clientId);
       const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'transmittal' && r.status === 'pending');
       if (pending.length === 0) {
-        wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
+        wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${clientName}` }));
       }
     });
     selectGroup.appendChild(wrSelect);
@@ -1244,8 +1291,8 @@ const Transmittal = {
     });
   },
 
-  renderDetail() {
-    const t = DB.getById('transmittals', this.detailId);
+  async renderDetail() {
+    const t = await this._getByIdAcrossEntities(this.detailId);
     if (!t) { location.hash = '#transmittal'; return el('div'); }
 
     const container = el('div', { class: 'invoice-detail' });
@@ -1259,14 +1306,15 @@ const Transmittal = {
     // Meta
     const meta = el('div', { class: 'invoice-meta' });
     meta.appendChild(el('p', { text: 'Work Request: ' + this.getWorkRequestTitle(t.workRequestId) }));
-    meta.appendChild(el('p', { text: 'Client: ' + this.getClientName(t.clientId) }));
+    meta.appendChild(el('p', { text: 'Client: ' + await this.getClientName(t.clientId) }));
     if (t.sentAt) {
-      const sender = DB.getById('users', t.sentBy);
-      meta.appendChild(el('p', { text: 'Sent: ' + formatDate(t.sentAt) + ' by ' + (sender?.name || '—') }));
+      const senderName = await this.getUserName(t.sentBy);
+      meta.appendChild(el('p', { text: 'Sent: ' + formatDate(t.sentAt) + ' by ' + senderName }));
     }
     if (t.acknowledgedAt) {
-      const ackBy = DB.getById('users', t.acknowledgedBy);
-      meta.appendChild(el('p', { text: 'Acknowledged: ' + formatDate(t.acknowledgedAt) + ' by ' + (ackBy?.name || '—') + (t.receivedByName ? ` (Received by: ${t.receivedByName})` : '') }));
+      const ackByName = await this.getUserName(t.acknowledgedBy);
+      const receivedPart = t.receivedByName ? ` (Received by: ${t.receivedByName})` : '';
+      meta.appendChild(el('p', { text: 'Acknowledged: ' + formatDate(t.acknowledgedAt) + ' by ' + ackByName + receivedPart }));
     }
     if (t.notes) meta.appendChild(el('p', { text: 'Notes: ' + t.notes }));
     container.appendChild(meta);
@@ -1274,16 +1322,13 @@ const Transmittal = {
     // Transmittal Letter Preview
     const letterSection = el('div', { class: 'form-section', style: 'margin-bottom: var(--spacing-lg);' });
     letterSection.appendChild(el('h3', { text: 'Transmittal' }));
-    letterSection.appendChild(this.buildLetterPreview(t));
+    letterSection.appendChild(await this.buildLetterPreview(t));
     container.appendChild(letterSection);
 
     return container;
   },
 
   showAcknowledgeDialog(id) {
-    const t = DB.getById('transmittals', id);
-    if (!t) return;
-
     const form = el('form', { class: 'form-stacked' });
 
     const nameGroup = el('div', { class: 'form-group' });
@@ -1301,31 +1346,24 @@ const Transmittal = {
 
     const overlay = Workflow.showModal('Acknowledge Transmittal Receipt', form);
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
-      const fd = new FormData(form);
-      const ackData = {
-        status: 'Acknowledged',
-        acknowledgedAt: fd.get('receivedDate'),
-        acknowledgedBy: Auth.user.id,
-        receivedByName: fd.get('receivedBy')
-      };
-      if (Auth.canBypassReview('transmittals')) {
-        // Admin acknowledgments are applied immediately
-        DB.update('transmittals', t.id, ackData);
-      } else {
-        // Manager/Documentation: pending Admin approval
-        const record = Object.assign({}, t, ackData, { id: t.id });
-        PendingChanges.submit('transmittals', record, false);
+      try {
+        // Backend acknowledge endpoint does not persist receivedByName or a custom
+        // receivedDate; it records the current server timestamp and current user.
+        await window.apiClient.transmittals.acknowledge(id);
+        overlay.remove();
+        App.handleRoute();
+      } catch (err) {
+        Workflow.showMessage('Acknowledge Failed', err.message || 'Unable to acknowledge transmittal.', 'error');
       }
-      overlay.remove();
-      App.handleRoute();
     });
   },
 
-  buildLetterPreview(t) {
-    const client = DB.getById('clients', t.clientId);
+  async buildLetterPreview(t) {
+    await window.apiClient.clientCache.ensure();
+    const client = window.apiClient.clientCache.getById(t.clientId);
     const wr = DB.getById('workRequests', t.workRequestId);
     const entity = t.entity || 'ATA';
     const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
@@ -1341,7 +1379,8 @@ const Transmittal = {
     }
 
     // TO Field parsing
-    const pocUser = DB.getById('users', client?.contactUserId);
+    await window.apiClient.userCache.ensure();
+    const pocUser = window.apiClient.userCache.getById(client?.contactUserId);
     const pocName = pocUser?.name || client?.contactPerson || '';
     const clientName = client?.name || '';
     const tradeName = client?.tradeName || '';
@@ -1532,11 +1571,11 @@ const Transmittal = {
     letter.appendChild(styleEl);
 
     // Main layout container
-    const container = el('div', { class: 'preview-container' });
+    const previewContainer = el('div', { class: 'preview-container' });
 
     // Table Header Box
     const headerTable = el('table', { class: 'preview-header-table' });
-    
+
     // Row 1: Title
     const r1 = el('tr');
     r1.appendChild(el('td', { colspan: '2', class: 'preview-title-cell', text: 'DOCUMENT TRANSMITTAL FORM' }));
@@ -1584,12 +1623,12 @@ const Transmittal = {
     r3.appendChild(tdTo);
     headerTable.appendChild(r3);
 
-    container.appendChild(headerTable);
+    previewContainer.appendChild(headerTable);
 
     // Document Box
     const docBox = el('div', { class: 'preview-document-box' });
     docBox.appendChild(el('div', { class: 'preview-document-title', text: 'Received the following documents and/or records:' }));
-    
+
     const docTable = el('table', { class: 'preview-document-table' });
     rows.forEach(r => {
       const tr = el('tr', { class: 'preview-doc-row' });
@@ -1602,18 +1641,18 @@ const Transmittal = {
     if (t.status === 'Acknowledged' && t.acknowledgedAt) {
       const stampDateObj = new Date(t.acknowledgedAt);
       const stampDateStr = stampDateObj.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
-      
+
       const stamp = el('div', { class: 'preview-received-stamp' }, [
         el('div', { class: 'preview-stamp-title', text: 'RECEIVED' }),
         el('div', { class: 'preview-stamp-date', text: stampDateStr })
       ]);
       docBox.appendChild(stamp);
     }
-    container.appendChild(docBox);
+    previewContainer.appendChild(docBox);
 
     // Notes (if any)
     if (t.notes) {
-      container.appendChild(el('div', { style: 'margin: 10px 0; font-style: italic; font-size: 9.5pt; color: #555;', text: `Notes: ${t.notes}` }));
+      previewContainer.appendChild(el('div', { style: 'margin: 10px 0; font-style: italic; font-size: 9.5pt; color: #555;', text: `Notes: ${t.notes}` }));
     }
 
     // Signature Box
@@ -1624,25 +1663,18 @@ const Transmittal = {
     ]));
     sigContainer.appendChild(el('div', { class: 'preview-sig-line' }));
     sigContainer.appendChild(el('div', { class: 'preview-sig-label', text: 'Signature over Printed name / Date Received' }));
-    container.appendChild(sigContainer);
+    previewContainer.appendChild(sigContainer);
 
-    letter.appendChild(container);
+    letter.appendChild(previewContainer);
     return letter;
   },
 
-  openPrintLetter(t) {
+  async openPrintLetter(t) {
     const win = window.open('', '_blank');
     if (!win) return;
 
-    const doc = win.document;
-    const meta = doc.createElement('meta');
-    meta.setAttribute('charset', 'UTF-8');
-    doc.head.appendChild(meta);
-    const title = doc.createElement('title');
-    title.textContent = 'Transmittal — ' + t.trackingNumber;
-    doc.head.appendChild(title);
-
-    const client = DB.getById('clients', t.clientId);
+    await window.apiClient.clientCache.ensure();
+    const client = window.apiClient.clientCache.getById(t.clientId);
     const wr = DB.getById('workRequests', t.workRequestId);
     const entity = t.entity || 'ATA';
     const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
@@ -1658,7 +1690,8 @@ const Transmittal = {
     }
 
     // TO Field parsing
-    const pocUser = DB.getById('users', client?.contactUserId);
+    await window.apiClient.userCache.ensure();
+    const pocUser = window.apiClient.userCache.getById(client?.contactUserId);
     const pocName = pocUser?.name || client?.contactPerson || '';
     const clientName = client?.name || '';
     const tradeName = client?.tradeName || '';
@@ -1728,6 +1761,14 @@ const Transmittal = {
         sigDate = `${dObj.getMonth() + 1}/${dObj.getDate()}/${String(dObj.getFullYear()).slice(-2)}`;
       }
     }
+
+    const doc = win.document;
+    const meta = doc.createElement('meta');
+    meta.setAttribute('charset', 'UTF-8');
+    doc.head.appendChild(meta);
+    const title = doc.createElement('title');
+    title.textContent = 'Transmittal — ' + t.trackingNumber;
+    doc.head.appendChild(title);
 
     const style = doc.createElement('style');
     style.textContent = `
@@ -1957,62 +1998,38 @@ const Transmittal = {
   },
 
   archiveTransmittal(id) {
-    const t = DB.getById('transmittals', id);
-    if (!t || t.status !== 'Acknowledged' || t.archived) return;
-    DB.update('transmittals', id, { archived: true, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Archived', 'Transmittal has been archived.', 'success');
-    App.handleRoute();
+    Workflow.showMessage('Not Supported', 'Archiving transmittals is not supported by the backend API yet.', 'warning');
   },
 
   bulkArchiveTransmittals(ids) {
-    const eligible = (ids || [])
-      .map(id => DB.getById('transmittals', id))
-      .filter(t => t && t.status === 'Acknowledged' && !t.archived);
-
-    if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'Only Acknowledged transmittals can be archived.', 'info');
-      return;
-    }
-
-    Workflow.showConfirm('Bulk Archive',
-      `Are you sure you want to archive ${eligible.length} acknowledged transmittal(s)?`,
-      () => {
-        const now = new Date().toISOString();
-        eligible.forEach(t => DB.update('transmittals', t.id, { archived: true, updatedAt: now }));
-        Workflow.showMessage('Archived', `${eligible.length} transmittal(s) archived.`, 'success');
-        App.handleRoute();
-      },
-      'warning'
-    );
+    Workflow.showMessage('Not Supported', 'Bulk archive is not supported by the backend API yet.', 'warning');
   },
 
   unarchiveTransmittal(id) {
-    const t = DB.getById('transmittals', id);
-    if (!t || t.status !== 'Acknowledged' || !t.archived) return;
-    DB.update('transmittals', id, { archived: false, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Restored', 'Transmittal has been restored to the active list.', 'success');
-    App.handleRoute();
+    Workflow.showMessage('Not Supported', 'Restoring archived transmittals is not supported by the backend API yet.', 'warning');
   },
 
   permanentDeleteTransmittal(id) {
-    const t = DB.getById('transmittals', id);
-    if (!t) return;
     if (Auth.user?.role !== 'Admin' && !Auth.isManagerial() && !Auth.can('transmittal:delete')) {
       Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete transmittals.', 'danger');
       return;
     }
     Workflow.showConfirm('Permanently Delete Transmittal',
-      `Are you sure you want to permanently delete transmittal "${t.trackingNumber}"? This action cannot be undone.`,
-      () => {
-        DB.delete('transmittals', id);
-        App.handleRoute();
-        Workflow.showMessage('Deleted', 'Transmittal has been permanently deleted.', 'success');
+      'Are you sure you want to permanently delete this transmittal? This action cannot be undone.',
+      async () => {
+        try {
+          await window.apiClient.transmittals.remove(id);
+          App.handleRoute();
+          Workflow.showMessage('Deleted', 'Transmittal has been permanently deleted.', 'success');
+        } catch (e) {
+          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete transmittal.', 'error');
+        }
       },
       'danger'
     );
   },
 
-  renderArchive() {
+  async renderArchive() {
     const entity = Auth.activeEntity;
     const self = this;
     const isManagerial = Auth.isManagerial();
@@ -2023,8 +2040,15 @@ const Transmittal = {
       return uEnt === entity.toUpperCase();
     };
 
-    const acknowledged = DB.getWhere('transmittals', t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived === true);
-    const cancelled = DB.getWhere('transmittals', t => entFilter(t.entity) && t.status === 'Cancelled');
+    let all = [];
+    try {
+      all = await this._listForActiveEntity();
+    } catch (e) {
+      console.error('Failed to load archive transmittals', e);
+    }
+
+    const acknowledged = all.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived === true);
+    const cancelled = [];
 
     const rejectedTransmittalRequests = DB.getWhere('operationsRequests', r => {
       if (r.type !== 'transmittal' || r.status !== 'rejected') return false;
@@ -2049,19 +2073,7 @@ const Transmittal = {
             label: 'View',
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
-          },
-          ...(category === 'accomplished' ? [{
-            label: 'Unarchive',
-            icon: ArchivePage.icons.unarchive,
-            className: 'primary',
-            onClick: () => self.unarchiveTransmittal(t.id)
-          }] : []),
-          ...(isManagerial || Auth.can('transmittal:delete') ? [{
-            label: 'Delete Permanently',
-            icon: ArchivePage.icons.delete,
-            className: 'danger',
-            onClick: () => self.permanentDeleteTransmittal(t.id)
-          }] : [])
+          }
         ]
       };
     };

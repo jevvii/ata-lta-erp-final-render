@@ -106,4 +106,18 @@ const getAvatarUploadUrl = async (req, res, next) => {
   }
 };
 
-module.exports = { meController: { getMe, getPermissions, updateMe, changePassword, getAvatarUploadUrl } };
+/**
+ * GET /v1/me/team
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+const getTeam = async (req, res, next) => {
+  try {
+    const team = await meService.listTeam({ currentUser: req.user });
+    res.status(200).json({ data: team });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { meController: { getMe, getPermissions, updateMe, changePassword, getAvatarUploadUrl, getTeam } };

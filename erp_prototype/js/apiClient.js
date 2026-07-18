@@ -107,13 +107,121 @@
     me: {
       get: () => get('/me'),
       permissions: () => get('/me/permissions'),
+      team: () => get('/me/team'),
       update: (body) => patch('/me', body),
       changePassword: (body) => patch('/me/password', body),
       avatarUploadUrl: () => post('/me/avatar-upload-url'),
     },
 
+    userCache: {
+      _users: null,
+      _promise: null,
+      async ensure() {
+        if (this._users) return this._users;
+        if (this._promise) return this._promise;
+        this._promise = window.apiClient.me.team().then(res => {
+          this._users = res.data || [];
+          return this._users;
+        }).catch(err => {
+          this._users = [];
+          return this._users;
+        }).finally(() => {
+          this._promise = null;
+        });
+        return this._promise;
+      },
+      getById(id) {
+        if (!id || !this._users) return null;
+        return this._users.find(u => u.id === id) || null;
+      },
+      getByName(name) {
+        if (!name || !this._users) return null;
+        return this._users.find(u => u.name === name) || null;
+      },
+      invalidate() {
+        this._users = null;
+      }
+    },
+
+    clientCache: {
+      _clients: null,
+      _promise: null,
+      async ensure() {
+        if (this._clients) return this._clients;
+        if (this._promise) return this._promise;
+        this._promise = window.apiClient.clients.list({}).then(res => {
+          this._clients = (res.data || []).map(c => this._normalize(c));
+          return this._clients;
+        }).catch(err => {
+          this._clients = [];
+          return this._clients;
+        }).finally(() => {
+          this._promise = null;
+        });
+        return this._promise;
+      },
+      _normalize(client) {
+        if (!client) return client;
+        return {
+          ...client,
+          relatedCompanies: (client.relatedCompanies || []).map(rc => ({
+            clientId: rc.relatedClientId || rc.clientId,
+            relationType: rc.relationship || rc.relationType,
+            relationship: rc.relationship || rc.relationType,
+            id: rc.id
+          }))
+        };
+      },
+      getById(id) {
+        if (!id || !this._clients) return null;
+        return this._clients.find(c => c.id === id) || null;
+      },
+      getByName(name) {
+        if (!name || !this._clients) return null;
+        return this._clients.find(c => c.name === name) || null;
+      },
+      invalidate() {
+        this._clients = null;
+      }
+    },
+
+    workRequestCache: {
+      _wrs: null,
+      _promise: null,
+      async ensure() {
+        if (this._wrs) return this._wrs;
+        if (this._promise) return this._promise;
+        this._promise = window.apiClient.workRequests.list({}).then(res => {
+          this._wrs = res.data || [];
+          return this._wrs;
+        }).catch(err => {
+          this._wrs = [];
+          return this._wrs;
+        }).finally(() => {
+          this._promise = null;
+        });
+        return this._promise;
+      },
+      getById(id) {
+        if (!id || !this._wrs) return null;
+        return this._wrs.find(wr => wr.id === id) || null;
+      },
+      getByTitle(title) {
+        if (!title || !this._wrs) return null;
+        return this._wrs.find(wr => wr.title === title) || null;
+      },
+      invalidate() {
+        this._wrs = null;
+      }
+    },
+
     clients: {
-      list: () => get('/clients'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/clients${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/clients', data),
       get: (id) => get(`/clients/${id}`),
       update: (id, data) => put(`/clients/${id}`, data),
@@ -121,7 +229,12 @@
     },
 
     documents: {
-      list: () => get('/documents'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/documents${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/documents', data),
       get: (id) => get(`/documents/${id}`),
       update: (id, data) => put(`/documents/${id}`, data),
@@ -132,7 +245,12 @@
     },
 
     workRequests: {
-      list: () => get('/work-requests'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/work-requests${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/work-requests', data),
       get: (id) => get(`/work-requests/${id}`),
       update: (id, data) => put(`/work-requests/${id}`, data),
@@ -144,7 +262,12 @@
     },
 
     invoices: {
-      list: () => get('/invoices'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/invoices${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/invoices', data),
       get: (id) => get(`/invoices/${id}`),
       update: (id, data) => put(`/invoices/${id}`, data),
@@ -152,10 +275,19 @@
       recordPayment: (id, data) => post(`/invoices/${id}/payments`, data),
       pdf: (id) => get(`/invoices/${id}/pdf`),
       voucher: (id) => get(`/invoices/${id}/voucher`),
+      listTemplates: () => get('/invoices/templates'),
+      createTemplate: (data) => post('/invoices/templates', data),
+      updateTemplate: (id, data) => put(`/invoices/templates/${id}`, data),
+      deleteTemplate: (id) => del(`/invoices/templates/${id}`),
     },
 
     disbursements: {
-      list: () => get('/disbursements'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/disbursements${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/disbursements', data),
       get: (id) => get(`/disbursements/${id}`),
       update: (id, data) => put(`/disbursements/${id}`, data),
@@ -166,7 +298,12 @@
     },
 
     transmittals: {
-      list: () => get('/transmittals'),
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/transmittals${q ? '?' + q : ''}`);
+      },
       create: (data) => post('/transmittals', data),
       get: (id) => get(`/transmittals/${id}`),
       update: (id, data) => put(`/transmittals/${id}`, data),

@@ -381,7 +381,7 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
 };
 
 /**
- * Soft delete a client.
+ * Soft delete a client and cascade to its work requests and documents.
  * @param {Object} params
  * @param {string} params.id
  * @param {string} params.entityId
@@ -392,11 +392,13 @@ const deleteClient = async ({ id, entityId, deletedBy }) => {
   const existing = await getClientById({ id, entityId });
   if (!existing) return false;
 
+  const now = new Date().toISOString();
+
   const { error } = await supabaseAdmin
     .from('clients')
     .update({
       status: 'Archived',
-      deleted_at: new Date().toISOString(),
+      deleted_at: now,
       updated_by: deletedBy,
     })
     .eq('id', id)
@@ -408,6 +410,26 @@ const deleteClient = async ({ id, entityId, deletedBy }) => {
       title: 'Database Error',
       detail: 'Unable to delete client',
     });
+  }
+
+  // Cascade: cancel related work requests and archive their documents.
+  const { data: wrs } = await supabaseAdmin
+    .from('work_requests')
+    .select('id')
+    .eq('client_id', id)
+    .eq('entity_id', entityId);
+
+  if (wrs && wrs.length) {
+    const wrIds = wrs.map((wr) => wr.id);
+    await supabaseAdmin
+      .from('work_requests')
+      .update({ status: 'Cancelled', updated_at: now, updated_by: deletedBy })
+      .in('id', wrIds);
+
+    await supabaseAdmin
+      .from('documents')
+      .update({ status: 'Archived', archived: true, updated_at: now })
+      .in('work_request_id', wrIds);
   }
 
   return true;

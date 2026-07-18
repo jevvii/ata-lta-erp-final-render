@@ -68,6 +68,64 @@ describe('GET /v1/me', () => {
   });
 });
 
+describe('GET /v1/me/team', () => {
+  beforeEach(() => {
+    resetMock();
+    seedDefaults();
+  });
+
+  it('returns visible users scoped by shared entity', async () => {
+    const ataUser = registerUser({
+      email: 'ataonly@ata-lta.ph',
+      name: 'ATA Staff',
+      role: 'Accounting',
+      entities: ['ATA'],
+    });
+
+    registerUser({
+      email: 'ltaonly@ata-lta.ph',
+      name: 'LTA Staff',
+      role: 'Operations',
+      entities: ['LTA'],
+    });
+
+    const res = await request(app)
+      .get('/v1/me/team')
+      .set('Authorization', `Bearer ${ataUser}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    const names = res.body.data.map((u) => u.name);
+    expect(names).toContain('ATA Staff');
+    expect(names).not.toContain('LTA Staff');
+  });
+
+  it('returns all users for an admin', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    registerUser({
+      email: 'ltaonly@ata-lta.ph',
+      name: 'LTA Staff',
+      role: 'Operations',
+      entities: ['LTA'],
+    });
+
+    const res = await request(app)
+      .get('/v1/me/team')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    const names = res.body.data.map((u) => u.name);
+    expect(names).toContain('LTA Staff');
+  });
+});
+
 describe('GET /v1/me/permissions', () => {
   beforeEach(() => {
     resetMock();

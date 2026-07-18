@@ -426,7 +426,7 @@ const App = {
     }
   },
 
-  handleRoute() {
+  async handleRoute() {
     if (window.SidePaneInstance) window.SidePaneInstance.close();
     const rawHash = location.hash || '#dashboard';
 
@@ -570,7 +570,7 @@ const App = {
       }
 
       content.innerHTML = '';
-      const rendered = module.render();
+      const rendered = await module.render();
       if (typeof rendered === 'string') {
         content.innerHTML = rendered;
       } else {

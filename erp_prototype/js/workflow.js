@@ -78,12 +78,215 @@ function disableIfPending(element, wr, title = 'Under approval') {
 }
 
 /**
+ * API-backed data layer for Work Requests and Tasks.
+ * Replaces DB.*('workRequests') and DB.*('tasks') with window.apiClient.workRequests calls.
+ */
+const WorkflowData = {
+  _workRequests: null,
+  _tasks: null,
+  _loadingPromise: null,
+
+  normalizeWorkRequest(wr) {
+    if (!wr) return wr;
+    return {
+      ...wr,
+      // Backend does not persist these frontend-only fields; supply defaults.
+      archived: wr.archived ?? false,
+      boardOrder: wr.boardOrder ?? null,
+      priority: wr.priority || 'Normal',
+      isPendingApproval: wr.isPendingApproval ?? false,
+      linkedInvoiceId: wr.linkedInvoiceId || null,
+      linkedDisbursementIds: wr.linkedDisbursementIds || [],
+      linkedTransmittalIds: wr.linkedTransmittalIds || [],
+      tasks: wr.tasks || []
+    };
+  },
+
+  normalizeTask(task) {
+    if (!task) return task;
+    return {
+      ...task,
+      // Preserve frontend-only extensions that the backend strips.
+      comments: task.comments || [],
+      taskDocuments: task.taskDocuments || [],
+      coAssignees: task.coAssignees || [],
+      priority: task.priority || 'Normal',
+      assignedTo: task.assignedTo || task.assigneeId || null,
+      checklist: (task.checklist || []).map(item => ({
+        id: item.id || generateId('chk'),
+        text: item.text || '',
+        category: item.category || 'subtask',
+        completed: item.completed ?? false,
+        assigneeId: item.assigneeId || null,
+        assigneeName: item.assigneeName || null,
+        dependsOn: item.dependsOn || null,
+        timeLogs: item.timeLogs || []
+      }))
+    };
+  },
+
+  async ensure() {
+    if (this._workRequests && this._tasks) return;
+    if (this._loadingPromise) return this._loadingPromise;
+    this._loadingPromise = this._load().finally(() => { this._loadingPromise = null; });
+    return this._loadingPromise;
+  },
+
+  async _load() {
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+    const res = await window.apiClient.workRequests.list({});
+    const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
+    // Backend does not return tasks inline; fetch per work request.
+    const tasks = [];
+    await Promise.all(wrs.map(async wr => {
+      try {
+        const tRes = await window.apiClient.workRequests.listTasks(wr.id);
+        wr.tasks = (tRes.data || []).map(t => this.normalizeTask(t));
+        tasks.push(...wr.tasks);
+      } catch (e) {
+        wr.tasks = [];
+      }
+    }));
+    this._workRequests = wrs;
+    this._tasks = tasks;
+  },
+
+  invalidate() {
+    this._workRequests = null;
+    this._tasks = null;
+  },
+
+  getAllWorkRequests() { return this._workRequests || []; },
+  getAllTasks() { return this._tasks || []; },
+  getWorkRequestById(id) { return (this._workRequests || []).find(r => r.id === id) || null; },
+  getTaskById(id) { return (this._tasks || []).find(t => t.id === id) || null; },
+  getWorkRequestsWhere(predicate) { return (this._workRequests || []).filter(predicate); },
+  getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
+
+  async createWorkRequest(record) {
+    const res = await window.apiClient.workRequests.create(record);
+    const created = this.normalizeWorkRequest(res.data);
+    created.tasks = [];
+    (this._workRequests || []).push(created);
+    return created;
+  },
+
+  async createTask(record) {
+    const wrId = record.workRequestId;
+    const payload = { ...record };
+    delete payload.id;
+    delete payload.workRequestId;
+    delete payload.createdAt;
+    delete payload.updatedAt;
+    const res = await window.apiClient.workRequests.createTask(wrId, payload);
+    const created = this.normalizeTask(res.data);
+    (this._tasks || []).push(created);
+    const wr = this.getWorkRequestById(wrId);
+    if (wr && wr.tasks) wr.tasks.push(created);
+    return created;
+  },
+
+  async updateWorkRequest(id, changes) {
+    const existing = this.getWorkRequestById(id);
+    const updated = { ...(existing || {}), ...changes, id };
+    if (existing) Object.assign(existing, changes);
+    try {
+      const res = await window.apiClient.workRequests.update(id, updated);
+      const normalized = this.normalizeWorkRequest(res.data);
+      // Preserve frontend-only fields the backend does not return/persist.
+      normalized.tasks = (existing && existing.tasks) || [];
+      normalized.archived = (existing && existing.archived) ?? normalized.archived ?? false;
+      normalized.boardOrder = (existing && existing.boardOrder) ?? normalized.boardOrder;
+      normalized.priority = (existing && existing.priority) || normalized.priority || 'Normal';
+      normalized.linkedInvoiceId = (existing && existing.linkedInvoiceId) || normalized.linkedInvoiceId || null;
+      normalized.linkedDisbursementIds = (existing && existing.linkedDisbursementIds) || normalized.linkedDisbursementIds || [];
+      normalized.linkedTransmittalIds = (existing && existing.linkedTransmittalIds) || normalized.linkedTransmittalIds || [];
+      if (existing) Object.assign(existing, normalized);
+    } catch (e) {
+      console.error('Failed to update work request', e);
+    }
+    return updated;
+  },
+
+  async updateTask(id, changes) {
+    const existing = this.getTaskById(id);
+    const wrId = existing ? existing.workRequestId : (changes && changes.workRequestId);
+    if (!wrId) {
+      console.error('Cannot update task without work request id', id, changes);
+      return existing;
+    }
+    const updated = { ...(existing || {}), ...changes, id };
+    if (existing) Object.assign(existing, changes);
+    try {
+      const payload = { ...updated };
+      delete payload.id;
+      delete payload.workRequestId;
+      delete payload.createdAt;
+      delete payload.updatedAt;
+      const res = await window.apiClient.workRequests.updateTask(wrId, id, payload);
+      const normalized = this.normalizeTask(res.data);
+      if (existing) {
+        // Preserve frontend-only extensions the backend strips.
+        normalized.comments = existing.comments || [];
+        normalized.taskDocuments = existing.taskDocuments || [];
+        normalized.coAssignees = existing.coAssignees || [];
+        normalized.priority = existing.priority || normalized.priority || 'Normal';
+        // Merge backend checklist with local dependency/timeLog/coAssignee extras by id.
+        const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+        normalized.checklist = (normalized.checklist || []).map(c => {
+          const ec = existingClById.get(c.id);
+          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+        });
+        Object.assign(existing, normalized);
+      }
+    } catch (e) {
+      console.error('Failed to update task', e);
+    }
+    return updated;
+  },
+
+  async deleteWorkRequest(id) {
+    const idx = (this._workRequests || []).findIndex(r => r.id === id);
+    if (idx >= 0) (this._workRequests || []).splice(idx, 1);
+    try {
+      await window.apiClient.workRequests.remove(id);
+    } catch (e) {
+      console.error('Failed to delete work request', e);
+    }
+  },
+
+  async deleteTask(id) {
+    const existing = this.getTaskById(id);
+    const wrId = existing ? existing.workRequestId : null;
+    const idx = (this._tasks || []).findIndex(t => t.id === id);
+    if (idx >= 0) (this._tasks || []).splice(idx, 1);
+    if (existing) {
+      const wr = this.getWorkRequestById(existing.workRequestId);
+      if (wr && wr.tasks) {
+        const tidx = wr.tasks.findIndex(t => t.id === id);
+        if (tidx >= 0) wr.tasks.splice(tidx, 1);
+      }
+    }
+    if (!wrId) return;
+    try {
+      await window.apiClient.workRequests.removeTask(wrId, id);
+    } catch (e) {
+      console.error('Failed to delete task', e);
+    }
+  }
+};
+
+
+/**
  * Build a map of tasks keyed by workRequestId for batch canViewWr checks.
  * Avoids N+1 DB lookups when filtering many WRs.
  * Returns { [workRequestId]: Task[] }
  */
 function buildTaskMap() {
-  const allTasks = DB.getAll('tasks') || [];
+  const allTasks = WorkflowData.getAllTasks() || [];
   const map = {};
   allTasks.forEach(t => {
     if (!map[t.workRequestId]) map[t.workRequestId] = [];
@@ -116,13 +319,13 @@ const Workflow = {
 
   getWorkRequestAssigneeNames(r, taskMap) {
     const names = new Set();
-    const assignedUser = r.assignedTo ? DB.getById('users', r.assignedTo) : null;
+    const assignedUser = r.assignedTo ? window.apiClient.userCache.getById(r.assignedTo) : null;
     if (assignedUser?.name) names.add(assignedUser.name);
     const resolvedTaskMap = taskMap || this._tempTaskMap || buildTaskMap();
     const tasks = resolvedTaskMap[r.id] || [];
     tasks.forEach(t => {
       if (t.assigneeId) {
-        const u = DB.getById('users', t.assigneeId);
+        const u = window.apiClient.userCache.getById(t.assigneeId);
         if (u?.name) names.add(u.name);
       }
       if (t.assigneeName) names.add(t.assigneeName);
@@ -170,7 +373,7 @@ const Workflow = {
     if (!trimmed) return { id: null, name: null };
     
     // Check system users first
-    const user = (DB.getAll('users') || []).find(u => u.name.toLowerCase() === trimmed.toLowerCase());
+    const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === trimmed.toLowerCase());
     if (user) return { id: user.id, name: user.name };
     
     // Check ground workers next
@@ -191,7 +394,7 @@ const Workflow = {
    */
   createGroundWorkerDropdown({ selectedGroundWorkerName, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
     const buildOptions = () => {
-      const systemUsers = DB.getAll('users') || [];
+      const systemUsers = (window.apiClient.userCache._users || []) || [];
       const groundWorkers = DB.getAll('groundWorkers') || [];
       const systemUserNames = systemUsers.map(u => u.name);
       const prioritySet = new Set([...(priorityNames || []), ...systemUserNames].filter(Boolean));
@@ -248,7 +451,7 @@ const Workflow = {
       let resolvedId = null;
 
       if (val) {
-        const u = (DB.getAll('users') || []).find(user => user.id === val);
+        const u = ((window.apiClient.userCache._users || []) || []).find(user => user.id === val);
         if (u) {
           name = u.name;
           resolvedId = u.id;
@@ -280,7 +483,7 @@ const Workflow = {
     // Set initial value
     if (selectedGroundWorkerName) {
       const nameLower = selectedGroundWorkerName.toLowerCase();
-      const user = (DB.getAll('users') || []).find(u => u.name.toLowerCase() === nameLower);
+      const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === nameLower);
       if (user) {
         dropdown.value = user.id;
       } else {
@@ -324,7 +527,7 @@ const Workflow = {
   // Phase Transition Logic (Robust Business Accounting Logic)
   // ============================================================
   getPhaseTransitionStatus(wrId) {
-    let wr = DB.getById('workRequests', wrId);
+    let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
       const pc = DB.getById('pendingChanges', wrId) || 
                  DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === wrId)[0];
@@ -334,7 +537,7 @@ const Workflow = {
       return null;
     }
     
-    const tasks = DB.getWhere('tasks', t => t.workRequestId === wrId);
+    const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
     const invoices = DB.getWhere('invoices', inv => inv.workRequestId === wrId || wr.linkedInvoiceId === inv.id);
     const disbursements = DB.getWhere('disbursements', d => d.linkedWorkRequestId === wrId || (wr.linkedDisbursementIds || []).includes(d.id));
     const transmittals = DB.getWhere('transmittals', t => t.workRequestId === wrId || (wr.linkedTransmittalIds || []).includes(t.id));
@@ -549,7 +752,7 @@ const Workflow = {
   },
 
   requestPhaseRouting(wrId, nextPhase) {
-    const wr = DB.getById('workRequests', wrId);
+    const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
     const existing = DB.getWhere('pendingChanges', pc =>
       pc.status === 'pending' && pc.table === 'workRequestPhaseRouting' && pc.parentRecordId === wrId
@@ -579,7 +782,7 @@ const Workflow = {
 
     if (Auth.can('workflow:approve')) {
       this.showConfirm('Confirm Routing', `Are you sure you want to transition this Work Request to ${status.nextPhase}?`, () => {
-        DB.update('workRequests', wrId, {
+        WorkflowData.updateWorkRequest(wrId, {
           status: status.nextPhase,
           updatedAt: new Date().toISOString()
         });
@@ -604,7 +807,7 @@ const Workflow = {
       this.showMessage('Permission Denied', 'Only managerial users can cancel work requests.', 'danger');
       return;
     }
-    const wr = DB.getById('workRequests', wrId);
+    const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
     if (wr.status === 'Completed' || wr.status === 'Cancelled') {
       this.showMessage('Error', 'Work Request is already in a terminal state.', 'danger');
@@ -615,17 +818,17 @@ const Workflow = {
       `Are you sure you want to cancel "${wr.title}"? All non-completed tasks will also be cancelled.`,
       () => {
         const now = new Date().toISOString();
-        const tasks = DB.getWhere('tasks', t => t.workRequestId === wrId);
+        const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
         let cancelledCount = 0;
 
         tasks.forEach(t => {
           if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-            DB.update('tasks', t.id, { status: 'Cancelled', updatedAt: now });
+            WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
             cancelledCount++;
           }
         });
 
-        DB.update('workRequests', wrId, {
+        WorkflowData.updateWorkRequest(wrId, {
           status: 'Cancelled',
           archived: true,
           updatedAt: now
@@ -642,24 +845,24 @@ const Workflow = {
   },
 
   archiveWorkRequest(wrId) {
-    const wr = DB.getById('workRequests', wrId);
+    const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || wr.status !== 'Completed') return;
-    DB.update('workRequests', wrId, { archived: true, updatedAt: new Date().toISOString() });
+    WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
     this.showMessage('Archived', 'Work Request has been archived.', 'success');
     App.handleRoute();
   },
 
   unarchiveWorkRequest(wrId) {
-    const wr = DB.getById('workRequests', wrId);
+    const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
-    DB.update('workRequests', wrId, { archived: false, updatedAt: new Date().toISOString() });
+    WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
     this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
     App.handleRoute();
   },
 
   bulkArchiveWorkRequests(ids) {
     const eligible = (ids || [])
-      .map(id => DB.getById('workRequests', id))
+      .map(id => WorkflowData.getWorkRequestById(id))
       .filter(wr => wr && wr.status === 'Completed' && !wr.archived);
 
     if (eligible.length === 0) {
@@ -671,7 +874,7 @@ const Workflow = {
       `Are you sure you want to archive ${eligible.length} completed Work Request(s)?`,
       () => {
         const now = new Date().toISOString();
-        eligible.forEach(wr => DB.update('workRequests', wr.id, { archived: true, updatedAt: now }));
+        eligible.forEach(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now }));
         this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
         App.handleRoute();
       },
@@ -686,7 +889,7 @@ const Workflow = {
     }
 
     const eligible = (ids || [])
-      .map(id => DB.getById('workRequests', id))
+      .map(id => WorkflowData.getWorkRequestById(id))
       .filter(wr => wr && wr.status !== 'Completed' && wr.status !== 'Cancelled');
 
     if (eligible.length === 0) {
@@ -701,14 +904,14 @@ const Workflow = {
         let cancelledTasks = 0;
 
         eligible.forEach(wr => {
-          const tasks = DB.getWhere('tasks', t => t.workRequestId === wr.id);
+          const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
           tasks.forEach(t => {
             if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-              DB.update('tasks', t.id, { status: 'Cancelled', updatedAt: now });
+              WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
               cancelledTasks++;
             }
           });
-          DB.update('workRequests', wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
+          WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
         });
 
         this.showMessage('Cancelled',
@@ -783,7 +986,7 @@ const Workflow = {
       });
     }
 
-    DB.update('tasks', task.id, { checklist: checklist, updatedAt: new Date().toISOString() });
+    WorkflowData.updateTask(task.id, { checklist: checklist, updatedAt: new Date().toISOString() });
   },
 
   ensureTaskChecklistNormalized(task, persist = false) {
@@ -816,7 +1019,7 @@ const Workflow = {
 
       task.checklist = normalized;
       if (persist && task.id && !task.id.startsWith('tmp')) {
-        DB.update('tasks', task.id, { checklist: normalized, updatedAt: new Date().toISOString() });
+        WorkflowData.updateTask(task.id, { checklist: normalized, updatedAt: new Date().toISOString() });
       }
     }
   },
@@ -1015,8 +1218,8 @@ const Workflow = {
    */
   openGenerateBillingModal(wr, preselectedTask) {
     const entity = Auth.activeEntity;
-    const client = DB.getById('clients', wr.clientId);
-    const tasks = DB.getWhere('tasks', t => t.workRequestId === wr.id);
+    const client = window.apiClient.clientCache.getById(wr.clientId);
+    const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-billing-form', class: 'form-stacked' });
@@ -1217,9 +1420,9 @@ const Workflow = {
 
       // Link invoice back to WR
       if (data.workRequestId) {
-        const linkedWr = DB.getById('workRequests', data.workRequestId);
+        const linkedWr = WorkflowData.getWorkRequestById(data.workRequestId);
         if (linkedWr) {
-          DB.update('workRequests', linkedWr.id, { linkedInvoiceId: record.id });
+          WorkflowData.updateWorkRequest(linkedWr.id, { linkedInvoiceId: record.id });
         }
       }
 
@@ -1242,8 +1445,8 @@ const Workflow = {
    */
   openGenerateDisbursementModal(wr, preselectedTask) {
     const entity = Auth.activeEntity;
-    const client = DB.getById('clients', wr.clientId);
-    const tasks = DB.getWhere('tasks', t => t.workRequestId === wr.id);
+    const client = window.apiClient.clientCache.getById(wr.clientId);
+    const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-disbursement-form', class: 'form-stacked' });
@@ -1333,7 +1536,7 @@ const Workflow = {
     const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
     invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
     DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
-      const invClient = DB.getById('clients', inv.clientId);
+      const invClient = window.apiClient.clientCache.getById(inv.clientId);
       invSel.appendChild(el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (invClient?.name || '—') }));
     });
     invGroup.appendChild(invSel);
@@ -1408,11 +1611,11 @@ const Workflow = {
 
       // Link disbursement back to WR
       if (record.linkedWorkRequestId) {
-        const linkedWr = DB.getById('workRequests', record.linkedWorkRequestId);
+        const linkedWr = WorkflowData.getWorkRequestById(record.linkedWorkRequestId);
         if (linkedWr) {
           const linkedIds = new Set(linkedWr.linkedDisbursementIds || []);
           linkedIds.add(record.id);
-          DB.update('workRequests', linkedWr.id, { linkedDisbursementIds: Array.from(linkedIds) });
+          WorkflowData.updateWorkRequest(linkedWr.id, { linkedDisbursementIds: Array.from(linkedIds) });
         }
       }
 
@@ -1435,7 +1638,7 @@ const Workflow = {
    */
   openGenerateTransmittalModal(wr, preselectedTask = null, prefilledRequestId = null) {
     const entity = Auth.activeEntity;
-    const client = DB.getById('clients', wr.clientId);
+    const client = window.apiClient.clientCache.getById(wr.clientId);
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-transmittal-form', class: 'form-stacked' });
@@ -1608,11 +1811,11 @@ const Workflow = {
 
       // Link transmittal back to WR
       if (record.workRequestId) {
-        const linkedWr = DB.getById('workRequests', record.workRequestId);
+        const linkedWr = WorkflowData.getWorkRequestById(record.workRequestId);
         if (linkedWr) {
           const linkedIds = new Set(linkedWr.linkedTransmittalIds || []);
           linkedIds.add(record.id);
-          DB.update('workRequests', linkedWr.id, { linkedTransmittalIds: Array.from(linkedIds) });
+          WorkflowData.updateWorkRequest(linkedWr.id, { linkedTransmittalIds: Array.from(linkedIds) });
         }
       }
 
@@ -1665,7 +1868,7 @@ const Workflow = {
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-md); min-width: 420px; max-width: 500px;' });
     const form = el('form', { class: 'form-stacked' });
 
-    const client = DB.getById('clients', wr.clientId);
+    const client = window.apiClient.clientCache.getById(wr.clientId);
     const contextRow = el('div', { style: 'display: grid; grid-template-columns: 1fr 1fr; gap: var(--spacing-sm); border-bottom: 1px solid var(--color-border); padding-bottom: var(--spacing-sm); margin-bottom: var(--spacing-xs);' }, [
       el('div', { class: 'form-group' }, [
         el('label', { text: 'Client' }),
@@ -1691,7 +1894,7 @@ const Workflow = {
 
     if (type === 'billing') {
       // 1. Link to Specific Task
-      const tasks = DB.getWhere('tasks', t => t.workRequestId === wr.id) || [];
+      const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id) || [];
       const taskGroup = el('div', { class: 'form-group' });
       taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
       const taskSel = el('select', { name: 'linkedTaskId', class: 'form-select' });
@@ -1945,7 +2148,8 @@ const Workflow = {
     });
   },
 
-  render() {
+  async render() {
+    await WorkflowData.ensure();
     const container = el('div', { class: 'page' });
     if (this.view === 'list') {
       container.classList.add('operations-list-page');
@@ -1953,7 +2157,7 @@ const Workflow = {
     this._tempTaskMap = buildTaskMap();
     
     if (this.view === 'detail' && this.detailWrId) {
-      let wr = DB.getById('workRequests', this.detailWrId);
+      let wr = WorkflowData.getWorkRequestById(this.detailWrId);
       if (!wr) {
         const pc = DB.getById('pendingChanges', this.detailWrId) || 
                    DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === this.detailWrId)[0];
@@ -1972,7 +2176,7 @@ const Workflow = {
         return el('div');
       }
       // Breadcrumb title bar consistent with the rest of the system
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const canEdit = Auth.can('workflow:edit') && !wr.isPendingApproval;
       const isArchived = wr && wr.status === 'Cancelled';
       const titleBar = el('div', { class: 'page-title-bar-v2' });
@@ -2054,7 +2258,7 @@ const Workflow = {
       // Full-page work-request form: breadcrumb with view switcher + save/cancel
       container.classList.add('operations-tab-page');
       const isNew = !this.editingId;
-      const wr = isNew ? null : DB.getById('workRequests', this.editingId);
+      const wr = isNew ? null : WorkflowData.getWorkRequestById(this.editingId);
       const fullPageRoute = isNew ? '#operations/form/new' : `#operations/form/${this.editingId}`;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
@@ -2122,7 +2326,7 @@ const Workflow = {
       }));
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       container.classList.add('operations-tab-page');
-      const wr = DB.getById('workRequests', this.addTaskWrId);
+      const wr = WorkflowData.getWorkRequestById(this.addTaskWrId);
       const fullPageRoute = '#operations/addTask/' + this.addTaskWrId;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
@@ -2192,7 +2396,7 @@ const Workflow = {
     if (this.view === 'detail' && this.prefilledTransmittalRequestId) {
       const reqId = this.prefilledTransmittalRequestId;
       this.prefilledTransmittalRequestId = null;
-      const wr = DB.getById('workRequests', this.detailWrId);
+      const wr = WorkflowData.getWorkRequestById(this.detailWrId);
       if (wr) {
         setTimeout(() => this.openGenerateTransmittalModal(wr, null, reqId), 100);
       }
@@ -2206,7 +2410,7 @@ const Workflow = {
   renderTabNav() {
     const entity = Auth.activeEntity;
     const taskMap = this._tempTaskMap || buildTaskMap();
-    const wrCount = DB.getWhere('workRequests', wr => {
+    const wrCount = WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
@@ -2220,7 +2424,7 @@ const Workflow = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveWrCount = DB.getWhere('workRequests', wr => {
+    const archiveWrCount = WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       if (!matchesEntity || !Auth.canViewWrWithTasks(wr, taskMap)) return false;
@@ -2234,7 +2438,7 @@ const Workflow = {
       if (!['workRequests', 'tasks'].includes(pc.table)) return false;
       const data = pc.proposedData || {};
       const wrId = pc.table === 'tasks' ? data.workRequestId : data.id;
-      const wr = wrId ? DB.getById('workRequests', wrId) : null;
+      const wr = wrId ? WorkflowData.getWorkRequestById(wrId) : null;
       const ent = (wr?.entity || data.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(ent) : ent === entity.toUpperCase());
       if (!matchesEntity) return false;
@@ -2327,13 +2531,13 @@ const Workflow = {
     }
 
     // Category value sources
-    const getScopedUsers = () => DB.getWhere('users', u => {
+    const getScopedUsers = () => (window.apiClient.userCache._users || []).filter(u => {
       const userEnts = (u.entities || []).map(e => e.toUpperCase());
       if (entity === 'ALL') return userEnts.some(e => Auth.user.entities.map(ae => ae.toUpperCase()).includes(e));
       return userEnts.includes(entity.toUpperCase());
     });
 
-    const getScopedClients = () => DB.getWhere('clients', c => {
+    const getScopedClients = () => (window.apiClient.clientCache._clients || []).filter(c => {
       const clientEnt = (c.entity || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt);
       return clientEnt === entity.toUpperCase();
@@ -2343,7 +2547,7 @@ const Workflow = {
       const options = new Map();
       options.set('__UNASSIGNED__', { value: '__UNASSIGNED__', label: 'Unassigned' });
       getScopedUsers().forEach(u => options.set(u.name, { value: u.name, label: u.name }));
-      (DB.getAll('tasks') || []).forEach(t => {
+      (WorkflowData.getAllTasks() || []).forEach(t => {
         const name = (t.assigneeName || '').trim();
         if (name) options.set(name, { value: name, label: name });
       });
@@ -2353,7 +2557,7 @@ const Workflow = {
     const getPriorityOptions = () => {
       const defaultPriorities = ['Urgent', 'Priority', 'Low Priority'];
       const set = new Set(defaultPriorities);
-      DB.getWhere('workRequests', r => {
+      WorkflowData.getWorkRequestsWhere(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity && !r.archived && r.status !== 'Cancelled';
       }).forEach(r => {
@@ -2453,7 +2657,7 @@ const Workflow = {
 
       if (searchQuery) {
         result = result.filter(r => {
-          const client = DB.getById('clients', r.clientId);
+          const client = window.apiClient.clientCache.getById(r.clientId);
           const assignees = Array.from(this.getWorkRequestAssigneeNames(r, resolvedTaskMap));
           const hay = [
             r.title || '',
@@ -2898,7 +3102,7 @@ const Workflow = {
         return wr;
       });
 
-      let wrs = DB.getWhere('workRequests', r => {
+      let wrs = WorkflowData.getWorkRequestsWhere(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity && !r.archived && r.status !== 'Cancelled';
       });
@@ -2932,7 +3136,7 @@ const Workflow = {
     const canApprove = Auth.can('workflow:approve');
     if (wrs.length === 0) {
       const entity = Auth.activeEntity;
-      const allWrs = DB.getWhere('workRequests', r => {
+      const allWrs = WorkflowData.getWorkRequestsWhere(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity && !r.archived && r.status !== 'Cancelled';
       });
@@ -3072,7 +3276,7 @@ const Workflow = {
           return cell;
         }
       },
-      { key: 'clientId', label: 'Client', render: (wr) => DB.getById('clients', wr.clientId)?.name || '—' },
+      { key: 'clientId', label: 'Client', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
       { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '120px' },
       {
         key: 'status',
@@ -3091,7 +3295,7 @@ const Workflow = {
       columns,
       selectable: true,
       bulkActions: (ids) => {
-        const rows = ids.map(id => DB.getById('workRequests', id)).filter(Boolean);
+        const rows = ids.map(id => WorkflowData.getWorkRequestById(id)).filter(Boolean);
         const canArchive = rows.filter(wr => wr.status === 'Completed' && !wr.archived).length;
         const canCancel = rows.filter(wr => wr.status !== 'Completed' && wr.status !== 'Cancelled').length;
         const actions = [];
@@ -3122,7 +3326,7 @@ const Workflow = {
   refreshBoard(container, wrs, groupBy = 'none', hasActiveFilters = false, toolbarContainer = null) {
     if (wrs.length === 0) {
       const entity = Auth.activeEntity;
-      const allWrs = DB.getWhere('workRequests', r => {
+      const allWrs = WorkflowData.getWorkRequestsWhere(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity && !r.archived && r.status !== 'Cancelled';
       });
@@ -3182,23 +3386,23 @@ const Workflow = {
     const seqMap = getChronologicalSequenceMap('workRequests');
 
     const renderBoardCard = (wr, phase) => {
-      const tasks = wr.isPendingApproval ? (wr.tasks || []) : DB.getWhere('tasks', t => t.workRequestId === wr.id);
+      const tasks = wr.isPendingApproval ? (wr.tasks || []) : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
       const completedTasks = tasks.filter(t => t.status === 'Completed').length;
       const totalTasks = tasks.length;
       const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
       const allComments = tasks.reduce((acc, t) => acc + (t.comments?.length || 0), 0);
 
       const assigneeIds = [...new Set(tasks.map(t => t.assigneeId || t.assignedTo).filter(Boolean))];
-      let assignees = assigneeIds.map(id => DB.getById('users', id)).filter(Boolean);
+      let assignees = assigneeIds.map(id => window.apiClient.userCache.getById(id)).filter(Boolean);
       if (wr.isPendingApproval && assignees.length === 0) {
         const names = [...new Set(tasks.map(t => t.assigneeName).filter(Boolean))];
         names.forEach(name => {
-          const u = DB.getWhere('users', usr => usr.name.toLowerCase() === name.toLowerCase())[0];
+          const u = (window.apiClient.userCache._users || []).filter(usr => usr.name.toLowerCase() === name.toLowerCase())[0];
           if (u) assignees.push(u);
         });
       }
 
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const priorityConfig = {
         'Urgent': { label: 'Urgent', cls: 'card-v2-priority-urgent' },
         'Priority': { label: 'Priority', cls: 'card-v2-priority-priority' },
@@ -3303,8 +3507,8 @@ const Workflow = {
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
           onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, () => {
-            DB.getWhere('tasks', t => t.workRequestId === wr.id).forEach(t => DB.delete('tasks', t.id));
-            DB.delete('workRequests', wr.id);
+            WorkflowData.getTasksWhere(t => t.workRequestId === wr.id).forEach(t => WorkflowData.deleteTask(t.id));
+            WorkflowData.deleteWorkRequest(wr.id);
             App.handleRoute();
           }, 'danger')
         });
@@ -3327,7 +3531,7 @@ const Workflow = {
           changes.status = targetStatus;
           changes.updatedAt = new Date().toISOString();
         }
-        DB.update('workRequests', wr.id, changes);
+        WorkflowData.updateWorkRequest(wr.id, changes);
         App.handleRoute();
       };
 
@@ -3384,7 +3588,7 @@ const Workflow = {
           const newOrder = (idx + 1) * 1000;
           if (wr.boardOrder !== newOrder) {
             wr.boardOrder = newOrder;
-            DB.update('workRequests', wr.id, { boardOrder: newOrder });
+            WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder });
           }
         });
         sortedWrs.push(...phaseWrs);
@@ -3423,7 +3627,7 @@ const Workflow = {
           return Array.from(names).sort().join(', ');
         }
         if (groupBy === 'client') {
-          const client = DB.getById('clients', wr.clientId);
+          const client = window.apiClient.clientCache.getById(wr.clientId);
           return client?.name || 'No Client';
         }
         if (groupBy === 'priority') {
@@ -3470,7 +3674,7 @@ const Workflow = {
             const newOrder = (idx + 1) * 1000;
             if (wr.boardOrder !== newOrder) {
               wr.boardOrder = newOrder;
-              DB.update('workRequests', wr.id, { boardOrder: newOrder });
+              WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder });
             }
           });
         });
@@ -3528,7 +3732,7 @@ const Workflow = {
             avatar.appendChild(emptyAv);
           } else {
             assigneeNames.slice(0, 5).forEach((assigneeName) => {
-              const user = DB.getWhere('users', u => u.name === assigneeName)[0];
+              const user = (window.apiClient.userCache._users || []).filter(u => u.name === assigneeName)[0];
               const av = el('div', { class: 'avatar-xs', title: assigneeName });
               av.style.backgroundColor = groupColor(assigneeName);
               av.style.color = '#fff';
@@ -3551,7 +3755,7 @@ const Workflow = {
         } else {
           avatar = el('div', { class: 'board-group-avatar' });
           if (groupBy === 'client') {
-            const client = DB.getWhere('clients', c => c.name === name)[0];
+            const client = (window.apiClient.clientCache._clients || []).filter(c => c.name === name)[0];
             displayName = client?.name || name;
           }
           avatar.textContent = getInitials(displayName);
@@ -3645,7 +3849,7 @@ const Workflow = {
     const canApprove = Auth.can('workflow:approve');
     if (wrs.length === 0) {
       const entity = Auth.activeEntity;
-      const allWrs = DB.getWhere('workRequests', r => {
+      const allWrs = WorkflowData.getWorkRequestsWhere(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity && !r.archived && r.status !== 'Cancelled';
       });
@@ -3685,7 +3889,7 @@ const Workflow = {
     }
     const list = el('div', { class: 'list-view operations-list-view' });
     wrs.forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const row = el('div', { class: 'list-item' });
       const textCol = el('div');
       
@@ -3761,7 +3965,7 @@ const Workflow = {
   },
 
   showTaskSidePane(taskId, triggerElement) {
-    let task = DB.getById('tasks', taskId);
+    let task = WorkflowData.getTaskById(taskId);
     let pendingWr = null;
     if (!task) {
       const pendingChanges = DB.getWhere('pendingChanges', pc => pc.status === 'pending' && pc.table === 'workRequests');
@@ -3782,8 +3986,8 @@ const Workflow = {
     if (!task) return;
     this.ensureTaskChecklistNormalized(task);
 
-    const assignedUser = task.assignedTo || task.assigneeId ? DB.getById('users', task.assignedTo || task.assigneeId) : null;
-    const wr = pendingWr || (task.workRequestId ? DB.getById('workRequests', task.workRequestId) : null);
+    const assignedUser = task.assignedTo || task.assigneeId ? window.apiClient.userCache.getById(task.assignedTo || task.assigneeId) : null;
+    const wr = pendingWr || (task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null);
 
     const paneContent = el('div');
 
@@ -3921,7 +4125,7 @@ const Workflow = {
         placeholder: 'Assign primary employee...',
         className: 'side-pane-primary-assignee-dropdown',
         onChange: ({ assigneeId, assigneeName }) => {
-          DB.update('tasks', task.id, {
+          WorkflowData.updateTask(task.id, {
             assigneeId: assigneeId || null,
             assigneeName: assigneeName || null,
             status: assigneeName ? 'Assigned' : 'Draft',
@@ -4025,7 +4229,7 @@ const Workflow = {
                 onChange: ({ assigneeId, assigneeName }) => {
                   item.assigneeName = assigneeName || null;
                   item.assigneeId = assigneeId || null;
-                  DB.update('tasks', task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                   this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
                 }
@@ -4044,7 +4248,7 @@ const Workflow = {
                 !isArchived,
                 true,
                 () => {
-                  DB.update('tasks', task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                   this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
                 }
@@ -4087,7 +4291,7 @@ const Workflow = {
                 e.stopPropagation();
                 if (!item.timeLogs || item.timeLogs.length === 0) {
                   normalizedChecklist.splice(idx, 1);
-                  DB.update('tasks', task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                   this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
                 } else {
@@ -4104,20 +4308,20 @@ const Workflow = {
                   
                   reassignBtn.addEventListener('click', () => {
                     overlay.remove();
-                    const tObj = DB.getById('tasks', task.id) || task;
+                    const tObj = WorkflowData.getTaskById(task.id) || task;
                     const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
                     tObj.timeLogs = [...(tObj.timeLogs || []), ...logsToMove];
                     tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
-                    DB.update('tasks', tObj.id, { checklist: tObj.checklist, timeLogs: tObj.timeLogs, updatedAt: new Date().toISOString() });
+                    WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, timeLogs: tObj.timeLogs, updatedAt: new Date().toISOString() });
                     this.showTaskSidePane(taskId, triggerElement);
                     App.handleRoute();
                   });
                   
                   deleteAllBtn.addEventListener('click', () => {
                     overlay.remove();
-                    const tObj = DB.getById('tasks', task.id) || task;
+                    const tObj = WorkflowData.getTaskById(task.id) || task;
                     tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
-                    DB.update('tasks', tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
+                    WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
                     this.showTaskSidePane(taskId, triggerElement);
                     App.handleRoute();
                   });
@@ -4238,7 +4442,7 @@ const Workflow = {
             if (!val) return;
             const prereqId = selectedPrereqId || null;
             normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
-            DB.update('tasks', task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+            WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
             this.showTaskSidePane(taskId, triggerElement);
             App.handleRoute();
           });
@@ -4339,7 +4543,7 @@ const Workflow = {
                 e.stopPropagation();
                 this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, () => {
                   const updatedTaskDocs = task.taskDocuments.filter((_, i) => i !== dIdx);
-                  DB.update('tasks', task.id, { taskDocuments: updatedTaskDocs });
+                  WorkflowData.updateTask(task.id, { taskDocuments: updatedTaskDocs });
                   const dmsMatch = DB.getWhere('documents', doc => doc.fileName === fName && doc.workRequestId === wr.id)[0];
                   if (dmsMatch) DB.delete('documents', dmsMatch.id);
                   this.showTaskSidePane(taskId, triggerElement);
@@ -4424,7 +4628,7 @@ const Workflow = {
           const [y, m, d] = l.date.split('-').map(Number);
           const logDate = new Date(y, m - 1, d);
           const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-          const workerLabel = l.workerName || (DB.getById('users', l.userId)?.name || l.userId || 'Unknown');
+          const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
           const noteText = l.note ? ` — ${l.note}` : '';
           const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
 
@@ -4489,7 +4693,7 @@ const Workflow = {
         depList.appendChild(renderEmptyState('No dependencies'));
       } else {
         taskPreds.forEach(pid => {
-          const pTask = DB.getById('tasks', pid);
+          const pTask = WorkflowData.getTaskById(pid);
           const pStatus = pTask ? pTask.status : 'Unknown';
           const pStatusColors = {
             'Completed': 'var(--color-success)',
@@ -4771,7 +4975,7 @@ const Workflow = {
     }
 
     const entity = Auth.activeEntity;
-    const wr = this.editingId ? DB.getById('workRequests', this.editingId) : null;
+    const wr = this.editingId ? WorkflowData.getWorkRequestById(this.editingId) : null;
     if (this.editingId && (!wr || !Auth.canViewWr(wr))) {
       this.view = 'list';
       App.handleRoute();
@@ -4803,7 +5007,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client' }));
     const clientSel = el('select', { name: 'clientId', class: 'notion-prop-select', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (wr && wr.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
@@ -4840,7 +5044,7 @@ const Workflow = {
     assigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Assignee' }));
     const assigneeSel = el('select', { name: 'assignedTo', class: 'notion-prop-select', required: true });
     assigneeSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    DB.getWhere('users', u => u.entities.includes(entity) || u.entities.includes(entity.toLowerCase())).forEach(u => {
+    (window.apiClient.userCache._users || []).filter(u => u.entities.includes(entity) || u.entities.includes(entity.toLowerCase())).forEach(u => {
       const opt = el('option', { value: u.id, text: u.name });
       if (wr && wr.assignedTo === u.id) opt.selected = true;
       assigneeSel.appendChild(opt);
@@ -5007,7 +5211,7 @@ const Workflow = {
 
     // Pre-populate existing tasks if editing
     if (wr) {
-      const existingTasks = wr.tasks || DB.getWhere('tasks', t => t.workRequestId === wr.id);
+      const existingTasks = wr.tasks || WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
       existingTasks.forEach(t => this.addTaskRow(tasksList, t));
     } else {
       this.addTaskRow(tasksList);
@@ -5015,7 +5219,7 @@ const Workflow = {
     }
     this.updatePredecessorOptions(tasksList);
 
-    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form); });
+    form.addEventListener('submit', async e => { e.preventDefault(); await this.submitForm(form); });
 
     container.appendChild(form);
     return container;
@@ -5099,7 +5303,7 @@ const Workflow = {
         if (name === primaryName) { coAssigneeDropdown.value = ''; return; }
         if (!coAssignees.includes(name)) {
           coAssignees.push(name);
-          const isUser = (DB.getAll('users') || []).some(u => u.name.toLowerCase() === name.toLowerCase());
+          const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
             const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
             if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
@@ -5313,7 +5517,7 @@ const Workflow = {
     }
   },
 
-  submitForm(form) {
+  async submitForm(form) {
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
     // Temporarily enable disabled fields so FormData picks them up
     const disabledFields = form.querySelectorAll('[disabled]');
@@ -5332,16 +5536,16 @@ const Workflow = {
       dueDate: data.dueDate || '',
       entity: entity,
       assignedTo: data.assignedTo || null,
-      status: this.editingId ? (DB.getById('workRequests', this.editingId)?.status || 'Draft') : 'Draft',
+      status: this.editingId ? (WorkflowData.getWorkRequestById(this.editingId)?.status || 'Draft') : 'Draft',
       updatedAt: now
     };
 
     if (!this.editingId) {
       record.requestedBy = Auth.user.id;
-      const maxOrder = Math.max(0, ...DB.getAll('workRequests').map(r => r.boardOrder || 0));
+      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
       record.boardOrder = maxOrder + 1000;
     } else {
-      const existingWr = DB.getById('workRequests', this.editingId);
+      const existingWr = WorkflowData.getWorkRequestById(this.editingId);
       record.boardOrder = existingWr?.boardOrder ?? 0;
     }
 
@@ -5384,7 +5588,7 @@ const Workflow = {
 
     const existingTasksById = {};
     if (this.editingId) {
-      DB.getWhere('tasks', t => t.workRequestId === this.editingId).forEach(t => {
+      WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId).forEach(t => {
         existingTasksById[t.id] = t;
       });
     }
@@ -5431,7 +5635,7 @@ const Workflow = {
       record.linkedTransmittalIds = [];
     } else {
       record.id = this.editingId;
-      const existingWr = DB.getById('workRequests', this.editingId);
+      const existingWr = WorkflowData.getWorkRequestById(this.editingId);
       record.requestedBy = existingWr?.requestedBy || null;
       record.createdAt = existingWr?.createdAt || now;
       record.linkedInvoiceId = existingWr?.linkedInvoiceId || null;
@@ -5442,20 +5646,28 @@ const Workflow = {
     record.tasks = taskRecords;
     const result = PendingChanges.submit('workRequests', record, isNew);
 
-    // Tasks are always saved directly (they're child records, not structural mutations per se)
+    // Sync to the backend when the request is approved (admin/managerial save).
+    let apiWrId = this.editingId;
     if (result.approved) {
       if (isNew) {
-        taskRecords.forEach(t => {
-          t.workRequestId = record.id;
-          DB.insert('tasks', t);
-        });
+        const createdWr = await WorkflowData.createWorkRequest(record);
+        apiWrId = createdWr ? createdWr.id : record.id;
       } else {
-        const existing = DB.getWhere('tasks', t => t.workRequestId === this.editingId);
-        existing.forEach(t => DB.delete('tasks', t.id));
-        taskRecords.forEach(t => {
+        await WorkflowData.updateWorkRequest(this.editingId, record);
+      }
+
+      if (isNew) {
+        for (const t of taskRecords) {
+          t.workRequestId = apiWrId;
+          await WorkflowData.createTask(t);
+        }
+      } else {
+        const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
+        for (const t of existing) await WorkflowData.deleteTask(t.id);
+        for (const t of taskRecords) {
           t.workRequestId = this.editingId;
-          DB.insert('tasks', t);
-        });
+          await WorkflowData.createTask(t);
+        }
       }
     } else {
       // Staged tasks are stored inside record.tasks in the pending changes proposedData.
@@ -5525,7 +5737,7 @@ const Workflow = {
           const remove = el('span', { class: 'co-assignee-chip-remove', text: '×' });
           remove.addEventListener('click', () => {
             const updated = coAssignees.filter((_, i) => i !== idx);
-            DB.update('tasks', t.id, { coAssignees: updated, updatedAt: new Date().toISOString() });
+            WorkflowData.updateTask(t.id, { coAssignees: updated, updatedAt: new Date().toISOString() });
             if (onChange) onChange();
             App.handleRoute();
           });
@@ -5550,7 +5762,7 @@ const Workflow = {
           const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
           if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
           const updated = [...coAssignees, name];
-          DB.update('tasks', t.id, { coAssignees: updated, updatedAt: new Date().toISOString() });
+          WorkflowData.updateTask(t.id, { coAssignees: updated, updatedAt: new Date().toISOString() });
           this.clearDropdown(addDropdown);
           if (onChange) onChange();
           App.handleRoute();
@@ -5619,7 +5831,7 @@ const Workflow = {
       { bg: '#e5e5e5', fg: '#6b6b6b' }
     ];
     displayNames.forEach((name, idx) => {
-      const user = DB.getWhere('users', u => u.name === name)[0];
+      const user = (window.apiClient.userCache._users || []).filter(u => u.name === name)[0];
       const row = el('div', { class: 'assignee-avatar-row' });
       const av = el('div', { class: 'avatar-xs', title: name });
       const theme = avatarColors[idx % avatarColors.length];
@@ -5646,7 +5858,7 @@ const Workflow = {
   },
 
   renderDetail() {
-    let wr = DB.getById('workRequests', this.detailWrId);
+    let wr = WorkflowData.getWorkRequestById(this.detailWrId);
     if (!wr) {
       const pc = DB.getById('pendingChanges', this.detailWrId) || 
                  DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === this.detailWrId)[0];
@@ -5668,8 +5880,8 @@ const Workflow = {
       this.lastRenderedWrId = this.detailWrId;
       this.expandedTaskIds.clear();
     }
-    const client = DB.getById('clients', wr.clientId);
-    const tasks = wr.isPendingApproval ? (wr.tasks || []) : DB.getWhere('tasks', t => t.workRequestId === wr.id);
+    const client = window.apiClient.clientCache.getById(wr.clientId);
+    const tasks = wr.isPendingApproval ? (wr.tasks || []) : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
     tasks.forEach(t => this.ensureTaskChecklistNormalized(t));
     const canApprove = Auth.can('workflow:approve');
     const isDraft = wr.status === 'Draft';
@@ -5920,7 +6132,7 @@ const Workflow = {
     // Employee Filter Options
     const empOptions = [{ value: '', text: 'All Employees' }];
     const uniqueEmpNames = new Set();
-    (DB.getAll('users') || []).forEach(u => {
+    ((window.apiClient.userCache._users || []) || []).forEach(u => {
       if (u.name) uniqueEmpNames.add(u.name.trim());
     });
     (DB.getAll('groundWorkers') || []).forEach(gw => {
@@ -5963,7 +6175,7 @@ const Workflow = {
       }).length,
       'Blocked': sortedTasks.filter(t => {
         const preds = t.predecessors || [];
-        if (preds.some(pid => { const pt = DB.getById('tasks', pid); return pt && pt.status !== 'Completed'; })) return true;
+        if (preds.some(pid => { const pt = WorkflowData.getTaskById(pid); return pt && pt.status !== 'Completed'; })) return true;
         return (t.checklist || []).some(item => isChecklistBlocked(item, t.checklist));
       }).length,
       'Incomplete checklist': sortedTasks.filter(t => {
@@ -6083,7 +6295,7 @@ const Workflow = {
 
       pendingTaskChanges.forEach(pc => {
         const task = pc.proposedData;
-        const submitter = DB.getById('users', pc.submittedBy);
+        const submitter = window.apiClient.userCache.getById(pc.submittedBy);
         const row = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #fff; border: 1px solid #fde68a; border-radius: 12px; margin-bottom: 8px;' });
 
         const infoCol = el('div');
@@ -6216,7 +6428,7 @@ const Workflow = {
         // Bulk assign dropdown is single-select, so only one name can be chosen.
         // Treat that single name as the primary assignee and clear any co-assignees.
         selected.forEach(t => {
-          DB.update('tasks', t.id, {
+          WorkflowData.updateTask(t.id, {
             assigneeId: res.id,
             assigneeName: res.name,
             coAssignees: [],
@@ -6308,7 +6520,7 @@ const Workflow = {
           const [eh, em] = end.split(':').map(Number);
           const startMin = sh * 60 + sm;
           const endMin = eh * 60 + em;
-          const workerName = workerInput.value.trim() || (DB.getById('users', Auth.user.id)?.name || '');
+          const workerName = workerInput.value.trim() || (window.apiClient.userCache.getById(Auth.user.id)?.name || '');
 
           let entries = [];
           if (endMin > startMin) {
@@ -6347,7 +6559,7 @@ const Workflow = {
               hours: entry.hours,
               checklistItemId: null
             }));
-            DB.update('tasks', t.id, {
+            WorkflowData.updateTask(t.id, {
               timeLogs: [...taskLogs, ...newEntries],
               updatedAt: new Date().toISOString()
             });
@@ -6431,7 +6643,7 @@ const Workflow = {
           'Blocked': () => {
             const preds = t.predecessors || [];
             if (preds.some(pid => {
-              const pt = DB.getById('tasks', pid);
+              const pt = WorkflowData.getTaskById(pid);
               return pt && pt.status !== 'Completed';
             })) return true;
             return (t.checklist || []).some(item => isChecklistBlocked(item, t.checklist));
@@ -6533,7 +6745,7 @@ const Workflow = {
             const newOrder = (idx + 1) * 1000;
             if (t.boardOrder !== newOrder) {
               t.boardOrder = newOrder;
-              DB.update('tasks', t.id, { boardOrder: newOrder });
+              WorkflowData.updateTask(t.id, { boardOrder: newOrder });
             }
           });
           boardTasks.push(...colTasks);
@@ -6552,7 +6764,7 @@ const Workflow = {
           })),
           renderCard(t) {
             const comp = getTaskChecklistCompletion(t);
-            const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? DB.getById('users', t.assigneeId || t.assignedTo)?.name : null);
+            const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? window.apiClient.userCache.getById(t.assigneeId || t.assignedTo)?.name : null);
             const priorityConfig = {
               'Urgent': { label: 'Urgent', cls: 'card-v2-priority-urgent' },
               'Priority': { label: 'Priority', cls: 'card-v2-priority-priority' },
@@ -6612,7 +6824,7 @@ const Workflow = {
             orderField: 'boardOrder',
             onDrop({ item, targetStatus, newOrder, fromStatus }) {
               if (fromStatus === targetStatus) {
-                DB.update('tasks', item.id, { boardOrder: newOrder });
+                WorkflowData.updateTask(item.id, { boardOrder: newOrder });
                 App.handleRoute();
                 return;
               }
@@ -6622,7 +6834,7 @@ const Workflow = {
                 self.showMessage('Status Change Blocked', result.error, 'warning');
                 return;
               }
-              DB.update('tasks', item.id, { boardOrder: newOrder });
+              WorkflowData.updateTask(item.id, { boardOrder: newOrder });
 
               if (result.cascaded?.length) {
                 self.showMessage(
@@ -6660,7 +6872,7 @@ const Workflow = {
           const textCol = el('div');
           textCol.appendChild(el('div', { class: 'list-item-title', text: t.title }));
           
-          const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? DB.getById('users', t.assigneeId || t.assignedTo)?.name : null);
+          const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? window.apiClient.userCache.getById(t.assigneeId || t.assignedTo)?.name : null);
           const metaText = (assigneeName ? `${assigneeName} | ` : '') + (t.dueDate ? `Due: ${formatDate(t.dueDate)}` : 'No due date');
           textCol.appendChild(el('div', { class: 'list-item-meta', text: metaText }));
           
@@ -6707,7 +6919,7 @@ const Workflow = {
         filteredTasks.forEach(t => {
           const assignee = t.assigneeName
             ? { name: t.assigneeName }
-            : DB.getById('users', t.assigneeId || t.assignedTo);
+            : window.apiClient.userCache.getById(t.assigneeId || t.assignedTo);
           const name = assignee?.name || 'Unassigned';
           groups[name] = groups[name] || [];
           groups[name].push(t);
@@ -6743,7 +6955,7 @@ const Workflow = {
         }
         const assignee = t.assigneeName
           ? { name: t.assigneeName }
-          : DB.getById('users', t.assigneeId || t.assignedTo);
+          : window.apiClient.userCache.getById(t.assigneeId || t.assignedTo);
         const hours = getTaskTotalHours(t);
         totalHours += hours;
 
@@ -6793,7 +7005,7 @@ const Workflow = {
         const preds = t.predecessors || [];
         if (preds.length > 0) {
           const predTitles = preds.map(pid => {
-            const pt = DB.getById('tasks', pid);
+            const pt = WorkflowData.getTaskById(pid);
             return pt ? pt.title : null;
           }).filter(Boolean);
           if (predTitles.length > 0) {
@@ -6820,7 +7032,7 @@ const Workflow = {
             placeholder: 'Employee...',
             className: 'inline-ground-worker-autocomplete',
             onChange: ({ assigneeId, assigneeName }) => {
-              DB.update('tasks', t.id, {
+              WorkflowData.updateTask(t.id, {
                 assigneeId: assigneeId || null,
                 assigneeName: assigneeName || null,
                 status: assigneeName ? 'Assigned' : 'Draft',
@@ -7148,7 +7360,7 @@ const Workflow = {
           menuList.classList.remove('open');
           menuList.classList.add('hidden');
           this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', () => {
-            DB.delete('tasks', t.id);
+            WorkflowData.deleteTask(t.id);
             App.handleRoute();
           }, 'danger');
         });
@@ -7225,7 +7437,7 @@ const Workflow = {
                   onChange: ({ assigneeId, assigneeName }) => {
                     item.assigneeName = assigneeName || null;
                     item.assigneeId = assigneeId || null;
-                    DB.update('tasks', t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                     renderChecklist();
                     App.handleRoute();
                   }
@@ -7239,7 +7451,7 @@ const Workflow = {
                   !isArchived,
                   true,
                   () => {
-                    DB.update('tasks', t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                     renderChecklist();
                     App.handleRoute();
                   }
@@ -7283,7 +7495,7 @@ const Workflow = {
                   e.stopPropagation();
                   if (!item.timeLogs || item.timeLogs.length === 0) {
                     normalizedChecklist.splice(idx, 1);
-                    DB.update('tasks', t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                     renderChecklist();
                     populatePrereqSelect();
                   } else {
@@ -7298,18 +7510,18 @@ const Workflow = {
                     const overlay = this.showModal('Delete Checklist Item', content, null);
                     reassignBtn.addEventListener('click', () => {
                       overlay.remove();
-                      const task = DB.getById('tasks', t.id) || t;
+                      const task = WorkflowData.getTaskById(t.id) || t;
                       const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
                       task.timeLogs = [...(task.timeLogs || []), ...logsToMove];
                       task.checklist = (task.checklist || []).filter(c => c.id !== item.id);
-                      DB.update('tasks', task.id, { checklist: task.checklist, timeLogs: task.timeLogs, updatedAt: new Date().toISOString() });
+                      WorkflowData.updateTask(task.id, { checklist: task.checklist, timeLogs: task.timeLogs, updatedAt: new Date().toISOString() });
                       App.handleRoute();
                     });
                     deleteAllBtn.addEventListener('click', () => {
                       overlay.remove();
-                      const task = DB.getById('tasks', t.id) || t;
+                      const task = WorkflowData.getTaskById(t.id) || t;
                       task.checklist = (task.checklist || []).filter(c => c.id !== item.id);
-                      DB.update('tasks', task.id, { checklist: task.checklist, updatedAt: new Date().toISOString() });
+                      WorkflowData.updateTask(task.id, { checklist: task.checklist, updatedAt: new Date().toISOString() });
                       App.handleRoute();
                     });
                   }
@@ -7430,7 +7642,7 @@ const Workflow = {
               if (!val) return;
               const prereqId = selectedPrereqId || null;
               normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
-              DB.update('tasks', t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+              WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
               newItemInput.value = '';
               selectedPrereqId = null;
               predBtn.textContent = '— Dependency —';
@@ -7574,7 +7786,7 @@ const Workflow = {
                   e.stopPropagation();
                   this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, () => {
                     const updatedTaskDocs = t.taskDocuments.filter((_, i) => i !== dIdx);
-                    DB.update('tasks', t.id, { taskDocuments: updatedTaskDocs });
+                    WorkflowData.updateTask(t.id, { taskDocuments: updatedTaskDocs });
                     const dmsMatch = DB.getWhere('documents', doc => doc.fileName === fName && doc.workRequestId === wr.id)[0];
                     if (dmsMatch) DB.delete('documents', dmsMatch.id);
                     App.handleRoute();
@@ -7598,7 +7810,7 @@ const Workflow = {
               } else {
                 d.comments.forEach((c, cIdx) => {
                   const commentRow = el('div', { style: 'background:var(--surface); padding:8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); position:relative;' });
-                  const cUser = DB.getById('users', c.userId);
+                  const cUser = window.apiClient.userCache.getById(c.userId);
                   const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.75rem;' });
                   header.appendChild(el('span', { text: cUser?.name || 'Unknown', style: 'font-weight:600; color:var(--accent);' }));
                   header.appendChild(el('span', { text: formatDate(c.date), style: 'color:var(--muted);' }));
@@ -7629,7 +7841,7 @@ const Workflow = {
                           if (newText) {
                             c.text = newText;
                             c.date = new Date().toISOString();
-                            DB.update('tasks', t.id, { taskDocuments: t.taskDocuments });
+                            WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
                             renderComments();
                           }
                         });
@@ -7645,7 +7857,7 @@ const Workflow = {
                         e.stopPropagation();
                         this.showConfirm('Delete Comment', 'Are you sure you want to delete this comment?', () => {
                           d.comments.splice(cIdx, 1);
-                          DB.update('tasks', t.id, { taskDocuments: t.taskDocuments });
+                          WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
                           renderComments();
                           commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
                         }, 'danger');
@@ -7676,7 +7888,7 @@ const Workflow = {
                     if (text) {
                       if (!d.comments) d.comments = [];
                       d.comments.push({ userId: Auth.user.id, date: new Date().toISOString(), text });
-                      DB.update('tasks', t.id, { taskDocuments: t.taskDocuments });
+                      WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
                       addInput.value = '';
                       renderComments();
                       commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
@@ -7716,7 +7928,7 @@ const Workflow = {
             const [y, m, d] = l.date.split('-').map(Number);
             const logDate = new Date(y, m - 1, d);
             const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-            const workerLabel = l.workerName || (DB.getById('users', l.userId)?.name || l.userId || 'Unknown');
+            const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
             const noteText = l.note ? ` — ${l.note}` : '';
             return el('div', { class: 'history-item' }, [
               el('div', {}, [
@@ -7752,7 +7964,7 @@ const Workflow = {
           depContent.appendChild(renderEmptyState('No dependencies'));
         } else {
           taskPreds.forEach(pid => {
-            const pTask = DB.getById('tasks', pid);
+            const pTask = WorkflowData.getTaskById(pid);
             const depItem = el('div', { class: 'dep-item' });
             depItem.appendChild(el('span', { text: pTask ? pTask.title : 'Unknown' }));
             depItem.appendChild(el('span', { class: 'dep-arrow', text: '→' }));
@@ -7868,7 +8080,7 @@ const Workflow = {
         
         let scopeText = ' (Entire WR)';
         if (inv.linkedTaskId) {
-          const task = DB.getById('tasks', inv.linkedTaskId);
+          const task = WorkflowData.getTaskById(inv.linkedTaskId);
           if (task) scopeText = ` (Task: ${task.title})`;
         }
         left.appendChild(el('span', { text: scopeText, style: 'color: var(--muted); font-size: var(--text-xs); font-style: italic;' }));
@@ -7920,7 +8132,7 @@ const Workflow = {
         
         let scopeText = ' (Entire WR)';
         if (d.linkedTaskId) {
-          const task = DB.getById('tasks', d.linkedTaskId);
+          const task = WorkflowData.getTaskById(d.linkedTaskId);
           if (task) scopeText = ` (Task: ${task.title})`;
         }
         left.appendChild(el('span', { text: scopeText, style: 'color: var(--muted); font-size: var(--text-xs); font-style: italic;' }));
@@ -7981,9 +8193,9 @@ const Workflow = {
   },
 
   showLinkFinancialModal(taskId) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = DB.getById('workRequests', task.workRequestId);
+    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
 
     const form = el('form', { class: 'form-stacked' });
     
@@ -8041,14 +8253,14 @@ const Workflow = {
       if (typeSel.value === 'invoice') {
         DB.update('invoices', recId, { linkedTaskId: taskId, workRequestId: task.workRequestId });
         if (wr && !wr.linkedInvoiceId) {
-          DB.update('workRequests', wr.id, { linkedInvoiceId: recId });
+          WorkflowData.updateWorkRequest(wr.id, { linkedInvoiceId: recId });
         }
       } else if (typeSel.value === 'disbursement') {
         DB.update('disbursements', recId, { linkedTaskId: taskId, linkedWorkRequestId: task.workRequestId });
         if (wr) {
           const linkedIds = new Set(wr.linkedDisbursementIds || []);
           linkedIds.add(recId);
-          DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
+          WorkflowData.updateWorkRequest(wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
         }
       }
       overlay.remove();
@@ -8057,9 +8269,9 @@ const Workflow = {
   },
 
   showAddDocumentModal(taskId) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = DB.getById('workRequests', task.workRequestId);
+    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
 
     const form = el('form', { class: 'form-stacked' });
     form.appendChild(el('div', { class: 'form-group' }, [
@@ -8087,7 +8299,7 @@ const Workflow = {
           uploaderId: Auth.user.id
         };
         const updatedDocs = [...(task.taskDocuments || []), entry];
-        DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
         // 2. Also create a record in DMS documents table so it is viewable
         const dmsRecord = {
@@ -8119,9 +8331,9 @@ const Workflow = {
   },
 
   showAttachmentPopover(taskId, triggerEl, mode) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = DB.getById('workRequests', task.workRequestId);
+    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
 
     // Remove any existing popover
     const existing = document.querySelector('.notion-embed-popover');
@@ -8159,7 +8371,7 @@ const Workflow = {
                 uploaderId: Auth.user.id
               };
               const updatedDocs = [...(task.taskDocuments || []), entry];
-              DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
               const dmsRecord = {
                 id: generateId('doc'),
@@ -8220,7 +8432,7 @@ const Workflow = {
               linkUrl: val
             };
             const updatedDocs = [...(task.taskDocuments || []), entry];
-            DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
             const dmsRecord = {
               id: generateId('doc'),
@@ -8284,7 +8496,7 @@ const Workflow = {
               linkUrl: val
             };
             const updatedDocs = [...(task.taskDocuments || []), entry];
-            DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
             const dmsRecord = {
               id: generateId('doc'),
@@ -8346,7 +8558,7 @@ const Workflow = {
                 isGoogleDrive: true
               };
               const updatedDocs = [...(task.taskDocuments || []), entry];
-              DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
               const dmsRecord = {
                 id: generateId('doc'),
@@ -8454,7 +8666,7 @@ const Workflow = {
   },
 
   showGoogleDriveChooser(taskId) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     
     const driveFiles = [
@@ -8498,7 +8710,7 @@ const Workflow = {
           isGoogleDrive: true
         };
         const updatedDocs = [...(task.taskDocuments || []), entry];
-        DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
         
         const dmsRecord = {
           id: generateId('doc'),
@@ -8533,7 +8745,7 @@ const Workflow = {
   },
 
   showFigmaEmbedModal(taskId) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     
     const container = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column; padding: 8px;' });
@@ -8569,7 +8781,7 @@ const Workflow = {
       };
       
       const updatedDocs = [...(task.taskDocuments || []), entry];
-      DB.update('tasks', taskId, { taskDocuments: updatedDocs, updatedAt: now });
+      WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
       
       overlay.remove();
       this.showTaskSidePane(taskId, null);
@@ -8578,7 +8790,7 @@ const Workflow = {
   },
 
   showAddTimeLogModal(taskId, checklistItemId = null) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     let defaultWorkerName = '';
     if (checklistItemId) {
       const item = (task?.checklist || []).find(c => c.id === checklistItemId);
@@ -8587,7 +8799,7 @@ const Workflow = {
       defaultWorkerName = task?.assigneeName
         ? task.assigneeName
         : (task?.assigneeId || task?.assignedTo)
-          ? (DB.getById('users', task.assigneeId || task.assignedTo)?.name || '')
+          ? (window.apiClient.userCache.getById(task.assigneeId || task.assignedTo)?.name || '')
           : '';
     }
 
@@ -8677,7 +8889,7 @@ const Workflow = {
       const [eh, em] = end.split(':').map(Number);
       const startMin = sh * 60 + sm;
       const endMin = eh * 60 + em;
-      const workerName = workerInput.value.trim() || (DB.getById('users', Auth.user.id)?.name || '');
+      const workerName = workerInput.value.trim() || (window.apiClient.userCache.getById(Auth.user.id)?.name || '');
 
       let entries = [];
       if (endMin > startMin) {
@@ -8696,7 +8908,7 @@ const Workflow = {
         return;
       }
 
-      const currentTask = DB.getById('tasks', taskId);
+      const currentTask = WorkflowData.getTaskById(taskId);
       const checklist = currentTask.checklist || [];
       const item = checklistItemId ? checklist.find(c => c.id === checklistItemId) : null;
 
@@ -8731,7 +8943,7 @@ const Workflow = {
       } else {
         updates.timeLogs = [...(currentTask.timeLogs || []), ...newEntries];
       }
-      DB.update('tasks', taskId, updates);
+      WorkflowData.updateTask(taskId, updates);
       overlay.remove();
       App.handleRoute();
     });
@@ -8739,7 +8951,7 @@ const Workflow = {
 
   renderAddTaskForm(wrId, opts = {}) {
     const { hideHeader = false } = opts;
-    let wr = DB.getById('workRequests', wrId);
+    let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
       const pc = DB.getById('pendingChanges', wrId) || 
                  DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === wrId)[0];
@@ -8938,7 +9150,7 @@ const Workflow = {
         }
         if (!coAssignees.includes(name)) {
           coAssignees.push(name);
-          const isUser = (DB.getAll('users') || []).some(u => u.name.toLowerCase() === name.toLowerCase());
+          const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
             const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
             if (!existing) {
@@ -9008,7 +9220,7 @@ const Workflow = {
 
     predMenu.addEventListener('click', (e) => e.stopPropagation());
 
-    const existingTasks = DB.getWhere('tasks', t => t.workRequestId === wrId);
+    const existingTasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
     let selectedPreds = [];
 
     const updateModalSelectionText = () => {
@@ -9165,7 +9377,7 @@ const Workflow = {
    */
   openWorkRequestForm(mode = null) {
     const isNew = !this.editingId;
-    const wr = isNew ? null : DB.getById('workRequests', this.editingId);
+    const wr = isNew ? null : WorkflowData.getWorkRequestById(this.editingId);
     const fullPageRoute = isNew ? '#operations/form/new' : `#operations/form/${this.editingId}`;
     openFormPanel({
       icon: '📝',
@@ -9208,9 +9420,9 @@ const Workflow = {
   },
 
   showEditTaskModal(taskId, onSaved) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = DB.getById('workRequests', task.workRequestId);
+    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
     const isDraft = wr?.status === 'Draft';
 
     const form = el('form', { class: 'form-stacked' });
@@ -9254,7 +9466,7 @@ const Workflow = {
         }
         if (!coAssignees.includes(name)) {
           coAssignees.push(name);
-          const isUser = (DB.getAll('users') || []).some(u => u.name.toLowerCase() === name.toLowerCase());
+          const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
             const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
             if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
@@ -9420,7 +9632,7 @@ const Workflow = {
     });
     predMenu.addEventListener('click', (e) => e.stopPropagation());
 
-    const existingTasks = DB.getWhere('tasks', t => t.workRequestId === task.workRequestId && t.id !== task.id);
+    const existingTasks = WorkflowData.getTasksWhere(t => t.workRequestId === task.workRequestId && t.id !== task.id);
     let selectedPreds = [...(task.predecessors || [])];
 
     const updateModalSelectionText = () => {
@@ -9522,7 +9734,7 @@ const Workflow = {
 
       const res = this.resolveAssignee(groundWorkerName);
 
-      DB.update('tasks', task.id, {
+      WorkflowData.updateTask(task.id, {
         title: data.title.trim(),
         assigneeId: res.id,
         assigneeName: res.name,
@@ -9619,7 +9831,7 @@ const Workflow = {
       ]));
       const logBody = el('tbody');
       logs.forEach(l => {
-        const user = DB.getById('users', l.userId);
+        const user = window.apiClient.userCache.getById(l.userId);
         logBody.appendChild(el('tr', {}, [
           el('td', { text: formatDate(l.date) }),
           el('td', { text: l.startTime || '—' }),
@@ -9644,7 +9856,7 @@ const Workflow = {
     } else {
       const commentList = el('div');
       comments.forEach(c => {
-        const user = DB.getById('users', c.userId);
+        const user = window.apiClient.userCache.getById(c.userId);
         commentList.appendChild(el('div', { class: 'card', style: 'margin-bottom: var(--spacing-sm);' }, [
           el('div', { class: 'kpi-label', text: (user?.name || c.userId) + ' • ' + formatDate(c.date) }),
           el('div', { text: c.comment })
@@ -9670,7 +9882,7 @@ const Workflow = {
       };
       if (!entry.comment) return;
       const updatedComments = [...(task.comments || []), entry];
-      DB.update('tasks', task.id, { comments: updatedComments, updatedAt: new Date().toISOString() });
+      WorkflowData.updateTask(task.id, { comments: updatedComments, updatedAt: new Date().toISOString() });
       App.handleRoute();
     });
     section.appendChild(commentForm);
@@ -9688,7 +9900,7 @@ const Workflow = {
     allowed.add('Cancelled');
 
     // Retrieve associated Work Request, if any
-    const wr = task.workRequestId ? DB.getById('workRequests', task.workRequestId) : null;
+    const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
     let result;
     if (wr) {
       if (wr.status === 'Completed' || wr.status === 'Cancelled') {
@@ -9736,24 +9948,24 @@ const Workflow = {
   // Dependency Engine
   // ============================================================
   canStart(taskId) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     const preds = task?.predecessors || task?.dependencies || [];
     if (preds.length === 0) return true;
     return preds.every(pid => {
-      const p = DB.getById('tasks', pid);
+      const p = WorkflowData.getTaskById(pid);
       return p && p.status === 'Completed';
     });
   },
 
   updateTaskStatus(taskId, newStatus) {
-    const task = DB.getById('tasks', taskId);
+    const task = WorkflowData.getTaskById(taskId);
     if (!task) return { error: 'Task not found.' };
     if (task.status === 'Completed' || task.status === 'Cancelled') {
       return { error: 'Completed and cancelled tasks are immutable.' };
     }
     const allowed = this.getValidNextStatuses(task);
     if (!allowed.includes(newStatus)) {
-      const wr = task.workRequestId ? DB.getById('workRequests', task.workRequestId) : null;
+      const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
       if (wr) {
         return { error: `Task status cannot be set to "${newStatus}" in the "${wr.status}" phase.` };
       }
@@ -9788,7 +10000,7 @@ const Workflow = {
         if (visited.has(currentId)) continue;
         visited.add(currentId);
 
-        const dependents = DB.getWhere('tasks', t =>
+        const dependents = WorkflowData.getTasksWhere(t =>
           (t.predecessors || t.dependencies || []).includes(currentId)
         );
 
@@ -9803,12 +10015,12 @@ const Workflow = {
       }
 
       toCancel.forEach(id => {
-        DB.update('tasks', id, { status: 'Cancelled', updatedAt: now });
+        WorkflowData.updateTask(id, { status: 'Cancelled', updatedAt: now });
         cascaded.push(id);
       });
     }
 
-    DB.update('tasks', taskId, { status: newStatus, updatedAt: now });
+    WorkflowData.updateTask(taskId, { status: newStatus, updatedAt: now });
     return { success: true, cascaded };
   },
 
@@ -9849,7 +10061,7 @@ const Workflow = {
     const wrapper = el('div', { class: 'page-content-section' });
 
     const backlogItems = templates.map(t => {
-      const client = DB.getById('clients', t.clientId);
+      const client = window.apiClient.clientCache.getById(t.clientId);
       return {
         id: t.id,
         name: t.name,
@@ -10005,7 +10217,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { text: 'Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (template && template.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
@@ -10159,8 +10371,8 @@ const Workflow = {
       return matchesEntity && Auth.canViewWr(wr);
     };
 
-    const accomplished = DB.getWhere('workRequests', wr => wrFilter(wr) && wr.status === 'Completed' && wr.archived === true);
-    const cancelled = DB.getWhere('workRequests', wr => wrFilter(wr) && wr.status === 'Cancelled');
+    const accomplished = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Completed' && wr.archived === true);
+    const cancelled = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Cancelled');
 
     const rejectedRecords = DB.getWhere('pendingChanges', pc => {
       if (pc.status !== 'rejected') return false;
@@ -10170,7 +10382,7 @@ const Workflow = {
     });
 
     const buildWrItem = (wr, category) => {
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       return {
         id: wr.id,
         category,
@@ -10200,7 +10412,7 @@ const Workflow = {
               self.showConfirm('Restore Work Request',
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
                 () => {
-                  DB.update('workRequests', wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                  WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
                   App.handleRoute();
                 }, 'warning');
             }
@@ -10213,14 +10425,14 @@ const Workflow = {
       const isTask = pc.table === 'tasks';
       const data = pc.proposedData || {};
       const wrId = isTask ? data.workRequestId : data.id;
-      const wr = DB.getById('workRequests', wrId);
+      const wr = WorkflowData.getWorkRequestById(wrId);
       const title = isTask ? `Task: ${data.title || '(untitled)'}` : `Work Request: ${data.title || '(untitled)'}`;
       return {
         id: pc.id,
         category: 'rejected',
         title: title,
         meta: [
-          { icon: ArchivePage.icons.client, text: wr ? (DB.getById('clients', wr.clientId)?.name || '—') : '—' },
+          { icon: ArchivePage.icons.client, text: wr ? (window.apiClient.clientCache.getById(wr.clientId)?.name || '—') : '—' },
           { icon: ArchivePage.icons.date, text: formatDate(pc.reviewedAt || pc.updatedAt || pc.requestedAt) },
           { icon: ArchivePage.icons.status, text: pc.rejectionReason ? `Reason: ${pc.rejectionReason}` : 'Rejected' }
         ],
@@ -10249,7 +10461,7 @@ const Workflow = {
     });
   },
 
-  generateFromTemplate(templateId) {
+  async generateFromTemplate(templateId) {
     const template = DB.getById('retainerTemplates', templateId);
     if (!template) return;
     const now = new Date();
@@ -10257,7 +10469,7 @@ const Workflow = {
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
 
-    const maxOrder = Math.max(0, ...DB.getAll('workRequests').map(r => r.boardOrder || 0));
+    const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
     const workRequest = {
       id: generateSequentialId('wr', 'workRequests'),
       title: `${template.name} (${titleSuffix})`,
@@ -10271,16 +10483,18 @@ const Workflow = {
       updatedAt: nowIso,
       boardOrder: maxOrder + 1000
     };
-    DB.insert('workRequests', workRequest);
+    const createdWr = await WorkflowData.createWorkRequest(workRequest);
+    const wrId = createdWr ? createdWr.id : workRequest.id;
 
     const idMap = new Map();
     (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
 
-    (template.tasks || []).forEach((t, idx) => {
+    for (const t of (template.tasks || [])) {
+      const idx = (template.tasks || []).indexOf(t);
       const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-      DB.insert('tasks', {
+      await WorkflowData.createTask({
         id: idMap.get(t.id),
-        workRequestId: workRequest.id,
+        workRequestId: wrId,
         title: t.title,
         assigneeId: t.assigneeId || null,
         assigneeName: t.assigneeName || null,
@@ -10291,12 +10505,12 @@ const Workflow = {
         updatedAt: nowIso,
         sortOrder: idx
       });
-    });
+    }
 
-    location.hash = '#operations/detail/' + workRequest.id;
+    location.hash = '#operations/detail/' + wrId;
   },
 
-  bulkGenerateFromTemplates(templateIds) {
+  async bulkGenerateFromTemplates(templateIds) {
     if (!Array.isArray(templateIds) || templateIds.length === 0) return;
 
     const now = new Date();
@@ -10304,12 +10518,12 @@ const Workflow = {
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     let generatedCount = 0;
 
-    templateIds.forEach(templateId => {
+    for (const templateId of templateIds) {
       const template = DB.getById('retainerTemplates', templateId);
-      if (!template) return;
+      if (!template) continue;
 
       const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
-      const maxOrder = Math.max(0, ...DB.getAll('workRequests').map(r => r.boardOrder || 0));
+      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
 
       const workRequest = {
         id: generateSequentialId('wr', 'workRequests'),
@@ -10324,16 +10538,19 @@ const Workflow = {
         updatedAt: nowIso,
         boardOrder: maxOrder + 1000
       };
-      DB.insert('workRequests', workRequest);
+      const createdWr = await WorkflowData.createWorkRequest(workRequest);
+      const wrId = createdWr ? createdWr.id : workRequest.id;
 
       const idMap = new Map();
       (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
 
-      (template.tasks || []).forEach((t, idx) => {
+      const tmplTasks = template.tasks || [];
+      for (let idx = 0; idx < tmplTasks.length; idx++) {
+        const t = tmplTasks[idx];
         const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-        DB.insert('tasks', {
+        await WorkflowData.createTask({
           id: idMap.get(t.id),
-          workRequestId: workRequest.id,
+          workRequestId: wrId,
           title: t.title,
           assigneeId: t.assigneeId || null,
           assigneeName: t.assigneeName || null,
@@ -10344,10 +10561,10 @@ const Workflow = {
           updatedAt: nowIso,
           sortOrder: idx
         });
-      });
+      }
 
       generatedCount++;
-    });
+    }
 
     this.showMessage(
       'Bulk Generation Complete',

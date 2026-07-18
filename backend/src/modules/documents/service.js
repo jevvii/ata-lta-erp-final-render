@@ -132,6 +132,8 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     file_size: data.fileSize,
     content_type: data.contentType,
     storage_path: storagePath,
+    comments: data.comments || [],
+    versions: data.versions || [],
     created_by: userId,
     updated_by: userId,
   };
@@ -221,6 +223,8 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
   if (data.storedLocation !== undefined) updates.stored_location = data.storedLocation;
   if (data.handoverLog !== undefined) updates.handover_log = data.handoverLog;
   if (data.archived !== undefined) updates.archived = data.archived;
+  if (data.comments !== undefined) updates.comments = data.comments;
+  if (data.versions !== undefined) updates.versions = data.versions;
 
   const { data: updated, error } = await supabaseAdmin
     .from('documents')

@@ -43,7 +43,34 @@ const Clients = {
   editingId: null,
   activeTab: 'active',
 
-  render() {
+  /**
+   * Convert backend client shape to the local shape expected by the UI.
+   * Backend uses relatedClientId/relationship; UI uses clientId/relationType.
+   */
+  normalizeClient(client) {
+    if (!client) return client;
+    return {
+      ...client,
+      relatedCompanies: (client.relatedCompanies || []).map(rc => ({
+        clientId: rc.relatedClientId || rc.clientId,
+        relationType: rc.relationship || rc.relationType,
+        relationship: rc.relationship || rc.relationType,
+        id: rc.id
+      }))
+    };
+  },
+
+  /**
+   * Convert UI related-company shape to backend payload shape.
+   */
+  toApiRelatedCompanies(relatedCompanies) {
+    return (relatedCompanies || []).map(rc => ({
+      relatedClientId: rc.clientId || rc.relatedClientId,
+      relationship: rc.relationType || rc.relationship
+    })).filter(rc => rc.relatedClientId);
+  },
+
+  async render() {
     if (!this.activeTab) this.activeTab = 'active';
     const container = el('div', { class: 'page clients-tab-page' });
 
@@ -51,7 +78,15 @@ const Clients = {
     // with its own breadcrumb header and right-aligned Save/Cancel actions.
     if (this.editingId) {
       const isNew = this.editingId === 'new';
-      const client = isNew ? null : DB.getById('clients', this.editingId);
+      let client = null;
+      if (!isNew) {
+        try {
+          const res = await window.apiClient.clients.get(this.editingId);
+          client = res.data;
+        } catch (e) {
+          console.error('Failed to load client for form', e);
+        }
+      }
       const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
 
       const viewSwitcher = buildFormViewSwitcher({
@@ -91,26 +126,15 @@ const Clients = {
           }
         ]
       }));
-      container.appendChild(this.renderForm(el('div'), this.editingId, null, true));
+      container.appendChild(await this.renderForm(el('div'), this.editingId, null, true));
       setTimeout(() => this.updateStickyOffsets(), 0);
       return container;
     }
 
     const titleBar = el('div', { class: 'page-title-bar-v2' });
     titleBar.appendChild(el('h1', { text: 'Clients' }));
-
-    if (Auth.user?.role === 'Admin' && typeof window.apiClient !== 'undefined') {
-      const migrateBtn = el('button', {
-        class: 'btn btn-outline-secondary btn-sm',
-        style: 'margin-left: auto;',
-        text: 'Migrate Clients'
-      });
-      migrateBtn.addEventListener('click', () => this.migrateClientsFromLocalStorage());
-      titleBar.appendChild(migrateBtn);
-    }
-
     container.appendChild(titleBar);
-    container.appendChild(this.renderTabNav());
+    container.appendChild(await this.renderTabNav());
 
     // Toolbar (Sticky Container)
     const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
@@ -147,13 +171,13 @@ const Clients = {
     const listContainer = el('div', { class: 'list-container' + (this.activeTab === 'archived' ? ' hidden' : '') });
     content.appendChild(listContainer);
     if (this.activeTab === 'active') {
-      this.renderList(listContainer, '');
+      await this.renderList(listContainer, '');
     }
 
     const archiveContainer = el('div', { class: 'archive-container' + (this.activeTab === 'active' ? ' hidden' : '') });
     content.appendChild(archiveContainer);
     if (this.activeTab === 'archived') {
-      archiveContainer.appendChild(this.renderArchive(''));
+      archiveContainer.appendChild(await this.renderArchive(''));
     }
 
     container.appendChild(content);
@@ -180,22 +204,28 @@ const Clients = {
     App.updateStickyOffsets();
   },
 
-  renderTabNav() {
+  async getClientCounts() {
     const entity = Auth.activeEntity;
-    const activeCount = DB.getWhere('clients', c => {
-      const cEnt = (c.entity || '').toUpperCase();
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
-      return matchesEntity && c.status !== 'Archived';
-    }).length;
+    try {
+      const res = await window.apiClient.clients.list({});
+      let clients = res.data || [];
+      clients = clients.filter(c => {
+        const cEnt = (c.entity || '').toUpperCase();
+        return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+      });
+      const activeCount = clients.filter(c => c.status !== 'Archived').length;
+      const archivedCount = clients.filter(c => c.status === 'Archived').length;
+      return { activeCount, archivedCount };
+    } catch (e) {
+      return { activeCount: 0, archivedCount: 0 };
+    }
+  },
 
+  async renderTabNav() {
+    const entity = Auth.activeEntity;
     const isAdmin = Auth.user?.role === 'Admin';
     const isManagerial = Auth.isManagerial();
-
-    const archivedCount = DB.getWhere('clients', c => {
-      const cEnt = (c.entity || '').toUpperCase();
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
-      return matchesEntity && c.status === 'Archived';
-    }).length;
+    const { activeCount, archivedCount } = await this.getClientCounts();
 
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -249,37 +279,23 @@ const Clients = {
   },
 
   async getFilteredClients(query) {
-    try {
-      const res = await window.apiClient.clients.list(query ? { search: query, status: 'Active' } : { status: 'Active' });
-      let clients = res.data || [];
-      const entity = Auth.activeEntity;
-      clients = clients.filter(c => {
-        const cEnt = (c.entity || '').toUpperCase();
-        return (entity === 'ALL' ? Auth.user.entities.includes(cEnt) : cEnt === entity);
-      });
-      return clients;
-    } catch (e) {
-      // Fallback to local data if API is unavailable.
-      const entity = Auth.activeEntity;
-      let clients = DB.getWhere('clients', c => {
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(c.entity) : c.entity === entity);
-        return matchesEntity && c.status !== 'Archived';
-      });
-      if (query) {
-        const q = query.toLowerCase();
-        clients = clients.filter(c =>
-          (c.name || '').toLowerCase().includes(q) ||
-          (c.tradeName || '').toLowerCase().includes(q) ||
-          (c.tin || '').toLowerCase().includes(q)
-        );
-      }
-      return clients;
-    }
+    const res = await window.apiClient.clients.list(query ? { search: query, status: 'Active' } : { status: 'Active' });
+    let clients = (res.data || []).map(c => this.normalizeClient(c));
+    const entity = Auth.activeEntity;
+    clients = clients.filter(c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+    });
+    return clients;
   },
 
   async renderList(container, query) {
     this.clearNode(container);
-    const clients = this.getFilteredClients(query);
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+    const clients = await this.getFilteredClients(query);
 
     if (clients.length === 0) {
       container.appendChild(renderEmptyState('No clients found', null, { variant: 'zero-state' }));
@@ -516,7 +532,7 @@ const Clients = {
 
       // 7. Point of Contact
       const tdAssignee = el('td');
-      const pocUser = client.contactUserId ? DB.getById('users', client.contactUserId) : null;
+      const pocUser = client.contactUserId ? window.apiClient.userCache.getById(client.contactUserId) : null;
       if (pocUser) {
         const avatarCell = el('div', { class: 'jira-avatar-cell' });
         const initials = getInitials(pocUser.name);
@@ -554,7 +570,7 @@ const Clients = {
 
       // 10. Related Companies
       const rcList = (client.relatedCompanies || []).map(rc => {
-        const rcClient = DB.getById('clients', rc.clientId);
+        const rcClient = window.apiClient.clientCache.getById(rc.clientId);
         return (rcClient?.name || '—') + ' (' + rc.relationType + ')';
       }).join(', ') || '—';
       const tdRc = el('td', { text: rcList });
@@ -619,7 +635,7 @@ const Clients = {
       addGridRow('Business Address', client.address);
 
       const relCos = (client.relatedCompanies || []).map(rc => {
-        const rcClient = DB.getById('clients', rc.clientId);
+        const rcClient = window.apiClient.clientCache.getById(rc.clientId);
         return (rcClient?.name || '—') + ' (' + rc.relationType + ')';
       }).join(', ');
       addGridRow('Related Companies', relCos);
@@ -714,15 +730,15 @@ const Clients = {
     if (!isNew) {
       try {
         const res = await window.apiClient.clients.get(clientId);
-        client = res.data;
+        client = this.normalizeClient(res.data);
       } catch (e) {
-        client = DB.getById('clients', this.editingId);
+        console.error('Failed to load client form', e);
       }
     }
     const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;
 
     const formContainer = el('div', { class: 'form-container' });
-    this.renderForm(formContainer, this.editingId, client);
+    await this.renderForm(formContainer, this.editingId, client);
 
     openFormPanel({
       icon: '🏢',
@@ -740,8 +756,20 @@ const Clients = {
     });
   },
 
-  renderForm(container, clientId, clientOrNull = null, hideHeader = false) {
-    const client = clientOrNull || (clientId && clientId !== 'new' ? DB.getById('clients', clientId) : null);
+  async renderForm(container, clientId, clientOrNull = null, hideHeader = false) {
+    let client = clientOrNull;
+    if (!client && clientId && clientId !== 'new') {
+      try {
+        const res = await window.apiClient.clients.get(clientId);
+        client = this.normalizeClient(res.data);
+      } catch (e) {
+        console.error('Failed to load client form', e);
+      }
+    }
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
     this.clearNode(container);
 
     // Inline action bar for embedded/list views. Full-page forms render their own
@@ -828,13 +856,14 @@ const Clients = {
     pocProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Point of Contact' }));
     const pocInput = el('input', { type: 'text', name: 'pointOfContactInput', class: 'notion-prop-input', list: 'staff-list', placeholder: '— Select or type Staff —' });
     const datalist = el('datalist', { id: 'staff-list' });
-    DB.getWhere('users', u => {
+    const staffUsers = window.apiClient.userCache._users || [];
+    staffUsers.filter(u => {
       const userEntities = (u.entities || []).map(e => e.toUpperCase());
-      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(Auth.activeEntity);
+      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(Auth.activeEntity.toUpperCase());
     }).forEach(u => { datalist.appendChild(el('option', { value: u.name + ' (' + u.role + ')' })); });
     if (client) {
       if (client.contactUserId) {
-        const u = DB.getById('users', client.contactUserId);
+        const u = window.apiClient.userCache.getById(client.contactUserId);
         if (u) pocInput.value = u.name + ' (' + u.role + ')';
       } else if (client.contactPerson) {
         pocInput.value = client.contactPerson;
@@ -962,7 +991,11 @@ const Clients = {
     const entity = Auth.activeEntity;
     const clientSel = el('select', { class: 'notion-line-item-type', name: 'rc-client-' + idx, style: 'flex: 1 1 auto; min-width: 160px;' });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    const allClients = window.apiClient.clientCache._clients || [];
+    allClients.filter(c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      return cEnt === entity.toUpperCase();
+    }).forEach(c => {
       if (this.editingId && c.id === this.editingId) return;
       clientSel.appendChild(el('option', { value: c.id, text: c.name }));
     });
@@ -1069,14 +1102,11 @@ const Clients = {
 
     const pocInputValue = (data.pointOfContactInput || '').trim();
     let contactUserId = '';
-    let contactPerson = '';
 
     if (pocInputValue) {
-      const matchedUser = DB.getWhere('users', u => (u.name + ' (' + u.role + ')') === pocInputValue)[0];
+      const matchedUser = window.apiClient.userCache._users?.find(u => (u.name + ' (' + u.role + ')') === pocInputValue);
       if (matchedUser) {
         contactUserId = matchedUser.id;
-      } else {
-        contactPerson = pocInputValue;
       }
     }
 
@@ -1090,7 +1120,7 @@ const Clients = {
       entity: data.entity || (Auth.activeEntity !== 'ALL' ? Auth.activeEntity : 'ATA'),
       retainer: !!form.querySelector('input[name="retainer"]:checked'),
       contactDetails,
-      relatedCompanies
+      relatedCompanies: this.toApiRelatedCompanies(relatedCompanies)
     };
 
     const isNew = !this.editingId || this.editingId === 'new';
@@ -1102,21 +1132,10 @@ const Clients = {
       } else {
         await window.apiClient.clients.update(this.editingId, record);
       }
+      window.apiClient.clientCache.invalidate();
     } catch (e) {
-      // Fallback to local persistence when API is unavailable.
-      if (isNew) {
-        record.id = generateId('c');
-        record.createdAt = new Date().toISOString();
-        DB.insert('clients', record);
-      } else {
-        const old = DB.getById('clients', this.editingId);
-        if (old) {
-          record.createdAt = old.createdAt;
-          record.phone = old.phone || '';
-          record.email = old.email || '';
-        }
-        DB.update('clients', this.editingId, record);
-      }
+      Workflow.showMessage('Save Client', e.message || 'Unable to save client.', 'error');
+      return;
     }
 
     const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
@@ -1140,26 +1159,12 @@ const Clients = {
 
     try {
       await window.apiClient.clients.remove(clientId);
+      window.apiClient.clientCache.invalidate();
+      alert('Client archived successfully.');
+      App.handleRoute();
     } catch (e) {
-      // Fallback to local persistence.
-      const client = DB.getById('clients', clientId);
-      if (!client) return;
-      client.status = 'Archived';
-      client.updatedAt = new Date().toISOString();
-      DB.update('clients', clientId, client);
-
-      const wrs = DB.getWhere('workRequests', wr => wr.clientId === clientId);
-      wrs.forEach(wr => {
-        DB.update('workRequests', wr.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
-        const docs = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
-        docs.forEach(doc => {
-          DB.update('documents', doc.id, { status: 'Archived', archived: true });
-        });
-      });
+      Workflow.showMessage('Archive Client', e.message || 'Unable to archive client.', 'error');
     }
-
-    alert('Client archived successfully.');
-    App.handleRoute();
   },
 
   archiveClientRequest(clientId) {
@@ -1292,31 +1297,22 @@ const Clients = {
     if (!confirm(`Are you sure you want to archive ${label}? This will cancel all related work requests and archive all associated documents.`)) return;
 
     let archivedCount = 0;
+    let lastError = null;
     for (const clientId of clientIds) {
       try {
         await window.apiClient.clients.remove(clientId);
         archivedCount++;
       } catch (e) {
-        // Fallback to local persistence.
-        const client = DB.getById('clients', clientId);
-        if (!client) continue;
-        client.status = 'Archived';
-        client.updatedAt = new Date().toISOString();
-        DB.update('clients', clientId, client);
-
-        const wrs = DB.getWhere('workRequests', wr => wr.clientId === clientId);
-        wrs.forEach(wr => {
-          DB.update('workRequests', wr.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
-          const docs = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
-          docs.forEach(doc => {
-            DB.update('documents', doc.id, { status: 'Archived', archived: true });
-          });
-        });
-        archivedCount++;
+        lastError = e;
       }
     }
 
-    alert(archivedCount === 1 ? 'Client archived successfully.' : `${archivedCount} clients archived successfully.`);
+    window.apiClient.clientCache.invalidate();
+    if (archivedCount === 0 && lastError) {
+      Workflow.showMessage('Archive Clients', lastError.message || 'Unable to archive clients.', 'error');
+    } else {
+      alert(archivedCount === 1 ? 'Client archived successfully.' : `${archivedCount} clients archived successfully.`);
+    }
     App.handleRoute();
   },
 
@@ -1374,69 +1370,58 @@ const Clients = {
   async unarchiveClient(id) {
     try {
       await window.apiClient.clients.update(id, { status: 'Active' });
+      window.apiClient.clientCache.invalidate();
     } catch (e) {
-      const client = DB.getById('clients', id);
-      if (!client || client.status !== 'Archived') return;
-      DB.update('clients', id, { status: 'Active', archived: false, updatedAt: new Date().toISOString() });
+      Workflow.showMessage('Restore Client', e.message || 'Unable to restore client.', 'error');
+      return;
     }
     App.handleRoute();
   },
 
   async bulkUnarchiveClients(clientIds) {
     if (!clientIds || clientIds.length === 0) return;
-    const validIds = clientIds.filter(id => {
-      const client = DB.getById('clients', id);
-      return client && client.status === 'Archived';
-    });
-    if (validIds.length === 0) return;
-
-    const label = validIds.length === 1 ? 'this client' : `these ${validIds.length} clients`;
+    const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
     if (!confirm(`Are you sure you want to restore ${label} to Active Clients?`)) return;
 
-    for (const id of validIds) {
+    let restoredCount = 0;
+    let lastError = null;
+    for (const id of clientIds) {
       try {
         await window.apiClient.clients.update(id, { status: 'Active' });
+        restoredCount++;
       } catch (e) {
-        DB.update('clients', id, { status: 'Active', archived: false, updatedAt: new Date().toISOString() });
+        lastError = e;
       }
     }
 
-    alert(validIds.length === 1 ? 'Client restored successfully.' : `${validIds.length} clients restored successfully.`);
+    window.apiClient.clientCache.invalidate();
+    if (restoredCount === 0 && lastError) {
+      Workflow.showMessage('Restore Clients', lastError.message || 'Unable to restore clients.', 'error');
+    } else {
+      alert(restoredCount === 1 ? 'Client restored successfully.' : `${restoredCount} clients restored successfully.`);
+    }
     App.handleRoute();
   },
 
   async getArchivedClients(query) {
-    try {
-      const res = await window.apiClient.clients.list(query ? { search: query, status: 'Archived' } : { status: 'Archived' });
-      let clients = res.data || [];
-      const entity = Auth.activeEntity;
-      clients = clients.filter(c => {
-        const cEnt = (c.entity || '').toUpperCase();
-        return (entity === 'ALL' ? Auth.user.entities.includes(cEnt) : cEnt === entity);
-      });
-      return clients;
-    } catch (e) {
-      const entity = Auth.activeEntity;
-      let clients = DB.getWhere('clients', c => {
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(c.entity) : c.entity === entity);
-        return matchesEntity && c.status === 'Archived';
-      });
-      if (query) {
-        const q = query.toLowerCase();
-        clients = clients.filter(c =>
-          (c.name || '').toLowerCase().includes(q) ||
-          (c.tradeName || '').toLowerCase().includes(q) ||
-          (c.tin || '').toLowerCase().includes(q)
-        );
-      }
-      return clients;
-    }
+    const res = await window.apiClient.clients.list(query ? { search: query, status: 'Archived' } : { status: 'Archived' });
+    let clients = (res.data || []).map(c => this.normalizeClient(c));
+    const entity = Auth.activeEntity;
+    clients = clients.filter(c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+    });
+    return clients;
   },
 
   async renderArchive(query = '') {
     const entity = Auth.activeEntity;
     const self = this;
     const isManagerial = Auth.isManagerial();
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
 
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -1464,7 +1449,7 @@ const Clients = {
     const canEdit = Auth.can('clients:edit');
 
     const buildItem = (c, category) => {
-      const pocUser = DB.getById('users', c.contactUserId);
+      const pocUser = window.apiClient.userCache.getById(c.contactUserId);
       return {
         id: c.id,
         category,
@@ -1495,7 +1480,7 @@ const Clients = {
       const isOpReq = record.hasOwnProperty('requestedBy');
       const data = isOpReq ? record : (record.proposedData || {});
       const clientId = isOpReq ? record.clientId : data.id;
-      const client = clientId ? DB.getById('clients', clientId) : null;
+      const client = clientId ? window.apiClient.clientCache.getById(clientId) : null;
       const title = isOpReq
         ? `Client Request ${client ? '— ' + (client.name || '') : ''}`
         : `Client Change: ${data.name || '(untitled)'}`;

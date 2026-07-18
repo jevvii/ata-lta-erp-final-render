@@ -8,15 +8,133 @@ const Disbursement = {
   detailId: null,
   templateEditingId: null,
   listViewMode: 'table', // 'table' | 'board' | 'list'
-  EDITABLE_STATUSES: ['Draft', 'Submitted', 'Under Review', 'Pending'],
-  PENDING_APPROVAL_STATUSES: ['Submitted', 'Under Review', 'Pending'],
+  EDITABLE_STATUSES: ['Draft', 'Pending'],
+  PENDING_APPROVAL_STATUSES: ['Pending'],
   STANDARD_CATEGORIES: ['Transportation', 'Notary', 'Meals', 'Government Fee', 'Other'],
 
-  render() {
+  // API-backed disbursement cache
+  _items: null,
+  _promise: null,
+  _detailCache: {},
+
+  /**
+   * Convert a backend disbursement row (snake_case, joined clients.name)
+   * into the camelCase shape expected by the UI.
+   */
+  normalizeDisbursement(d) {
+    if (!d) return d;
+    const status = d.status || 'Draft';
+    const approvedBy = d.approved_by || null;
+    const paymentDetails = d.payment_method ? {
+      method: d.payment_method,
+      reference: d.payment_reference || '',
+      bank: d.payment_bank || '',
+      date: d.payment_date || '',
+      processedBy: d.payment_processed_by || null
+    } : (d.payment_details || null);
+    return {
+      id: d.id,
+      disbursementNumber: d.disbursement_number || d.disbursementNumber || null,
+      entityId: d.entity_id || d.entityId || null,
+      entity: d.entity_code || d.entity || null,
+      category: d.category || '',
+      description: d.description || '',
+      amount: typeof d.amount === 'number' ? d.amount : parseFloat(d.amount) || 0,
+      fundSource: d.fund_source || d.fundSource || 'Firm Fund',
+      status,
+      clientId: d.client_id || d.clientId || null,
+      clientName: d.clients?.name || d.clientName || null,
+      employeeId: d.employee_id || d.employeeId || null,
+      linkedInvoiceId: d.linked_invoice_id || d.linkedInvoiceId || null,
+      linkedWorkRequestId: d.linked_work_request_id || d.linkedWorkRequestId || null,
+      linkedTaskId: d.linked_task_id || d.linkedTaskId || null,
+      requestedBy: d.requested_by || d.requestedBy || null,
+      dueDate: d.due_date || d.dueDate || null,
+      notes: d.notes || null,
+      approvedBy,
+      approvedAt: d.approved_at || d.approvedAt || null,
+      releasedBy: d.released_by || d.releasedBy || null,
+      releasedAt: d.released_at || d.releasedAt || null,
+      rejectedBy: d.rejected_by || d.rejectedBy || null,
+      rejectedAt: d.rejected_at || d.rejectedAt || null,
+      rejectionReason: d.rejection_reason || d.rejectionReason || null,
+      paymentHandledBy: d.payment_handled_by || d.paymentHandledBy || approvedBy || null,
+      paymentDetails,
+      receiptS3Key: d.receipt_s3_key || d.receiptS3Key || null,
+      receiptFilename: d.receipt_filename || d.receiptFilename || (d.receipt_s3_key ? 'Receipt' : null),
+      releaseFilename: d.release_filename || d.releaseFilename || null,
+      archived: d.archived || false,
+      createdAt: d.created_at || d.createdAt || null,
+      updatedAt: d.updated_at || d.updatedAt || null,
+      createdBy: d.created_by || d.createdBy || null,
+      updatedBy: d.updated_by || d.updatedBy || null,
+      // UI-only convenience fields (backend does not persist these)
+      fromTemplate: d.from_template || d.fromTemplate || false,
+      submittedAt: d.submitted_at || d.submittedAt || d.created_at || d.createdAt || null,
+      voucherNumber: d.disbursement_number || d.voucherNumber || null,
+      boardOrder: typeof d.board_order === 'number' ? d.board_order : (typeof d.boardOrder === 'number' ? d.boardOrder : null)
+    };
+  },
+
+  /**
+   * Convert UI form record to backend create/update payload.
+   */
+  toApiPayload(data) {
+    return {
+      category: data.category,
+      description: data.description,
+      amount: typeof data.amount === 'number' ? data.amount : parseFloat(data.amount) || 0,
+      fundSource: data.fundSource || 'Firm Fund',
+      clientId: data.clientId || null,
+      employeeId: data.employeeId || null,
+      linkedInvoiceId: data.linkedInvoiceId || null,
+      linkedWorkRequestId: data.linkedWorkRequestId || null,
+      dueDate: data.dueDate || null,
+      notes: data.notes || null
+    };
+  },
+
+  async loadDisbursements(force = false) {
+    if (!force && this._items) return this._items;
+    if (!force && this._promise) return this._promise;
+    this._promise = window.apiClient.disbursements.list().then(res => {
+      const items = (res.data || []).map(d => this.normalizeDisbursement(d));
+      this._items = items;
+      return items;
+    }).catch(err => {
+      console.error('Failed to load disbursements', err);
+      this._items = this._items || [];
+      return this._items;
+    }).finally(() => {
+      this._promise = null;
+    });
+    return this._promise;
+  },
+
+  invalidateCache() {
+    this._items = null;
+    this._detailCache = {};
+  },
+
+  async loadDisbursement(id) {
+    if (!id) return null;
+    if (this._detailCache[id]) return this._detailCache[id];
+    try {
+      const res = await window.apiClient.disbursements.get(id);
+      const normalized = this.normalizeDisbursement(res.data);
+      this._detailCache[id] = normalized;
+      return normalized;
+    } catch (err) {
+      console.error('Failed to load disbursement', id, err);
+      return null;
+    }
+  },
+
+  async render() {
     const container = el('div', { class: 'page' });
-    
+
     if (this.view === 'detail' && this.detailId) {
-      const d = DB.getById('disbursements', this.detailId);
+      const d = await this.loadDisbursement(this.detailId);
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       const h1 = el('h1', { class: 'breadcrumb-h1' });
       const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Disbursement' });
@@ -104,7 +222,7 @@ const Disbursement = {
     } else if (this.view === 'form') {
       container.classList.add('disbursement-tab-page');
       const isNew = !this.detailId;
-      const existing = isNew ? null : DB.getById('disbursements', this.detailId);
+      const existing = isNew ? null : await this.loadDisbursement(this.detailId);
       const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${this.detailId}`;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
@@ -168,15 +286,15 @@ const Disbursement = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Disbursement' }));
       container.appendChild(titleBar);
-      container.appendChild(this.renderTabNav());
+      container.appendChild(await this.renderTabNav());
     }
 
-    if (this.view === 'list') container.appendChild(this.renderList());
+    if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') container.appendChild(this.renderForm({ hideHeader: true }));
     else if (this.view === 'detail') container.appendChild(this.renderDetail());
-    else if (this.view === 'report') container.appendChild(this.renderReport());
+    else if (this.view === 'report') container.appendChild(await this.renderReport());
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
-    else if (this.view === 'archive') container.appendChild(this.renderArchive());
+    else if (this.view === 'archive') container.appendChild(await this.renderArchive());
     else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
@@ -191,7 +309,7 @@ const Disbursement = {
     App.updateStickyOffsets();
   },
 
-  renderTabNav() {
+  async renderTabNav() {
     const entity = Auth.activeEntity;
     const entMatch = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -199,7 +317,9 @@ const Disbursement = {
       return uEnt === entity.toUpperCase();
     };
 
-    const dbCount = DB.getWhere('disbursements', d => {
+    const disbursements = await this.loadDisbursements();
+
+    const dbCount = disbursements.filter(d => {
       if (!entMatch(d.entity)) return false;
       return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
     }).length;
@@ -212,7 +332,7 @@ const Disbursement = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveDbCount = DB.getWhere('disbursements', d => {
+    const archiveDbCount = disbursements.filter(d => {
       if (!entMatch(d.entity)) return false;
       if (d.status === 'Cancelled') return true;
       if (d.status === 'Funded' && d.archived) return true;
@@ -329,10 +449,10 @@ const Disbursement = {
            this.EDITABLE_STATUSES.includes(d.status);
   },
 
-  showForm(disbId = null, mode = null) {
+  async showForm(disbId = null, mode = null) {
     this.detailId = disbId;
     const isNew = !disbId;
-    const existing = isNew ? null : DB.getById('disbursements', disbId);
+    const existing = isNew ? null : await this.loadDisbursement(disbId);
     const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${disbId}`;
 
     openFormPanel({
@@ -384,15 +504,20 @@ const Disbursement = {
   // ============================================================
   // List View
   // ============================================================
-  renderList() {
+  async renderList() {
     const entity = Auth.activeEntity;
     let viewMode = App.getPreferredViewMode('disbursement');
     let groupBy = App.restoreGroupBy('disbursement') || 'none';
 
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+
     const groupOptions = [
       { key: 'none', label: 'None' },
       { key: 'employee', label: 'Employee', getName: d => {
-        const u = DB.getById('users', this.getEmployeeId(d));
+        const u = window.apiClient.userCache.getById(this.getEmployeeId(d));
         return u?.name || 'Unassigned';
       }},
       { key: 'workRequest', label: 'Work Request', getName: d => {
@@ -401,7 +526,9 @@ const Disbursement = {
       }},
       { key: 'client', label: 'Client', getName: d => {
         const wr = DB.getById('workRequests', d.linkedWorkRequestId);
-        const client = wr ? DB.getById('clients', wr.clientId) : null;
+        const client = wr
+          ? window.apiClient.clientCache.getById(wr.clientId)
+          : window.apiClient.clientCache.getById(d.clientId);
         return client?.name || 'No Client';
       }},
       { key: 'fund', label: 'Fund', getName: d => this.getFundSource(d) || 'No Fund' }
@@ -539,16 +666,17 @@ const Disbursement = {
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const refresh = () => this.refreshList(listContainer, activeFilters, viewMode, groupBy, groupOptions, stickyContainer);
-    refresh();
+    const refresh = async () => this.refreshList(listContainer, activeFilters, viewMode, groupBy, groupOptions, stickyContainer);
+    await refresh();
 
     return wrapper;
   },
 
-  refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
+  async refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const entity = Auth.activeEntity;
-    let items = DB.getWhere('disbursements', d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
+    const allItems = await this.loadDisbursements();
+    let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
 
     items = items.filter(d => Auth.canViewDisbursement(d));
     items = items.filter(d => d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived));
@@ -606,10 +734,12 @@ const Disbursement = {
     if (this.searchQuery) {
       items = items.filter(d => {
         const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
-        const client = wr ? DB.getById('clients', wr.clientId) : null;
-        const emp = d.employeeId ? DB.getById('users', d.employeeId) : null;
+        const client = wr
+          ? window.apiClient.clientCache.getById(wr.clientId)
+          : window.apiClient.clientCache.getById(d.clientId);
+        const emp = d.employeeId ? window.apiClient.userCache.getById(d.employeeId) : null;
         const hay = [
-          d.voucherNumber || '',
+          d.voucherNumber || d.disbursementNumber || '',
           d.description || d.purpose || '',
           client?.name || '',
           wr?.title || '',
@@ -656,17 +786,11 @@ const Disbursement = {
         wrapper.appendChild(editBtn);
       }
 
-      if (d.status === 'Funded' && !d.archived) {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveDisbursement(d.id); });
-        wrapper.appendChild(archiveBtn);
-      }
-
       return wrapper;
     };
 
     const columns = [
-      { key: 'employee', label: 'Employee', render: (d) => DB.getById('users', this.getEmployeeId(d))?.name || '—' },
+      { key: 'employee', label: 'Employee', render: (d) => window.apiClient.userCache.getById(this.getEmployeeId(d))?.name || '—' },
       {
         key: 'category',
         label: 'Category',
@@ -713,16 +837,7 @@ const Disbursement = {
       items,
       columns,
       selectable: true,
-      bulkActions: (ids) => {
-        const rows = ids.map(id => DB.getById('disbursements', id)).filter(Boolean);
-        const canArchive = rows.filter(d => d.status === 'Funded' && !d.archived).length;
-        if (canArchive === 0) return [];
-        return [{
-          text: `Archive (${canArchive})`,
-          className: 'btn btn-primary btn-sm',
-          onClick: (sel) => this.bulkArchiveDisbursements(sel)
-        }];
-      },
+      bulkActions: () => [],
       rowId: (d) => d.id,
       onRowClick: (d) => { location.hash = '#disbursement/detail/' + d.id; }
     });

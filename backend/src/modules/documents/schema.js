@@ -48,6 +48,17 @@ const updateDocumentSchema = z.object({
     notes: z.string().optional(),
   })).optional(),
   archived: z.boolean().optional(),
+  comments: z.array(z.object({
+    userId: z.string().min(1),
+    date: z.string().min(1),
+    text: z.string().min(1),
+  })).optional(),
+  versions: z.array(z.object({
+    version: z.number().int().positive(),
+    fileName: z.string().min(1),
+    uploader: z.string().min(1),
+    uploadDate: z.string().min(1),
+  })).optional(),
 });
 
 /**

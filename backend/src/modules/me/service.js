@@ -129,10 +129,43 @@ const getAvatarUploadUrl = async ({ userId }) => {
   };
 };
 
+/**
+ * List users visible to the requesting user for name/avatar resolution.
+ * Admins see everyone; other users see users sharing at least one entity.
+ * @param {Object} params
+ * @param {object} params.currentUser
+ * @returns {Promise<Array>}
+ */
+const listTeam = async ({ currentUser }) => {
+  const { data, error } = await supabaseAdmin.from('users').select('*').eq('is_active', true);
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to load team' });
+  }
+
+  const isAdmin = currentUser.role === 'Admin';
+  const userEntities = (currentUser.entities || []).map((e) => e.toUpperCase());
+
+  const rows = (data || []).filter((row) => {
+    if (isAdmin) return true;
+    const rowEntities = (row.entities || []).map((e) => e.toUpperCase());
+    return rowEntities.some((e) => userEntities.includes(e));
+  });
+
+  const profiles = await Promise.all(
+    rows.map(async (row) => {
+      const departments = await loadUserDepartments(row.id);
+      return toApiUser(row, departments);
+    })
+  );
+
+  return profiles;
+};
+
 module.exports = {
   getProfile,
   updateProfile,
   changePassword,
   getAvatarUploadUrl,
+  listTeam,
   toApiUser,
 };

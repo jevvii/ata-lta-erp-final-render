@@ -20,6 +20,14 @@ const mockTables = {
   task_time_logs: new Map(),
   pending_changes: new Map(),
   operations_requests: new Map(),
+  invoices: new Map(),
+  invoice_line_items: new Map(),
+  invoice_payments: new Map(),
+  billing_templates: new Map(),
+  disbursements: new Map(),
+  transmittals: new Map(),
+  transmittal_items: new Map(),
+  documents: new Map(),
 };
 
 let sequence = 0;
@@ -82,18 +90,50 @@ const tableQuery = (table) => {
   let insertRecords = null;
   let updateValues = null;
 
+  const matchFilter = (row, { column, value, op: fop = 'eq' }) => {
+    const rowValue = row[column];
+    if (fop === 'is') {
+      return value === null ? (rowValue === null || rowValue === undefined) : rowValue === value;
+    }
+    if (fop === 'in') {
+      return Array.isArray(value) && value.includes(rowValue);
+    }
+    if (fop === 'gt') {
+      return rowValue !== null && rowValue !== undefined && Number(rowValue) > Number(value);
+    }
+    if (fop === 'gte') {
+      return rowValue !== null && rowValue !== undefined && Number(rowValue) >= Number(value);
+    }
+    if (fop === 'lte') {
+      return rowValue !== null && rowValue !== undefined && Number(rowValue) <= Number(value);
+    }
+    if (fop === 'ilike') {
+      if (rowValue === null || rowValue === undefined) return false;
+      const pattern = value.replace(/^%|%$/g, '');
+      return String(rowValue).toLowerCase().includes(pattern.toLowerCase());
+    }
+    if (Array.isArray(rowValue)) return rowValue.includes(value);
+    return rowValue === value;
+  };
+
+  const parseOrPart = (part) => {
+    // Expected: column.ilike.%value% or column.eq.value
+    const m = part.match(/^([^.]+)\.([^.]+)\.%?(.+)%?$/);
+    if (!m) return null;
+    return { column: m[1], value: m[3], op: m[2] };
+  };
+
   const applyFilters = () => {
     return Array.from(rows.values()).filter((row) =>
-      filters.every(({ column, value, op: fop = 'eq' }) => {
-        const rowValue = row[column];
-        if (fop === 'is') {
-          return value === null ? (rowValue === null || rowValue === undefined) : rowValue === value;
+      filters.every((filter) => {
+        if (filter.op === 'or') {
+          return filter.parts.some((part) => {
+            const parsed = parseOrPart(part);
+            if (!parsed) return false;
+            return matchFilter(row, parsed);
+          });
         }
-        if (fop === 'in') {
-          return Array.isArray(value) && value.includes(rowValue);
-        }
-        if (Array.isArray(rowValue)) return rowValue.includes(value);
-        return rowValue === value;
+        return matchFilter(row, filter);
       })
     );
   };
@@ -136,6 +176,9 @@ const tableQuery = (table) => {
     }
 
     if (limit) result = result.slice(0, limit);
+    if (builder._postFilters) {
+      builder._postFilters.forEach((fn) => { result = fn(result); });
+    }
     return result;
   };
 
@@ -164,6 +207,34 @@ const tableQuery = (table) => {
     },
     limit: (n) => {
       limit = n;
+      return builder;
+    },
+    range: (from, to) => {
+      // Store as a filter that slices after ordering; we apply in execute via postFilters
+      if (!builder._postFilters) builder._postFilters = [];
+      builder._postFilters.push((result) => result.slice(from, to + 1));
+      return builder;
+    },
+    gt: (column, value) => {
+      filters.push({ column, value, op: 'gt' });
+      return builder;
+    },
+    gte: (column, value) => {
+      filters.push({ column, value, op: 'gte' });
+      return builder;
+    },
+    lte: (column, value) => {
+      filters.push({ column, value, op: 'lte' });
+      return builder;
+    },
+    ilike: (column, value) => {
+      filters.push({ column, value, op: 'ilike' });
+      return builder;
+    },
+    or: (expression) => {
+      // Very coarse OR parser for patterns like col.ilike.%term%,col2.ilike.%term%
+      const parts = expression.split(',');
+      filters.push({ op: 'or', parts });
       return builder;
     },
     insert: (records) => {
