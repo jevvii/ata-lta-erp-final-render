@@ -97,6 +97,20 @@ const listUsers = async ({ entityId } = {}) => {
 };
 
 const createUser = async ({ data, createdBy: _createdBy }) => {
+  // Enforce a global cap of 15 active user accounts.
+  const { count, error: countError } = await supabaseAdmin
+    .from('users')
+    .select('*', { count: 'exact', head: true })
+    .eq('is_active', true);
+
+  if (countError) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to verify user limit' });
+  }
+
+  if (count >= 15) {
+    throw new AppError({ statusCode: 403, title: 'Forbidden', detail: 'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.', code: 'USER_LIMIT_REACHED' });
+  }
+
   const password = data.password || 'ChangeMe123!';
 
   const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({

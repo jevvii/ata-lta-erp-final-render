@@ -1,6 +1,8 @@
 const { chromium } = require('playwright');
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
+// These users must exist in the target Supabase Auth project and the `users`
+// table before the smoke test runs. Demo/local fallback has been removed.
 const SEED_USERS = [
   { email: 'admin@ata-lta.ph', password: 'password123', role: 'Admin' },
   { email: 'accounting-ata@ata-lta.ph', password: 'password123', role: 'Accounting' },
@@ -227,41 +229,6 @@ async function runTests() {
     await log('Task Accordion Panels (#15, #19)', false, 'no WR card found');
   }
   await page.waitForTimeout(300);
-
-  // ─── TEST 14: Rejected submissions visible to submitter ───────────
-  // Inject a fake rejected pending change directly into localStorage
-  await page.evaluate(() => {
-    const pc = {
-      id: 'pc-test-001',
-      table: 'clients',
-      parentRecordId: 'c-0001',
-      proposedData: { id: 'c-0001', name: 'Test Rejected Client', tin: '123-456-789-0001', address: 'Test', entity: 'ATA', retainer: true, contactDetails: [], relatedCompanies: [], createdAt: new Date().toISOString() },
-      submittedBy: 'u-0004',
-      submittedAt: new Date().toISOString(),
-      status: 'rejected',
-      rejectionReason: 'Test rejection reason',
-      reviewedBy: 'u-0001',
-      reviewedAt: new Date().toISOString()
-    };
-    const existing = JSON.parse(localStorage.getItem('erp_pendingChanges') || '[]');
-    existing.push(pc);
-    localStorage.setItem('erp_pendingChanges', JSON.stringify(existing));
-  });
-
-  await logout();
-  await loginAs(SEED_USERS[1]); // accounting staff (u-0004)
-  await page.goto(BASE + '/#admin');
-  await page.waitForTimeout(800);
-  await page.click('button:has-text("My Pending Submissions")');
-  await page.waitForTimeout(800);
-  const hasRejected = (await page.isVisible('text=Test rejection reason')) || (await page.isVisible('text=Rejected'));
-  await log('Rejected Submissions Visible (#3)', hasRejected, `visible=${hasRejected}`);
-
-  // Clean up injected test data
-  await page.evaluate(() => {
-    const existing = JSON.parse(localStorage.getItem('erp_pendingChanges') || '[]');
-    localStorage.setItem('erp_pendingChanges', JSON.stringify(existing.filter(pc => pc.id !== 'pc-test-001')));
-  });
 
   // ─── TEST 15: Disbursement view toggle under filters ─────────────
   await page.goto(BASE + '/#disbursement');

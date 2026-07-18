@@ -10,3 +10,6 @@ dist/
 build/
 *.log
 .DS_Store
+
+# Generated SPA runtime config (built by erp_prototype/build.js)
+erp_prototype/env.js

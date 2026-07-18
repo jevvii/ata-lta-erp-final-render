@@ -98,6 +98,46 @@ USING (bucket_id = 'ata-lta-erp-documents-uat');
 
 Create a second Supabase project named `ata-lta-erp-prod` and repeat steps 1.2–1.4 with production values.
 
+### 1.6 Create the First Admin Account (UAT and Production)
+
+The SPA no longer uses demo/local users. The very first admin must be created directly in Supabase so they can log in and invite additional users through the Admin > Users UI.
+
+The system enforces a hard cap of **15 active user accounts** in the backend. Once the cap is reached, create or re-enable an existing account only after disabling another.
+
+Steps:
+
+1. In the Supabase dashboard, go to **Authentication → Users** and click **Add user**.
+2. Enter a strong email and password, and set **Email confirmed** to ON.
+3. Copy the new user's UUID from the Users list (this is the `auth_user_id`).
+4. Open the **SQL Editor** and run:
+
+   ```sql
+   -- Replace the values below with the actual admin details.
+   INSERT INTO users (auth_user_id, email, name, role, entities, is_active)
+   VALUES (
+     'PASTE_AUTH_USER_ID_HERE',
+     'admin@your-domain.com',
+     'System Administrator',
+     'Admin',
+     ARRAY['ATA', 'LTA'],
+     true
+   )
+   RETURNING id;
+   ```
+
+5. Assign the `Management` department so the legacy RBAC resolves correctly:
+
+   ```sql
+   -- Use the UUID returned by the previous INSERT as the user_id.
+   INSERT INTO user_departments (user_id, department_id)
+   SELECT 'PASTE_USER_ID_HERE', id
+   FROM departments
+   WHERE name = 'Management';
+   ```
+
+6. Log in to the SPA with the admin email and password.
+7. Go to **Admin > Users** to create additional users. The UI will reject creation once 15 active users exist.
+
 ---
 
 ## Phase 2 — GitHub Setup

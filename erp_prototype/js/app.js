@@ -65,6 +65,7 @@ const App = {
     this.setupNavigation();
     this.setupResponsiveMenu();
     this.setupSidebarCollapse();
+    this.setupUserMenu();
     this.setupLogout();
     
     // Default route is dashboard for all users
@@ -381,6 +382,35 @@ const App = {
     });
   },
 
+  setupUserMenu() {
+    const chip = document.getElementById('user-chip');
+    const toggle = document.getElementById('user-menu-toggle');
+    const dropdown = document.getElementById('user-menu-dropdown');
+    if (!toggle || !dropdown) return;
+
+    toggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      dropdown.classList.toggle('hidden');
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (chip && !chip.contains(e.target) && !dropdown.classList.contains('hidden')) {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    // Profile link navigates via hash
+    const profileLink = document.getElementById('profile-link');
+    if (profileLink) {
+      profileLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        dropdown.classList.add('hidden');
+        location.hash = '#profile';
+      });
+    }
+  },
+
   setupLogout() {
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
@@ -510,7 +540,8 @@ const App = {
       '#disbursement': Disbursement,
       '#transmittal': Transmittal,
       '#reports': Reports,
-      '#admin': Users
+      '#admin': Users,
+      '#profile': Profile
     };
 
     // Restrict reports and disbursement based on RBAC

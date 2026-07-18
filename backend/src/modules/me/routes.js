@@ -9,5 +9,8 @@ const { meController } = require('./controller');
 
 router.get('/', meController.getMe);
 router.get('/permissions', meController.getPermissions);
+router.patch('/', meController.updateMe);
+router.patch('/password', meController.changePassword);
+router.post('/avatar-upload-url', meController.getAvatarUploadUrl);
 
 module.exports = router;

@@ -107,6 +107,9 @@
     me: {
       get: () => get('/me'),
       permissions: () => get('/me/permissions'),
+      update: (body) => patch('/me', body),
+      changePassword: (body) => patch('/me/password', body),
+      avatarUploadUrl: () => post('/me/avatar-upload-url'),
     },
 
     clients: {

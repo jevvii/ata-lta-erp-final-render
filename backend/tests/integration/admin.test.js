@@ -64,6 +64,39 @@ describe('/v1/admin', () => {
     expect(res.body.title).toMatch(/forbidden/i);
   });
 
+  it('enforces the 15-user account cap', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+
+    // Fill the user table to the cap.
+    for (let i = 1; i <= 15; i += 1) {
+      mockTables.users.set(`capped-user-${i}`, {
+        id: `capped-user-${i}`,
+        auth_user_id: `auth-capped-${i}`,
+        email: `capped${i}@ata-lta.ph`,
+        name: `Capped ${i}`,
+        role: 'Accounting',
+        entities: ['ATA'],
+        is_active: true,
+      });
+    }
+
+    const res = await request(app)
+      .post('/v1/admin/users')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        email: 'overflow@ata-lta.ph',
+        name: 'Overflow',
+        role: 'Accounting',
+        entities: ['ATA'],
+        departments: ['Accounting'],
+        password: 'password123',
+      })
+      .expect(403);
+
+    expect(res.body.detail).toMatch(/maximum number of user accounts/i);
+  });
+
   it('lists and approves a pending change', async () => {
     const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
     const entity = mockTables.entities.get('ent-ata');

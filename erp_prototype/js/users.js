@@ -95,7 +95,7 @@ const Users = {
 
     if (isUserFullPage) {
       const isNew = this.editingId === 'new';
-      const user = isNew ? null : DB.getById('users', this.editingId);
+      const user = isNew ? null : this.users.find(u => u.id === this.editingId);
       const fullPageRoute = isNew ? '#admin/users/form/new' : `#admin/users/form/${this.editingId}`;
 
       const viewSwitcher = buildFormViewSwitcher({
@@ -303,7 +303,7 @@ const Users = {
     };
 
     if (canManageUsers) {
-      const userCount = (DB.getAll('users') || []).length;
+      const userCount = (this.users || []).length;
       const auditCount = (DB.getAll('auditLog') || []).length;
       const pendingCount = (() => {
         if (typeof this.getPendingCategories !== 'function') return 0;
@@ -614,6 +614,18 @@ const Users = {
   // ============================================================
   // Users Section
   // ============================================================
+  users: [],
+
+  async loadUsers() {
+    try {
+      const res = await window.apiClient.admin.listUsers();
+      this.users = res.data || [];
+    } catch (e) {
+      this.users = [];
+      Workflow.showMessage('Users', 'Unable to load users from the server.', 'error');
+    }
+  },
+
   renderUsersSection() {
     const wrapper = el('div', { class: 'page-content-section' });
 
@@ -622,16 +634,6 @@ const Users = {
     wrapper.appendChild(listContainer);
     this.renderUserList(listContainer);
 
-    // Reset Demo Data section (kept subtle at the bottom of the page)
-    const resetSection = el('div', { class: 'reset-section reset-section--subtle' });
-    const resetTitle = el('h3', { text: 'Reset Demo Data' });
-    resetSection.appendChild(resetTitle);
-    resetSection.appendChild(el('p', { text: 'This will reset all data to the original demo state. This action cannot be undone.' }));
-    const resetBtn = el('button', { class: 'btn btn-outline-danger btn-sm', text: 'Reset Demo Data' });
-    resetBtn.addEventListener('click', () => this.handleReset(resetSection));
-    resetSection.appendChild(resetBtn);
-    wrapper.appendChild(resetSection);
-
     return wrapper;
   },
 
@@ -639,9 +641,10 @@ const Users = {
     while (node.firstChild) node.removeChild(node.firstChild);
   },
 
-  renderUserList(container) {
+  async renderUserList(container) {
     this.clearNode(container);
-    const users = DB.getAll('users');
+    await this.loadUsers();
+    const users = this.users;
 
     if (users.length === 0) {
       container.appendChild(renderEmptyStateV2({
@@ -700,10 +703,14 @@ const Users = {
               message += ' (Your own account will not be disabled.)';
             }
             
-            Workflow.showConfirm('Disable Users', message, () => {
-              targetIds.forEach(id => {
-                DB.update('users', id, { isActive: false });
-              });
+            Workflow.showConfirm('Disable Users', message, async () => {
+              for (const id of targetIds) {
+                try {
+                  await window.apiClient.admin.deleteUser(id);
+                } catch (e) {
+                  Workflow.showMessage('Disable User', e.message || 'Unable to disable user.', 'error');
+                }
+              }
               App.handleRoute();
             }, 'warning');
           }
@@ -725,10 +732,14 @@ const Users = {
               message += ' (Your own account will not be deleted.)';
             }
             
-            Workflow.showConfirm('Delete Users', message, () => {
-              targetIds.forEach(id => {
-                DB.delete('users', id);
-              });
+            Workflow.showConfirm('Delete Users', message, async () => {
+              for (const id of targetIds) {
+                try {
+                  await window.apiClient.admin.deleteUser(id);
+                } catch (e) {
+                  Workflow.showMessage('Delete User', e.message || 'Unable to delete user.', 'error');
+                }
+              }
               App.handleRoute();
             }, 'danger');
           }
@@ -859,9 +870,9 @@ const Users = {
 
     form.appendChild(propsGrid);
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      this.submitUserForm(form);
+      await this.submitUserForm(form);
     });
 
     return form;
@@ -869,7 +880,7 @@ const Users = {
 
   showUserForm(userId, mode = null) {
     this.editingId = userId || 'new';
-    const user = userId ? DB.getById('users', userId) : null;
+    const user = userId ? this.users.find(u => u.id === userId) : null;
     const form = this.renderUserFormContent(user);
 
     const fullPageRoute = userId ? `#admin/users/form/${userId}` : '#admin/users/form/new';
@@ -896,7 +907,7 @@ const Users = {
     this.updateBreadcrumb(null);
   },
 
-  submitUserForm(form) {
+  async submitUserForm(form) {
     const data = Object.fromEntries(new FormData(form).entries());
     const entityCheckboxes = form.querySelectorAll('input[name="entities"]:checked');
     const entities = Array.from(entityCheckboxes).map(cb => cb.value);
@@ -907,7 +918,7 @@ const Users = {
     // Preserve existing department assignments when the department field is not
     // rendered (e.g. Admin users) or when no checkboxes are checked on edit.
     if (this.editingId && departments.length === 0) {
-      const existing = DB.getById('users', this.editingId);
+      const existing = this.users.find(u => u.id === this.editingId);
       if (existing && Array.isArray(existing.departments) && existing.departments.length > 0) {
         departments = existing.departments;
       }
@@ -915,7 +926,7 @@ const Users = {
 
     // Derive a legacy role for compatibility and keep it in sync with department assignments.
     let role = null;
-    const existing = this.editingId ? DB.getById('users', this.editingId) : null;
+    const existing = this.editingId ? this.users.find(u => u.id === this.editingId) : null;
     if (existing && existing.role === 'Admin') {
       role = 'Admin';
     } else if (departments.includes('Management')) {
@@ -968,45 +979,21 @@ const Users = {
       isActive: true
     };
 
-    if (this.editingId) {
-      if (data.password && data.password.trim()) {
+    try {
+      if (this.editingId) {
+        if (data.password && data.password.trim()) {
+          record.password = data.password.trim();
+        }
+        await window.apiClient.admin.updateUser(this.editingId, record);
+      } else {
         record.password = data.password.trim();
+        await window.apiClient.admin.createUser(record);
       }
-      DB.update('users', this.editingId, record);
-    } else {
-      record.id = generateId('u');
-      record.password = data.password.trim();
-      record.createdAt = new Date().toISOString();
-      DB.insert('users', record);
+      this.showUserList();
+    } catch (e) {
+      const detail = e.message || 'Unable to save user.';
+      Workflow.showMessage('Save User', detail, 'error');
     }
-
-    this.showUserList();
-  },
-
-  // ============================================================
-  // Reset Demo Data
-  // ============================================================
-  handleReset(section) {
-    // Remove any existing confirmation
-    const existing = section.querySelector('.reset-confirm');
-    if (existing) existing.remove();
-
-    const confirmWrap = el('div', { class: 'reset-confirm' });
-    confirmWrap.appendChild(el('span', { text: 'Are you sure? This will erase all changes.', style: 'color: var(--color-danger); font-size: 0.875rem;' }));
-    const yesBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Yes, Reset' });
-    const noBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Cancel' });
-    confirmWrap.appendChild(yesBtn);
-    confirmWrap.appendChild(noBtn);
-    section.appendChild(confirmWrap);
-
-    yesBtn.addEventListener('click', () => {
-      DB.resetToSeed();
-      const msg = el('p', { text: 'Data reset successfully. Reloading...', style: 'color: var(--color-success); margin-top: var(--spacing-sm);' });
-      section.appendChild(msg);
-      setTimeout(() => location.reload(), 800);
-    });
-
-    noBtn.addEventListener('click', () => confirmWrap.remove());
   },
 
   // ============================================================

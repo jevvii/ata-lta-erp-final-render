@@ -100,18 +100,8 @@ const Auth = {
       this.updateSessionClasses(true);
       return true;
     } catch (e) {
-      // Fallback to local demo users when the API is unavailable.
-      const users = DB.getAll('users');
-      const user = users.find(u => u.email === email && u.password === password);
-      if (!user) return false;
-      if (user.isActive === false) return 'disabled';
-      this.user = user;
-      this.user.entities = (this.user.entities || []).map(e => e.toUpperCase());
-      if (!Array.isArray(this.user.departments)) this.user.departments = [];
-      this.activeEntity = this.user.entities.includes('ATA') ? 'ATA' : 'LTA';
-      localStorage.setItem(this._sessionKey, JSON.stringify({ userId: user.id, activeEntity: this.activeEntity }));
-      this.updateSessionClasses(true);
-      return true;
+      // Demo/local fallback removed: authentication always goes through the API.
+      return false;
     }
   },
 
@@ -143,20 +133,8 @@ const Auth = {
       this.updateSessionClasses(true);
       return true;
     } catch (e) {
-      // Fallback to local demo session if API is unavailable.
-      const s = JSON.parse(localStorage.getItem(this._sessionKey) || 'null');
-      if (!s) {
-        this.updateSessionClasses(false);
-        return false;
-      }
-      this.user = DB.getById('users', s.userId);
-      if (this.user && this.user.isActive !== false) {
-        this.user.entities = (this.user.entities || []).map(e => e.toUpperCase());
-        if (!Array.isArray(this.user.departments)) this.user.departments = [];
-        this.activeEntity = s.activeEntity;
-        this.updateSessionClasses(true);
-        return true;
-      }
+      // Clear stale token; demo/local fallback removed.
+      try { sessionStorage.removeItem(this._tokenKey); } catch (err) {}
       this.user = null;
       this.updateSessionClasses(false);
       return false;

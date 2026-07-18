@@ -58,6 +58,9 @@ const registerUser = (user) => {
     role: user.role,
     entities: user.entities || ['ATA'],
     is_active: user.isActive !== false,
+    avatar_url: user.avatarUrl || null,
+    preferences: user.preferences || {},
+    password_updated_at: user.passwordUpdatedAt || null,
   };
   mockUsers.set(token, record);
   mockTokens.set(record.auth_user_id, token);
@@ -75,6 +78,7 @@ const tableQuery = (table) => {
   let order = null;
   let limit = null;
   let op = 'select';
+  let countOptions = null;
   let insertRecords = null;
   let updateValues = null;
 
@@ -136,7 +140,10 @@ const tableQuery = (table) => {
   };
 
   const builder = {
-    select: () => {
+    select: (_columns, options = {}) => {
+      if (options.count) {
+        countOptions = options;
+      }
       return builder;
     },
     eq: (column, value) => {
@@ -184,9 +191,24 @@ const tableQuery = (table) => {
       }
       return Promise.resolve({ data: result[0], error: null });
     },
+    count: (options = {}) => {
+      const result = execute();
+      const count = result.length;
+      if (options.head) {
+        return Promise.resolve({ data: null, count, error: null });
+      }
+      return Promise.resolve({ data: [{ count }], count, error: null });
+    },
     then: (resolve) => {
       const result = execute();
-      return Promise.resolve({ data: result, error: null }).then(resolve);
+      const response = { data: result, error: null };
+      if (countOptions) {
+        response.count = result.length;
+        if (countOptions.head) {
+          response.data = null;
+        }
+      }
+      return Promise.resolve(response).then(resolve);
     },
   };
 
@@ -212,6 +234,10 @@ const supabaseAdmin = {
           password,
           email_confirmed_at: new Date().toISOString(),
         };
+        return Promise.resolve({ data: { user: record }, error: null });
+      },
+      updateUserById: (authUserId, updates) => {
+        const record = { id: authUserId, ...updates };
         return Promise.resolve({ data: { user: record }, error: null });
       },
     },
