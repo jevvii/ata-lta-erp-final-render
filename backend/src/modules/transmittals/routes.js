@@ -12,12 +12,19 @@ const { requirePermission } = require('../../middleware/rbac');
 const { audit } = require('../../middleware/audit');
 const { resolveEntity } = require('../../middleware/resolveEntity');
 
-// Resolve entity code → UUID for all routes in this module
-router.use(resolveEntity());
+// Resolve entity code → UUID for all routes in this module.
+// allowAll: true lets the consolidated entity selector return counts/lists across
+// both ATA and LTA, which the frontend then filters by user permissions.
+router.use(resolveEntity({ allowAll: true }));
 
 router.get('/',
   requirePermission('transmittal:view'),
   transmittalsController.listTransmittals,
+);
+
+router.get('/counts',
+  requirePermission('transmittal:view'),
+  transmittalsController.getTransmittalCounts,
 );
 
 router.post('/',

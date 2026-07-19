@@ -30,7 +30,7 @@ const Disbursement = {
     return {
       id: doc.id,
       name: doc.name,
-      entity: doc.entity_id || doc.entity,
+      entity: doc.entities?.code || doc.entity_code || doc.entity || doc.entity_id,
       category: doc.category || '',
       amount: parseFloat(doc.amount) || 0,
       fundSource: doc.fund_source || doc.fundSource || 'Firm Fund',

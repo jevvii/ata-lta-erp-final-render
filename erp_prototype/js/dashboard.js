@@ -44,6 +44,30 @@ const Dashboard = {
     this._dataPromise = null;
   },
 
+  /**
+   * When navigating from the consolidated dashboard to a per-entity record,
+   * switch the active entity to the record's own entity. Non-consolidated
+   * routes (operations, disbursement, etc.) do not support Auth.activeEntity
+   * === 'ALL'; the backend falls back to the user's first real entity, which
+   * hides records from the other entity and causes the target module to fall
+   * back to its list view (appearing to clear the detail view).
+   */
+  _switchToItemEntity(item) {
+    const userEntities = (Auth.user?.entities || []).map(e => e.toUpperCase());
+    const itemEntity = (item?.entity || '').toUpperCase();
+    const targetEntity = userEntities.includes(itemEntity) && itemEntity !== 'ALL'
+      ? itemEntity
+      : userEntities.find(e => e !== 'ALL');
+
+    if (targetEntity && Auth.activeEntity !== targetEntity) {
+      Auth.switchEntity(targetEntity);
+      if (typeof App !== 'undefined') {
+        App.renderEntitySwitcher();
+        App.updateEntityBadge();
+      }
+    }
+  },
+
   async render(routeId) {
     if (!this._dataCache) {
       // Show a module-level skeleton immediately while warming the cache in the
@@ -1679,6 +1703,7 @@ const Dashboard = {
       const viewBtn = el('button', { class: 'btn btn-primary btn-xs btn-block', style: 'margin-top:12px;', text: btnText });
       viewBtn.onclick = (e) => {
         e.stopPropagation();
+        this._switchToItemEntity(item);
         if (type === 'wr') {
           location.hash = '#operations/detail/' + item.id;
         } else {

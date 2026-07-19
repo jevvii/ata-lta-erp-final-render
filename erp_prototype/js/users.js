@@ -1289,8 +1289,15 @@ const Users = {
 
     let allLogs = [];
     try {
-      const res = await window.apiClient.admin.listAudit({ limit: 1000 });
-      allLogs = res?.data || [];
+      const pageSize = 100;
+      let offset = 0;
+      while (true) {
+        const res = await window.apiClient.admin.listAudit({ limit: pageSize, offset });
+        const page = res?.data || [];
+        allLogs = allLogs.concat(page);
+        if (!res?.meta?.hasMore || page.length === 0) break;
+        offset += pageSize;
+      }
     } catch (err) {
       console.error('[Users.refreshAuditLog] failed to load audit log', err);
       container.appendChild(renderEmptyState('Unable to load audit log', null, { variant: 'zero-state' }));

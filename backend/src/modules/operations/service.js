@@ -507,17 +507,23 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
  */
 const getWorkRequestRelated = async ({ id, entityId }) => {
-  const { data: wr, error: wrErr } = await supabaseAdmin
+  let wrQuery = supabaseAdmin
     .from('work_requests')
-    .select('id')
+    .select('id, entity_id')
     .eq('id', id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    wrQuery = wrQuery.eq('entity_id', entityId);
+  }
+
+  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
 
   if (wrErr || !wr) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
   }
+
+  const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
 
   const [
     { data: invoices },
@@ -528,28 +534,28 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
     supabaseAdmin
       .from('invoices')
       .select('*, clients(name)')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('work_request_id', id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('disbursements')
       .select('*, clients(name)')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('linked_work_request_id', id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('transmittals')
       .select('*, clients(name)')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('work_request_id', id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('documents')
       .select('*')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('work_request_id', id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
@@ -585,17 +591,23 @@ const getTaskRelated = async ({ id, entityId }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
   }
 
-  const { data: wr } = await supabaseAdmin
+  let wrQuery = supabaseAdmin
     .from('work_requests')
-    .select('id')
+    .select('id, entity_id')
     .eq('id', task.work_request_id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    wrQuery = wrQuery.eq('entity_id', entityId);
+  }
+
+  const { data: wr } = await wrQuery.maybeSingle();
 
   if (!wr) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
   }
+
+  const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
 
   const [
     { data: invoices },
@@ -604,14 +616,14 @@ const getTaskRelated = async ({ id, entityId }) => {
     supabaseAdmin
       .from('invoices')
       .select('*, clients(name)')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('work_request_id', task.work_request_id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('disbursements')
       .select('*, clients(name)')
-      .eq('entity_id', entityId)
+      .eq('entity_id', relatedEntityId)
       .eq('linked_work_request_id', task.work_request_id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),

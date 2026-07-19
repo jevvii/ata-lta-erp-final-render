@@ -37,7 +37,7 @@ const operationsRequestsRouter = require('./modules/operationsRequests/routes');
 const app = express();
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
   origin: env.isDevelopment ? true : env.frontendUrl,
   credentials: true,

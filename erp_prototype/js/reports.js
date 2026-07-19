@@ -106,6 +106,21 @@ const Reports = {
     while (node.firstChild) node.removeChild(node.firstChild);
   },
 
+  /**
+   * Detect abort/route-change errors from apiClient so they do not render
+   * as user-visible failures. Covers native AbortError, apiClient pre-flight
+   * aborts, and browser-specific message variants.
+   */
+  isAbortError(e) {
+    if (!e) return false;
+    if (e.name === 'AbortError') return true;
+    if (e.message === 'route-change') return true;
+    if (e.message === 'Request aborted') return true;
+    if (typeof e.message === 'string' && e.message.includes('AbortError')) return true;
+    if (typeof e.reason === 'string' && (e.reason === 'route-change' || e.reason.includes('AbortError'))) return true;
+    return false;
+  },
+
   renderMiniStat(label, value, color) {
     const card = el('div', { class: 'report-mini-stat', style: `padding: var(--spacing-md); background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); border-left: 4px solid var(--color-${color});` });
     card.appendChild(el('div', { text: label, style: 'font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em;' }));
@@ -257,7 +272,7 @@ const Reports = {
 
         content.appendChild(bento);
       } catch (e) {
-        if (e.message === 'route-change' || e.name === 'AbortError') return;
+        if (this.isAbortError(e)) return;
         console.error('Analytics report failed', e);
         this.renderErrorState(content, e.message || 'Could not load analytics.');
       }
@@ -358,7 +373,7 @@ const Reports = {
           ])
         ));
       } catch (e) {
-        if (e.message === 'route-change' || e.name === 'AbortError') return;
+        if (this.isAbortError(e)) return;
         console.error('Daily report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load daily report.');
       }
@@ -475,7 +490,7 @@ const Reports = {
           ])
         ));
       } catch (e) {
-        if (e.message === 'route-change' || e.name === 'AbortError') return;
+        if (this.isAbortError(e)) return;
         console.error('Weekly report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load weekly report.');
       }
@@ -579,7 +594,7 @@ const Reports = {
           })
         ));
       } catch (e) {
-        if (e.message === 'route-change' || e.name === 'AbortError') return;
+        if (this.isAbortError(e)) return;
         console.error('Monthly pending report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load monthly pending report.');
       }

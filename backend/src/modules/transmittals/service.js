@@ -24,8 +24,11 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
   let query = supabaseAdmin
     .from('transmittals')
     .select('*, clients(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
@@ -46,7 +49,51 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
     });
   }
 
-  return { data: data || [], count: count || 0 };
+  const rows = data || [];
+  const { data: entitiesData } = rows.length
+    ? await supabaseAdmin.from('entities').select('id, code')
+    : { data: [] };
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+
+  const mapped = rows.map((row) => ({
+    ...row,
+    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+  }));
+
+  return { data: mapped, count: count || 0 };
+};
+
+/**
+ * Count transmittals for the active entity (or all entities when entityId is 'ALL').
+ * @param {object} params
+ * @param {string} params.entityId
+ * @returns {Promise<{ active: number, archived: number, total: number }>}
+ */
+const countTransmittals = async ({ entityId }) => {
+  let query = supabaseAdmin
+    .from('transmittals')
+    .select('*', { count: 'exact' })
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data, error, count } = await query;
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to count transmittals',
+    });
+  }
+
+  const rows = data || [];
+  const active = rows.filter((t) => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
+  const archived = rows.filter((t) => t.status === 'Acknowledged' && t.archived).length;
+
+  return { active, archived, total: count || rows.length };
 };
 
 /**
@@ -333,6 +380,7 @@ const acknowledgeTransmittal = async ({ entityId, id, userId }) => {
 
 module.exports = {
   listTransmittals,
+  countTransmittals,
   createTransmittal,
   getTransmittalById,
   updateTransmittal,

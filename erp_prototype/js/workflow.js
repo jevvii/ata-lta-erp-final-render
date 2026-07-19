@@ -286,10 +286,18 @@ const WorkflowData = {
 
   async updateWorkRequest(id, changes) {
     const existing = this.getWorkRequestById(id);
-    const updated = { ...(existing || {}), ...changes, id };
-    if (existing) Object.assign(existing, changes);
+    // The entity of a work request is immutable; do not let caller-supplied
+    // `entity` overwrite the existing value or be sent to the backend.
+    const { entity: _ignoredEntity, ...safeChanges } = changes || {};
+    const updated = { ...(existing || {}), ...safeChanges, id };
+    if (existing) Object.assign(existing, safeChanges);
     try {
-      const res = await window.apiClient.workRequests.update(id, updated);
+      const payload = { ...updated };
+      delete payload.entity;
+      // Scope the mutation to the record's own entity so updates work even when
+      // the global active entity is 'ALL'.
+      const entityHeader = (existing && existing.entity) || (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+      const res = await window.apiClient.workRequests.update(id, payload, entityHeader ? { headers: { 'X-Active-Entity': entityHeader } } : undefined);
       const normalized = this.normalizeWorkRequest(res.data);
       // Preserve frontend-only fields the backend does not return/persist.
       normalized.tasks = (existing && existing.tasks) || [];

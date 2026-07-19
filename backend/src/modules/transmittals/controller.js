@@ -42,6 +42,16 @@ const listTransmittals = async (req, res, next) => {
 };
 
 /** @type {import('express').RequestHandler} */
+const getTransmittalCounts = async (req, res, next) => {
+  try {
+    const result = await service.countTransmittals({ entityId: req.activeEntity });
+    res.json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
 const createTransmittal = async (req, res, next) => {
   try {
     const validated = createTransmittalSchema.parse(req.body);
@@ -116,6 +126,7 @@ const acknowledgeTransmittal = async (req, res, next) => {
 module.exports = {
   transmittalsController: {
     listTransmittals,
+    getTransmittalCounts,
     createTransmittal,
     getTransmittal,
     updateTransmittal,

@@ -27,7 +27,7 @@ const Transmittal = {
    */
   normalizeTransmittal(t, entityCodeHint) {
     if (!t) return t;
-    const entity = entityCodeHint || t.entity || this._entityCodeFromId(t.entity_id) || Auth.activeEntity;
+    const entity = entityCodeHint || t.entityCode || t.entity_code || t.entity || this._entityCodeFromId(t.entity_id) || Auth.activeEntity;
     return {
       ...t,
       id: t.id,
@@ -93,24 +93,12 @@ const Transmittal = {
   },
 
   /**
-   * List transmittals for the active entity, handling 'ALL' by merging per-entity calls.
+   * List transmittals for the active entity. The backend handles consolidated 'ALL'
+   * by returning rows for all accessible entities; each row carries its entity_code.
    */
   async _listForActiveEntity() {
-    if (Auth.activeEntity !== 'ALL') {
-      const res = await window.apiClient.transmittals.list();
-      return (res.data || []).map(t => this.normalizeTransmittal(t));
-    }
-    const codes = (Auth.user?.entities || []).filter(c => c !== 'ALL');
-    const all = [];
-    for (const code of codes) {
-      try {
-        const res = await this._callWithEntity(code, () => window.apiClient.transmittals.list());
-        all.push(...(res.data || []).map(t => this.normalizeTransmittal(t, code)));
-      } catch (e) {
-        console.error(`Failed to load transmittals for ${code}`, e);
-      }
-    }
-    return all;
+    const res = await window.apiClient.transmittals.list();
+    return (res.data || []).map(t => this.normalizeTransmittal(t));
   },
 
   /**
@@ -134,10 +122,13 @@ const Transmittal = {
   },
 
   async _getCounts() {
-    const all = await this._listForActiveEntity();
-    const activeCount = all.filter(t => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
-    const archivedCount = all.filter(t => t.status === 'Acknowledged' && t.archived).length;
-    return { activeCount, archivedCount, all };
+    const res = await window.apiClient.transmittals.counts();
+    const data = res?.data || {};
+    return {
+      activeCount: data.active || 0,
+      archivedCount: data.archived || 0,
+      all: null
+    };
   },
 
   async render() {

@@ -31,7 +31,7 @@ const listRequests = async ({ entityId, filters = {} }) => {
     .select('*, clients(name), work_requests(title)', { count: 'exact' })
     .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
 
-  if (entityId) {
+  if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
   }
 
@@ -251,7 +251,7 @@ const getCounts = async ({ entityId, user }) => {
       .from('operations_requests')
       .select('*', { count: 'exact', head: true })
       .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
-    if (entityId) {
+    if (entityId && entityId !== 'ALL') {
       q = q.eq('entity_id', entityId);
     }
     return q;

@@ -475,7 +475,7 @@ const rejectDisbursement = async ({ entityId, id, userId, reason }) => {
 const listDisbursementTemplates = async ({ entityId }) => {
   const { data, error } = await supabaseAdmin
     .from('disbursement_templates')
-    .select('*, clients(name)')
+    .select('*, entities(code)')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order('name', { ascending: true });
@@ -516,7 +516,7 @@ const createDisbursementTemplate = async ({ entityId, userId, data }) => {
   const { data: template, error } = await supabaseAdmin
     .from('disbursement_templates')
     .insert(row)
-    .select()
+    .select('*, entities(code)')
     .single();
 
   if (error) {
@@ -556,7 +556,7 @@ const updateDisbursementTemplate = async ({ entityId, id, data }) => {
     .eq('id', id)
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .select()
+    .select('*, entities(code)')
     .single();
 
   if (error || !updated) {

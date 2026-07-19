@@ -76,7 +76,7 @@
     if (token) {
       headers.Authorization = `Bearer ${token}`;
     }
-    if (entity) {
+    if (entity && !headers['X-Active-Entity']) {
       headers['X-Active-Entity'] = entity;
     }
 
@@ -88,7 +88,9 @@
     }
 
     if (signal && signal.aborted) {
-      throw new Error(signal.reason || 'Request aborted');
+      const abortError = new Error(signal.reason || 'Request aborted');
+      abortError.name = 'AbortError';
+      throw abortError;
     }
 
     const res = await fetch(url, {
@@ -147,7 +149,8 @@
   };
 
   const post = (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) });
-  const put = (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) });
+  const put = (path, body, options = {}) =>
+    request(path, { ...options, method: 'PUT', body: JSON.stringify(body) });
   const patch = (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) });
   const del = (path) => request(path, { method: 'DELETE' });
 
@@ -379,7 +382,7 @@
       },
       create: (data) => post('/work-requests', data),
       get: (id) => get(`/work-requests/${id}`),
-      update: (id, data) => put(`/work-requests/${id}`, data),
+      update: (id, data, options) => put(`/work-requests/${id}`, data, options),
       remove: (id) => del(`/work-requests/${id}`),
       getRelated: (id) => get(`/work-requests/${id}/related`),
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
@@ -483,11 +486,17 @@
         const q = qs.toString();
         return get(`/transmittals${q ? '?' + q : ''}`);
       },
-      create: (data) => post('/transmittals', data),
+      counts: (entityId) => cachedCount(
+        `transmittals.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/transmittals/counts', entityId)),
+        { data: { active: 0, archived: 0, total: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('transmittals.counts'),
+      create: (data) => post('/transmittals', data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       get: (id) => get(`/transmittals/${id}`),
-      update: (id, data) => put(`/transmittals/${id}`, data),
-      send: (id) => post(`/transmittals/${id}/send`),
-      acknowledge: (id) => post(`/transmittals/${id}/acknowledge`),
+      update: (id, data) => put(`/transmittals/${id}`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      send: (id) => post(`/transmittals/${id}/send`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      acknowledge: (id) => post(`/transmittals/${id}/acknowledge`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
     },
 
     reports: {

@@ -27,7 +27,7 @@ router.post('/ground-workers', resolveEntity(), requirePermission('workflow:edit
 router.get('/', resolveEntity({ allowAll: true }), requirePermission('workflow:view'), operationsController.list);
 router.post('/', resolveEntity(), requirePermission('workflow:edit'), audit('work_request.created', { table: 'work_requests' }), operationsController.create);
 router.get('/:id', resolveEntity(), requirePermission('workflow:view'), operationsController.getById);
-router.get('/:id/related', resolveEntity(), requirePermission('workflow:view'), operationsController.getRelated);
+router.get('/:id/related', resolveEntity({ allowAll: true }), requirePermission('workflow:view'), operationsController.getRelated);
 router.put('/:id', resolveEntity(), requirePermission('workflow:edit'), audit('work_request.updated', { table: 'work_requests' }), operationsController.update);
 router.delete('/:id', resolveEntity(), requirePermission('workflow:edit'), audit('work_request.deleted', { table: 'work_requests' }), operationsController.remove);
 
