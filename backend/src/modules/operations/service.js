@@ -227,7 +227,7 @@ const listWorkRequests = async ({
     : visibleRows;
 
   // Only load tasks for the paginated subset (not ALL work requests)
-  const taskMap = (withTasks || !user.role === 'Admin')
+  const taskMap = withTasks
     ? await loadTasksForWorkRequests(resultRows.map((r) => r.id))
     : new Map();
 

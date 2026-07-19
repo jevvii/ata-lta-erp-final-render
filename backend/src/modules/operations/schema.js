@@ -24,7 +24,7 @@ const timeLogSchema = z.object({
 
 const createWorkRequestSchema = z.object({
   title: z.string().min(1).max(255),
-  description: z.string().optional(),
+  description: z.string().optional().nullable(),
   clientId: z.string().uuid(),
   entity: z.enum(['ATA', 'LTA']),
   status: z.string().max(50).optional(),

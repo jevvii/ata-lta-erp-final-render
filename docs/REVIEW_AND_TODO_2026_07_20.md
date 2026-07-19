@@ -316,9 +316,11 @@ The table below maps each resolved issue and each remaining task to the forecast
 
 | File | Why it changed |
 |------|----------------|
-| `backend/src/app.js` | Disabled Helmet CORP header; CORS unaffected |
+| `backend/src/app.js` | Disabled Helmet CORP header; added `Vary: X-Active-Entity` to entity-scoped `GET`/`HEAD` `/v1/*` responses |
 | `backend/src/modules/disbursements/service.js` | Fixed invalid `clients(name)` join; replaced with `entities(code)` |
-| `erp_prototype/js/workflow.js` | Strips `entity` from PUT; sends per-record `X-Active-Entity` |
+| `erp_prototype/js/workflow.js` | Strips `entity` from PUT; sends per-record `X-Active-Entity`; made `WorkflowData` entity-aware; strips literal `null` description from PUT payload; maps `In Progress`/`For Review` to board phases; local-only `boardOrder` normalization prevents board-render network storm |
+| `erp_prototype/js/app.js` | Suppresses duplicate `hashchange` during entity/form-close routing; makes `updateSidebarNotifications()` run in background so entity switches are not blocked |
+| `erp_prototype/js/utils.js` | Makes `triggerSyncReload` and `closeFormPanelAndRoute` async with single hash reset and awaited route handling |
 | `erp_prototype/js/apiClient.js` | Allows per-request header overrides; abort errors named `AbortError` |
 | `erp_prototype/js/disbursement.js` | `normalizeTemplate` derives `entity` from entity code |
 | `erp_prototype/js/users.js` | Audit log pagination loop (`limit: 100`) |
@@ -326,6 +328,8 @@ The table below maps each resolved issue and each remaining task to the forecast
 | `backend/src/modules/operationsRequests/service.js` | Skip `entity_id` filter when `entityId === 'ALL'` in counts/list |
 | `backend/src/modules/operations/routes.js` | Allow `ALL` active entity for `GET /work-requests/:id/related` |
 | `backend/src/modules/operations/service.js` | Derive real entity from parent row when `ALL`; scope related records |
+| `backend/src/modules/operations/schema.js` | Made `description` `nullable()` so `null` is accepted on update payloads |
+| `backend/src/middleware/audit.js` | Use short `req.entityCode` instead of UUID `req.activeEntity` for `audit_logs.entity` |
 | `backend/src/modules/transmittals/service.js` | Skip `entity_id` filter for `ALL`; map `entity_code` |
 | `backend/src/modules/transmittals/controller.js` | Added `countTransmittals` / `GET /v1/transmittals/counts` |
 | `backend/src/modules/transmittals/routes.js` | Use `resolveEntity({ allowAll: true })` |
@@ -436,6 +440,274 @@ The consolidated `ALL` entity selector is only meant to return true consolidated
    - `npx jest tests/unit/modules/transmittals/service.test.js --runInBand`
 3. **Verify count cache invalidation** for transmittals under both `ALL` and single-entity modes; the 30-second cache window may delay badge updates if mutations do not explicitly invalidate.
 4. **Audit dashboard schedule items** for other record types (invoices, transmittals, tasks) to ensure `_switchToItemEntity` is applied consistently before routing to any per-entity detail page.
+
+---
+
+## 8. Operations Page Follow-up Fixes
+
+Three additional defects were found while exercising the Operations page after the consolidated-view fixes in §7. All three preserve the existing global-variable SPA architecture.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 8.1 | `PUT /v1/work-requests/{id}` returns 400 with `description: Expected string, received null` | **High** | Schema mismatch between DB representation and update validator | `backend/src/modules/operations/schema.js` |
+| 8.2 | Switching consolidated/entity views on Operations page shows stale items from previous entity | **High** | Browser cache ignored active entity because it was only in `X-Active-Entity` header | `backend/src/app.js`, `erp_prototype/js/workflow.js` |
+| 8.3 | Console/network errors: `Failed to write audit log: value too long for type character varying(10)` | **High** | Audit middleware passed entity UUID (36 chars) into `varchar(10)` column | `backend/src/middleware/audit.js` |
+
+### 8.1 `PUT /v1/work-requests/{id}` — "description: Expected string, received null"
+
+**Symptom**
+Any work-request mutation that did not explicitly overwrite `description` (form save, status transitions, archive/cancel, bulk actions) failed with HTTP 400 and Zod reporting `description: Expected string, received null`.
+
+**Root cause**
+`updateWorkRequestSchema` was built from `createWorkRequestSchema.partial()`. The base schema declared `description` as `z.string().optional()`. In Zod, `.optional()` only permits the key to be absent; an explicit `null` value still fails validation.
+
+`WorkflowData.updateWorkRequest()` merges the full existing work-request record (which may contain `description: null` from the database via `toApiWorkRequest`) with the caller's changes and sends the merged object as the PUT payload. Any update path that did not explicitly replace `description` therefore transmitted `description: null`, which the update schema rejected.
+
+**Fix applied**
+Changed `createWorkRequestSchema.description` from `z.string().optional()` to `z.string().optional().nullable()`. Because `updateWorkRequestSchema = createWorkRequestSchema.partial()`, the update schema now accepts `description` as a string, omitted, or explicit `null`, matching the database/API representation. `createWorkRequestSchema` accepting `null` is harmless because the value maps to a database `NULL` anyway.
+
+No controller, service, or frontend files were modified for this fix.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/modules/operations/schema.js`
+
+**Verification steps**
+1. `node -e` load the schema and confirm `updateWorkRequestSchema.safeParse({ ..., description: null }).success` is `true`.
+2. Confirm `description: undefined` and `description: 'hello'` still parse successfully.
+3. Confirm `createWorkRequestSchema` also accepts `description: null`.
+4. Verify only `backend/src/modules/operations/schema.js` was changed (`git status --short`).
+5. In the browser, edit a work request whose `description` is null, change status, archive, or cancel it, and confirm the PUT now returns 200.
+
+### 8.2 Operations list shows stale items after switching entity/consolidated view
+
+**Symptom**
+After switching the active entity selector from ATA → LTA, or to Consolidated View (ALL), the Operations list still displayed records from the previously selected entity for up to 30 seconds. Clicking those stale records produced 404s on detail/task endpoints because those endpoints scoped queries to the newly selected entity.
+
+**Root cause**
+The Operations list endpoint (`GET /v1/work-requests?includeTasks=true`) was being cached by the browser for 30 seconds using only the URL as the cache key. The active entity is sent in the `X-Active-Entity` request header, not the URL, so switching entities reused the previous entity's cached response. The stale list then surfaced records that did not belong to the current entity.
+
+A secondary issue was that `WorkflowData.ensure()` only checked whether arrays existed; it did not verify that the cached data belonged to the currently active entity, so even the in-memory cache could theoretically reuse stale data across entity boundaries.
+
+**Fix applied**
+1. **Backend** — `backend/src/app.js`: added `Vary: X-Active-Entity` to all `GET`/`HEAD` `/v1/*` responses that use the 30-second `Cache-Control` header. This makes the browser cache key include the active entity, so entity switches no longer reuse a cached response from a previous entity.
+2. **Frontend** — `erp_prototype/js/workflow.js`: made `WorkflowData` entity-aware:
+   - Added `_entity`, `_getActiveEntity()`, and `_isEntityFresh()` helpers.
+   - `hasData()` now returns `true` only when data exists **and** it was loaded for the current `Auth.activeEntity`.
+   - `invalidate()` clears `_entity` along with the existing caches.
+   - `_load()` captures the active entity at request time and stores it after a successful load; combined with the existing `_loadGeneration` guard, in-flight loads from a prior entity are discarded.
+
+The existing `window.*` / global-variable SPA architecture is preserved; no new modules or build steps were introduced.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/app.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+
+**Verification steps**
+1. `npx jest tests/integration/operations.test.js --runInBand` in `/home/javvii/FreelanceProject/Project4_Final-Render/backend` — all operations tests should pass.
+2. `npx jest tests/integration/health.test.js --runInBand` — should pass.
+3. `node -c /home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js` — syntax should validate.
+4. Manual browser QA:
+   - Sign in as a managerial user with access to both `ATA` and `LTA`.
+   - Open `#operations`.
+   - Switch the entity dropdown to `LTA`; confirm the list refreshes and shows only LTA records.
+   - Switch to `Consolidated View`; confirm the list aggregates both ATA and LTA records.
+   - Switch back to `ATA` within 30 seconds; confirm no stale LTA records appear.
+   - In consolidated view, click work requests from each entity and confirm the detail view loads without 404s and related records match the work request's actual entity.
+
+### 8.3 Audit log insert fails with `value too long for type character varying(10)`
+
+**Symptom**
+Backend logs and network responses showed `Failed to write audit log: value too long for type character varying(10)` whenever an Agent B module route (e.g., `/v1/operations`) was used.
+
+**Root cause**
+The `resolveEntity()` middleware overrides `req.activeEntity` to the entity UUID (36 characters) for Agent B module routes. The audit middleware then passed that UUID directly to `audit_logs.entity`, which is defined as `varchar(10)`, causing PostgreSQL to reject the insert.
+
+Routes without `resolveEntity()` were unaffected because `req.activeEntity` remained the short entity code.
+
+**Fix applied**
+Changed `auditService.log()` entity source from `req.activeEntity` to `req.entityCode || req.activeEntity || null`. `req.entityCode` preserves the original short entity code (`ATA`/`LTA`/`ALL`) after `resolveEntity()` replaces `req.activeEntity` with the UUID, keeping values within the `varchar(10)` column limit. Routes without `resolveEntity()` continue to fall back to `req.activeEntity`.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/middleware/audit.js`
+
+**Verification steps**
+1. `node -c backend/src/middleware/audit.js` — syntax should be OK.
+2. `npx eslint src/middleware/audit.js` — no lint errors.
+3. `PORT=0 npx jest tests/admin-pending-audit.test.js` — 9 tests should pass.
+4. In the browser, perform any mutating action on the Operations page and confirm the backend no longer logs the `varchar(10)` error.
+
+### 8.4 Remaining Work
+
+1. **Audit other Agent B module routes** for the same `req.activeEntity` → UUID / `req.entityCode` mismatch. The audit fix covers the middleware globally, but any other code path that reads `req.activeEntity` expecting a short code on Agent B routes may still break.
+2. **Verify `Vary: X-Active-Entity` is applied consistently** across every entity-scoped list/detail endpoint. Any endpoint that uses `Cache-Control` and respects `X-Active-Entity` must include the `Vary` header or risk cross-entity cache collisions.
+3. **Confirm `WorkflowData` entity freshness** after logout/login or after the user is assigned to a new entity. The current check compares `Auth.activeEntity` at load time; if `Auth.activeEntity` changes without an explicit invalidation, cached data may still appear fresh.
+4. **Run backend integration tests for the affected modules** before committing:
+   - `PORT=0 npx jest tests/integration/operations.test.js --runInBand`
+   - `PORT=0 npx jest tests/admin-pending-audit.test.js --runInBand`
+5. **Re-audit retainer template API shape** from §2.1; the description fix unblocks updates, but the `entity_id`/`client_id`/`pf_amount` → `entity`/`clientId`/`pfAmount` mapping issue is still open.
+
+---
+
+*End of review. No commits made. No Playwright used.*
+
+---
+
+## 9. Remaining Validation & Count Fixes
+
+Two additional frontend-side defects were validated and fixed while exercising the Operations page in the dev server.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 9.1 | `PUT /v1/work-requests` still returns `description: Expected string, received null` in dev server | **High** | Merged cached record transmits literal `null` description | `erp_prototype/js/workflow.js` |
+| 9.2 | Operations Board view total shows one fewer card than the "Work Requests" tab badge | **Medium** | Board phase status filters did not include current lifecycle statuses (`In Progress`, `For Review`) | `erp_prototype/js/workflow.js` |
+
+### 9.1 `PUT /v1/work-requests` — persistent `description: Expected string, received null`
+
+**Symptom**
+Even after the backend schema was made nullable (§8.1), the dev server still returned HTTP 400 with Zod reporting `description: Expected string, received null` when updating certain work requests.
+
+**Root cause**
+`WorkflowData.updateWorkRequest()` merges the full cached existing record into the PUT payload. If the cached record had `description: null`, the merged payload transmitted a literal `null` to the backend. While the current backend `schema.js` and `service.js` already accept and store `null`, a stale backend process/deployment or a frontend request reaching an older schema rejected the explicit `null`.
+
+**Fix applied**
+In `WorkflowData.updateWorkRequest()`, after deleting `payload.entity`, added:
+
+```js
+if (payload.description === null) delete payload.description;
+```
+
+This prevents the merged cached record from sending a literal `null` description, making the PUT resilient against schemas that treat optional strings as non-nullable. The global-variable SPA architecture is preserved.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+
+**Verification steps**
+1. `node --check /home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`.
+2. Start the dev server and confirm it serves source by default with `curl http://localhost:8080/health` — expect `"serveFrom": "root"`. If it says `"dist"`, stop the server, run `npm run build` (local API) or `npm run build:uat` (UAT API), then restart with `ERP_SERVE_DIST=1` if needed.
+3. In the browser, update any work request whose cached description is null/empty and confirm `PUT /v1/work-requests` succeeds without the `description: Expected string, received null` console error.
+4. If the error persists against the local backend, restart the backend Node process so it loads the current `backend/src/modules/operations/schema.js`. If it persists against the UAT backend, deploy the latest backend so the nullable schema is live.
+
+### 9.2 Operations Board view — total cards equals tab badge minus one
+
+**Symptom**
+The Operations Board view displayed one fewer card than the "Work Requests" tab badge (e.g., badge showed N, board columns summed to N-1). The missing card was still present in the list view.
+
+**Root cause**
+`refreshBoard` assigned work requests to board phases using only legacy statuses (`Draft`, `Pre-processing`, `Processing`, `Billing`, `Disbursement`, `Completed`). The current backend lifecycle uses `In Progress` and `For Review`, so any work request in those statuses was counted by the `wrCount` badge but never placed in a board column. With the current data set, exactly one work request fell into this gap, producing the observed `-1` difference.
+
+**Fix applied**
+Updated the board phase status filters in `refreshBoard`:
+- Added `In Progress` to the `pre-processing` phase statuses.
+- Added `For Review` to the `processing` phase statuses.
+- Kept the legacy statuses (`Pre-processing`, `Processing`, `Billing`, `Disbursement`) for backward compatibility with existing records.
+- Preserved the existing four-column board layout and global `window.*` SPA architecture.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+
+**Verification steps**
+1. Start the dev server (default) and confirm it serves from root: `curl http://localhost:8080/health` should return `"serveFrom": "root"`. If it returns `"dist"`, unset `ERP_SERVE_DIST`/`NODE_ENV=production` or rebuild with `npm run build`.
+2. Open Operations → Board view.
+3. Compare the "Work Requests" tab badge count with the sum of the four board column counts; they should match.
+4. Confirm cards with status `In Progress` render in the Pre-processing column and cards with status `For Review` render in the Processing column.
+5. Verify the fix in both grouped and ungrouped board views.
+
+### 9.3 Remaining Work
+
+1. **Dev-server reload / dist rebuild.** Both fixes are in the unbundled source. If the dev server is serving from `dist/` or if a stale `dist/` bundle is cached, run `npm run build` (or `node build.js`) in `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype` and restart. The default dev server serves from the project root, but environment variables (`ERP_SERVE_DIST=1` or `NODE_ENV=production`) can switch it to `dist/`.
+2. **Backend deployment for nullable description.** If testing against the UAT backend, ensure the latest `backend/src/modules/operations/schema.js` (with `description` `nullable()`) is deployed; otherwise the frontend null-guard is only a partial defense.
+3. **Audit other board/status mappings.** As the work-request lifecycle evolves, verify that any new statuses are mapped to board phases and that legacy statuses can eventually be retired.
+4. **Run frontend syntax checks** on `workflow.js` after any further edits: `node --check erp_prototype/js/workflow.js`.
+
+---
+
+## 10. Entity Switch & Board Network Storm Fixes
+
+Two additional frontend defects were fixed while exercising the Operations board and entity switcher.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 10.1 | Board render logs many `NetworkError` failures from `PUT /v1/work-requests` | **High** | Render-time normalization loop sent one PUT per visible card because `boardOrder` is frontend-only and not returned by the backend | `erp_prototype/js/workflow.js` |
+| 10.2 | Entity switch leaves stale items; sometimes needs manual refresh or long wait | **High** | Stale in-flight loads could overwrite newer entity loads; route handler reset hash twice; sidebar counts blocked routing | `erp_prototype/js/workflow.js`, `erp_prototype/js/app.js`, `erp_prototype/js/utils.js` |
+
+### 10.1 Board refresh fires concurrent `PUT /v1/work-requests` causing `NetworkError`
+
+**Symptom**
+The Operations Board view flooded the Network tab with concurrent `PUT /v1/work-requests/:id` requests and logged `TypeError: NetworkError when attempting to fetch resource`. The board still rendered, but the browser exhausted per-origin connections and other route/data fetches failed.
+
+**Root cause**
+`refreshBoard` in `erp_prototype/js/workflow.js` re-normalizes each visible card's `boardOrder` to sequential multiples of `1000` on every render. `boardOrder` is a frontend-only ordering field and is **not** returned by the backend's `toApiWorkRequest`, so each freshly loaded work request arrived with `boardOrder: null`. The normalization loop treated every card as "changed" and called `WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder })` for each visible work request, which immediately issued a `PUT` for every card. The unbounded burst of concurrent PUTs exhausted browser per-origin connections and collided with entity/route-switch abort logic, producing the observed `NetworkError`.
+
+`apiClient.js` only forwarded the calls; the bug was the render-time loop treating a frontend-only field as a persisted field.
+
+**Fix applied**
+In `refreshBoard`, replaced the two `WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder })` calls (ungrouped and grouped board normalizations) with local-only `wr.boardOrder = newOrder` assignments. Added inline comments explaining that `boardOrder` is frontend-only and is not persisted by the backend, so normalization must not trigger network requests.
+
+The explicit drag-and-drop handler `handleBoardDrop` still calls `WorkflowData.updateWorkRequest` for user-initiated moves, preserving existing UX behavior.
+
+No changes were made to `window.*` global architecture, `apiClient.js`, or backend code.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+
+**Verification steps**
+1. Run `grep -n "WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder })"` on `workflow.js` and confirm zero matches remaining in the normalization loops.
+2. Run `node --check` on both `/erp_prototype/js/workflow.js` and `/erp_prototype/js/apiClient.js`.
+3. Confirm `handleBoardDrop` still invokes `WorkflowData.updateWorkRequest(wr.id, changes)` for explicit card moves.
+4. In the browser, open Operations → Board view and confirm no `NetworkError` storm in the Network tab.
+5. Drag a card to a new column and confirm a single intentional `PUT` is sent and the new order persists after reload.
+
+### 10.2 Entity switch does not immediately reflect correct items
+
+**Symptom**
+Switching entities (e.g., ATA → LTA) left stale work-request cards/list items from the previous entity. Sometimes the correct items appeared only after a manual refresh or after a noticeable delay, making the app feel unresponsive.
+
+**Root cause**
+When the user switched entities, `App.renderEntitySwitcher` called `triggerSyncReload`, which invalidated `WorkflowData` and re-ran the router. Three issues let stale/cached work-request data render before the fresh server load completed:
+
+1. `WorkflowData.ensure()` could return or complete a load that was in flight for the **previous** entity. Its `_loadingPromise` was reset by the `finally` of any load, so a stale load could clobber a newer in-flight load, and the cache could be left populated with data from the wrong entity.
+2. `triggerSyncReload` was synchronous and fired `App.handleRoute()` without waiting. If the current hash had a subpath, the code both changed `location.hash` **and** called `handleRoute`, producing two competing route renders.
+3. `App.handleRoute` awaited `updateSidebarNotifications()` after rendering, so slow count endpoints blocked the route from completing and made the switch feel sluggish.
+
+**Fix applied**
+- `erp_prototype/js/workflow.js`
+  - Added `_loadingEntity` to `WorkflowData` so the in-flight load is bound to the active entity.
+  - Hardened `WorkflowData.ensure()` to start a fresh, generation-tagged load when the entity changes and to share only a load that matches the current entity.
+  - Updated `WorkflowData._load()` to accept a load generation, discard results if the generation or active entity changed mid-flight, and only cache when the result is still fresh.
+  - Added `Workflow.hasCachedData(entity)` so `App.handleRoute` can skip the skeleton overlay when `WorkflowData` is already fresh.
+
+- `erp_prototype/js/app.js`
+  - Added `_suppressHashChange` flag and updated the `hashchange` listener to ignore one suppressed event.
+  - Made the entity-switch `onchange` handler `async` and `await triggerSyncReload(baseHash)`.
+  - Removed the manual `location.hash = baseHash` step from the entity switcher; `triggerSyncReload` now handles the reset exactly once.
+  - Changed `updateSidebarNotifications()` in `handleRoute()` to run in the background so it no longer blocks the route switch.
+
+- `erp_prototype/js/utils.js`
+  - Made `triggerSyncReload` `async`; it now sets `is_syncing`, awaits `App.handleRoute()`, and suppresses the duplicate `hashchange` when it resets the hash.
+  - Made `closeFormPanelAndRoute` `async` and used the same hash-change suppression so form-close routing is handled once and awaited.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/app.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/utils.js`
+
+**Verification steps**
+1. `node --check` the three modified files.
+2. Start the ERP prototype, log in, and navigate to Operations.
+3. Note the work-request items for the current entity (e.g., ATA).
+4. Use the entity switcher to select the other entity (e.g., LTA).
+5. Confirm the Operations list immediately refreshes and shows only the newly selected entity's work requests — no stale items from the previous entity.
+6. Switch back to the first entity and confirm the original items return.
+7. Open a work-request detail, switch entity, and verify the app redirects to the Operations list and loads the correct entity's data.
+8. Open the browser console and confirm no errors or stale-load warnings during entity switches.
+9. Confirm sidebar badge counts still update after the route content appears (they should no longer block the route switch).
+
+### 10.3 Remaining Work
+
+1. **Re-audit board-render paths** for any other frontend-only field that might accidentally trigger network mutations on every render (e.g., `boardGroup`, computed `phase`, or temporary drag state).
+2. **Confirm `WorkflowData` entity freshness** after logout/login or after role/entity assignment changes; the generation check covers mid-flight races but does not detect stale cached data if `Auth.activeEntity` is not explicitly invalidated.
+3. **Verify `updateSidebarNotifications()` background behavior** does not race with subsequent route switches; it now runs without blocking, but any unhandled rejection should be caught.
+4. **Run frontend syntax checks** after any further edits: `node --check erp_prototype/js/workflow.js erp_prototype/js/app.js erp_prototype/js/utils.js`.
 
 ---
 

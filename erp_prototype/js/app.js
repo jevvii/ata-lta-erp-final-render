@@ -8,6 +8,7 @@ const App = {
   _routeId: 0,
   _lastNavTime: 0,
   _bundlePromises: {},
+  _suppressHashChange: false,
 
   /**
    * Load a route-specific JS bundle on demand. Each bundle is only injected
@@ -350,7 +351,7 @@ const App = {
       sel.appendChild(opt);
     });
     
-    sel.onchange = (ev) => {
+    sel.onchange = async (ev) => {
       const newEntity = ev.target.value;
       Auth.switchEntity(newEntity);
       this.updateEntityBadge();
@@ -395,11 +396,10 @@ const App = {
       // If the current route has subpaths (e.g. #billing/detail/123), reset to the base route (e.g. #billing)
       const rawHash = location.hash || '#dashboard';
       const baseHash = rawHash.split('?')[0].split('/')[0];
-      if (location.hash !== baseHash) {
-        location.hash = baseHash;
-      }
 
-      triggerSyncReload(baseHash);
+      // Let triggerSyncReload reset the hash (when needed) and re-route once,
+      // avoiding a duplicate handleRoute from both hashchange and a direct call.
+      await triggerSyncReload(baseHash);
     };
   },
 
@@ -438,7 +438,13 @@ const App = {
   },
 
   setupRouting() {
-    window.addEventListener('hashchange', () => this.handleRoute());
+    window.addEventListener('hashchange', () => {
+      if (this._suppressHashChange) {
+        this._suppressHashChange = false;
+        return;
+      }
+      this.handleRoute();
+    });
   },
 
   setupNavigation() {
@@ -762,7 +768,11 @@ const App = {
       if (module.init) await module.init();
       this.highlightNav(rawHash);
       this.updateEntityBadge();
-      await this.updateSidebarNotifications();
+      // Update sidebar badges in the background so slow count endpoints do not
+      // block the route from completing or showing fresh module content.
+      this.updateSidebarNotifications().catch(err => {
+        console.error('[App.handleRoute] sidebar notifications failed', err);
+      });
       requestAnimationFrame(() => this.updateStickyTrayOffset());
     }
   },

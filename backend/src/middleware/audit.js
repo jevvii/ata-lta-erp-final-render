@@ -27,7 +27,9 @@ const audit = (action, options = {}) => {
         action: auditMeta.action || action,
         table: auditMeta.table || options.table,
         recordId: auditMeta.recordId || null,
-        entity: req.activeEntity || null,
+        // resolveEntity() overrides req.activeEntity to the entity UUID (36 chars),
+        // which exceeds audit_logs.entity varchar(10). Use the preserved short code.
+        entity: req.entityCode || req.activeEntity || null,
         userId: req.user?.id || null,
         details: auditMeta.details || {},
       }).catch(() => {

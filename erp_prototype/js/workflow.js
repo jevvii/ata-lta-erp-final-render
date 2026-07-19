@@ -85,6 +85,13 @@ const WorkflowData = {
   _workRequests: null,
   _tasks: null,
   _loadingPromise: null,
+  // Track which entity the in-flight load belongs to so a rapid entity switch
+  // cannot return a stale load for the previous entity.
+  _loadingEntity: null,
+  _loadGeneration: 0,
+  // Track which entity the cached work requests belong to so an entity switch
+  // cannot accidentally reuse data from a previous entity.
+  _entity: null,
 
   // Pending approvals cache using window.apiClient.pendingApprovals.
   _pendingApprovals: null,
@@ -131,14 +138,25 @@ const WorkflowData = {
     };
   },
 
+  _getActiveEntity() {
+    return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
+
+  _isEntityFresh() {
+    return this._entity === this._getActiveEntity();
+  },
+
   hasData() {
-    return Array.isArray(this._workRequests) && Array.isArray(this._tasks);
+    return Array.isArray(this._workRequests) && Array.isArray(this._tasks) && this._isEntityFresh();
   },
 
   invalidate() {
     this._workRequests = null;
     this._tasks = null;
     this._loadingPromise = null;
+    this._loadingEntity = null;
+    this._loadGeneration++;
+    this._entity = null;
     this._pendingApprovals = null;
     this._pendingApprovalsPromise = null;
     this._pendingApprovalsLoadedAt = null;
@@ -200,16 +218,31 @@ const WorkflowData = {
 
   async ensure() {
     if (this.hasData()) return;
-    if (this._loadingPromise) return this._loadingPromise;
-    this._loadingPromise = this._load().finally(() => { this._loadingPromise = null; });
-    return this._loadingPromise;
+    const activeEntity = this._getActiveEntity();
+    // If a load is already in flight for the current entity, share it.
+    if (this._loadingPromise && this._loadingEntity === activeEntity) return this._loadingPromise;
+    // Otherwise start a fresh load for the active entity and tag it with a new
+    // generation. The finally only clears the in-flight promise when the
+    // generation is still the one it started with, so stale loads cannot clobber
+    // newer loads started after an invalidate or another entity switch.
+    const loadGen = ++this._loadGeneration;
+    this._loadingEntity = activeEntity;
+    const promise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._loadingPromise = null;
+        this._loadingEntity = null;
+      }
+    });
+    this._loadingPromise = promise;
+    return promise;
   },
 
   async ensurePendingApprovals() {
     return this.loadPendingApprovals();
   },
 
-  async _load(options = {}) {
+  async _load(loadGen, options = {}) {
+    const entity = this._getActiveEntity();
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure()
@@ -226,8 +259,15 @@ const WorkflowData = {
       });
       tasks.push(...wr.tasks);
     });
+    // If the cache was invalidated, the active entity changed, or a newer load
+    // started while this one was in flight, discard the stale result so it
+    // cannot overwrite a newer load's data.
+    if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
+      return { workRequests: this._workRequests || [], tasks: this._tasks || [], meta: res.meta || {} };
+    }
     this._workRequests = wrs;
     this._tasks = tasks;
+    this._entity = entity;
     return { workRequests: wrs, tasks, meta: res.meta || {} };
   },
 
@@ -294,6 +334,7 @@ const WorkflowData = {
     try {
       const payload = { ...updated };
       delete payload.entity;
+      if (payload.description === null) delete payload.description;
       // Scope the mutation to the record's own entity so updates work even when
       // the global active entity is 'ALL'.
       const entityHeader = (existing && existing.entity) || (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
@@ -633,6 +674,12 @@ const Workflow = {
   isPendingWr,
   disableIfPending,
   view: 'list',
+
+  // Tell the app shell whether the cached WorkflowData is fresh for the given
+  // entity, so it can skip the route skeleton overlay when data is already usable.
+  hasCachedData(entity) {
+    return typeof WorkflowData !== 'undefined' && WorkflowData.hasData() && WorkflowData._entity === entity;
+  },
   detailWrId: null,
   templateEditingId: null,
   selectedTaskId: null,
@@ -3027,6 +3074,7 @@ const Workflow = {
     let page = 1;
     let totalPages = 1;
     let pageMeta = {};
+    let refreshGeneration = 0;
 
     // Restore saved filters (v2 format)
     const savedFilters = App.restoreFilters('operations');
@@ -3631,6 +3679,7 @@ const Workflow = {
     };
 
     const refresh = async () => {
+      const gen = ++refreshGeneration;
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
       await WorkflowData.loadPendingApprovals();
       const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
@@ -3663,13 +3712,21 @@ const Workflow = {
         return matchesEntity;
       }));
 
+      // Active work-request views exclude archived and cancelled records so the
+      // nav badge, table, list, and board all operate on the same visible set.
+      wrs = wrs.filter(r => !r.archived && r.status !== 'Cancelled');
+
       const listTaskMap = buildPageTaskMap(wrs);
       wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
       wrs = applyFilters(wrs, listTaskMap);
 
+      // If a newer refresh was started while this one was awaiting data, do not
+      // overwrite the already-rendered newer result with stale data.
+      if (gen !== refreshGeneration) return;
+
       const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
       if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
-      else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, stickyContainer);
+      else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
       else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
 
       renderPagination();
@@ -3931,8 +3988,8 @@ const Workflow = {
 
     const boardPhases = [
       { key: 'draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
-      { key: 'pre-processing', label: 'Pre-processing', statuses: ['Pre-processing'], targetStatus: 'Pre-processing', color: '#3b82f6' },
-      { key: 'processing', label: 'Processing', statuses: ['Processing', 'Billing', 'Disbursement'], targetStatus: 'Processing', color: '#f59e0b' },
+      { key: 'pre-processing', label: 'Pre-processing', statuses: ['Pre-processing', 'In Progress'], targetStatus: 'Pre-processing', color: '#3b82f6' },
+      { key: 'processing', label: 'Processing', statuses: ['Processing', 'Billing', 'Disbursement', 'For Review'], targetStatus: 'Processing', color: '#f59e0b' },
       { key: 'completed', label: 'Completed', statuses: ['Completed'], targetStatus: 'Completed', color: '#10b981' }
     ];
 
@@ -4141,8 +4198,10 @@ const Workflow = {
         phaseWrs.forEach((wr, idx) => {
           const newOrder = (idx + 1) * 1000;
           if (wr.boardOrder !== newOrder) {
+            // boardOrder is frontend-only and is not persisted by the backend.
+            // Normalize it locally to keep drop midpoint math stable without firing
+            // a PUT for every card on each refresh.
             wr.boardOrder = newOrder;
-            WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder });
           }
         });
         sortedWrs.push(...phaseWrs);
@@ -4227,8 +4286,10 @@ const Workflow = {
           phaseWrs.forEach((wr, idx) => {
             const newOrder = (idx + 1) * 1000;
             if (wr.boardOrder !== newOrder) {
+              // boardOrder is frontend-only and is not persisted by the backend.
+              // Normalize it locally to keep drop midpoint math stable without firing
+              // a PUT for every card on each refresh.
               wr.boardOrder = newOrder;
-              WorkflowData.updateWorkRequest(wr.id, { boardOrder: newOrder });
             }
           });
         });

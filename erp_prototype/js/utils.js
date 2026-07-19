@@ -2011,7 +2011,10 @@ window.Utils = {
  * @param {string} hash - Optional target hash (e.g. '#billing')
  * @param {Object} messageConfig - Optional toast success message config
  */
-function triggerSyncReload(hash, messageConfig) {
+async function triggerSyncReload(hash, messageConfig) {
+  // Keep the loading overlay active while we invalidate caches and re-render.
+  try { sessionStorage.setItem('is_syncing', 'true'); } catch (e) {}
+
   // Invalidate common caches so the next render picks up fresh data.
   try {
     if (typeof window.apiClient !== 'undefined') {
@@ -2040,11 +2043,14 @@ function triggerSyncReload(hash, messageConfig) {
   }
 
   const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
-  if (hash && location.hash !== hash) {
-    location.hash = hash;
-    // hashchange will invoke App.handleRoute(); no need to call it directly.
-  } else if (appRef && typeof appRef.handleRoute === 'function') {
-    appRef.handleRoute();
+  if (appRef && typeof appRef.handleRoute === 'function') {
+    // If we are also changing the hash, suppress the duplicate hashchange
+    // event so the route is handled exactly once and awaited.
+    if (hash && location.hash !== hash) {
+      appRef._suppressHashChange = true;
+      location.hash = hash;
+    }
+    await appRef.handleRoute();
   }
 
   if (messageConfig) {
@@ -2067,20 +2073,21 @@ function triggerSyncReload(hash, messageConfig) {
  * @param {string} hash - The URL hash path to navigate to (e.g. '#billing')
  * @param {Object} [messageConfig] - Optional toast success message config.
  */
-function closeFormPanelAndRoute(hash, messageConfig) {
+async function closeFormPanelAndRoute(hash, messageConfig) {
   if (window.SidePaneInstance && typeof window.SidePaneInstance.close === 'function') {
     window.SidePaneInstance.close();
   }
 
   if (messageConfig) {
-    triggerSyncReload(hash, messageConfig);
+    await triggerSyncReload(hash, messageConfig);
   } else {
-    if (hash) {
-      location.hash = hash;
-    }
     const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
     if (appRef && typeof appRef.handleRoute === 'function') {
-      appRef.handleRoute();
+      if (hash && location.hash !== hash) {
+        appRef._suppressHashChange = true;
+        location.hash = hash;
+      }
+      await appRef.handleRoute();
     }
   }
 }

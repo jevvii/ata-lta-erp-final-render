@@ -103,6 +103,9 @@ app.use((req, res, next) => {
   if (!req.path.startsWith('/v1/')) return next();
   if (req.method === 'GET' || req.method === 'HEAD') {
     res.setHeader('Cache-Control', 'private, max-age=30, stale-while-revalidate=60');
+    // The active entity is sent in a header, not the URL, so vary the cache by it.
+    // Without this, switching between ATA/LTA/ALL serves the previous entity's data.
+    res.setHeader('Vary', 'X-Active-Entity');
   } else {
     res.setHeader('Cache-Control', 'no-store');
   }
