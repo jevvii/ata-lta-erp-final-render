@@ -12,9 +12,10 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 const { requirePermission } = require('../../middleware/rbac');
 const { audit } = require('../../middleware/audit');
 
+router.get('/', auth, entityScope, resolveEntity({ allowAll: true }), requirePermission('clients:view'), clientsController.list);
+
 router.use(auth, entityScope, resolveEntity());
 
-router.get('/', requirePermission('clients:view'), clientsController.list);
 router.post('/', requirePermission('clients:edit'), audit('client.created', { table: 'clients' }), clientsController.create);
 router.get('/:id', requirePermission('clients:view'), clientsController.getById);
 router.put('/:id', requirePermission('clients:edit'), audit('client.updated', { table: 'clients' }), clientsController.update);

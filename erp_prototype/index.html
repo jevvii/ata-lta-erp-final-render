@@ -8,7 +8,29 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="http://localhost:3000">
   <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
-  <link rel="stylesheet" href="css/styles.css">
+  <!-- Preload critical JS to start download early while HTML parses -->
+  <link rel="preload" href="js/utils.js" as="script">
+  <link rel="preload" href="js/apiClient.js" as="script">
+  <link rel="preload" href="js/auth.js" as="script">
+  <!-- Critical CSS for instant first paint (loading screen + login + app shell) -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --color-bg: #f4f6fb; --color-surface: #ffffff; --color-text: #2d2d3f; --color-text-muted: #9494a0; --color-border: #f0f0f5; --color-primary: #2563eb; --color-primary-dark: #1d4ed8; --font-sans: "Poppins", "Inter", system-ui, -apple-system, sans-serif; --radius-sm: 12px; --sidebar-width: 200px; --shadow-soft: 0 10px 40px rgba(0,0,0,0.03); }
+    [data-theme="dark"] { --color-bg: #0c0f1a; --color-surface: #13172a; --color-text: #e2e8f0; --color-text-muted: #94a3b8; --color-border: #1e2540; --color-primary: #4f8afa; }
+    html, body { height: 100%; font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); }
+    .hidden { display: none !important; }
+    .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+    .loading-spinner { width: 40px; height: 40px; border: 3px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .login-card { max-width: 400px; margin: 15vh auto; padding: 2rem; background: var(--color-surface); border-radius: var(--radius-sm); box-shadow: var(--shadow-soft); }
+    .app-header { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; padding: .5rem 1rem; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
+    .app-layout { display: flex; min-height: calc(100vh - 49px); }
+    .sidebar { width: var(--sidebar-width); background: var(--color-surface); border-right: 1px solid var(--color-border); padding: .5rem 0; flex-shrink: 0; overflow-y: auto; }
+    .content { flex: 1; padding: 1.5rem; min-width: 0; overflow-x: hidden; }
+  </style>
+  <!-- Full stylesheet loaded non-blocking after first paint -->
+  <link rel="stylesheet" href="css/styles.css" media="print" onload="this.media='all'">
+  <noscript><link rel="stylesheet" href="css/styles.css"></noscript>
 </head>
 <body>
 
@@ -102,25 +124,31 @@
     </div>
   </div>
 
+  <!-- Core scripts: always needed for app shell, auth, and default routes -->
   <script src="js/utils.js"></script>
   <script src="env.js"></script>
   <script src="js/apiClient.js"></script>
+  <script src="js/auth.js"></script>
   <script src="js/dataTable.js" defer></script>
   <script src="js/kanban.js" defer></script>
   <script src="js/datepicker.js" defer></script>
   <script src="js/timepicker.js" defer></script>
-  <script src="js/auth.js"></script>
   <script src="js/dashboard.js" defer></script>
   <script src="js/clients.js" defer></script>
   <script src="js/workflow.js" defer></script>
-  <script src="js/billing.js" defer></script>
-  <script src="js/disbursement.js" defer></script>
-  <script src="js/dms.js" defer></script>
-  <script src="js/reports.js" defer></script>
-  <script src="js/transmittal.js" defer></script>
   <script src="js/pendingChanges.js" defer></script>
-  <script src="js/users.js" defer></script>
-  <script src="js/profile.js" defer></script>
+  <script>
+    // Dev-mode lazy bundle definitions.
+    // In production, build.js sets window.__ERP_BUNDLES__ to hashed single-file bundles.
+    // In dev, we map bundle names to arrays of individual source files that are
+    // loaded on demand when the user navigates to the relevant route.
+    if (!window.__ERP_BUNDLES__) {
+      window.__ERP_DEV_BUNDLES__ = {
+        billing: ['js/billing.js', 'js/disbursement.js', 'js/transmittal.js'],
+        admin: ['js/users.js', 'js/reports.js', 'js/profile.js', 'js/dms.js']
+      };
+    }
+  </script>
   <script src="js/app.js" defer></script>
   <script>
     (function () {

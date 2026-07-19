@@ -334,6 +334,14 @@ const resetMock = () => {
   mockTokens.clear();
   Object.keys(mockTables).forEach((key) => mockTables[key].clear());
   sequence = 0;
+  // Clear the auth middleware's in-memory profile cache so stale cached
+  // profiles from a previous test don't leak into the next test.
+  try {
+    const { clearProfileCache } = require('../../src/middleware/auth');
+    clearProfileCache();
+  } catch (e) {
+    // Ignore if not available
+  }
 };
 
 module.exports = {

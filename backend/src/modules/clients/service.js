@@ -133,16 +133,28 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
 
   let query = supabaseAdmin
     .from('clients')
-    .select('*')
-    .eq('entity_id', entityId)
+    .select('*', { count: 'exact' })
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) {
     query = query.eq('status', status);
   }
 
-  const { data, error } = await query;
+  if (search) {
+    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
+  }
+
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    query = query.range(offset, offset + limitNum - 1);
+  }
+
+  const { data, error, count } = await query;
 
   if (error) {
     throw new AppError({
@@ -154,34 +166,24 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
 
   let rows = data || [];
 
-  if (search) {
-    const q = search.toLowerCase();
-    rows = rows.filter(
-      (row) =>
-        (row.name || '').toLowerCase().includes(q) ||
-        (row.trade_name || '').toLowerCase().includes(q) ||
-        (row.tin || '').toLowerCase().includes(q)
-    );
-  }
-
   const clientIds = rows.map((r) => r.id);
-  const [related, entityCode] = await Promise.all([
+  const [related, { data: entitiesData }] = await Promise.all([
     loadRelated(clientIds),
-    resolveEntityCode(entityId),
+    supabaseAdmin.from('entities').select('id, code'),
   ]);
+
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
 
   const mapped = rows.map((row) =>
     toApiClient(row, {
-      entityCode,
+      entityCode: entityCodeMap.get(row.entity_id) || row.entity_id,
       contactDetails: related.contactDetails.get(row.id) || [],
       relatedCompanies: related.relatedCompanies.get(row.id) || [],
     })
   );
 
-  const total = mapped.length;
-  const result = isPaginated
-    ? mapped.slice((pageNum - 1) * limitNum, pageNum * limitNum)
-    : mapped;
+  const result = mapped;
+  const total = count || 0;
 
   if (!isPaginated) {
     return { data: result };

@@ -15,7 +15,15 @@ const VALID_TRANSITIONS = {
   Cancelled: [],
 };
 
+/* ── Cached entity resolution ─────────────────────────────────────── */
+const ENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const entityIdCache = new Map();   // code → { id, expiresAt }
+const entityCodeCache = new Map(); // id   → { code, expiresAt }
+
 const resolveEntityId = async (code) => {
+  const cached = entityIdCache.get(code);
+  if (cached && Date.now() < cached.expiresAt) return cached.id;
+
   const { data, error } = await supabaseAdmin
     .from('entities')
     .select('id')
@@ -24,12 +32,17 @@ const resolveEntityId = async (code) => {
   if (error || !data) {
     throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Unknown entity ${code}` });
   }
+  entityIdCache.set(code, { id: data.id, expiresAt: Date.now() + ENTITY_CACHE_TTL_MS });
   return data.id;
 };
 
 const resolveEntityCode = async (id) => {
+  const cached = entityCodeCache.get(id);
+  if (cached && Date.now() < cached.expiresAt) return cached.code;
+
   const { data, error } = await supabaseAdmin.from('entities').select('code').eq('id', id).maybeSingle();
   if (error || !data) return id;
+  entityCodeCache.set(id, { code: data.code, expiresAt: Date.now() + ENTITY_CACHE_TTL_MS });
   return data.code;
 };
 
@@ -172,20 +185,31 @@ const listWorkRequests = async ({
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list work requests' });
   }
 
-  const rows = (data || []).filter((row) => {
-    if (user.role === 'Admin') return true;
-    return canViewWorkRequest(row, user, new Map());
-  });
+  // For Admin users, skip the expensive visibility filter entirely.
+  // For other users, pre-filter using WR-level assignment (which doesn't need tasks).
+  // Task-level assignment check happens after pagination to avoid loading all tasks.
+  let visibleRows;
+  if (user.role === 'Admin') {
+    visibleRows = data || [];
+  } else {
+    visibleRows = (data || []).filter((row) =>
+      row.assigned_to === user.id || row.requested_by === user.id ||
+      isManagerial(user)
+    );
+  }
 
-  const taskMap = await loadTasksForWorkRequests(rows.map((r) => r.id));
-
-  const visibleRows = rows.filter((row) => user.role === 'Admin' || canViewWorkRequest(row, user, taskMap));
   const entityCode = await resolveEntityCode(entityId);
-
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
+
+  // Paginate from the pre-filtered set
   const resultRows = isPaginated
     ? visibleRows.slice((pageNum - 1) * limitNum, pageNum * limitNum)
     : visibleRows;
+
+  // Only load tasks for the paginated subset (not ALL work requests)
+  const taskMap = (withTasks || !user.role === 'Admin')
+    ? await loadTasksForWorkRequests(resultRows.map((r) => r.id))
+    : new Map();
 
   const result = resultRows.map((row) => {
     const wr = toApiWorkRequest(row, entityCode);

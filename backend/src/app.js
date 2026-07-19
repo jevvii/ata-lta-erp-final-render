@@ -96,6 +96,19 @@ app.use(rateLimit({
 // Compression for response bodies
 app.use(compression());
 
+// Cache-Control headers for API responses.
+// GET /v1/* responses are cacheable for 30s to reduce redundant round-trips
+// during rapid SPA navigation. Mutations always get no-store.
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/v1/')) return next();
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.setHeader('Cache-Control', 'private, max-age=30, stale-while-revalidate=60');
+  } else {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  next();
+});
+
 // Extended health check with dependency verification.
 // Cached for 30 s to avoid hammering dependencies under load;
 // each probe has a 5 s timeout so partial outages don't stall the endpoint.
