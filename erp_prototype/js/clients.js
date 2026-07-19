@@ -85,6 +85,10 @@ const Clients = {
           client = res.data;
         } catch (e) {
           console.error('Failed to load client for form', e);
+          if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+          this.editingId = null;
+          location.hash = '#clients';
+          return container;
         }
       }
       const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
@@ -744,6 +748,9 @@ const Clients = {
         client = this.normalizeClient(res.data);
       } catch (e) {
         console.error('Failed to load client form', e);
+        if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+        this.showList();
+        return;
       }
     }
     const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;

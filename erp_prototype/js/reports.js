@@ -379,7 +379,11 @@ const Reports = {
       }
     };
 
-    dateInput.addEventListener('change', () => { this.dailyDate = dateInput.value; refresh(); });
+    dateInput.addEventListener('change', () => {
+      this.dailyDate = dateInput.value || new Date().toISOString().slice(0, 10);
+      if (!dateInput.value) dateInput.value = this.dailyDate;
+      refresh();
+    });
 
     const refreshBtn = el('button', {
       class: 'btn btn-secondary btn-sm',
@@ -496,7 +500,11 @@ const Reports = {
       }
     };
 
-    weekInput.addEventListener('change', () => { this.weeklyDate = weekInput.value; refresh(); });
+    weekInput.addEventListener('change', () => {
+      this.weeklyDate = weekInput.value || new Date().toISOString().slice(0, 10);
+      if (!weekInput.value) weekInput.value = this.weeklyDate;
+      refresh();
+    });
 
     const refreshBtn = el('button', {
       class: 'btn btn-secondary btn-sm',
@@ -600,7 +608,11 @@ const Reports = {
       }
     };
 
-    monthInput.addEventListener('change', () => { this.monthlyMonth = monthInput.value; refresh(); });
+    monthInput.addEventListener('change', () => {
+      this.monthlyMonth = monthInput.value || new Date().toISOString().slice(0, 7);
+      if (!monthInput.value) monthInput.value = this.monthlyMonth;
+      refresh();
+    });
 
     const refreshBtn = el('button', {
       class: 'btn btn-secondary btn-sm',

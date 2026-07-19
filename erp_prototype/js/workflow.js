@@ -442,6 +442,15 @@ const WorkflowData = {
     return { invoices: [], disbursements: [] };
   },
 
+  _isAbortError(e) {
+    if (!e) return false;
+    if (e.name === 'AbortError') return true;
+    if (typeof e === 'string' && (e === 'route-change' || e.includes('AbortError'))) return true;
+    if (typeof e.message === 'string' && (e.message === 'route-change' || e.message === 'Request aborted' || e.message.includes('AbortError'))) return true;
+    if (typeof e.reason === 'string' && (e.reason === 'route-change' || e.reason.includes('AbortError'))) return true;
+    return false;
+  },
+
   _normalizeRelatedInvoice(inv) {
     if (!inv) return inv;
     return {
@@ -546,6 +555,9 @@ const WorkflowData = {
         return normalized;
       })
       .catch(async err => {
+        if (this._isAbortError(err)) {
+          return this._relatedByWr.get(id) || this._emptyWrRelated();
+        }
         console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
         if (!this._relatedByWr.has(id)) {
           this._relatedByWr.set(id, await this._buildRelatedFromApi(id));
@@ -586,6 +598,9 @@ const WorkflowData = {
       return normalized;
     })()
       .catch(async err => {
+        if (this._isAbortError(err)) {
+          return this._relatedByTask.get(id) || this._emptyTaskRelated();
+        }
         console.error(`[WorkflowData] failed to load related for task ${id}`, err);
         if (!this._relatedByTask.has(id)) {
           this._relatedByTask.set(id, await this._buildTaskRelatedFromApi(id));
@@ -2688,6 +2703,7 @@ const Workflow = {
     await Promise.all([
       WorkflowData.ensure(),
       this._loadRetainerTemplates(),
+      this._loadGroundWorkers(),
     ]);
     await WorkflowData.loadPendingApprovals();
     const container = el('div', { class: 'page' });
@@ -6774,7 +6790,7 @@ const Workflow = {
     ((window.apiClient.userCache._users || []) || []).forEach(u => {
       if (u.name) uniqueEmpNames.add(u.name.trim());
     });
-    this._groundWorkers.forEach(gw => {
+    (this._groundWorkers || []).forEach(gw => {
       if (gw.name) uniqueEmpNames.add(gw.name.trim());
     });
     sortedTasks.forEach(t => {

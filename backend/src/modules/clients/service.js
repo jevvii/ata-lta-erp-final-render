@@ -326,13 +326,17 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * @returns {Promise<object|null>}
  */
 const getClientById = async ({ id, entityId }) => {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('clients')
     .select('*')
     .eq('id', id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (entityId) {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new AppError({
