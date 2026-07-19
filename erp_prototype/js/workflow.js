@@ -2630,7 +2630,10 @@ const Workflow = {
   },
 
   async render() {
-    await WorkflowData.ensure();
+    await Promise.all([
+      WorkflowData.ensure(),
+      this._loadRetainerTemplates(),
+    ]);
     await WorkflowData.loadPendingApprovals();
     const container = el('div', { class: 'page' });
     if (this.view === 'list') {
@@ -2849,7 +2852,7 @@ const Workflow = {
     if (this.view === 'list') {
       container.appendChild(this.renderList());
     } else if (this.view === 'form') {
-      container.appendChild(this.renderForm());
+      container.appendChild(await this.renderForm());
     } else if (this.view === 'detail') {
       container.appendChild(await this.renderDetail());
     } else if (this.view === 'templates') {
@@ -2905,7 +2908,7 @@ const Workflow = {
       return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
     }).length;
 
-    const templateCount = this._retainerTemplates.filter(t => {
+    const templateCount = (this._retainerTemplates || []).filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
       if (entity === 'ALL') {
         return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
@@ -5622,7 +5625,7 @@ const Workflow = {
     form.appendChild(descSection);
 
     // Use Retainer Template button (only on creation, not edit) — placed above tasks
-    const templates = this._retainerTemplates.filter(t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
     let selectedTemplateId = null;
     let templateBtnRef = null;
     if (!wr && templates.length > 0) {
@@ -6204,7 +6207,7 @@ const Workflow = {
     }
 
     record.tasks = taskRecords;
-    const result = PendingChanges.submit('workRequests', record, isNew);
+    const result = await PendingChanges.submit('workRequests', record, isNew);
 
     // Sync to the backend when the request is approved (admin/managerial save).
     let apiWrId = this.editingId;
@@ -9921,7 +9924,7 @@ const Workflow = {
       predMenu.appendChild(optionEl);
     });
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const groundWorkerName = gwDropdown.searchText.trim();
@@ -9958,7 +9961,7 @@ const Workflow = {
         taskDocuments: [],
         comments: []
       };
-      const result = PendingChanges.submit('tasks', newTask, true);
+      const result = await PendingChanges.submit('tasks', newTask, true);
       const msgConfig = {
         title: 'Task Added',
         message: result.approved
@@ -9996,14 +9999,15 @@ const Workflow = {
    * Opens the Work Request form in a shared side-peek panel, optionally forcing a
    * specific pane mode. Used by the full-page view switcher.
    */
-  openWorkRequestForm(mode = null) {
+  async openWorkRequestForm(mode = null) {
     const isNew = !this.editingId;
     const wr = isNew ? null : WorkflowData.getWorkRequestById(this.editingId);
     const fullPageRoute = isNew ? '#operations/form/new' : `#operations/form/${this.editingId}`;
+    const formEl = await this.renderForm();
     openFormPanel({
       icon: '📝',
       title: ' ',
-      formContent: this.renderForm(),
+      formContent: formEl,
       formId: 'wr-form',
       mode,
       viewContext: 'work-request-form',

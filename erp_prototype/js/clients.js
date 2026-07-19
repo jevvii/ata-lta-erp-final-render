@@ -182,13 +182,13 @@ const Clients = {
 
     container.appendChild(content);
 
-    search.addEventListener('input', debounce(() => {
+    search.addEventListener('input', debounce(async () => {
       const q = search.value.trim();
       if (this.activeTab === 'active') {
         this.renderList(listContainer, q);
       } else {
         this.clearNode(archiveContainer);
-        archiveContainer.appendChild(this.renderArchive(q));
+        archiveContainer.appendChild(await this.renderArchive(q));
       }
     }, 200));
 

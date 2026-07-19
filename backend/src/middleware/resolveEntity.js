@@ -12,6 +12,7 @@
  */
 
 const { resolveEntityId } = require('../lib/entityResolver');
+const AppError = require('../lib/AppError');
 
 const VALID_ENTITIES = ['ATA', 'LTA'];
 
