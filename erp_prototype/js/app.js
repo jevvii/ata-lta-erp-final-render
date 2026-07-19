@@ -5,6 +5,8 @@
 
 const App = {
   currentModule: null,
+  _routeId: 0,
+  _lastNavTime: 0,
 
   /**
    * Theme management: manual toggle with OS preference fallback.
@@ -316,6 +318,13 @@ const App = {
     else if (Auth.activeEntity === 'LTA') badge.classList.add('badge-lta');
   },
 
+  renderRouteSkeleton(routeName) {
+    if (typeof Utils !== 'undefined' && typeof Utils.renderRouteSkeleton === 'function') {
+      return Utils.renderRouteSkeleton(routeName);
+    }
+    return '<div class="route-loading-overlay"><div class="loading-spinner"></div></div>';
+  },
+
   setupRouting() {
     window.addEventListener('hashchange', () => this.handleRoute());
   },
@@ -324,6 +333,12 @@ const App = {
     document.querySelectorAll('nav a[data-module]').forEach(link => {
       link.addEventListener('click', (e) => {
         e.preventDefault();
+
+        // 100 ms debounce to avoid accidental rapid-fire nav clicks.
+        const now = Date.now();
+        if (now - this._lastNavTime < 100) return;
+        this._lastNavTime = now;
+
         const href = link.getAttribute('href');
         // Reset module view to 'list' when clicking a nav link directly
         const moduleViewMap = {
@@ -427,8 +442,17 @@ const App = {
   },
 
   async handleRoute() {
+    const routeId = ++this._routeId;
+    performance.mark('route-start-' + routeId);
+
     if (window.SidePaneInstance) window.SidePaneInstance.close();
     const rawHash = location.hash || '#dashboard';
+
+    // Abort in-flight GET requests from the previous route so the dashboard N+1
+    // fetches (and similar) can be cancelled cleanly.
+    if (typeof window.apiClient !== 'undefined' && typeof window.apiClient.abortRequests === 'function') {
+      window.apiClient.abortRequests('route-change');
+    }
 
     // Clear editingPendingId when leaving form routes
     const hasFormInHash = rawHash.includes('/form/') || rawHash.includes('/templateForm/');
@@ -569,13 +593,34 @@ const App = {
         previousModule.cleanup();
       }
 
-      content.innerHTML = '';
-      const rendered = await module.render();
+      // If the module has warm data for the current entity, skip the skeleton
+      // overlay and let the module render from cache immediately. Modules expose
+      // a simple contract: hasCachedData(entity) returns true when data is usable.
+      const entity = Auth.activeEntity;
+      const hasCache = typeof module.hasCachedData === 'function' && module.hasCachedData(entity);
+      if (!hasCache) {
+        content.innerHTML = this.renderRouteSkeleton(rawHash);
+      }
+
+      const rendered = await module.render(routeId);
+
+      // Race guard: a newer handleRoute() wins; do not commit stale render output.
+      if (routeId !== this._routeId) {
+        performance.mark('route-end-' + routeId);
+        performance.measure('route-switch-' + routeId, 'route-start-' + routeId, 'route-end-' + routeId);
+        return;
+      }
+
+      content.replaceChildren();
       if (typeof rendered === 'string') {
         content.innerHTML = rendered;
-      } else {
+      } else if (rendered) {
         content.appendChild(rendered);
       }
+
+      performance.mark('route-end-' + routeId);
+      performance.measure('route-switch-' + routeId, 'route-start-' + routeId, 'route-end-' + routeId);
+
       if (module.init) module.init();
       this.highlightNav(rawHash);
       this.updateEntityBadge();

@@ -17,17 +17,23 @@ const validate = (schema, data) => {
   return result.data;
 };
 
-const resolveEntityId = async (req) => operationsService.resolveEntityId(req.activeEntity);
-
 const list = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
-    const data = await operationsService.listWorkRequests({
+    const entityId = req.entityUUID;
+    const { data, meta } = await operationsService.listWorkRequests({
       entityId,
       user: req.user,
       search: req.query.search,
+      status: req.query.status,
+      clientId: req.query.clientId,
+      page: req.query.page,
+      limit: req.query.limit,
+      sortBy: req.query.sortBy,
+      sortOrder: req.query.sortOrder,
+      includeTasks: req.query.includeTasks,
     });
-    res.status(200).json({ data });
+    const isPaginated = req.query.page !== undefined || req.query.limit !== undefined;
+    res.status(200).json(isPaginated ? { data, meta } : { data });
   } catch (err) {
     next(err);
   }
@@ -36,9 +42,9 @@ const list = async (req, res, next) => {
 const create = async (req, res, next) => {
   try {
     const payload = validate(createWorkRequestSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.activeEntity) {
+    if (payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Work request entity must match active entity' });
     }
 
@@ -61,7 +67,7 @@ const create = async (req, res, next) => {
 
 const getById = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const wr = await operationsService.getWorkRequestById({ id: req.params.id, entityId, user: req.user });
     if (!wr) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
@@ -75,9 +81,9 @@ const getById = async (req, res, next) => {
 const update = async (req, res, next) => {
   try {
     const payload = validate(updateWorkRequestSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.activeEntity) {
+    if (payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Work request entity must match active entity' });
     }
 
@@ -100,7 +106,7 @@ const update = async (req, res, next) => {
 
 const remove = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const removed = await operationsService.deleteWorkRequest({ id: req.params.id, entityId, user: req.user });
     if (!removed) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
@@ -123,7 +129,7 @@ const remove = async (req, res, next) => {
 
 const listTasks = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const data = await operationsService.listTasks({ workRequestId: req.params.wrId, entityId });
     res.status(200).json({ data });
   } catch (err) {
@@ -134,7 +140,7 @@ const listTasks = async (req, res, next) => {
 const createTask = async (req, res, next) => {
   try {
     const payload = validate(createTaskSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const task = await operationsService.createTask({
       workRequestId: req.params.wrId,
       entityId,
@@ -160,7 +166,7 @@ const createTask = async (req, res, next) => {
 const updateTask = async (req, res, next) => {
   try {
     const payload = validate(updateTaskSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const task = await operationsService.updateTask({
       workRequestId: req.params.wrId,
       taskId: req.params.taskId,
@@ -186,7 +192,7 @@ const updateTask = async (req, res, next) => {
 
 const removeTask = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const removed = await operationsService.deleteTask({
       workRequestId: req.params.wrId,
       taskId: req.params.taskId,

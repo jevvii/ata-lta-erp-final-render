@@ -17,6 +17,18 @@ const AppError = require('../../lib/AppError');
 const analytics = async (req, res, next) => {
   try {
     const data = await service.getAnalytics({ entityId: req.activeEntity });
+    res.set('Cache-Control', 'private, max-age=30');
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const dashboard = async (req, res, next) => {
+  try {
+    const data = await service.getDashboardSummary({ entityId: req.activeEntity });
+    res.set('Cache-Control', 'private, max-age=30');
     res.json({ data });
   } catch (err) {
     next(err);
@@ -99,6 +111,7 @@ const aging = async (req, res, next) => {
 module.exports = {
   reportsController: {
     analytics,
+    dashboard,
     daily,
     weekly,
     monthlyPending,

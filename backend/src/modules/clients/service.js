@@ -113,25 +113,36 @@ const loadRelated = async (clientIds) => {
 };
 
 /**
- * Fetch clients with optional filters and related records.
+ * Fetch clients with optional filters, sorting, pagination, and related records.
  * @param {Object} params
  * @param {string} params.entityId
  * @param {string} [params.search]
  * @param {string} [params.status]
- * @returns {Promise<Array>}
+ * @param {number|string} [params.page]
+ * @param {number|string} [params.limit]
+ * @param {string} [params.sortBy]
+ * @param {string} [params.sortOrder]
+ * @returns {Promise<{ data: Array, meta: object }>}
  */
-const listClients = async ({ entityId, search, status }) => {
+const listClients = async ({ entityId, search, status, page, limit, sortBy, sortOrder }) => {
+  const isPaginated = page !== undefined || limit !== undefined;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const sortField = ['name', 'created_at', 'updated_at', 'status'].includes(sortBy) ? sortBy : 'name';
+  const sortAsc = String(sortOrder).toLowerCase() === 'asc';
+
   let query = supabaseAdmin
     .from('clients')
     .select('*')
     .eq('entity_id', entityId)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .order(sortField, { ascending: sortAsc });
 
   if (status) {
     query = query.eq('status', status);
   }
 
-  const { data, error } = await query.order('name', { ascending: true });
+  const { data, error } = await query;
 
   if (error) {
     throw new AppError({
@@ -159,13 +170,32 @@ const listClients = async ({ entityId, search, status }) => {
     resolveEntityCode(entityId),
   ]);
 
-  return rows.map((row) =>
+  const mapped = rows.map((row) =>
     toApiClient(row, {
       entityCode,
       contactDetails: related.contactDetails.get(row.id) || [],
       relatedCompanies: related.relatedCompanies.get(row.id) || [],
     })
   );
+
+  const total = mapped.length;
+  const result = isPaginated
+    ? mapped.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+    : mapped;
+
+  if (!isPaginated) {
+    return { data: result };
+  }
+
+  return {
+    data: result,
+    meta: {
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    },
+  };
 };
 
 /**

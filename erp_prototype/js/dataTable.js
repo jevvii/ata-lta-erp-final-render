@@ -38,7 +38,9 @@
         onRowClick,
         emptyState,
         tableClass = 'data-table',
-        rowClass
+        rowClass,
+        pageSize = 50,
+        virtualize = false
       } = options;
 
       const wrapper = el('div', { class: 'jira-backlog-container jira-backlog-container--columns data-table-view' });
@@ -158,7 +160,10 @@
         });
       }
 
-      items.forEach(item => {
+      let renderedCount = 0;
+      const totalCount = items.length;
+
+      const appendRow = (item) => {
         const id = rowId(item);
         const trClasses = rowClass
           ? (typeof rowClass === 'function' ? rowClass(item) : rowClass)
@@ -226,10 +231,60 @@
         }
 
         tbody.appendChild(tr);
-      });
+        renderedCount++;
+      };
+
+      const renderSlice = (count) => {
+        const nextItems = items.slice(renderedCount, renderedCount + count);
+        nextItems.forEach(appendRow);
+      };
+
+      const initialCount = Math.min(totalCount, pageSize);
+      renderSlice(initialCount);
 
       table.appendChild(tbody);
       wrapper.appendChild(table);
+
+      // Pagination / virtualized load-more footer
+      if (totalCount > pageSize) {
+        const footer = el('div', { class: 'data-table-footer' });
+        const remaining = totalCount - renderedCount;
+        const loadMoreBtn = el('button', {
+          class: 'btn btn-secondary btn-sm',
+          text: remaining > pageSize ? `Show ${pageSize} more (${remaining} remaining)` : `Show ${remaining} more`
+        });
+        const updateButton = () => {
+          const rem = totalCount - renderedCount;
+          if (rem <= 0) {
+            footer.remove();
+            return;
+          }
+          loadMoreBtn.textContent = rem > pageSize ? `Show ${pageSize} more (${rem} remaining)` : `Show ${rem} more`;
+        };
+        loadMoreBtn.addEventListener('click', () => {
+          renderSlice(pageSize);
+          updateButton();
+          if (selectAllCheckbox) {
+            const allChecked = rowRefs.length > 0 && rowRefs.every(r => r.chk.checked);
+            const someChecked = rowRefs.some(r => r.chk.checked);
+            selectAllCheckbox.checked = allChecked;
+            selectAllCheckbox.indeterminate = someChecked && !allChecked;
+          }
+        });
+        footer.appendChild(loadMoreBtn);
+        wrapper.appendChild(footer);
+
+        if (virtualize && typeof IntersectionObserver !== 'undefined') {
+          const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+              if (entry.isIntersecting && renderedCount < totalCount) {
+                loadMoreBtn.click();
+              }
+            });
+          }, { root: wrapper, rootMargin: '0px 0px 200px 0px' });
+          observer.observe(loadMoreBtn);
+        }
+      }
 
       if (bulkBar) wrapper.appendChild(bulkBar);
 

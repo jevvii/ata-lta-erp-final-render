@@ -13,19 +13,52 @@
 
 const { resolveEntityId } = require('../lib/entityResolver');
 
-const resolveEntity = async (req, res, next) => {
-  try {
-    const code = req.activeEntity; // 'ATA' or 'LTA' from entityScope
-    const uuid = await resolveEntityId(code);
+const VALID_ENTITIES = ['ATA', 'LTA'];
 
-    req.entityCode = code;     // preserve original string
-    req.entityUUID = uuid;     // add UUID
-    req.activeEntity = uuid;   // override for Agent B services
+function resolveEntity(options = {}) {
+  return async (req, res, next) => {
+    try {
+      const code = req.activeEntity; // 'ATA', 'LTA', or 'ALL' from entityScope
 
-    next();
-  } catch (err) {
-    next(err);
-  }
-};
+      if (code === 'ALL') {
+        if (options.allowAll) {
+          req.entityCode = code;
+          req.entityUUID = null;
+          // Leave req.activeEntity as 'ALL' so services can handle consolidation.
+          next();
+          return;
+        }
+
+        // For non-consolidation endpoints, default to the user's first real entity.
+        const fallback = (req.user?.entities || [])
+          .map((e) => e.toUpperCase())
+          .find((e) => VALID_ENTITIES.includes(e));
+        if (!fallback) {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'No valid entity available for fallback',
+          });
+        }
+        const uuid = await resolveEntityId(fallback);
+        req.entityCode = code;
+        req.entityUUID = uuid;
+        req.activeEntity = uuid;
+        next();
+        return;
+      }
+
+      const uuid = await resolveEntityId(code);
+
+      req.entityCode = code;     // preserve original string
+      req.entityUUID = uuid;     // add UUID
+      req.activeEntity = uuid;   // override for Agent B services
+
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
 
 module.exports = { resolveEntity };

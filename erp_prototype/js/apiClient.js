@@ -12,6 +12,9 @@
   // Injected at build time or read from a global config.
   const API_BASE_URL = window.__ERP_API_BASE_URL__ || 'http://localhost:3000/v1';
 
+  // In-flight GET request registry used for lightweight request deduplication.
+  const inFlight = new Map();
+
   /**
    * Read the active JWT from sessionStorage.
    * @returns {string|null}
@@ -33,6 +36,26 @@
   };
 
   /**
+   * Combine two AbortSignals so that the resulting signal aborts when either
+   * source aborts. Falls back to manual listeners if AbortSignal.any is unavailable.
+   * @param {AbortSignal} callerSignal
+   * @param {AbortSignal} internalSignal
+   * @returns {AbortSignal}
+   */
+  function combineSignals(callerSignal, internalSignal) {
+    if (!callerSignal) return internalSignal;
+    if (!internalSignal) return callerSignal;
+    if (typeof AbortSignal !== 'undefined' && AbortSignal.any) {
+      return AbortSignal.any([callerSignal, internalSignal]);
+    }
+    const combined = new AbortController();
+    const onAbort = () => combined.abort(callerSignal.aborted ? callerSignal.reason : internalSignal.reason);
+    callerSignal.addEventListener('abort', onAbort);
+    internalSignal.addEventListener('abort', onAbort);
+    return combined.signal;
+  }
+
+  /**
    * Core request helper.
    * @param {string} path
    * @param {RequestInit} [options]
@@ -43,9 +66,11 @@
     const token = getToken();
     const entity = getActiveEntity();
 
+    const { __controller, signal: callerSignal, ...restOptions } = options;
+
     const headers = {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...restOptions.headers,
     };
 
     if (token) {
@@ -55,9 +80,21 @@
       headers['X-Active-Entity'] = entity;
     }
 
+    let signal;
+    if (__controller) {
+      signal = combineSignals(callerSignal, __controller.signal);
+    } else if (callerSignal) {
+      signal = callerSignal;
+    }
+
+    if (signal && signal.aborted) {
+      throw new Error(signal.reason || 'Request aborted');
+    }
+
     const res = await fetch(url, {
-      ...options,
+      ...restOptions,
       headers,
+      signal,
     });
 
     if (res.status === 401) {
@@ -86,7 +123,29 @@
   /**
    * Generic CRUD helpers.
    */
-  const get = (path) => request(path, { method: 'GET' });
+  const get = (path, options = {}) => {
+    const url = `${API_BASE_URL}${path}`;
+    const entity = getActiveEntity();
+    const key = `GET ${url} ${entity || ''}`;
+
+    // If the caller supplied their own signal, do not deduplicate; start fresh.
+    if (!options.signal && inFlight.has(key)) {
+      return inFlight.get(key).promise;
+    }
+
+    const controller = new AbortController();
+    const promise = request(path, { ...options, method: 'GET', __controller: controller })
+      .finally(() => {
+        const entry = inFlight.get(key);
+        if (entry && entry.controller === controller) {
+          inFlight.delete(key);
+        }
+      });
+
+    inFlight.set(key, { promise, controller });
+    return promise;
+  };
+
   const post = (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) });
   const put = (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) });
   const patch = (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) });
@@ -99,6 +158,21 @@
     put,
     patch,
     delete: del,
+
+    /**
+     * Abort all in-flight GET deduplication requests. Useful on route changes.
+     * @param {string|any} [reason='route-change']
+     */
+    abortRequests(reason = 'route-change') {
+      for (const entry of inFlight.values()) {
+        try {
+          entry.controller.abort(reason);
+        } catch (e) {
+          // ignore
+        }
+      }
+      inFlight.clear();
+    },
 
     auth: {
       signin: (credentials) => post('/auth/signin', credentials),
@@ -116,14 +190,21 @@
     userCache: {
       _users: null,
       _promise: null,
+      _loadedAt: null,
+      TTL_MS: 5 * 60 * 1000,
+      _stale() {
+        return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
+      },
       async ensure() {
-        if (this._users) return this._users;
+        if (this._users && !this._stale()) return this._users;
         if (this._promise) return this._promise;
         this._promise = window.apiClient.me.team().then(res => {
           this._users = res.data || [];
+          this._loadedAt = Date.now();
           return this._users;
         }).catch(err => {
           this._users = [];
+          this._loadedAt = Date.now();
           return this._users;
         }).finally(() => {
           this._promise = null;
@@ -140,20 +221,28 @@
       },
       invalidate() {
         this._users = null;
+        this._loadedAt = null;
       }
     },
 
     clientCache: {
       _clients: null,
       _promise: null,
+      _loadedAt: null,
+      TTL_MS: 5 * 60 * 1000,
+      _stale() {
+        return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
+      },
       async ensure() {
-        if (this._clients) return this._clients;
+        if (this._clients && !this._stale()) return this._clients;
         if (this._promise) return this._promise;
         this._promise = window.apiClient.clients.list({}).then(res => {
           this._clients = (res.data || []).map(c => this._normalize(c));
+          this._loadedAt = Date.now();
           return this._clients;
         }).catch(err => {
           this._clients = [];
+          this._loadedAt = Date.now();
           return this._clients;
         }).finally(() => {
           this._promise = null;
@@ -182,20 +271,28 @@
       },
       invalidate() {
         this._clients = null;
+        this._loadedAt = null;
       }
     },
 
     workRequestCache: {
       _wrs: null,
       _promise: null,
+      _loadedAt: null,
+      TTL_MS: 5 * 60 * 1000,
+      _stale() {
+        return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
+      },
       async ensure() {
-        if (this._wrs) return this._wrs;
+        if (this._wrs && !this._stale()) return this._wrs;
         if (this._promise) return this._promise;
         this._promise = window.apiClient.workRequests.list({}).then(res => {
           this._wrs = res.data || [];
+          this._loadedAt = Date.now();
           return this._wrs;
         }).catch(err => {
           this._wrs = [];
+          this._loadedAt = Date.now();
           return this._wrs;
         }).finally(() => {
           this._promise = null;
@@ -212,6 +309,7 @@
       },
       invalidate() {
         this._wrs = null;
+        this._loadedAt = null;
       }
     },
 
@@ -313,6 +411,7 @@
 
     reports: {
       analytics: () => get('/reports/analytics'),
+      dashboard: (options = {}) => get('/reports/dashboard', options),
       daily: (date) => get(`/reports/daily?date=${encodeURIComponent(date)}`),
       weekly: (date) => get(`/reports/weekly?date=${encodeURIComponent(date)}`),
       monthlyPending: (month) => get(`/reports/monthly-pending?month=${encodeURIComponent(month)}`),

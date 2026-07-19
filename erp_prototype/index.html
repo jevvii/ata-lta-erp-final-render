@@ -4,6 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ATA &amp; LTA Accounting Firm ERP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="http://localhost:3000">
+  <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -101,24 +105,48 @@
   <script src="js/utils.js"></script>
   <script src="env.js"></script>
   <script src="js/apiClient.js"></script>
-  <script src="js/dataTable.js"></script>
-  <script src="js/kanban.js"></script>
-  <script src="js/datepicker.js"></script>
-  <script src="js/timepicker.js"></script>
-  <script src="js/data.js"></script>
+  <script src="js/dataTable.js" defer></script>
+  <script src="js/kanban.js" defer></script>
+  <script src="js/datepicker.js" defer></script>
+  <script src="js/timepicker.js" defer></script>
+  <script src="js/data.js" defer></script>
   <script src="js/auth.js"></script>
-  <script src="js/dashboard.js"></script>
-  <script src="js/clients.js"></script>
-  <script src="js/workflow.js"></script>
-  <script src="js/logos.js"></script>
-  <script src="js/billing.js"></script>
-  <script src="js/disbursement.js"></script>
-  <script src="js/dms.js"></script>
-  <script src="js/reports.js"></script>
-  <script src="js/transmittal.js"></script>
-  <script src="js/pendingChanges.js"></script>
-  <script src="js/users.js"></script>
-  <script src="js/profile.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/dashboard.js" defer></script>
+  <script src="js/clients.js" defer></script>
+  <script src="js/workflow.js" defer></script>
+  <script src="js/logos.js" defer></script>
+  <script src="js/billing.js" defer></script>
+  <script src="js/disbursement.js" defer></script>
+  <script src="js/dms.js" defer></script>
+  <script src="js/reports.js" defer></script>
+  <script src="js/transmittal.js" defer></script>
+  <script src="js/pendingChanges.js" defer></script>
+  <script src="js/users.js" defer></script>
+  <script src="js/profile.js" defer></script>
+  <script src="js/app.js" defer></script>
+  <script>
+    (function () {
+      if (!('serviceWorker' in navigator)) return;
+
+      // In development, check for updates periodically but never auto-reload.
+      // The user can hard-refresh when they want fresh code. Auto-reload on every
+      // service worker activation breaks login/forms during active development.
+      navigator.serviceWorker.register('sw.js')
+        .then(function (registration) {
+          registration.addEventListener('updatefound', function () {
+            var installing = registration.installing;
+            if (!installing) return;
+            installing.addEventListener('statechange', function () {
+              if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[SW] New version available — hard refresh to update.');
+              }
+            });
+          });
+        })
+        .catch(function (err) {
+          console.warn('[SW] Registration failed:', err);
+        });
+    })();
+  </script>
 </body>
 </html>

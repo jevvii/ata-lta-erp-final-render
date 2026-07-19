@@ -1789,21 +1789,172 @@ function openFormPanel({ icon, title, formContent, formId, actions, mode, viewCo
 }
 
 /**
- * Centralized helper to set sync flags in sessionStorage and reload the page
- * to guarantee complete real-time data sync.
+ * Lightweight, non-blocking toast fallback used when Workflow.showMessage is
+ * unavailable (e.g. during very early loads or outside module contexts).
+ *
+ * @param {string} title
+ * @param {string} message
+ * @param {string} [type='success']
+ */
+function showToast(title, message, type = 'success') {
+  if (typeof Workflow !== 'undefined' && typeof Workflow.showMessage === 'function') {
+    Workflow.showMessage(title, message, type);
+    return;
+  }
+
+  let container = document.getElementById('utils-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'utils-toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = `utils-toast utils-toast-${type}`;
+  toast.innerHTML = `<strong>${escapeHtml(title)}</strong><div>${escapeHtml(message)}</div>`;
+  container.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}
+
+/**
+ * Skeleton helpers used by the route loading overlay.
+ */
+function skeletonCard() {
+  return '<div class="skeleton skeleton-card"></div>';
+}
+
+function skeletonRow(count = 1) {
+  return Array.from({ length: count })
+    .map(() => '<div class="skeleton skeleton-row"></div>')
+    .join('');
+}
+
+function skeletonText(width = '100%') {
+  return `<span class="skeleton skeleton-text" style="width:${width}"></span>`;
+}
+
+function skeletonAvatar() {
+  return '<span class="skeleton skeleton-avatar"></span>';
+}
+
+function renderRouteSkeleton(routeName) {
+  const base = (routeName || '').split('/')[0].replace('#', '');
+  const isDetail = routeName.includes('/detail/');
+  const isForm = routeName.includes('/form/') || routeName.includes('/templateForm/');
+
+  if (isForm) {
+    return `
+      <div class="route-loading-overlay">
+        <div class="route-skeleton-pane">
+          ${skeletonText('40%')}
+          ${skeletonRow(8)}
+        </div>
+      </div>`;
+  }
+
+  if (isDetail) {
+    return `
+      <div class="route-loading-overlay">
+        <div class="route-skeleton-pane">
+          ${skeletonText('35%')}
+          ${skeletonCard()}
+          ${skeletonRow(6)}
+        </div>
+      </div>`;
+  }
+
+  // Dashboard defaults to a card grid; everything else uses a list skeleton.
+  if (base === 'dashboard') {
+    return `
+      <div class="route-loading-overlay">
+        <div class="route-skeleton-pane">
+          ${skeletonText('25%')}
+          <div class="route-skeleton-grid">${skeletonCard()}${skeletonCard()}${skeletonCard()}${skeletonCard()}</div>
+          ${skeletonRow(4)}
+        </div>
+      </div>`;
+  }
+
+  // Default list skeleton for clients, operations, billing, disbursement, etc.
+  return `
+    <div class="route-loading-overlay">
+      <div class="route-skeleton-pane">
+        <div class="route-skeleton-header">${skeletonText('30%')}</div>
+        ${skeletonRow(10)}
+      </div>
+    </div>`;
+}
+
+window.Utils = {
+  escapeHtml,
+  showToast,
+  skeletonCard,
+  skeletonRow,
+  skeletonText,
+  skeletonAvatar,
+  renderRouteSkeleton
+};
+
+/**
+ * Centralized helper to keep client-side caches in sync without a full page
+ * reload. Invalidates the relevant caches, re-runs the router, and shows an
+ * optional success toast immediately.
  *
  * @param {string} hash - Optional target hash (e.g. '#billing')
  * @param {Object} messageConfig - Optional toast success message config
  */
 function triggerSyncReload(hash, messageConfig) {
-  if (hash) {
+  // Invalidate common caches so the next render picks up fresh data.
+  try {
+    if (typeof window.apiClient !== 'undefined') {
+      if (window.apiClient.userCache && typeof window.apiClient.userCache.invalidate === 'function') {
+        window.apiClient.userCache.invalidate();
+      }
+      if (window.apiClient.clientCache && typeof window.apiClient.clientCache.invalidate === 'function') {
+        window.apiClient.clientCache.invalidate();
+      }
+      if (window.apiClient.workRequestCache && typeof window.apiClient.workRequestCache.invalidate === 'function') {
+        window.apiClient.workRequestCache.invalidate();
+      }
+      // Invalidate module-level caches so writes/entity switches show fresh data.
+      if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+        Dashboard.invalidateCache();
+      }
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidate === 'function') {
+        WorkflowData.invalidate();
+      }
+      if (typeof window.apiClient.abortRequests === 'function') {
+        window.apiClient.abortRequests('sync-reload');
+      }
+    }
+  } catch (e) {
+    console.warn('triggerSyncReload cache cleanup failed:', e);
+  }
+
+  const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
+  if (hash && location.hash !== hash) {
     location.hash = hash;
+    // hashchange will invoke App.handleRoute(); no need to call it directly.
+  } else if (appRef && typeof appRef.handleRoute === 'function') {
+    appRef.handleRoute();
   }
+
   if (messageConfig) {
-    sessionStorage.setItem('pending_toast', JSON.stringify(messageConfig));
+    // Prefer an immediate toast; keep sessionStorage as a fallback for listeners.
+    try {
+      sessionStorage.removeItem('pending_toast');
+      showToast(messageConfig.title, messageConfig.message, messageConfig.type || 'success');
+    } catch (e) {
+      sessionStorage.setItem('pending_toast', JSON.stringify(messageConfig));
+    }
   }
-  sessionStorage.setItem('is_syncing', 'true');
-  location.reload();
+
+  sessionStorage.removeItem('is_syncing');
 }
 
 /**
@@ -1811,7 +1962,7 @@ function triggerSyncReload(hash, messageConfig) {
  * and triggers global module re-routing to sync the lists underneath.
  *
  * @param {string} hash - The URL hash path to navigate to (e.g. '#billing')
- * @param {Object} [messageConfig] - Optional toast success message config. If provided, triggers a full page sync reload and sets a pending success toast.
+ * @param {Object} [messageConfig] - Optional toast success message config.
  */
 function closeFormPanelAndRoute(hash, messageConfig) {
   if (window.SidePaneInstance && typeof window.SidePaneInstance.close === 'function') {

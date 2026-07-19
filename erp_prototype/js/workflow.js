@@ -125,38 +125,66 @@ const WorkflowData = {
     };
   },
 
-  async ensure() {
-    if (this._workRequests && this._tasks) return;
-    if (this._loadingPromise) return this._loadingPromise;
-    this._loadingPromise = this._load().finally(() => { this._loadingPromise = null; });
-    return this._loadingPromise;
-  },
-
-  async _load() {
-    await Promise.all([
-      window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
-    ]);
-    const res = await window.apiClient.workRequests.list({});
-    const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
-    // Backend does not return tasks inline; fetch per work request.
-    const tasks = [];
-    await Promise.all(wrs.map(async wr => {
-      try {
-        const tRes = await window.apiClient.workRequests.listTasks(wr.id);
-        wr.tasks = (tRes.data || []).map(t => this.normalizeTask(t));
-        tasks.push(...wr.tasks);
-      } catch (e) {
-        wr.tasks = [];
-      }
-    }));
-    this._workRequests = wrs;
-    this._tasks = tasks;
+  hasData() {
+    return Array.isArray(this._workRequests) && Array.isArray(this._tasks);
   },
 
   invalidate() {
     this._workRequests = null;
     this._tasks = null;
+    this._loadingPromise = null;
+  },
+
+  async ensure() {
+    if (this.hasData()) return;
+    if (this._loadingPromise) return this._loadingPromise;
+    this._loadingPromise = this._load().finally(() => { this._loadingPromise = null; });
+    return this._loadingPromise;
+  },
+
+  async _load(options = {}) {
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+    const res = await window.apiClient.workRequests.list({ includeTasks: true, ...options });
+    const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
+    // Tasks are embedded when includeTasks is true; normalize them in place.
+    const tasks = [];
+    wrs.forEach(wr => {
+      wr.tasks = (wr.tasks || []).map(t => {
+        const normalized = this.normalizeTask(t);
+        normalized.workRequestId = wr.id;
+        return normalized;
+      });
+      tasks.push(...wr.tasks);
+    });
+    this._workRequests = wrs;
+    this._tasks = tasks;
+    return { workRequests: wrs, tasks, meta: res.meta || {} };
+  },
+
+  async loadPage(options = {}) {
+    const { page = 1, limit = 50, status, clientId, search, sortBy, sortOrder, signal } = options;
+    const params = { includeTasks: true, page, limit };
+    if (status) params.status = status;
+    if (clientId) params.clientId = clientId;
+    if (search) params.search = search;
+    if (sortBy) params.sortBy = sortBy;
+    if (sortOrder) params.sortOrder = sortOrder;
+    if (signal) params.signal = signal;
+    const res = await window.apiClient.workRequests.list(params);
+    const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
+    const tasks = [];
+    wrs.forEach(wr => {
+      wr.tasks = (wr.tasks || []).map(t => {
+        const normalized = this.normalizeTask(t);
+        normalized.workRequestId = wr.id;
+        return normalized;
+      });
+      tasks.push(...wr.tasks);
+    });
+    return { workRequests: wrs, tasks, meta: res.meta || {} };
   },
 
   getAllWorkRequests() { return this._workRequests || []; },
@@ -2522,6 +2550,12 @@ const Workflow = {
     };
     let searchQuery = '';
 
+    // Server-side pagination state for board/table/list views.
+    const PAGE_SIZE = 50;
+    let page = 1;
+    let totalPages = 1;
+    let pageMeta = {};
+
     // Restore saved filters (v2 format)
     const savedFilters = App.restoreFilters('operations');
     if (savedFilters && savedFilters.v2) {
@@ -3090,7 +3124,41 @@ const Workflow = {
       'calc(var(--operations-title-bar-height, 48px) + var(--operations-tab-nav-height, 45px) + var(--operations-toolbar-height, 0px))'
     );
 
-    const refresh = () => {
+    const buildPageTaskMap = (wrs) => {
+      const map = {};
+      wrs.forEach(wr => { map[wr.id] = wr.tasks || []; });
+      return map;
+    };
+
+    const renderPagination = () => {
+      if (totalPages <= 1 && page === 1) return;
+      const footer = el('div', { class: 'workflow-pagination', style: 'display: flex; align-items: center; justify-content: center; gap: 12px; padding: 16px 0;' });
+      const prevBtn = el('button', {
+        class: 'btn btn-secondary btn-sm',
+        text: '‹ Previous',
+        disabled: page <= 1
+      });
+      const nextBtn = el('button', {
+        class: 'btn btn-secondary btn-sm',
+        text: 'Next ›',
+        disabled: page >= totalPages
+      });
+      const info = el('span', {
+        class: 'workflow-page-info',
+        style: 'font-size: 13px; color: var(--color-text-muted);',
+        text: `Page ${page}${totalPages ? ' of ' + totalPages : ''}`
+      });
+
+      prevBtn.addEventListener('click', () => { if (page > 1) { page--; refresh(); } });
+      nextBtn.addEventListener('click', () => { if (page < totalPages) { page++; refresh(); } });
+
+      footer.appendChild(prevBtn);
+      footer.appendChild(info);
+      footer.appendChild(nextBtn);
+      contentContainer.appendChild(footer);
+    };
+
+    const refresh = async () => {
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
       const pendingChanges = DB.getWhere('pendingChanges', pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
       const pendingWrs = pendingChanges.map(pc => {
@@ -3102,17 +3170,27 @@ const Workflow = {
         return wr;
       });
 
-      let wrs = WorkflowData.getWorkRequestsWhere(r => {
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
-        return matchesEntity && !r.archived && r.status !== 'Cancelled';
-      });
+      const serverParams = { page, limit: PAGE_SIZE };
+      if (searchQuery) serverParams.search = searchQuery;
+      const clientIds = Array.from(activeFilters.client);
+      if (clientIds.length === 1) serverParams.clientId = clientIds[0];
+      serverParams.sortBy = 'dueDate';
+      serverParams.sortOrder = 'asc';
 
+      const pageResult = await WorkflowData.loadPage(serverParams).catch(err => {
+        console.warn('Failed to load paginated work requests:', err);
+        return { workRequests: [], tasks: [], meta: {} };
+      });
+      pageMeta = pageResult.meta || {};
+      totalPages = pageMeta.totalPages || (pageResult.workRequests.length < PAGE_SIZE ? page : page + 1);
+
+      let wrs = (pageResult.workRequests || []).map(wr => ({ ...wr, entity: wr.entity || entity }));
       wrs = wrs.concat(pendingWrs.filter(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity;
       }));
 
-      const listTaskMap = this._tempTaskMap || buildTaskMap();
+      const listTaskMap = buildPageTaskMap(wrs);
       wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
       wrs = applyFilters(wrs, listTaskMap);
 
@@ -3120,6 +3198,8 @@ const Workflow = {
       if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
       else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, stickyContainer);
       else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
+
+      renderPagination();
 
       // Re-measure sticky offsets after the next paint so toolbar height changes
       // (grouped-board-active toggle, wrapping filters) are reflected.

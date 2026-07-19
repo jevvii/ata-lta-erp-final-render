@@ -429,24 +429,6 @@ const Billing = {
     }
   },
 
-  async nextInvoiceNumber(entity) {
-    const year = new Date().getFullYear();
-    const prefix = entity + '-SI-' + year + '-';
-    try {
-      const res = await window.apiClient.invoices.list({ limit: 1000 });
-      const existing = (res.data || []).map(inv => this.normalizeInvoice(inv)).filter(inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix));
-      const maxNum = existing.reduce((max, inv) => {
-        const parts = inv.invoiceNumber.split('-');
-        const num = parseInt(parts[parts.length - 1], 10);
-        return !isNaN(num) && num > max ? num : max;
-      }, 0);
-      return prefix + String(maxNum + 1).padStart(3, '0');
-    } catch (e) {
-      console.error('Failed to compute next invoice number', e);
-      return prefix + '001';
-    }
-  },
-
   // ============================================================
   // List View
   // ============================================================
@@ -565,7 +547,7 @@ const Billing = {
     wrapper.appendChild(contentContainer);
 
     const refresh = async () => {
-      while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
+      contentContainer.replaceChildren();
       const apiInvoices = await this.fetchInvoices();
       const baseInvoices = apiInvoices.filter(inv => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());

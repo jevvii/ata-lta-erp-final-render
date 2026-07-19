@@ -5,24 +5,34 @@
  * built artifacts can talk to local, UAT, or production backends without
  * rebuilding. This is the dev counterpart to Render's buildCommand.
  *
+ * In development mode (default) the server serves from the project root
+ * (unbundled source files) so edits are visible without rebuilding.
+ * To serve the production bundle from dist/, set ERP_SERVE_DIST=1 or
+ * NODE_ENV=production.
+ *
  * Usage:
  *   ERP_API_BASE_URL=http://localhost:3000/v1 node dev-server.js
+ *   ERP_SERVE_DIST=1 ERP_API_BASE_URL=http://localhost:3000/v1 node dev-server.js
  *   # or, with a .env file:
  *   node dev-server.js
  *
  * Environment variables:
  *   ERP_API_BASE_URL   Backend API origin + /v1  (default: http://localhost:3000/v1)
+ *   ERP_SERVE_DIST     Serve from dist/ if present  (default: false; true when NODE_ENV=production)
  *   PORT               Port for the dev server    (default: 8080)
+ *   HOST               Host for the dev server    (default: 127.0.0.1)
  */
 
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const { URL } = require('url');
+const zlib = require('zlib');
 
 require('dotenv').config();
 
-const ROOT = __dirname;
+const PROJECT_ROOT = __dirname;
+const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
 const DEFAULT_API_URL = 'http://localhost:3000/v1';
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -36,7 +46,48 @@ const API_BASE_URL = rawApiUrl.endsWith('/v1')
   ? rawApiUrl
   : `${rawApiUrl.replace(/\/$/, '')}/v1`;
 
-const ENV_JS = `window.__ERP_API_BASE_URL__ = ${JSON.stringify(API_BASE_URL)};\n`;
+function generateEnvJs(apiUrl) {
+  let preconnectSnippet = '';
+  try {
+    const origin = new URL(apiUrl).origin;
+    preconnectSnippet = `
+  const origin = ${JSON.stringify(origin)};
+  const head = document.head || document.getElementsByTagName('head')[0];
+  if (head && !head.querySelector('link[rel="preconnect"][href="' + origin + '"]')) {
+    const link = document.createElement('link');
+    link.rel = 'preconnect';
+    link.href = origin;
+    head.appendChild(link);
+  }`;
+  } catch (e) {
+    // Ignore malformed URL.
+  }
+
+  return `window.__ERP_API_BASE_URL__ = ${JSON.stringify(apiUrl)};
+(function() {${preconnectSnippet}
+})();
+`;
+}
+
+const ENV_JS = generateEnvJs(API_BASE_URL);
+
+function shouldServeDist() {
+  if (process.env.ERP_SERVE_DIST === '1' || process.env.ERP_SERVE_DIST === 'true') return true;
+  if (process.env.NODE_ENV === 'production') return true;
+  return false;
+}
+
+function useDist() {
+  if (!shouldServeDist()) return false;
+  try {
+    const stat = fs.statSync(DIST_DIR);
+    return stat.isDirectory();
+  } catch (e) {
+    return false;
+  }
+}
+
+const ROOT = useDist() ? DIST_DIR : PROJECT_ROOT;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -56,7 +107,21 @@ const MIME_TYPES = {
   '.eot': 'application/vnd.ms-fontobject',
   '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.gz': 'application/gzip',
 };
+
+function cacheHeaders(relativePath, ext) {
+  if (relativePath === 'index.html' || ext === '.html') {
+    return { 'Cache-Control': 'no-cache, no-store, must-revalidate' };
+  }
+  if (relativePath === 'env.js' || ext === '.html') {
+    return { 'Cache-Control': 'no-cache, no-store, must-revalidate' };
+  }
+  if (ext === '.js' || ext === '.css') {
+    return { 'Cache-Control': 'public, max-age=31536000, immutable' };
+  }
+  return { 'Cache-Control': 'no-cache' };
+}
 
 function send(res, status, body, contentType = 'text/plain') {
   res.writeHead(status, {
@@ -68,18 +133,35 @@ function send(res, status, body, contentType = 'text/plain') {
   res.end(body);
 }
 
-function serveStatic(filePath, res) {
+function serveStatic(filePath, req, res, relativePath) {
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
       return send(res, 404, 'Not found');
     }
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    res.writeHead(200, {
+
+    const acceptsGzip = (req.headers['accept-encoding'] || '').includes('gzip');
+    const acceptsBrotli = (req.headers['accept-encoding'] || '').includes('br');
+    const brPath = `${filePath}.br`;
+    const gzPath = `${filePath}.gz`;
+    const hasBr = acceptsBrotli && fs.existsSync(brPath) && fs.statSync(brPath).isFile();
+    const hasGz = acceptsGzip && fs.existsSync(gzPath) && fs.statSync(gzPath).isFile();
+    const targetPath = hasBr ? brPath : hasGz ? gzPath : filePath;
+
+    const headers = {
       'Content-Type': contentType,
       'Access-Control-Allow-Origin': '*',
-    });
-    fs.createReadStream(filePath).pipe(res);
+      ...cacheHeaders(relativePath, ext),
+    };
+    if (hasBr) {
+      headers['Content-Encoding'] = 'br';
+    } else if (hasGz) {
+      headers['Content-Encoding'] = 'gzip';
+    }
+
+    res.writeHead(200, headers);
+    fs.createReadStream(targetPath).pipe(res);
   });
 }
 
@@ -95,7 +177,7 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/health') {
-    return send(res, 200, JSON.stringify({ status: 'ok', apiBaseUrl: API_BASE_URL }), 'application/json');
+    return send(res, 200, JSON.stringify({ status: 'ok', apiBaseUrl: API_BASE_URL, serveFrom: useDist() ? 'dist' : 'root' }), 'application/json');
   }
 
   // Strip leading slash and serve file from ROOT.
@@ -107,14 +189,15 @@ const server = http.createServer((req, res) => {
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
       // SPA fallback: unknown paths return index.html so the hash router handles them.
-      return serveStatic(path.join(ROOT, 'index.html'), res);
+      return serveStatic(path.join(ROOT, 'index.html'), req, res, 'index.html');
     }
-    serveStatic(filePath, res);
+    serveStatic(filePath, req, res, relativePath);
   });
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`SPA dev server running at http://${HOST}:${PORT}`);
+  console.log(`Serving from: ${ROOT}`);
   console.log(`API base URL (injected into env.js): ${API_BASE_URL}`);
 });
 

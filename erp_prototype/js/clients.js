@@ -275,7 +275,11 @@ const Clients = {
   },
 
   clearNode(node) {
-    while (node.firstChild) node.removeChild(node.firstChild);
+    if (node && typeof node.replaceChildren === 'function') {
+      node.replaceChildren();
+    } else {
+      while (node.firstChild) node.removeChild(node.firstChild);
+    }
   },
 
   async getFilteredClients(query) {
@@ -402,7 +406,7 @@ const Clients = {
 
       if (selectedIds.length > 0 && bulkBar && actionsContainer) {
         countInfo.textContent = `${selectedIds.length} selected`;
-        actionsContainer.innerHTML = '';
+        actionsContainer.replaceChildren();
         const btn = el('button', {
           class: 'btn btn-outline-danger btn-sm',
           text: 'Archive Selected'

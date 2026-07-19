@@ -673,7 +673,7 @@ const Disbursement = {
   },
 
   async refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
-    while (container.firstChild) container.removeChild(container.firstChild);
+    container.replaceChildren();
     const entity = Auth.activeEntity;
     const allItems = await this.loadDisbursements();
     let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));

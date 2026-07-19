@@ -13,7 +13,7 @@ const { audit } = require('../../middleware/audit');
 const { resolveEntity } = require('../../middleware/resolveEntity');
 
 // Resolve entity code → UUID for all routes in this module
-router.use(resolveEntity);
+router.use(resolveEntity());
 
 router.get('/',
   requirePermission('disbursement:view'),

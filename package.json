@@ -17,6 +17,7 @@
     "smoke:uat": "cd erp_prototype && npm run smoke:dev:uat",
     "build:spa": "cd erp_prototype && npm run build",
     "build:spa:uat": "cd erp_prototype && npm run build:uat",
+    "keep-alive": "node scripts/keep-alive.js",
     "install:all": "npm install && cd backend && npm install && cd ../erp_prototype && npm install"
   },
   "engines": {

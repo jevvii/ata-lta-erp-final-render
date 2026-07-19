@@ -620,7 +620,7 @@ const Transmittal = {
   },
 
   refreshList(container, items, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
-    while (container.firstChild) container.removeChild(container.firstChild);
+    container.replaceChildren();
 
     items = items.filter(t => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived));
     const hasItems = items.length > 0;

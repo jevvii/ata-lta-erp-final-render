@@ -15,7 +15,10 @@ const cache = new Map();
  * @param {string} code — 'ATA' or 'LTA'
  * @returns {Promise<string>} — UUID
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const resolveEntityId = async (code) => {
+  if (UUID_RE.test(code)) return code;
   if (cache.has(code)) return cache.get(code);
 
   const { data, error } = await supabaseAdmin

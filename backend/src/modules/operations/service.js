@@ -131,14 +131,37 @@ const canViewWorkRequest = (wr, user, taskMap) => {
   });
 };
 
-const listWorkRequests = async ({ entityId, user, search }) => {
+const listWorkRequests = async ({
+  entityId,
+  user,
+  search,
+  status,
+  clientId,
+  page,
+  limit,
+  sortBy,
+  sortOrder,
+  includeTasks,
+}) => {
+  const isPaginated = page !== undefined || limit !== undefined;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const sortField = ['created_at', 'due_date', 'title', 'status'].includes(sortBy) ? sortBy : 'created_at';
+  const sortAsc = String(sortOrder).toLowerCase() === 'asc';
+
   let query = supabaseAdmin
     .from('work_requests')
     .select('*')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .order('created_at', { ascending: false });
+    .order(sortField, { ascending: sortAsc });
 
+  if (status) {
+    query = query.eq('status', status);
+  }
+  if (clientId) {
+    query = query.eq('client_id', clientId);
+  }
   if (search) {
     const q = search.toLowerCase();
     query = query.or(`title.ilike.%${q}%,description.ilike.%${q}%`);
@@ -158,7 +181,33 @@ const listWorkRequests = async ({ entityId, user, search }) => {
 
   const visibleRows = rows.filter((row) => user.role === 'Admin' || canViewWorkRequest(row, user, taskMap));
   const entityCode = await resolveEntityCode(entityId);
-  return visibleRows.map((row) => toApiWorkRequest(row, entityCode));
+
+  const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
+  const resultRows = isPaginated
+    ? visibleRows.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+    : visibleRows;
+
+  const result = resultRows.map((row) => {
+    const wr = toApiWorkRequest(row, entityCode);
+    if (withTasks) {
+      wr.tasks = (taskMap.get(row.id) || []).map((t) => toApiTask(t));
+    }
+    return wr;
+  });
+
+  if (!isPaginated) {
+    return { data: result };
+  }
+
+  return {
+    data: result,
+    meta: {
+      total: visibleRows.length,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(visibleRows.length / limitNum) || 1,
+    },
+  };
 };
 
 const createWorkRequest = async ({ entityId, data, user }) => {

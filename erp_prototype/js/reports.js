@@ -257,6 +257,7 @@ const Reports = {
 
         content.appendChild(bento);
       } catch (e) {
+        if (e.message === 'route-change' || e.name === 'AbortError') return;
         console.error('Analytics report failed', e);
         this.renderErrorState(content, e.message || 'Could not load analytics.');
       }
@@ -274,18 +275,10 @@ const Reports = {
     const controls = el('div', { class: 'filters-bar', style: 'margin-bottom: var(--spacing-md);' });
     controls.appendChild(el('span', { text: 'Date:', style: 'font-size:0.8125rem; font-weight:600; color:var(--color-text-muted);' }));
     const dateInput = el('input', { type: 'date', class: 'form-select', value: this.dailyDate });
-    dateInput.addEventListener('change', () => { this.dailyDate = dateInput.value; refresh(); });
     controls.appendChild(wrapFilterFieldWithClear(dateInput));
 
-    const refreshBtn = el('button', {
-      class: 'btn btn-secondary btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
-    });
-    refreshBtn.addEventListener('click', refresh);
-    controls.appendChild(refreshBtn);
-    wrapper.appendChild(controls);
-
     const reportContent = el('div');
+    wrapper.appendChild(controls);
     wrapper.appendChild(reportContent);
 
     const refresh = async () => {
@@ -365,10 +358,20 @@ const Reports = {
           ])
         ));
       } catch (e) {
+        if (e.message === 'route-change' || e.name === 'AbortError') return;
         console.error('Daily report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load daily report.');
       }
     };
+
+    dateInput.addEventListener('change', () => { this.dailyDate = dateInput.value; refresh(); });
+
+    const refreshBtn = el('button', {
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
+    });
+    refreshBtn.addEventListener('click', refresh);
+    controls.appendChild(refreshBtn);
 
     refresh();
     return wrapper;
@@ -382,18 +385,10 @@ const Reports = {
     const controls = el('div', { class: 'filters-bar', style: 'margin-bottom: var(--spacing-md);' });
     controls.appendChild(el('span', { text: 'Week of:', style: 'font-size:0.8125rem; font-weight:600; color:var(--color-text-muted);' }));
     const weekInput = el('input', { type: 'date', class: 'form-select', value: this.weeklyDate });
-    weekInput.addEventListener('change', () => { this.weeklyDate = weekInput.value; refresh(); });
     controls.appendChild(wrapFilterFieldWithClear(weekInput));
 
-    const refreshBtn = el('button', {
-      class: 'btn btn-secondary btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
-    });
-    refreshBtn.addEventListener('click', refresh);
-    controls.appendChild(refreshBtn);
-    wrapper.appendChild(controls);
-
     const reportContent = el('div');
+    wrapper.appendChild(controls);
     wrapper.appendChild(reportContent);
 
     const refresh = async () => {
@@ -480,10 +475,20 @@ const Reports = {
           ])
         ));
       } catch (e) {
+        if (e.message === 'route-change' || e.name === 'AbortError') return;
         console.error('Weekly report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load weekly report.');
       }
     };
+
+    weekInput.addEventListener('change', () => { this.weeklyDate = weekInput.value; refresh(); });
+
+    const refreshBtn = el('button', {
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
+    });
+    refreshBtn.addEventListener('click', refresh);
+    controls.appendChild(refreshBtn);
 
     refresh();
     return wrapper;
@@ -497,18 +502,10 @@ const Reports = {
     const controls = el('div', { class: 'filters-bar', style: 'margin-bottom: var(--spacing-md);' });
     controls.appendChild(el('span', { text: 'Month:', style: 'font-size:0.8125rem; font-weight:600; color:var(--color-text-muted);' }));
     const monthInput = el('input', { type: 'month', class: 'form-select', value: this.monthlyMonth });
-    monthInput.addEventListener('change', () => { this.monthlyMonth = monthInput.value; refresh(); });
     controls.appendChild(wrapFilterFieldWithClear(monthInput));
 
-    const refreshBtn = el('button', {
-      class: 'btn btn-secondary btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
-    });
-    refreshBtn.addEventListener('click', refresh);
-    controls.appendChild(refreshBtn);
-    wrapper.appendChild(controls);
-
     const reportContent = el('div');
+    wrapper.appendChild(controls);
     wrapper.appendChild(reportContent);
 
     const refresh = async () => {
@@ -582,10 +579,20 @@ const Reports = {
           })
         ));
       } catch (e) {
+        if (e.message === 'route-change' || e.name === 'AbortError') return;
         console.error('Monthly pending report failed', e);
         this.renderErrorState(reportContent, e.message || 'Could not load monthly pending report.');
       }
     };
+
+    monthInput.addEventListener('change', () => { this.monthlyMonth = monthInput.value; refresh(); });
+
+    const refreshBtn = el('button', {
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;vertical-align:middle;"><path d="M23 4v6h-6M1 20v-6h6"></path><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>Refresh'
+    });
+    refreshBtn.addEventListener('click', refresh);
+    controls.appendChild(refreshBtn);
 
     refresh();
     return wrapper;

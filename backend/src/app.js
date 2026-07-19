@@ -11,6 +11,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 
+const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const { randomUUID } = require('crypto');
 
@@ -46,13 +47,22 @@ app.use(cors({
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
+    const durationMs = Date.now() - start;
     logger.info('request', {
       method: req.method,
       originalUrl: req.originalUrl,
       status: res.statusCode,
-      durationMs: Date.now() - start,
+      durationMs,
       requestId: req.id,
     });
+    if (durationMs > 1000) {
+      logger.warn('slow request', {
+        method: req.method,
+        url: req.originalUrl,
+        durationMs,
+        requestId: req.id,
+      });
+    }
   });
   next();
 });
@@ -80,6 +90,9 @@ app.use(rateLimit({
     detail: 'Rate limit exceeded. Please slow down.',
   },
 }));
+
+// Compression for response bodies
+app.use(compression());
 
 // Extended health check with dependency verification.
 // Cached for 30 s to avoid hammering dependencies under load;

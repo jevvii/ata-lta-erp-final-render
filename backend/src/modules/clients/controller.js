@@ -27,19 +27,20 @@ const validate = (schema, data) => {
   return result.data;
 };
 
-const resolveEntityId = async (req) => {
-  return clientsService.resolveEntityId(req.activeEntity);
-};
-
 const list = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
-    const data = await clientsService.listClients({
+    const entityId = req.entityUUID;
+    const { data, meta } = await clientsService.listClients({
       entityId,
       search: req.query.search,
       status: req.query.status,
+      page: req.query.page,
+      limit: req.query.limit,
+      sortBy: req.query.sortBy,
+      sortOrder: req.query.sortOrder,
     });
-    res.status(200).json({ data });
+    const isPaginated = req.query.page !== undefined || req.query.limit !== undefined;
+    res.status(200).json(isPaginated ? { data, meta } : { data });
   } catch (err) {
     next(err);
   }
@@ -48,9 +49,9 @@ const list = async (req, res, next) => {
 const create = async (req, res, next) => {
   try {
     const payload = validate(createClientSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.activeEntity) {
+    if (payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({
         statusCode: 400,
         title: 'Bad Request',
@@ -81,7 +82,7 @@ const create = async (req, res, next) => {
 
 const getById = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const client = await clientsService.getClientById({ id: req.params.id, entityId });
 
     if (!client) {
@@ -101,9 +102,9 @@ const getById = async (req, res, next) => {
 const update = async (req, res, next) => {
   try {
     const payload = validate(updateClientSchema, req.body);
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.activeEntity) {
+    if (payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({
         statusCode: 400,
         title: 'Bad Request',
@@ -135,7 +136,7 @@ const update = async (req, res, next) => {
 
 const remove = async (req, res, next) => {
   try {
-    const entityId = await resolveEntityId(req);
+    const entityId = req.entityUUID;
     const removed = await clientsService.deleteClient({
       id: req.params.id,
       entityId,

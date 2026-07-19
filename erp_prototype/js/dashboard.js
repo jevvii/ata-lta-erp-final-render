@@ -4,10 +4,9 @@
  * natural language command bar, timezone intelligence, and hybrid work coordination buffers.
  *
  * Migrated from localStorage (DB.*) to the Node.js backend API.
- * - KPI widgets use window.apiClient.reports.analytics().
- * - Calendar events are sourced from window.apiClient.workRequests.list()
- *   and window.apiClient.disbursements.list(), filtered by due date.
- * - Task color-coding / overdue counts use window.apiClient.workRequests.listTasks().
+ * - KPI widgets and the calendar overview use window.apiClient.reports.dashboard().
+ * - Work requests with embedded tasks come from
+ *   window.apiClient.workRequests.list({ includeTasks: true }).
  * - User and client name lookups use window.apiClient.userCache / clientCache.
  */
 
@@ -45,8 +44,22 @@ const Dashboard = {
     this._dataPromise = null;
   },
 
-  async render() {
-    await this.ensureData();
+  async render(routeId) {
+    if (!this._dataCache) {
+      // Show a module-level skeleton immediately while warming the cache in the
+      // background. App.handleRoute() will commit the skeleton, then re-render
+      // with real data once the first fetch completes.
+      this.ensureData(routeId).then(() => {
+        if (routeId === App._routeId && (location.hash || '#dashboard').startsWith('#dashboard')) {
+          App.handleRoute();
+        }
+      }).catch(() => {});
+      return this.renderSkeleton();
+    }
+    await this.ensureData(routeId);
+    if (routeId && routeId !== App._routeId) {
+      return document.createDocumentFragment();
+    }
     if (Auth.activeEntity === 'ALL') {
       return this.renderConsolidated();
     }
@@ -116,6 +129,43 @@ const Dashboard = {
     const calendarCard = this.renderCalendarCard();
     calendarCard.className = 'bento-item bento-full dashboard-calendar-card';
     this.calendarCardRef = calendarCard;
+    bento.appendChild(calendarCard);
+    container.appendChild(bento);
+
+    return container;
+  },
+
+  renderSkeleton() {
+    const container = el('div', { class: 'page animate-fade-in' });
+
+    // Header skeleton
+    const header = el('div', { class: 'dashboard-welcome-banner' });
+    const headerLeft = el('div', { class: 'welcome-info' });
+    headerLeft.appendChild(el('div', { class: 'skeleton-text', style: 'width: 280px; height: 28px; margin-bottom: 10px;' }));
+    headerLeft.appendChild(el('div', { class: 'skeleton-text', style: 'width: 420px; height: 16px;' }));
+    header.appendChild(headerLeft);
+    container.appendChild(header);
+
+    // KPI strip skeleton
+    const kpiStrip = el('div', { class: 'kpi-strip' });
+    for (let i = 0; i < 4; i++) {
+      const card = el('div', { class: 'premium-kpi-card', style: '--card-accent: var(--color-text-muted);' });
+      card.appendChild(el('div', { class: 'skeleton-text', style: 'width: 80px; height: 12px; margin-bottom: 12px;' }));
+      card.appendChild(el('div', { class: 'skeleton-text', style: 'width: 120px; height: 32px;' }));
+      kpiStrip.appendChild(card);
+    }
+    container.appendChild(kpiStrip);
+
+    // Calendar skeleton
+    const bento = el('div', { class: 'bento-grid' });
+    const calendarCard = el('div', { class: 'bento-item bento-full dashboard-calendar-card' });
+    calendarCard.style.minHeight = '420px';
+    calendarCard.appendChild(el('div', { class: 'skeleton-text', style: 'width: 200px; height: 20px; margin-bottom: 16px;' }));
+    const grid = el('div', { class: 'calendar-grid', style: 'display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;' });
+    for (let i = 0; i < 35; i++) {
+      grid.appendChild(el('div', { class: 'calendar-cell skeleton-cell', style: 'min-height: 72px;' }));
+    }
+    calendarCard.appendChild(grid);
     bento.appendChild(calendarCard);
     container.appendChild(bento);
 
@@ -281,7 +331,7 @@ const Dashboard = {
     if (!container) {
       container = el('div', { class: 'bento-item bento-full dashboard-calendar-card' });
     } else {
-      container.innerHTML = '';
+      container.replaceChildren();
     }
 
     if (this.calMonth === undefined || this.calYear === undefined) {
@@ -591,7 +641,7 @@ const Dashboard = {
   },
 
   renderSkeletonGrid(grid) {
-    grid.innerHTML = '';
+    grid.replaceChildren();
     const itemsCount = this.calView === 'month' ? 35 : (this.calView === 'week' ? 21 : 5);
     for (let i = 0; i < itemsCount; i++) {
       const cell = el('div', { class: 'calendar-cell', style: 'opacity: 0.6; min-height: 80px;' });
@@ -1495,7 +1545,7 @@ const Dashboard = {
   },
 
   renderSidebarContent(sidebar, events) {
-    sidebar.innerHTML = '';
+    sidebar.replaceChildren();
 
     if (this.selectedDay) {
       const headerRow = el('div', { class: 'sidebar-header' });
@@ -1660,40 +1710,130 @@ const Dashboard = {
   // API data loading and normalization helpers
   // ============================================================
 
-  async ensureData() {
+  _makeSignal(routeId) {
+    if (!routeId) return undefined;
+    const controller = new AbortController();
+    if (!this._routeControllers) this._routeControllers = new Map();
+    this._routeControllers.set(routeId, controller);
+    return controller.signal;
+  },
+
+  CACHE_TTL_MS: 5 * 60 * 1000,
+
+  hasCachedData(entity) {
+    if (!this._dataCache) return false;
+    if (entity && this._dataCache.entity !== entity) return false;
+    if (!this._dataCache.loadedAt) return false;
+    return (Date.now() - this._dataCache.loadedAt) < this.CACHE_TTL_MS;
+  },
+
+  invalidateCache() {
+    this._dataCache = null;
+    this._dataPromise = null;
+    if (this._routeControllers) this._routeControllers.clear();
+  },
+
+  async ensureData(routeId) {
     if (this._dataPromise) return this._dataPromise;
-    this._dataPromise = this._loadData().finally(() => { this._dataPromise = null; });
+    const active = (Auth.activeEntity || '').toUpperCase();
+    if (this.hasCachedData(active)) return this._dataCache;
+    this._dataPromise = this._loadData(routeId).finally(() => { this._dataPromise = null; });
     return this._dataPromise;
   },
 
-  async _loadData() {
+  async _loadData(routeId) {
     const active = (Auth.activeEntity || '').toUpperCase();
-    const userEntities = (Auth.user?.entities || []).map(e => e.toUpperCase());
-    const entitiesToLoad = active === 'ALL'
-      ? userEntities.filter(e => ['ATA', 'LTA'].includes(e))
-      : [active];
+    const signal = this._makeSignal(routeId);
+    const isConsolidated = active === 'ALL';
 
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),
     ]);
 
-    const results = await Promise.all(entitiesToLoad.map(code => this._loadEntityData(code)));
+    const dashRes = await window.apiClient.reports.dashboard({ signal }).catch(err => {
+      console.warn('Dashboard report fetch failed:', err);
+      return { data: null };
+    });
+    const dash = dashRes?.data || {};
 
-    const workRequests = [];
-    const disbursements = [];
-    const analyticsByEntity = {};
+    let analyticsByEntity = dash.analyticsByEntity || {};
+    if (!analyticsByEntity.ATA && !analyticsByEntity.LTA) {
+      if (dash.ATA || dash.LTA) {
+        if (dash.ATA) analyticsByEntity.ATA = dash.ATA;
+        if (dash.LTA) analyticsByEntity.LTA = dash.LTA;
+      } else if (active && active !== 'ALL') {
+        analyticsByEntity[active] = dash;
+      }
+    }
 
-    results.forEach((res, idx) => {
-      const code = entitiesToLoad[idx];
-      analyticsByEntity[code] = res.analytics;
-      workRequests.push(...res.workRequests);
-      disbursements.push(...res.disbursements);
+    let workRequests = [];
+
+    if (isConsolidated) {
+      // In consolidated mode the dashboard endpoint returns calendar items from
+      // both entities. Build the work-request list from those instead of calling
+      // the entity-scoped list endpoint, which only supports a single entity.
+      if (Array.isArray(dash.calendar)) {
+        workRequests = dash.calendar
+          .filter(ev => ev.type === 'wr')
+          .map(ev => {
+            const raw = ev.data || ev;
+            return {
+              ...raw,
+              id: raw.id,
+              entity: raw.entity || active,
+              tasks: (raw.tasks || []).map(t => ({ ...t, workRequestId: raw.id })),
+            };
+          })
+          .filter(wr => wr.id);
+      }
+    } else {
+      const wrRes = await window.apiClient.workRequests.list({ includeTasks: true, signal }).catch(err => {
+        console.warn('Work requests fetch failed:', err);
+        return { data: [] };
+      });
+      workRequests = (wrRes.data || []).map(wr => ({
+        ...wr,
+        entity: wr.entity || active,
+        tasks: (wr.tasks || []).map(t => ({ ...t, workRequestId: wr.id }))
+      }));
+
+      // The dashboard summary may also include upcoming work requests for the
+      // consolidated calendar view. Merge them in without duplicating IDs.
+      if (Array.isArray(dash.calendar)) {
+        const existingIds = new Set(workRequests.map(wr => wr.id));
+        const calendarWrs = dash.calendar
+          .filter(ev => ev.type === 'wr')
+          .map(ev => {
+            const raw = ev.data || ev;
+            return {
+              ...raw,
+              id: raw.id,
+              entity: raw.entity || active,
+              tasks: (raw.tasks || []).map(t => ({ ...t, workRequestId: raw.id })),
+            };
+          })
+          .filter(wr => wr.id && !existingIds.has(wr.id));
+        workRequests.push(...calendarWrs);
+      }
+    }
+
+    const tasksByWr = new Map();
+    const tasks = [];
+    workRequests.forEach(wr => {
+      tasksByWr.set(wr.id, wr.tasks || []);
+      tasks.push(...(wr.tasks || []));
     });
 
-    const tasksByWr = await this._loadTasksForWorkRequests(workRequests);
-    const tasks = [];
-    tasksByWr.forEach(list => tasks.push(...list));
+    // Disbursements are supplied by the dashboard report's calendar overview.
+    let disbursements = [];
+    if (Array.isArray(dash.disbursements)) {
+      disbursements = dash.disbursements.map(d => this._normalizeDisbursement(d, active));
+    } else if (Array.isArray(dash.calendar)) {
+      disbursements = dash.calendar
+        .filter(ev => ev.type === 'db')
+        .map(ev => this._normalizeDisbursement(ev.data || ev, active));
+    }
 
     this._dataCache = {
       analyticsByEntity,
@@ -1702,64 +1842,15 @@ const Dashboard = {
       tasksByWr,
       tasks,
       loadedAt: Date.now(),
+      entity: active,
     };
-  },
-
-  async _loadEntityData(entityCode) {
-    const prevEntity = Auth.activeEntity;
-    Auth.activeEntity = entityCode;
-    try {
-      const [analyticsRes, wrRes, dbRes] = await Promise.all([
-        window.apiClient.reports.analytics().catch(err => {
-          console.warn(`Analytics fetch failed for ${entityCode}:`, err);
-          return { data: null };
-        }),
-        window.apiClient.workRequests.list({ limit: 1000 }).catch(err => {
-          console.warn(`Work requests fetch failed for ${entityCode}:`, err);
-          return { data: [] };
-        }),
-        window.apiClient.disbursements.list({ limit: 1000 }).catch(err => {
-          console.warn(`Disbursements fetch failed for ${entityCode}:`, err);
-          return { data: [] };
-        }),
-      ]);
-
-      return {
-        analytics: analyticsRes.data,
-        workRequests: (wrRes.data || []).map(wr => ({ ...wr, entity: wr.entity || entityCode })),
-        disbursements: (dbRes.data || []).map(d => this._normalizeDisbursement(d, entityCode)),
-      };
-    } finally {
-      Auth.activeEntity = prevEntity;
-    }
-  },
-
-  async _loadTasksForWorkRequests(workRequests) {
-    const tasksByWr = new Map();
-    if (!workRequests || workRequests.length === 0) return tasksByWr;
-
-    // Limit concurrency to avoid hammering the backend with one request per WR.
-    const CONCURRENCY = 5;
-    for (let i = 0; i < workRequests.length; i += CONCURRENCY) {
-      const batch = workRequests.slice(i, i + CONCURRENCY);
-      await Promise.all(batch.map(async (wr) => {
-        try {
-          const res = await window.apiClient.workRequests.listTasks(wr.id);
-          tasksByWr.set(wr.id, res.data || []);
-        } catch (e) {
-          console.warn('Failed to load tasks for work request', wr.id, e);
-          tasksByWr.set(wr.id, []);
-        }
-      }));
-    }
-    return tasksByWr;
   },
 
   _normalizeDisbursement(d, entityCode) {
     if (!d) return d;
     return {
       ...d,
-      entity: entityCode,
+      entity: d.entity || entityCode,
       description: d.description,
       category: d.category,
       amount: Number(d.amount) || 0,

@@ -13,11 +13,16 @@ const { requirePermission } = require('../../middleware/rbac');
 const { resolveEntity } = require('../../middleware/resolveEntity');
 
 // Resolve entity code → UUID for all routes in this module
-router.use(resolveEntity);
+router.use(resolveEntity({ allowAll: true }));
 
 router.get('/analytics',
   requirePermission('reports:view'),
   reportsController.analytics,
+);
+
+router.get('/dashboard',
+  requirePermission('workflow:view'),
+  reportsController.dashboard,
 );
 
 router.get('/daily',
