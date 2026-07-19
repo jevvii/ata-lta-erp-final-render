@@ -180,13 +180,14 @@ function deepClone(obj) {
  * @returns {boolean}
  */
 function matchesEntity(recordEntity, activeEntity) {
-  const active = activeEntity || (typeof Auth !== 'undefined' ? Auth.activeEntity : null) || '';
+  const active =
+    ((activeEntity || (typeof Auth !== 'undefined' ? Auth.activeEntity : null)) || '').toUpperCase();
   const rec = (recordEntity || '').toUpperCase();
   if (active === 'ALL') {
     const userEnts = (typeof Auth !== 'undefined' && Auth.user?.entities) || [];
     return userEnts.map(e => e.toUpperCase()).includes(rec);
   }
-  return rec === active.toUpperCase();
+  return rec === active;
 }
 
 function generateId(prefix) {

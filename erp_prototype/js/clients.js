@@ -749,6 +749,7 @@ const Clients = {
       } catch (e) {
         console.error('Failed to load client form', e);
         if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+        this.editingId = null;
         this.showList();
         return;
       }

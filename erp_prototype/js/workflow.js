@@ -174,6 +174,10 @@ const WorkflowData = {
         return this._pendingApprovals;
       })
       .catch(err => {
+        if (this._isAbortError(err)) {
+          if (!this._pendingApprovals) this._pendingApprovals = [];
+          return this._pendingApprovals;
+        }
         console.error('[WorkflowData] failed to load pending approvals', err);
         if (!this._pendingApprovals) this._pendingApprovals = [];
         return this._pendingApprovals;
@@ -5694,8 +5698,7 @@ const Workflow = {
     const assigneeSel = el('select', { name: 'assignedTo', class: 'notion-prop-select', required: true });
     assigneeSel.appendChild(el('option', { value: '', text: '— Select —' }));
     (window.apiClient.userCache._users || []).filter(u => {
-      if (entity === 'ALL') return u.entities.some(e => (Auth.user?.entities || []).map(ae => ae.toUpperCase()).includes(e.toUpperCase()));
-      return u.entities.includes(entity) || u.entities.includes(entity.toLowerCase());
+      return (u.entities || []).some(e => matchesEntity(e, entity));
     }).forEach(u => {
       const opt = el('option', { value: u.id, text: u.name });
       if (wr && wr.assignedTo === u.id) opt.selected = true;

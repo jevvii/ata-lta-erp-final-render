@@ -99,7 +99,7 @@
       signal,
     });
 
-    if (res.status === 401) {
+    if (res.status === 401 && !path.startsWith('/auth/')) {
       // Clear stale session and redirect to login.
       try {
         sessionStorage.removeItem('erp_access_token');

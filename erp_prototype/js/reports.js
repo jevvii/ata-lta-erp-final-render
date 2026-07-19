@@ -114,6 +114,7 @@ const Reports = {
   isAbortError(e) {
     if (!e) return false;
     if (e.name === 'AbortError') return true;
+    if (typeof e === 'string' && (e === 'route-change' || e.includes('AbortError'))) return true;
     if (e.message === 'route-change') return true;
     if (e.message === 'Request aborted') return true;
     if (typeof e.message === 'string' && e.message.includes('AbortError')) return true;

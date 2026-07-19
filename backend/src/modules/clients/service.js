@@ -322,10 +322,11 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * Get a single client by ID.
  * @param {Object} params
  * @param {string} params.id
- * @param {string} params.entityId
+ * @param {string} [params.entityId] - Entity scope. Required unless allowCrossEntity is true.
+ * @param {boolean} [params.allowCrossEntity=false] - When true, skip entity filtering (for consolidated ALL view).
  * @returns {Promise<object|null>}
  */
-const getClientById = async ({ id, entityId }) => {
+const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
   let query = supabaseAdmin
     .from('clients')
     .select('*')
@@ -334,6 +335,12 @@ const getClientById = async ({ id, entityId }) => {
 
   if (entityId) {
     query = query.eq('entity_id', entityId);
+  } else if (!allowCrossEntity) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'entityId is required when cross-entity access is not enabled',
+    });
   }
 
   const { data, error } = await query.maybeSingle();
