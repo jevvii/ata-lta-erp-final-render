@@ -142,4 +142,77 @@ describe('/v1/work-requests', () => {
 
     expect(res.body.title).toMatch(/forbidden/i);
   });
+
+  it('creates and lists retainer templates', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const client = await createClient(admin, 'ATA');
+
+    await request(app)
+      .post('/v1/work-requests/templates')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        name: 'Monthly Retainer',
+        clientId: client.id,
+        schedule: 'Monthly',
+        pfAmount: 10000,
+        tasks: [{ title: 'Prepare FS' }, { title: 'Review FS' }],
+      })
+      .expect(201);
+
+    const res = await request(app)
+      .get('/v1/work-requests/templates')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].name).toBe('Monthly Retainer');
+  });
+
+  it('updates and deletes a retainer template', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+
+    const created = await request(app)
+      .post('/v1/work-requests/templates')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ name: 'Quarterly Retainer' })
+      .expect(201);
+
+    const updated = await request(app)
+      .put(`/v1/work-requests/templates/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ pfAmount: 5000 })
+      .expect(200);
+
+    expect(updated.body.data.pf_amount).toBe(5000);
+
+    await request(app)
+      .delete(`/v1/work-requests/templates/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(204);
+  });
+
+  it('creates and lists ground workers', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+
+    await request(app)
+      .post('/v1/work-requests/ground-workers')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ name: 'Juan Dela Cruz' })
+      .expect(201);
+
+    const res = await request(app)
+      .get('/v1/work-requests/ground-workers')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].name).toBe('Juan Dela Cruz');
+  });
 });

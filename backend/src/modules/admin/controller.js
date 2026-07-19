@@ -3,7 +3,7 @@
  */
 
 const adminService = require('./service');
-const { createUserSchema, updateUserSchema, rejectPendingSchema } = require('./schema');
+const { createUserSchema, updateUserSchema, rejectPendingSchema, createPendingSchema, listAuditQuerySchema } = require('./schema');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 
@@ -104,8 +104,50 @@ const deleteUser = async (req, res, next) => {
 const listPendingApprovals = async (req, res, next) => {
   try {
     const entityId = await resolveEntityId(req);
-    const items = await adminService.listPendingApprovals({ entityId, user: req.user });
+    const items = await adminService.listPendingApprovals({
+      entityId,
+      user: req.user,
+      status: req.query.status,
+      tableName: req.query.tableName,
+      parentRecordId: req.query.parentRecordId,
+      submittedBy: req.query.submittedBy,
+    });
     res.status(200).json({ data: items });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createPending = async (req, res, next) => {
+  try {
+    const payload = validate(createPendingSchema, req.body);
+    const entityId = await resolveEntityId(req);
+    const item = await adminService.createPendingChange({
+      entityId,
+      userId: req.user.id,
+      data: payload,
+    });
+
+    await auditService.log({
+      action: 'pending.created',
+      table: 'pending_changes',
+      recordId: item.id,
+      entity: req.activeEntity,
+      userId: req.user.id,
+      details: { tableName: item.tableName, parentRecordId: item.parentRecordId },
+    });
+
+    res.status(201).json({ data: item });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getPendingById = async (req, res, next) => {
+  try {
+    const entityId = await resolveEntityId(req);
+    const item = await adminService.getPendingChangeById({ entityId, id: req.params.id });
+    res.status(200).json({ data: item });
   } catch (err) {
     next(err);
   }
@@ -159,6 +201,16 @@ const getAuditLogCount = async (req, res, next) => {
   }
 };
 
+const listAudit = async (req, res, next) => {
+  try {
+    const filters = validate(listAuditQuerySchema, req.query);
+    const result = await adminService.getAuditLogs({ entityCode: req.activeEntity, filters });
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   adminController: {
     listUsers,
@@ -167,8 +219,11 @@ module.exports = {
     updateUser,
     deleteUser,
     listPendingApprovals,
+    createPending,
+    getPendingById,
     approvePending,
     rejectPending,
     getAuditLogCount,
+    listAudit,
   },
 };

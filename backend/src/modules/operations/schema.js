@@ -48,6 +48,24 @@ const createTaskSchema = z.object({
 
 const updateTaskSchema = createTaskSchema.partial();
 
+const taskTemplateSchema = z.object({
+  title: z.string().min(1).max(255),
+  description: z.string().max(2000).optional().nullable(),
+});
+
+const retainerTemplateSchema = z.object({
+  name: z.string().min(1).max(255),
+  description: z.string().max(2000).optional().nullable(),
+  clientId: z.string().uuid().optional().nullable(),
+  schedule: z.string().max(50).optional().nullable(),
+  pfAmount: z.number().nonnegative().optional(),
+  tasks: z.array(taskTemplateSchema).optional(),
+});
+
+const groundWorkerSchema = z.object({
+  name: z.string().min(1).max(255),
+});
+
 module.exports = {
   createWorkRequestSchema,
   updateWorkRequestSchema,
@@ -55,4 +73,6 @@ module.exports = {
   updateTaskSchema,
   checklistItemSchema,
   timeLogSchema,
+  retainerTemplateSchema,
+  groundWorkerSchema,
 };

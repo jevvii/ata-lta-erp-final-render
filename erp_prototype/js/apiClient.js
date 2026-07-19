@@ -386,6 +386,36 @@
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
       updateTask: (wrId, taskId, data) => put(`/work-requests/${wrId}/tasks/${taskId}`, data),
       removeTask: (wrId, taskId) => del(`/work-requests/${wrId}/tasks/${taskId}`),
+      listTemplates: () => get('/work-requests/templates'),
+      createTemplate: (data) => post('/work-requests/templates', data),
+      updateTemplate: (id, data) => put(`/work-requests/templates/${id}`, data),
+      deleteTemplate: (id) => del(`/work-requests/templates/${id}`),
+      listGroundWorkers: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/work-requests/ground-workers${q ? '?' + q : ''}`);
+      },
+      createGroundWorker: (data) => post('/work-requests/ground-workers', data),
+    },
+
+    operationsRequests: {
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/operations-requests${q ? '?' + q : ''}`);
+      },
+      create: (data) => post('/operations-requests', data),
+      get: (id) => get(`/operations-requests/${id}`),
+      update: (id, data) => put(`/operations-requests/${id}`, data),
+      remove: (id) => del(`/operations-requests/${id}`),
+      counts: (entityId) => cachedCount(
+        `operationsRequests.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/operations-requests/counts', entityId)),
+        { data: { total: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('operationsRequests.counts'),
     },
 
     tasks: {
@@ -438,7 +468,12 @@
       submit: (id) => post(`/disbursements/${id}/submit`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       approve: (id) => post(`/disbursements/${id}/approve`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       release: (id) => post(`/disbursements/${id}/release`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      fund: (id) => post(`/disbursements/${id}/fund`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       reject: (id, data) => post(`/disbursements/${id}/reject`, data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      listTemplates: () => get('/disbursements/templates'),
+      createTemplate: (data) => post('/disbursements/templates', data),
+      updateTemplate: (id, data) => put(`/disbursements/templates/${id}`, data),
+      deleteTemplate: (id) => del(`/disbursements/templates/${id}`),
     },
 
     transmittals: {
@@ -470,15 +505,56 @@
       getUser: (id) => get(`/admin/users/${id}`),
       updateUser: (id, data) => put(`/admin/users/${id}`, data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
       deleteUser: (id) => del(`/admin/users/${id}`).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
-      listPendingApprovals: () => get('/admin/pending-approvals'),
+      listPendingApprovals: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/admin/pending-approvals${q ? '?' + q : ''}`);
+      },
       approvePending: (id) => post(`/admin/pending-approvals/${id}/approve`).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
       rejectPending: (id, data) => post(`/admin/pending-approvals/${id}/reject`, data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+      listAudit: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/admin/audit${q ? '?' + q : ''}`);
+      },
       auditCount: (entityId) => cachedCount(
         `admin.auditCount:${entityId || getActiveEntity() || 'none'}`,
         () => get(countUrl('/admin/audit/count', entityId)),
         { data: { total: 0 } }
       ),
       invalidateAuditCount: () => invalidateCountCache('admin.auditCount'),
+    },
+
+    pendingApprovals: {
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/admin/pending-approvals${q ? '?' + q : ''}`);
+      },
+      create: (data) => post('/admin/pending-approvals', data),
+      get: (id) => get(`/admin/pending-approvals/${id}`),
+      approve: (id) => post(`/admin/pending-approvals/${id}/approve`).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+      reject: (id, data) => post(`/admin/pending-approvals/${id}/reject`, data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+    },
+
+    operations: {
+      listTemplates: () => get('/work-requests/templates'),
+      createTemplate: (data) => post('/work-requests/templates', data),
+      updateTemplate: (id, data) => put(`/work-requests/templates/${id}`, data),
+      deleteTemplate: (id) => del(`/work-requests/templates/${id}`),
+    },
+
+    groundWorkers: {
+      list: (query = {}) => {
+        const qs = new URLSearchParams();
+        Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        const q = qs.toString();
+        return get(`/work-requests/ground-workers${q ? '?' + q : ''}`);
+      },
+      create: (data) => post('/work-requests/ground-workers', data),
     },
   };
 })();

@@ -14,6 +14,16 @@ const { audit } = require('../../middleware/audit');
 
 router.use(auth, entityScope, resolveEntity());
 
+// --- Retainer Templates (must come before /:id routes) ---
+router.get('/templates', requirePermission('workflow:view'), operationsController.listRetainerTemplates);
+router.post('/templates', requirePermission('workflow:edit'), audit('retainer-template.created', { table: 'retainer_templates' }), operationsController.createRetainerTemplate);
+router.put('/templates/:templateId', requirePermission('workflow:edit'), audit('retainer-template.updated', { table: 'retainer_templates' }), operationsController.updateRetainerTemplate);
+router.delete('/templates/:templateId', requirePermission('workflow:edit'), audit('retainer-template.deleted', { table: 'retainer_templates' }), operationsController.deleteRetainerTemplate);
+
+// --- Ground Workers ---
+router.get('/ground-workers', requirePermission('workflow:view'), operationsController.listGroundWorkers);
+router.post('/ground-workers', requirePermission('workflow:edit'), audit('ground-worker.created', { table: 'ground_workers' }), operationsController.createGroundWorker);
+
 router.get('/', requirePermission('workflow:view'), operationsController.list);
 router.post('/', requirePermission('workflow:edit'), audit('work_request.created', { table: 'work_requests' }), operationsController.create);
 router.get('/:id', requirePermission('workflow:view'), operationsController.getById);

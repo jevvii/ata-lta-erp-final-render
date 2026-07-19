@@ -4,7 +4,14 @@
  */
 
 const operationsService = require('./service');
-const { createWorkRequestSchema, updateWorkRequestSchema, createTaskSchema, updateTaskSchema } = require('./schema');
+const {
+  createWorkRequestSchema,
+  updateWorkRequestSchema,
+  createTaskSchema,
+  updateTaskSchema,
+  retainerTemplateSchema,
+  groundWorkerSchema,
+} = require('./schema');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 
@@ -237,6 +244,119 @@ const getTaskRelated = async (req, res, next) => {
   }
 };
 
+const listRetainerTemplates = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await operationsService.listRetainerTemplates({ entityId });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createRetainerTemplate = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const payload = validate(retainerTemplateSchema, req.body);
+    const template = await operationsService.createRetainerTemplate({ entityId, userId: req.user.id, data: payload });
+
+    await auditService.log({
+      action: 'retainer-template.created',
+      table: 'retainer_templates',
+      recordId: template.id,
+      entity: req.activeEntity,
+      userId: req.user.id,
+      details: { name: template.name },
+    });
+
+    res.status(201).json({ data: template });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateRetainerTemplate = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const payload = validate(retainerTemplateSchema.partial(), req.body);
+    const template = await operationsService.updateRetainerTemplate({
+      entityId,
+      id: req.params.templateId,
+      data: payload,
+    });
+
+    await auditService.log({
+      action: 'retainer-template.updated',
+      table: 'retainer_templates',
+      recordId: template.id,
+      entity: req.activeEntity,
+      userId: req.user.id,
+      details: { name: template.name },
+    });
+
+    res.status(200).json({ data: template });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteRetainerTemplate = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const removed = await operationsService.deleteRetainerTemplate({
+      entityId,
+      id: req.params.templateId,
+    });
+    if (!removed) {
+      throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Retainer template not found' });
+    }
+
+    await auditService.log({
+      action: 'retainer-template.deleted',
+      table: 'retainer_templates',
+      recordId: req.params.templateId,
+      entity: req.activeEntity,
+      userId: req.user.id,
+      details: {},
+    });
+
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+};
+
+const listGroundWorkers = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await operationsService.listGroundWorkers({ entityId });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createGroundWorker = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const payload = validate(groundWorkerSchema, req.body);
+    const worker = await operationsService.createGroundWorker({ entityId, userId: req.user.id, data: payload });
+
+    await auditService.log({
+      action: 'ground-worker.created',
+      table: 'ground_workers',
+      recordId: worker.id,
+      entity: req.activeEntity,
+      userId: req.user.id,
+      details: { name: worker.name },
+    });
+
+    res.status(201).json({ data: worker });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   operationsController: {
     list,
@@ -250,5 +370,11 @@ module.exports = {
     removeTask,
     getRelated,
     getTaskRelated,
+    listRetainerTemplates,
+    createRetainerTemplate,
+    updateRetainerTemplate,
+    deleteRetainerTemplate,
+    listGroundWorkers,
+    createGroundWorker,
   },
 };

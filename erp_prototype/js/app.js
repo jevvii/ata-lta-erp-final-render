@@ -118,7 +118,7 @@ const App = {
     }
     
     this.handleRoute();
-    this.updateSidebarNotifications();
+    await this.updateSidebarNotifications();
     this.setupStickyTrayResize();
 
 
@@ -174,29 +174,37 @@ const App = {
     });
   },
 
-  updateSidebarNotifications() {
+  async updateSidebarNotifications() {
     const entity = Auth.activeEntity;
 
-    // Disbursement nav badge only surfaces work awaiting the assigned handler's final release.
+    // Fetch lightweight badge counts from the API (cached for 30s by apiClient).
+    let disbCounts = null;
+    let opsCounts = null;
+    try {
+      disbCounts = await window.apiClient.disbursements.counts(entity);
+    } catch (err) {
+      console.error('[App.updateSidebarNotifications] disbursement counts failed', err);
+    }
+    try {
+      opsCounts = await window.apiClient.operationsRequests.counts(entity);
+    } catch (err) {
+      console.error('[App.updateSidebarNotifications] operations request counts failed', err);
+    }
+
+    // Disbursement nav badge only surfaces work awaiting release.
     // Pending approvals and release requests are handled in the dedicated Admin > Pending Approvals page.
-    const items = DB.getWhere('disbursements', d => d.entity === entity);
-    let count = 0;
-    items.forEach(d => {
-      if (d.status === 'Approved' && d.paymentHandledBy === Auth.user.id) {
-        count++;
-      }
-    });
+    const awaitingRelease = disbCounts?.data?.awaitingRelease || 0;
 
     const navLink = document.querySelector('nav a[href="#disbursement"]');
     if (navLink) {
       let badge = navLink.querySelector('.nav-badge');
-      if (count > 0) {
+      if (awaitingRelease > 0) {
         if (!badge) {
           badge = document.createElement('span');
           badge.className = 'nav-badge';
           navLink.appendChild(badge);
         }
-        badge.textContent = count > 99 ? '99+' : count;
+        badge.textContent = awaitingRelease > 99 ? '99+' : awaitingRelease;
       } else if (badge) {
         badge.remove();
       }
@@ -215,14 +223,16 @@ const App = {
         }
       } else {
         // For staff: count their own pending submissions.
-        const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getPendingForUser === 'function') ? PendingChanges.getPendingForUser(Auth.user.id) : [];
-        const myReqs = (typeof DB !== 'undefined' && typeof DB.getWhere === 'function') ? DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user.id && r.status === 'pending') : [];
+        const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getPendingForUser === 'function')
+          ? (await PendingChanges.getPendingForUser(Auth.user.id))
+          : [];
+        const myReqsPending = opsCounts?.data?.pending || 0;
         let approvalsCount = 0;
         if (Auth.isManagerial() && typeof Users !== 'undefined' && typeof Users.getPendingCategories === 'function') {
           const categories = Users.getPendingCategories();
           approvalsCount = Object.values(categories).reduce((sum, arr) => sum + (arr || []).length, 0);
         }
-        adminCount = pendingChanges.length + myReqs.length + approvalsCount;
+        adminCount = pendingChanges.length + myReqsPending + approvalsCount;
       }
 
       let adminBadge = adminNav.querySelector('.nav-badge');
@@ -713,10 +723,10 @@ const App = {
       performance.measure('route-switch-' + routeId, 'route-start-' + routeId, 'route-end-' + routeId);
       this._reportRouteTelemetry(routeId, baseHash, hasCache);
 
-      if (module.init) module.init();
+      if (module.init) await module.init();
       this.highlightNav(rawHash);
       this.updateEntityBadge();
-      this.updateSidebarNotifications();
+      await this.updateSidebarNotifications();
       requestAnimationFrame(() => this.updateStickyTrayOffset());
     }
   },

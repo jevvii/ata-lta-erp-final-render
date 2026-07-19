@@ -14,20 +14,40 @@ const Billing = {
   _archivePage: 1,
   _archiveLimit: 20,
   _lastArchiveMeta: {},
+  _detailCache: {}, // cached individual invoices for hot detail/form paths
+  _templates: [], // cached billing templates for the active entity
+  _templatesPromise: null, // in-flight loadTemplates() promise
 
   getInvoiceById(id) {
     if (!id) return null;
-    let inv = DB.getById('invoices', id);
-    if (!inv) {
-      const pc = DB.getWhere('pendingChanges', p => p.table === 'invoices' && p.status === 'pending' && p.proposedData && p.proposedData.id === id)[0];
-      if (pc) {
-        inv = deepClone(pc.proposedData);
-        inv.status = 'Pending';
-        inv.pendingChangeId = pc.id;
+    return this._detailCache[id] ? deepClone(this._detailCache[id]) : null;
+  },
+
+  async _fetchInvoiceAndRerender(id) {
+    if (!id) return;
+    try {
+      const res = await window.apiClient.invoices.get(id);
+      if (res?.data) {
+        this._detailCache[id] = this.normalizeInvoice(res.data);
+        App.handleRoute();
       }
+    } catch (err) {
+      console.error('Failed to fetch invoice', id, err);
     }
-    if (inv) inv = this.normalizeInvoice(inv);
-    return inv;
+  },
+
+  async _loadPrefilledOpReq() {
+    if (!this.prefilledRequestId) {
+      this._prefilledOpReq = null;
+      return;
+    }
+    try {
+      const res = await window.apiClient.operationsRequests.get(this.prefilledRequestId);
+      this._prefilledOpReq = res.data || null;
+    } catch (err) {
+      console.error('Failed to load prefilled operations request', this.prefilledRequestId, err);
+      this._prefilledOpReq = null;
+    }
   },
 
   /**
@@ -47,7 +67,14 @@ const Billing = {
 
   async render() {
     const container = el('div', { class: 'page' });
-    
+
+    const needsInvoice = (this.view === 'detail' || this.view === 'form') && this.detailId;
+    if (needsInvoice && !this.getInvoiceById(this.detailId)) {
+      this._fetchInvoiceAndRerender(this.detailId);
+      container.appendChild(el('div', { class: 'loading-skeleton', style: 'padding: 24px;', text: 'Loading invoice...' }));
+      return container;
+    }
+
     if (this.view === 'detail' && this.detailId) {
       const inv = this.getInvoiceById(this.detailId);
       const titleBar = el('div', { class: 'page-title-bar-v2' });
@@ -117,7 +144,7 @@ const Billing = {
     } else if (this.view === 'templateForm') {
       container.classList.add('billing-tab-page');
       const isNew = !this.templateEditingId;
-      const template = isNew ? null : DB.getById('billingTemplates', this.templateEditingId);
+      const template = isNew ? null : await this.getTemplateById(this.templateEditingId);
       const fullPageRoute = isNew ? '#billing/templateForm/new' : `#billing/templateForm/${this.templateEditingId}`;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
@@ -159,16 +186,19 @@ const Billing = {
     }
 
     if (this.view === 'list') container.appendChild(await this.renderList());
-    else if (this.view === 'form') container.appendChild(this.renderForm(this.detailId));
+    else if (this.view === 'form') {
+      await this._loadPrefilledOpReq();
+      container.appendChild(this.renderForm(this.detailId));
+    }
     else if (this.view === 'detail') container.appendChild(this.renderDetail());
     else if (this.view === 'aging') {
       const agingContainer = el('div');
       container.appendChild(agingContainer);
       this.renderAging().then(el => agingContainer.appendChild(el));
     }
-    else if (this.view === 'templates') container.appendChild(this.renderTemplates());
+    else if (this.view === 'templates') container.appendChild(await this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
-    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
+    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true, template }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -408,7 +438,9 @@ const Billing = {
     try {
       const res = await window.apiClient.invoices.list(query);
       this._lastInvoiceMeta = res.meta || {};
-      return (res.data || []).map(inv => this.normalizeInvoice(inv));
+      const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
+      invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
+      return invoices;
     } catch (e) {
       console.error('Failed to fetch invoices', e);
       Workflow.showMessage('Invoices', e.message || 'Unable to load invoices.', 'error');
@@ -424,6 +456,51 @@ const Billing = {
     } catch (e) {
       console.error('Failed to fetch billing templates', e);
       return [];
+    }
+  },
+
+  /**
+   * Load billing templates for the active entity into a local cache.
+   * Deduplicates concurrent calls via _templatesPromise.
+   */
+  async loadTemplates() {
+    if (this._templatesPromise) return this._templatesPromise;
+    this._templatesPromise = (async () => {
+      try {
+        const all = await this.fetchTemplates();
+        const entity = Auth.activeEntity;
+        this._templates = all.filter(t => {
+          if (entity === 'ALL') {
+            return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
+          }
+          return (t.entity || '').toUpperCase() === entity.toUpperCase();
+        });
+      } catch (e) {
+        console.error('Failed to load billing templates', e);
+        this._templates = [];
+      } finally {
+        this._templatesPromise = null;
+      }
+      return this._templates;
+    })();
+    return this._templatesPromise;
+  },
+
+  /**
+   * Get a template by ID from the cache, or fetch the list and find it if missing.
+   * Falls back to the local DB only if the API call fails and a local record exists.
+   */
+  async getTemplateById(id) {
+    if (!id) return null;
+    const cached = this._templates.find(t => t.id === id);
+    if (cached) return deepClone(cached);
+    try {
+      await this.loadTemplates();
+      const template = this._templates.find(t => t.id === id) || null;
+      return template ? deepClone(template) : null;
+    } catch (e) {
+      console.error('Failed to fetch template by id', id, e);
+      return null;
     }
   },
 
@@ -565,19 +642,24 @@ const Billing = {
         return matchesEntity && inv.status !== 'Cancelled' && !inv.archived;
       });
 
-      const pendingInvs = DB.getWhere('pendingChanges', pc => {
-        if (pc.table !== 'invoices' || pc.status !== 'pending') return false;
-        const inv = pc.proposedData;
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
-        if (!matchesEntity) return false;
-        if (!Auth.can('billing:approve') && pc.submittedBy !== Auth.user?.id) return false;
-        return true;
-      }).map(pc => {
-        const inv = deepClone(pc.proposedData);
-        inv.status = 'Pending';
-        inv.pendingChangeId = pc.id;
-        return inv;
-      });
+      let pendingInvs = [];
+      try {
+        const pendingRes = await window.apiClient.pendingApprovals.list({ status: 'pending', tableName: 'invoices' });
+        pendingInvs = (pendingRes.data || []).filter(pc => {
+          const inv = pc.proposedData || {};
+          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
+          if (!matchesEntity) return false;
+          if (!Auth.can('billing:approve') && pc.submittedBy !== Auth.user?.id) return false;
+          return true;
+        }).map(pc => {
+          const inv = deepClone(pc.proposedData);
+          inv.status = 'Pending';
+          inv.pendingChangeId = pc.id;
+          return inv;
+        });
+      } catch (e) {
+        console.error('Failed to load pending invoice approvals', e);
+      }
 
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
       let invoices = [...baseInvoices, ...pendingInvs];
@@ -1227,9 +1309,10 @@ const Billing = {
     const entity = Auth.activeEntity;
     const activeId = invoiceId || this.detailId;
     const inv = activeId ? this.getInvoiceById(activeId) : null;
-    const opReq = this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId) : null;
+    const opReq = this._prefilledOpReq || null;
     const prefill = this.pendingPrefill || (this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : null);
     this.pendingPrefill = null; // consume once
+    this._prefilledOpReq = null; // consume once
     const container = el('div');
 
     const form = el('form', { id: 'invoice-form', class: 'form-stacked notion-form' });
@@ -1544,20 +1627,17 @@ const Billing = {
         record.createdAt = res.data.created_at || res.data.createdAt;
         record.updatedAt = res.data.updated_at || res.data.updatedAt;
         record.status = res.data.status;
-        DB.insert('invoices', record);
       } else {
         if (record.status === 'Draft' || !requiresApproval) {
           const res = await window.apiClient.invoices.update(record.id, apiPayload);
           record.updatedAt = res.data.updated_at || res.data.updatedAt;
           record.status = res.data.status;
-          DB.update('invoices', record.id, record);
         } else {
           result = PendingChanges.submit('invoices', record, false);
           if (result.approved) {
             const res = await window.apiClient.invoices.update(record.id, apiPayload);
             record.updatedAt = res.data.updated_at || res.data.updatedAt;
             record.status = res.data.status;
-            DB.update('invoices', record.id, record);
           }
         }
       }
@@ -1567,23 +1647,23 @@ const Billing = {
       return;
     }
 
-    // Link to WR if selected
-    if (data.workRequestId) {
-      const wr = window.apiClient.workRequestCache.getById(data.workRequestId) || DB.getById('workRequests', data.workRequestId);
-      if (wr) {
-        DB.update('workRequests', wr.id, { linkedInvoiceId: record.id });
-      }
-    }
-
     // Fulfill pending operations request if any
-    const reqId = this.prefilledRequestId || (data.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === data.workRequestId && r.type === 'billing' && r.status === 'pending')[0]?.id : null);
-    if (reqId) {
-      DB.update('operationsRequests', reqId, {
-        status: 'fulfilled',
-        fulfilledBy: Auth.user.id,
-        fulfilledAt: new Date().toISOString(),
-        linkedRecordId: record.id
-      });
+    try {
+      let reqId = this.prefilledRequestId || null;
+      if (!reqId && data.workRequestId) {
+        const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'billing', workRequestId: data.workRequestId, limit: 1 });
+        reqId = (opReqRes.data || [])[0]?.id || null;
+      }
+      if (reqId) {
+        await window.apiClient.operationsRequests.update(reqId, {
+          status: 'fulfilled',
+          fulfilledBy: Auth.user.id,
+          fulfilledAt: new Date().toISOString(),
+          linkedRecordId: record.id
+        });
+      }
+    } catch (e) {
+      console.error('Failed to fulfill billing operations request', e);
     }
     this.prefilledRequestId = null;
     this.prefilledWrId = null;
@@ -1603,8 +1683,9 @@ const Billing = {
     closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
-  showForm(invoiceId = null, mode = null) {
+  async showForm(invoiceId = null, mode = null) {
     this.detailId = invoiceId;
+    await this._loadPrefilledOpReq();
     const isNew = !invoiceId;
     const inv = isNew ? null : this.getInvoiceById(invoiceId);
     const fullPageRoute = isNew ? '#billing/form/new' : `#billing/form/${invoiceId}`;
@@ -1627,7 +1708,7 @@ const Billing = {
     });
   },
 
-  showRequestInvoiceModal() {
+  async showRequestInvoiceModal() {
     const entity = Auth.activeEntity;
     const allWrs = window.apiClient.workRequestCache._wrs || [];
     const wrs = allWrs.filter(wr => {
@@ -1635,6 +1716,15 @@ const Billing = {
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
       return wrEnt === entity.toUpperCase();
     });
+
+    let pendingBillingRequests = [];
+    try {
+      const pendingRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'billing' });
+      pendingBillingRequests = pendingRes.data || [];
+    } catch (e) {
+      console.error('Failed to load pending billing requests', e);
+    }
+    const pendingWrIds = new Set(pendingBillingRequests.map(r => r.work_request_id || r.workRequestId).filter(Boolean));
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-md); min-width: 420px; max-width: 500px;' });
     const form = el('form', { class: 'form-stacked' });
@@ -1646,8 +1736,7 @@ const Billing = {
     wrSelect.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     wrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
-      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'billing' && r.status === 'pending');
-      if (pending.length === 0) {
+      if (!pendingWrIds.has(wr.id)) {
         wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
       }
     });
@@ -1712,7 +1801,7 @@ const Billing = {
 
     overlay.querySelector('#btn-cancel-opreq').addEventListener('click', () => overlay.remove());
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
       const wrId = wrSelect.value;
@@ -1720,7 +1809,7 @@ const Billing = {
         Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
         return;
       }
-      const wr = window.apiClient.workRequestCache.getById(wrId) || DB.getById('workRequests', wrId);
+      const wr = window.apiClient.workRequestCache.getById(wrId);
 
       const amtStr = amtIn.value;
       const amount = parseFloat(amtStr.replace(/[₱$,\s]/g, '')) || 0;
@@ -1734,28 +1823,26 @@ const Billing = {
       const receiptFile = fileIn.files?.[0];
 
       const record = {
-        id: generateId('opreq'),
         type: 'billing',
         workRequestId: wrId,
-        clientId: wr.clientId,
-        requestedBy: Auth.user.id,
-        requestedAt: new Date().toISOString(),
-        status: 'pending',
-        rejectionReason: '',
-        linkedTaskId: linkedTaskId || '',
+        clientId: wr?.clientId || null,
         amount: amount,
-        notes: notes,
-        receiptFilename: receiptFile ? receiptFile.name : null
+        notes: notes
       };
 
-      DB.insert('operationsRequests', record);
-      overlay.remove();
-
-      Workflow.showMessage(
-        'Request Submitted',
-        'Your invoice request has been submitted to Accounting for review.',
-        'success'
-      );
+      try {
+        await window.apiClient.operationsRequests.create(record);
+        overlay.remove();
+        Workflow.showMessage(
+          'Request Submitted',
+          'Your invoice request has been submitted to Accounting for review.',
+          'success'
+        );
+      } catch (err) {
+        console.error('Failed to create billing request', err);
+        Workflow.showMessage('Request Failed', err.message || 'Unable to submit billing request.', 'error');
+        return;
+      }
 
       App.handleRoute();
     });
@@ -2024,7 +2111,7 @@ const Billing = {
       collectorGroup.appendChild(el('label', { text: 'Payment Collected By' }));
       const collectorSel = el('select', { name: 'payCollectedBy' });
       collectorSel.appendChild(el('option', { value: '', text: '— Select User —' }));
-      (window.apiClient.userCache._users || DB.getAll('users')).forEach(u => {
+      (window.apiClient.userCache._users || []).forEach(u => {
         const opt = el('option', { value: u.id, text: u.name });
         collectorSel.appendChild(opt);
       });
@@ -2088,7 +2175,7 @@ const Billing = {
           });
           // Refresh invoice from server so totals/status reflect DB state
           const refreshed = await window.apiClient.invoices.get(inv.id);
-          DB.update('invoices', inv.id, this.normalizeInvoice(refreshed.data));
+          this._detailCache[inv.id] = this.normalizeInvoice(refreshed.data);
         } catch (e) {
           console.error('Failed to record payment', e);
           Workflow.showMessage('Payment Failed', e.message || 'Unable to record payment.', 'error');
@@ -2133,11 +2220,7 @@ const Billing = {
         approveBtn.addEventListener('click', async () => {
           try {
             const res = await window.apiClient.invoices.update(inv.id, { status: 'Approved' });
-            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
-            if (inv.workRequestId) {
-              const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
-              if (wr) DB.update('workRequests', wr.id, { linkedInvoiceId: inv.id });
-            }
+            this._detailCache[inv.id] = this.normalizeInvoice(res.data);
           } catch (e) {
             console.error('Failed to approve invoice', e);
             Workflow.showMessage('Approval Failed', e.message || 'Unable to approve invoice.', 'error');
@@ -2152,7 +2235,7 @@ const Billing = {
         sendBtn.addEventListener('click', async () => {
           try {
             const res = await window.apiClient.invoices.update(inv.id, { status: 'Pending' });
-            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+            this._detailCache[inv.id] = this.normalizeInvoice(res.data);
             PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
           } catch (e) {
             console.error('Failed to submit invoice for approval', e);
@@ -2172,7 +2255,7 @@ const Billing = {
         try {
           const targetStatus = isAdmin ? 'Sent' : 'Release Pending Approval';
           const res = await window.apiClient.invoices.update(inv.id, { status: targetStatus });
-          DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+          this._detailCache[inv.id] = this.normalizeInvoice(res.data);
           if (!isAdmin) Workflow.showMessage('Submitted', 'Invoice release has been submitted for administrative approval.', 'success');
         } catch (e) {
           console.error('Failed to update invoice status', e);
@@ -3050,11 +3133,12 @@ const Billing = {
   // ============================================================
   // Templates View
   // ============================================================
-  renderTemplates() {
+  async renderTemplates() {
     const entity = Auth.activeEntity;
     const wrapper = el('div', { class: 'page-content-section' });
 
-    const templates = DB.getWhere('billingTemplates', t => t.entity === entity);
+    await this.loadTemplates();
+    const templates = this._templates;
 
     const backlogItems = templates.map(t => {
       const client = window.apiClient.clientCache.getById(t.clientId);
@@ -3100,8 +3184,16 @@ const Billing = {
             text: 'Delete',
             className: 'btn btn-danger btn-xs',
             onClick: () => {
-              Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, () => {
-                DB.delete('billingTemplates', t.id);
+              Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, async () => {
+                try {
+                  await window.apiClient.invoices.deleteTemplate(t.id);
+                  this._templates = this._templates.filter(tm => tm.id !== t.id);
+                  this._counts = null; // invalidate counts
+                } catch (e) {
+                  console.error('Failed to delete template', t.id, e);
+                  Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
+                  return;
+                }
                 App.handleRoute();
               }, 'danger');
             }
@@ -3125,7 +3217,7 @@ const Billing = {
                   const entity = Auth.activeEntity;
                   const now = new Date();
                   const payload = {
-                    invoiceNumber: this.nextInvoiceNumber(entity),
+                    invoiceNumber: await this.nextInvoiceNumber(entity),
                     clientId: t.clientId,
                     workRequestId: null,
                     issueDate: now.toISOString().slice(0, 10),
@@ -3136,8 +3228,7 @@ const Billing = {
                     terms: null,
                   };
                   try {
-                    const res = await window.apiClient.invoices.create(payload);
-                    DB.insert('invoices', this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity }));
+                    await window.apiClient.invoices.create(payload);
                     count++;
                   } catch (e) {
                     console.error('Failed to generate invoice from template', e);
@@ -3158,10 +3249,16 @@ const Billing = {
             const message = ids.length === 1
               ? 'Are you sure you want to delete this selected template?'
               : `Are you sure you want to delete these ${ids.length} selected templates?`;
-            Workflow.showConfirm(title, message, () => {
-              ids.forEach(id => {
-                DB.delete('billingTemplates', id);
-              });
+            Workflow.showConfirm(title, message, async () => {
+              try {
+                await Promise.all(ids.map(id => window.apiClient.invoices.deleteTemplate(id)));
+                this._templates = this._templates.filter(tm => !ids.includes(tm.id));
+                this._counts = null; // invalidate counts
+              } catch (e) {
+                console.error('Failed to bulk delete templates', e);
+                Workflow.showMessage('Delete Failed', e.message || 'Unable to delete templates.', 'error');
+                return;
+              }
               App.handleRoute();
             }, 'danger');
           }
@@ -3179,9 +3276,8 @@ const Billing = {
   },
 
   renderTemplateForm(opts = {}) {
-    const { hideHeader = false } = opts;
+    const { hideHeader = false, template = null } = opts;
     const entity = Auth.activeEntity;
-    const template = this.templateEditingId ? DB.getById('billingTemplates', this.templateEditingId) : null;
     const container = el('div', { class: 'page' });
 
     const form = el('form', { id: 'billing-tpl-form', class: 'form-stacked notion-form' });
@@ -3193,8 +3289,16 @@ const Billing = {
       if (template) {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, () => {
-            DB.delete('billingTemplates', template.id);
+          Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, async () => {
+            try {
+              await window.apiClient.invoices.deleteTemplate(template.id);
+              this._templates = this._templates.filter(t => t.id !== template.id);
+              this._counts = null; // invalidate counts
+            } catch (e) {
+              console.error('Failed to delete template', template.id, e);
+              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
+              return;
+            }
             this.view = 'templates';
             this.templateEditingId = null;
             closeFormPanelAndRoute('#billing');
@@ -3220,7 +3324,7 @@ const Billing = {
     clientGroup.appendChild(el('label', { text: 'Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    const clients = window.apiClient.clientCache._clients || DB.getWhere('clients', c => c.entity === entity);
+    const clients = window.apiClient.clientCache._clients || [];
     clients.filter(c => {
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes((c.entity || '').toUpperCase());
       return (c.entity || '').toUpperCase() === entity.toUpperCase();
@@ -3250,42 +3354,60 @@ const Billing = {
 
     form.addEventListener('submit', e => {
       e.preventDefault();
-      const fd = new FormData(form);
-      const record = {
-        name: fd.get('name').trim(),
-        clientId: fd.get('clientId'),
-        entity: entity,
-        schedule: fd.get('schedule'),
-        pfAmount: parseFloat(fd.get('pfAmount')) || 0,
-        lineItems: [
-          { type: 'Professional Fee', description: fd.get('name').trim(), amount: parseFloat(fd.get('pfAmount')) || 0 }
-        ],
-        updatedAt: new Date().toISOString()
-      };
-
-      if (template) {
-        DB.update('billingTemplates', template.id, record);
-      } else {
-        record.id = generateId('bt');
-        record.createdAt = new Date().toISOString();
-        DB.insert('billingTemplates', record);
-      }
-      this.view = 'templates';
-      this.templateEditingId = null;
-      closeFormPanelAndRoute('#billing');
+      this.submitTemplateForm(form, template).catch(err => console.error('submitTemplateForm error', err));
     });
 
     container.appendChild(form);
     return container;
   },
 
-  showTemplateForm(existing = null, mode = null) {
+  async submitTemplateForm(form, template) {
+    if (!validateRequiredFields(form)) return;
+    const entity = Auth.activeEntity;
+    const fd = new FormData(form);
+    const payload = {
+      name: fd.get('name').trim(),
+      clientId: fd.get('clientId'),
+      entity: entity,
+      schedule: fd.get('schedule'),
+      pfAmount: parseFloat(fd.get('pfAmount')) || 0,
+      lineItems: [
+        { type: 'Professional Fee', description: fd.get('name').trim(), amount: parseFloat(fd.get('pfAmount')) || 0 }
+      ]
+    };
+
+    try {
+      if (template) {
+        const res = await window.apiClient.invoices.updateTemplate(template.id, payload);
+        const updated = this.normalizeTemplate(res.data);
+        const idx = this._templates.findIndex(t => t.id === updated.id);
+        if (idx >= 0) this._templates[idx] = updated;
+        else this._templates.push(updated);
+      } else {
+        const res = await window.apiClient.invoices.createTemplate(payload);
+        const created = this.normalizeTemplate(res.data);
+        this._templates.push(created);
+      }
+      this._counts = null; // invalidate counts
+    } catch (e) {
+      console.error('Failed to save billing template', e);
+      Workflow.showMessage('Save Failed', e.message || 'Unable to save template.', 'error');
+      return;
+    }
+
+    this.view = 'templates';
+    this.templateEditingId = null;
+    closeFormPanelAndRoute('#billing');
+  },
+
+  async showTemplateForm(existing = null, mode = null) {
     this.templateEditingId = existing ? existing.id : null;
     const fullPageRoute = this.templateEditingId ? `#billing/templateForm/${this.templateEditingId}` : '#billing/templateForm/new';
+    const template = this.templateEditingId ? await this.getTemplateById(this.templateEditingId) : null;
     openFormPanel({
       icon: '📋',
-      title: ' ',
-      formContent: this.renderTemplateForm(),
+      title: template?.name ? `Edit ${template.name}` : 'New Billing Template',
+      formContent: this.renderTemplateForm({ template }),
       formId: 'billing-tpl-form',
       mode,
       viewContext: 'billing-template-form',
@@ -3302,7 +3424,7 @@ const Billing = {
     const entity = Auth.activeEntity;
     const now = new Date();
     const payload = {
-      invoiceNumber: this.nextInvoiceNumber(entity),
+      invoiceNumber: await this.nextInvoiceNumber(entity),
       clientId: t.clientId,
       workRequestId: null,
       issueDate: now.toISOString().slice(0, 10),
@@ -3315,7 +3437,6 @@ const Billing = {
     try {
       const res = await window.apiClient.invoices.create(payload);
       const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity });
-      DB.insert('invoices', inv);
       Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
       this.view = 'list';
       App.handleRoute();
@@ -3333,14 +3454,6 @@ const Billing = {
       async () => {
         try {
           await window.apiClient.invoices.remove(id);
-          // Clean up WR backlink
-          if (inv.workRequestId) {
-            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
-            if (wr && wr.linkedInvoiceId === inv.id) {
-              DB.update('workRequests', wr.id, { linkedInvoiceId: null });
-            }
-          }
-          DB.update('invoices', id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
         } catch (e) {
           console.error('Failed to trash invoice', e);
           Workflow.showMessage('Trash Failed', e.message || 'Unable to trash invoice.', 'error');
@@ -3359,12 +3472,7 @@ const Billing = {
       `Are you sure you want to restore invoice "${inv.invoiceNumber}"?`,
       async () => {
         try {
-          const res = await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
-          DB.update('invoices', id, this.normalizeInvoice(res.data));
-          if (inv.workRequestId) {
-            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
-            if (wr) DB.update('workRequests', wr.id, { linkedInvoiceId: id });
-          }
+          await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
         } catch (e) {
           console.error('Failed to restore invoice', e);
           Workflow.showMessage('Restore Failed', e.message || 'Unable to restore invoice.', 'error');
@@ -3384,8 +3492,7 @@ const Billing = {
       `Are you sure you want to archive invoice "${inv.invoiceNumber}"?`,
       async () => {
         try {
-          const res = await window.apiClient.invoices.update(id, { archived: true });
-          DB.update('invoices', id, this.normalizeInvoice(res.data));
+          await window.apiClient.invoices.update(id, { archived: true });
         } catch (e) {
           console.error('Failed to archive invoice', e);
           Workflow.showMessage('Archive Failed', e.message || 'Unable to archive invoice.', 'error');
@@ -3414,8 +3521,7 @@ const Billing = {
         let count = 0;
         for (const inv of eligible) {
           try {
-            const res = await window.apiClient.invoices.update(inv.id, { archived: true });
-            DB.update('invoices', inv.id, this.normalizeInvoice(res.data));
+            await window.apiClient.invoices.update(inv.id, { archived: true });
             count++;
           } catch (e) {
             console.error('Failed to archive invoice', inv.id, e);
@@ -3450,13 +3556,6 @@ const Billing = {
         for (const inv of eligible) {
           try {
             await window.apiClient.invoices.remove(inv.id);
-            if (inv.workRequestId) {
-              const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
-              if (wr && wr.linkedInvoiceId === inv.id) {
-                DB.update('workRequests', wr.id, { linkedInvoiceId: null });
-              }
-            }
-            DB.update('invoices', inv.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
             count++;
           } catch (e) {
             console.error('Failed to trash invoice', inv.id, e);
@@ -3476,8 +3575,7 @@ const Billing = {
       `Are you sure you want to unarchive invoice "${inv.invoiceNumber}"?`,
       async () => {
         try {
-          const res = await window.apiClient.invoices.update(id, { archived: false });
-          DB.update('invoices', id, this.normalizeInvoice(res.data));
+          await window.apiClient.invoices.update(id, { archived: false });
         } catch (e) {
           console.error('Failed to unarchive invoice', e);
           Workflow.showMessage('Unarchive Failed', e.message || 'Unable to unarchive invoice.', 'error');
@@ -3502,13 +3600,6 @@ const Billing = {
       async () => {
         try {
           await window.apiClient.invoices.remove(id);
-          if (inv.workRequestId) {
-            const wr = window.apiClient.workRequestCache.getById(inv.workRequestId) || DB.getById('workRequests', inv.workRequestId);
-            if (wr && wr.linkedInvoiceId === inv.id) {
-              DB.update('workRequests', wr.id, { linkedInvoiceId: null });
-            }
-          }
-          DB.delete('invoices', id);
         } catch (e) {
           console.error('Failed to delete invoice', e);
           Workflow.showMessage('Delete Failed', e.message || 'Unable to delete invoice.', 'error');
@@ -3546,20 +3637,29 @@ const Billing = {
     const paid = archivedInvoices.filter(inv => inv.status === 'Paid' && inv.archived === true);
     const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled');
 
-    const rejectedInvoiceChanges = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'invoices' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      if (!entFilter(data.entity || '')) return false;
-      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    });
-
-    const rejectedBillingRequests = DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'billing' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity || '')) return false;
-      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    });
+    let rejectedInvoiceChanges = [];
+    let rejectedBillingRequests = [];
+    try {
+      const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'invoices' });
+      rejectedInvoiceChanges = (pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!entFilter(data.entity || '')) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected invoice changes', e);
+    }
+    try {
+      const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'billing' });
+      rejectedBillingRequests = (opReqRes.data || []).filter(r => {
+        if (!entFilter(r.entity || '')) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected billing requests', e);
+    }
 
     const buildInvItem = (inv, category) => {
       const client = window.apiClient.clientCache.getById(inv.clientId);

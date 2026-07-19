@@ -26,7 +26,13 @@ const Users = {
     if (this._countTs.myRequests && (now - this._countTs.myRequests) < 30 * 1000) {
       return this._counts.myRequests;
     }
-    const count = DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user?.id).length;
+    let count = 0;
+    try {
+      const res = await window.apiClient.operationsRequests.list({ requestedBy: Auth.user?.id, limit: 1 });
+      count = res?.meta?.total || res?.data?.length || 0;
+    } catch (err) {
+      console.error('[Users.countMyRequests] failed to load operations request count', err);
+    }
     this._counts.myRequests = count;
     this._countTs.myRequests = now;
     return count;
@@ -34,6 +40,88 @@ const Users = {
 
   invalidateMyRequestsCount() {
     this._countTs.myRequests = 0;
+  },
+
+  /**
+   * Normalize an audit log row from the API (snake_case created_at) to the
+   * camelCase shape the legacy UI expects (timestamp).
+   */
+  _normalizeAuditLog(l) {
+    if (!l) return l;
+    return {
+      ...l,
+      id: l.id,
+      action: l.action,
+      tableName: l.tableName || l.table_name,
+      recordId: l.recordId || l.record_id,
+      entity: l.entity,
+      userId: l.userId || l.user_id,
+      details: l.details,
+      timestamp: l.timestamp || l.createdAt || l.created_at
+    };
+  },
+
+  /**
+   * Map a date-bucket label to an ISO from/to range for server-side filtering.
+   */
+  _dateBucketRange(bucket) {
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const toIso = (d) => d.toISOString().slice(0, 10);
+    switch (bucket) {
+      case 'Overdue': {
+        const yesterday = new Date(now);
+        yesterday.setDate(now.getDate() - 1);
+        return { from: null, to: toIso(yesterday) + 'T23:59:59Z' };
+      }
+      case 'Due Today':
+        return { from: today + 'T00:00:00Z', to: today + 'T23:59:59Z' };
+      case 'Due This Week': {
+        const endOfWeek = new Date(now);
+        endOfWeek.setDate(now.getDate() + (now.getDay() === 0 ? 0 : 7 - now.getDay()));
+        return { from: today + 'T00:00:00Z', to: toIso(endOfWeek) + 'T23:59:59Z' };
+      }
+      case 'Due This Month': {
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        return { from: today + 'T00:00:00Z', to: toIso(endOfMonth) + 'T23:59:59Z' };
+      }
+      case 'Due Later': {
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        return { from: toIso(nextMonth) + 'T00:00:00Z', to: null };
+      }
+      default:
+        return null;
+    }
+  },
+
+  /**
+   * Normalize an operations request row from the API to the camelCase shape
+   * the legacy UI expects, handling both Supabase snake_case and existing
+   * camelCase fields.
+   */
+  _normalizeOperationsRequest(r) {
+    if (!r) return r;
+    return {
+      ...r,
+      id: r.id,
+      type: r.type,
+      status: r.status,
+      requestedBy: r.requested_by || r.requestedBy,
+      requestedAt: r.requested_at || r.requestedAt || r.created_at || r.createdAt,
+      fulfilledBy: r.fulfilled_by || r.fulfilledBy,
+      fulfilledAt: r.fulfilled_at || r.fulfilledAt,
+      rejectionReason: r.rejection_reason || r.rejectionReason,
+      workRequestId: r.work_request_id || r.workRequestId,
+      clientId: r.client_id || r.clientId,
+      amount: typeof r.amount === 'number' ? r.amount : (parseFloat(r.amount) || 0),
+      notes: r.notes,
+      linkedTaskId: r.linked_task_id || r.linkedTaskId,
+      receiptFilename: r.receipt_filename || r.receiptFilename,
+      disbursementType: r.disbursement_type || r.disbursementType,
+      paymentMethod: r.payment_method || r.paymentMethod,
+      recipientDetails: r.recipient_details || r.recipientDetails,
+      documents: r.documents
+    };
   },
 
   /**
@@ -181,7 +269,13 @@ const Users = {
 
     if (isFullPage) {
       if (this.view === 'myRequests') {
-        const r = DB.getById('operationsRequests', this.sidePeekId);
+        let r = null;
+        try {
+          const res = await window.apiClient.operationsRequests.get(this.sidePeekId);
+          r = this._normalizeOperationsRequest(res?.data);
+        } catch (err) {
+          console.error('[Users.render] failed to load operations request', err);
+        }
         if (r) {
           const fullPageRoute = `#admin/myRequests/${r.id}`;
           const actions = [];
@@ -190,8 +284,13 @@ const Users = {
               text: 'Cancel Request',
               class: 'btn btn-danger btn-sm',
               onClick: () => {
-                Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
-                  DB.delete('operationsRequests', r.id);
+                Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+                  try {
+                    await window.apiClient.operationsRequests.remove(r.id);
+                  } catch (e) {
+                    Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+                    return;
+                  }
                   Users.invalidateMyRequestsCount();
                   location.hash = '#admin';
                 }, 'danger');
@@ -227,13 +326,13 @@ const Users = {
           return container;
         }
       } else {
-        const pc = PendingChanges.getById(this.sidePeekId);
+        const pc = await PendingChanges.getById(this.sidePeekId);
         if (pc) {
           const isMyPending = this.view === 'myPending';
           const baseLabel = isMyPending ? 'My Submissions' : 'Admin';
           const isNew = !pc.parentRecordId;
           const currentText = pc.title || (isNew ? 'New Submission' : 'Edit Submission');
-          
+
           const canApprove = PendingChanges.canApproveChange(pc);
           const isSubmitter = pc.submittedBy === Auth.user.id;
 
@@ -243,8 +342,13 @@ const Users = {
               text: 'Approve Change',
               class: 'btn btn-success btn-sm',
               onClick: () => {
-                Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
-                  PendingChanges.approve(pc.id);
+                Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', async () => {
+                  try {
+                    await PendingChanges.approve(pc.id);
+                  } catch (e) {
+                    Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
+                    return;
+                  }
                   location.hash = '#admin';
                 }, 'success');
               }
@@ -255,8 +359,15 @@ const Users = {
               onClick: () => {
                 const reason = prompt('Enter rejection reason:');
                 if (reason !== null) {
-                  PendingChanges.reject(pc.id, reason);
-                  location.hash = '#admin';
+                  Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', async () => {
+                    try {
+                      await PendingChanges.reject(pc.id, reason);
+                    } catch (e) {
+                      Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
+                      return;
+                    }
+                    location.hash = '#admin';
+                  }, 'danger');
                 }
               }
             });
@@ -265,8 +376,13 @@ const Users = {
               text: 'Withdraw Submission',
               class: 'btn btn-secondary btn-sm',
               onClick: () => {
-                Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', () => {
-                  PendingChanges.delete(pc.id);
+                Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', async () => {
+                  try {
+                    await PendingChanges.delete(pc.id);
+                  } catch (e) {
+                    Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
+                    return;
+                  }
                   location.hash = '#admin';
                 }, 'danger');
               }
@@ -298,7 +414,7 @@ const Users = {
             actions
           }));
 
-          const detailContent = this.renderPendingDetail(pc.id, false, true);
+          const detailContent = await this.renderPendingDetail(pc.id, false, true);
           container.appendChild(detailContent);
           return container;
         }
@@ -418,7 +534,7 @@ const Users = {
     }
   },
 
-  init() {
+  async init() {
     if (this.editingId) {
       const userViewMode = window.SidePaneInstance ? window.SidePaneInstance.resolveMode({ viewContext: 'user-form' }) : 'side-peek';
       // Direct URL / new-tab full-page routes carry the form path in the hash.
@@ -439,12 +555,18 @@ const Users = {
 
       if (!isFullPage) {
         if (this.view === 'pending' || this.view === 'myPending') {
-          const pc = PendingChanges.getById(this.sidePeekId);
+          const pc = await PendingChanges.getById(this.sidePeekId);
           if (pc) {
             this.openPendingDetailSidePeek(pc, viewMode);
           }
         } else if (this.view === 'myRequests') {
-          const r = DB.getById('operationsRequests', this.sidePeekId);
+          let r = null;
+          try {
+            const res = await window.apiClient.operationsRequests.get(this.sidePeekId);
+            r = this._normalizeOperationsRequest(res?.data);
+          } catch (err) {
+            console.error('[Users.init] failed to load operations request', err);
+          }
           if (r) {
             this.openRequestDetailSidePeek(r, viewMode);
           }
@@ -460,11 +582,11 @@ const Users = {
     }
   },
 
-  openPendingDetailSidePeek(pc, mode = null) {
+  async openPendingDetailSidePeek(pc, mode = null) {
     const isMyPending = this.view === 'myPending';
     const fullPageRoute = isMyPending ? `#admin/myPending/${pc.id}` : `#admin/pending/${pc.id}`;
     const title = `Pending Change: ${pc.title || 'Review'}`;
-    const content = this.renderPendingDetail(pc.id, true);
+    const content = await this.renderPendingDetail(pc.id, true);
     window.SidePaneInstance.open({
       title,
       content,
@@ -536,14 +658,14 @@ const Users = {
 
     // Render type-specific fields
     if (r.type === 'billing') {
-      const linkedTask = r.linkedTaskId ? DB.getById('tasks', r.linkedTaskId) : null;
+      const linkedTask = r.linkedTaskId ? (wr?.tasks || []).find(t => t.id === r.linkedTaskId) : null;
       addProp('Linked Task', document.createTextNode(linkedTask ? linkedTask.title : '— Whole Project —'));
       addProp('Amount', el('strong', { text: (r.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'PHP' }) }));
       if (r.receiptFilename) {
         addProp('Receipt File', el('span', { text: r.receiptFilename, style: 'font-family: monospace;' }));
       }
     } else if (r.type === 'disbursement') {
-      const linkedTask = r.linkedTaskId ? DB.getById('tasks', r.linkedTaskId) : null;
+      const linkedTask = r.linkedTaskId ? (wr?.tasks || []).find(t => t.id === r.linkedTaskId) : null;
       addProp('Disbursement Type', document.createTextNode(r.disbursementType ? r.disbursementType.charAt(0).toUpperCase() + r.disbursementType.slice(1) : '—'));
       addProp('Category', document.createTextNode(r.category || '—'));
       addProp('Amount', el('strong', { text: (r.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'PHP' }) }));
@@ -618,8 +740,13 @@ const Users = {
       const footerActions = el('div', { class: 'side-pane-form-footer' });
       const cancelBtn = el('button', { class: 'btn btn-danger', text: 'Cancel Request' });
       cancelBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
-          DB.delete('operationsRequests', r.id);
+        Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+          try {
+            await window.apiClient.operationsRequests.remove(r.id);
+          } catch (e) {
+            Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+            return;
+          }
           Users.invalidateMyRequestsCount();
           if (location.hash.includes('/')) {
             location.hash = location.hash.split('/')[0];
@@ -885,7 +1012,7 @@ const Users = {
       const deptProp = el('div', { class: 'notion-prop' });
       deptProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg> Department' }));
       const deptWrap = el('div', { class: 'notion-checkbox-group' });
-      const departmentList = Auth.DEPARTMENTS || DB.getAll('departments').map(d => d.name || d);
+      const departmentList = Auth.DEPARTMENTS;
       departmentList.forEach(d => {
         const label = el('label', { class: 'checkbox-label' });
         const cb = el('input', { type: 'checkbox', name: 'departments', value: d });
@@ -1129,26 +1256,37 @@ const Users = {
     content.appendChild(tableContainer);
     wrapper.appendChild(content);
 
-    const triggerRefresh = () => {
-      this.refreshAuditLog(tableContainer, activeFilters, searchQuery, currentSort);
+    const triggerRefresh = async () => {
+      await this.refreshAuditLog(tableContainer, activeFilters, searchQuery, currentSort);
     };
 
-    triggerRefresh();
+    triggerRefresh().catch(err => console.error('[Users.renderAuditLogSection] refresh failed', err));
     return wrapper;
   },
 
-  refreshAuditLog(container, activeFilters, searchQuery, sortOrder) {
+  async refreshAuditLog(container, activeFilters, searchQuery, sortOrder) {
     this.clearNode(container);
-    let logs = DB.getAll('auditLog');
-    const hasLogs = logs.length > 0;
 
-    // Create a chronological map of logs to determine their creation order sequence number
-    const allLogs = DB.getAll('auditLog');
-    allLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    let allLogs = [];
+    try {
+      const res = await window.apiClient.admin.listAudit({ limit: 1000 });
+      allLogs = res?.data || [];
+    } catch (err) {
+      console.error('[Users.refreshAuditLog] failed to load audit log', err);
+      container.appendChild(renderEmptyState('Unable to load audit log', null, { variant: 'zero-state' }));
+      return;
+    }
+
+    const hasLogs = allLogs.length > 0;
+
+    // Create a chronological map of logs to determine their creation order sequence number.
+    const chronological = [...allLogs].sort((a, b) => new Date(a.timestamp || a.created_at || 0) - new Date(b.timestamp || b.created_at || 0));
     const logSequenceMap = new Map();
-    allLogs.forEach((l, i) => {
-      logSequenceMap.set(l.id, i + 1);
+    chronological.forEach((l, i) => {
+      if (l.id) logSequenceMap.set(l.id, i + 1);
     });
+
+    let logs = allLogs.slice();
 
     if (activeFilters && activeFilters.user && activeFilters.user.size > 0) {
       logs = logs.filter(l => activeFilters.user.has(l.userName || (window.apiClient.userCache.getById(l.userId)?.name)));
@@ -1197,9 +1335,9 @@ const Users = {
     // Sort order (defaults to newest)
     const sort = sortOrder || 'newest';
     if (sort === 'oldest') {
-      logs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      logs.sort((a, b) => new Date(a.timestamp || a.created_at || 0) - new Date(b.timestamp || b.created_at || 0));
     } else {
-      logs.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      logs.sort((a, b) => new Date(b.timestamp || b.created_at || 0) - new Date(a.timestamp || a.created_at || 0));
     }
 
     const hasActiveFilters = (activeFilters && Object.values(activeFilters).some(s => s && s.size > 0)) || !!searchQuery;
@@ -1262,7 +1400,7 @@ const Users = {
       const avatarIcon = `<div class="backlog-avatar${user?.avatarUrl ? ' backlog-avatar--image' : ''}" style="${avatarStyle}">${avatarContent}</div>`;
       const ts = new Date(l.timestamp);
 
-      const seqNum = logSequenceMap.get(l.id) || (idx + 1);
+      const seqNum = (l.id && logSequenceMap.get(l.id)) || (idx + 1);
       return {
         id: l.id || idx,
         keyText: 'AUD-' + String(seqNum).padStart(2, '0'),
@@ -1432,81 +1570,9 @@ const Users = {
       }
     });
 
-    // Disbursement submissions awaiting approval
-    DB.getWhere('disbursements', d => entFilter(d.entity) && ['Submitted', 'Under Review'].includes(d.status)).forEach(d => {
-      const submitter = window.apiClient.userCache.getById(d.requestedBy);
-      disbursementToRelease.push({
-        type: 'record',
-        kind: 'disbursementCreation',
-        id: d.id,
-        recordId: d.id,
-        title: `Expense: ${d.category || '—'}`,
-        description: d.description || 'Expense submission awaiting approval',
-        amount: d.amount || null,
-        submittedBy: d.requestedBy,
-        submitter,
-        submittedAt: d.submittedAt || d.createdAt,
-        entity: d.entity,
-        raw: d
-      });
-    });
-
-    // Release-pending disbursements
-    DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Release Pending Approval').forEach(d => {
-      const submitter = window.apiClient.userCache.getById(d.releaseRequestedBy || d.requestedBy);
-      disbursementToRelease.push({
-        type: 'record',
-        kind: 'disbursementRelease',
-        id: d.id,
-        recordId: d.id,
-        title: `Expense: ${d.category || '—'}`,
-        description: 'Disbursement release pending approval',
-        amount: d.amount || null,
-        submittedBy: d.releaseRequestedBy || d.requestedBy,
-        submitter,
-        submittedAt: d.releaseRequestedAt || d.submittedAt || d.createdAt,
-        entity: d.entity,
-        raw: d
-      });
-    });
-
-    // Release-pending invoices (billing release)
-    DB.getWhere('invoices', inv => entFilter(inv.entity) && inv.status === 'Release Pending Approval').forEach(inv => {
-      const submitter = window.apiClient.userCache.getById(inv.releaseRequestedBy || inv.createdBy);
-      billingToRelease.push({
-        type: 'record',
-        kind: 'billingRelease',
-        id: inv.id,
-        recordId: inv.id,
-        title: `Invoice: ${inv.invoiceNumber || inv.id || '—'}`,
-        description: 'Invoice release (mark as sent) pending approval',
-        amount: inv.total || null,
-        submittedBy: inv.releaseRequestedBy || inv.createdBy,
-        submitter,
-        submittedAt: inv.releaseRequestedAt || inv.createdAt,
-        entity: inv.entity,
-        raw: inv
-      });
-    });
-
-    // Release-pending transmittals
-    DB.getWhere('transmittals', t => entFilter(t.entity) && t.status === 'Release Pending Approval').forEach(t => {
-      const submitter = window.apiClient.userCache.getById(t.releaseRequestedBy || t.createdBy);
-      transmittalSent.push({
-        type: 'record',
-        kind: 'transmittalRelease',
-        id: t.id,
-        recordId: t.id,
-        title: `Transmittal: ${t.trackingNumber || t.transmittalNumber || t.id || '—'}`,
-        description: 'Transmittal mark-as-sent pending approval',
-        amount: null,
-        submittedBy: t.releaseRequestedBy || t.createdBy,
-        submitter,
-        submittedAt: t.releaseRequestedAt || t.createdAt,
-        entity: t.entity,
-        raw: t
-      });
-    });
+    // Record-type pending release requests (disbursement, billing, transmittal)
+    // are now handled through their respective resource APIs / operations requests;
+    // only structural pending-approval changes remain in this list.
 
     return {
       workRequestCreation,
@@ -1700,51 +1766,33 @@ const Users = {
 
   approvePendingItem(item) {
     if (item.kind === 'wrPhaseRouting') {
-      Workflow.showConfirm('Confirm Routing', `Approve routing for ${item.title} to ${item.raw?.proposedData?.status || 'next phase'}?`, () => {
+      Workflow.showConfirm('Confirm Routing', `Approve routing for ${item.title} to ${item.raw?.proposedData?.status || 'next phase'}?`, async () => {
         const nextPhase = item.raw?.proposedData?.status;
         if (nextPhase) {
-          DB.update('workRequests', item.recordId, {
-            status: nextPhase,
-            updatedAt: new Date().toISOString()
-          });
+          try {
+            await window.apiClient.workRequests.update(item.recordId, { status: nextPhase });
+          } catch (e) {
+            Workflow.showMessage('Approve Routing', e.message || 'Unable to update work request status.', 'error');
+            return;
+          }
         }
-        PendingChanges.delete(item.id);
+        try {
+          await PendingChanges.delete(item.id);
+        } catch (e) {
+          console.error('[Users.approvePendingItem] failed to withdraw routing pending change', e);
+        }
         App.handleRoute();
       }, 'success');
       return;
     }
     if (item.type === 'change') {
-      Workflow.showConfirm('Confirm Approval', `Approve ${item.title}?`, () => {
-        PendingChanges.approve(item.id);
-        App.handleRoute();
-      }, 'success');
-    } else if (item.kind === 'disbursementCreation') {
-      location.hash = '#disbursement/detail/' + item.id;
-    } else if (item.kind === 'disbursementRelease') {
-      Workflow.showConfirm('Confirm Release', `Approve and release ${item.title}?`, () => {
-        DB.update('disbursements', item.id, {
-          status: 'Released',
-          releasedBy: Auth.user.id,
-          releasedAt: new Date().toISOString()
-        });
-        App.handleRoute();
-      }, 'success');
-    } else if (item.kind === 'billingRelease') {
-      Workflow.showConfirm('Confirm Release', `Approve and mark ${item.title} as sent?`, () => {
-        DB.update('invoices', item.id, {
-          status: 'Sent',
-          releasedBy: Auth.user.id,
-          releasedAt: new Date().toISOString()
-        });
-        App.handleRoute();
-      }, 'success');
-    } else if (item.kind === 'transmittalRelease') {
-      Workflow.showConfirm('Confirm Sent', `Approve and mark ${item.title} as sent?`, () => {
-        DB.update('transmittals', item.id, {
-          status: 'Sent',
-          sentBy: Auth.user.id,
-          sentAt: new Date().toISOString()
-        });
+      Workflow.showConfirm('Confirm Approval', `Approve ${item.title}?`, async () => {
+        try {
+          await PendingChanges.approve(item.id);
+        } catch (e) {
+          Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
+          return;
+        }
         App.handleRoute();
       }, 'success');
     }
@@ -1755,36 +1803,9 @@ const Users = {
     if (reason === null) return;
 
     if (item.type === 'change') {
-      PendingChanges.reject(item.id, reason);
-      App.handleRoute();
-    } else if (item.kind === 'disbursementCreation') {
-      DB.update('disbursements', item.id, {
-        status: 'Rejected',
-        rejectedBy: Auth.user.id,
-        rejectionReason: reason
-      });
-      App.handleRoute();
-    } else if (item.kind === 'disbursementRelease') {
-      DB.update('disbursements', item.id, {
-        status: 'Approved',
-        releaseRejectedBy: Auth.user.id,
-        releaseRejectionReason: reason
-      });
-      App.handleRoute();
-    } else if (item.kind === 'billingRelease') {
-      DB.update('invoices', item.id, {
-        status: 'Approved',
-        releaseRejectedBy: Auth.user.id,
-        releaseRejectionReason: reason
-      });
-      App.handleRoute();
-    } else if (item.kind === 'transmittalRelease') {
-      DB.update('transmittals', item.id, {
-        status: 'Draft',
-        releaseRejectedBy: Auth.user.id,
-        releaseRejectionReason: reason
-      });
-      App.handleRoute();
+      PendingChanges.reject(item.id, reason).catch(e => {
+        Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
+      }).finally(() => App.handleRoute());
     }
   },
 
@@ -1796,34 +1817,16 @@ const Users = {
     let processed = 0;
     items.forEach(item => {
       if (item.type === 'change') {
-        PendingChanges.approve(item.id);
-        processed++;
-      } else if (item.kind === 'disbursementRelease') {
-        DB.update('disbursements', item.id, {
-          status: 'Released',
-          releasedBy: Auth.user.id,
-          releasedAt: new Date().toISOString()
-        });
-        processed++;
-      } else if (item.kind === 'billingRelease') {
-        DB.update('invoices', item.id, {
-          status: 'Sent',
-          releasedBy: Auth.user.id,
-          releasedAt: new Date().toISOString()
-        });
-        processed++;
-      } else if (item.kind === 'transmittalRelease') {
-        DB.update('transmittals', item.id, {
-          status: 'Sent',
-          sentBy: Auth.user.id,
-          sentAt: new Date().toISOString()
+        PendingChanges.approve(item.id).catch(e => {
+          console.error('[Users.approveAll] approve failed', e);
         });
         processed++;
       }
     });
 
     if (processed > 0) {
-      App.handleRoute();
+      // Give the async approvals a moment to fire before re-rendering.
+      setTimeout(() => App.handleRoute(), 150);
     } else {
       Workflow.showMessage('Approve All', 'Some items require individual review and cannot be bulk-approved.', 'warning');
     }
@@ -1838,12 +1841,10 @@ const Users = {
       return wrapper;
     }
 
-    const entity = Auth.activeEntity;
     let pendingChanges = PendingChanges.getAllPending();
     pendingChanges = pendingChanges.filter(pc => PendingChanges.canApproveChange(pc));
-    const pendingDisbursements = DB.getWhere('disbursements', d => d.entity === entity && (d.status === 'Submitted' || d.status === 'Under Review'));
 
-    if (pendingChanges.length === 0 && pendingDisbursements.length === 0) {
+    if (pendingChanges.length === 0) {
       wrapper.appendChild(renderEmptyState('No pending approvals', null, { variant: 'zero-state' }));
       return wrapper;
     }
@@ -1870,16 +1871,6 @@ const Users = {
     wrapper.appendChild(contentContainer);
 
     const items = [
-      ...pendingDisbursements.map(d => ({
-        type: 'disbursement',
-        id: d.id,
-        title: `Expense: ${d.category}`,
-        subtitle: d.description || 'No description provided',
-        amount: d.amount,
-        submittedBy: d.requestedBy,
-        submittedAt: d.submittedAt,
-        raw: d
-      })),
       ...pendingChanges.map(pc => {
         const typeStr = pc.parentRecordId ? 'Edit' : 'New';
         const data = pc.proposedData || {};
@@ -3068,8 +3059,10 @@ const Users = {
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const updateFilters = () => self.refreshMyRequestsList(listContainer, activeFilters, isPowerUser ? (self.myRequestsViewMode || 'table') : 'table', searchQuery);
-    updateFilters();
+    const updateFilters = async () => {
+      await self.refreshMyRequestsList(listContainer, activeFilters, isPowerUser ? (self.myRequestsViewMode || 'table') : 'table', searchQuery);
+    };
+    updateFilters().catch(err => console.error('[Users.renderMyRequestsSection] refresh failed', err));
 
     return wrapper;
   },
@@ -3088,11 +3081,26 @@ const Users = {
     return map[type] || type;
   },
 
-  refreshMyRequestsList(container, activeFilters, viewMode, searchQuery) {
+  async refreshMyRequestsList(container, activeFilters, viewMode, searchQuery) {
     while (container.firstChild) container.removeChild(container.firstChild);
 
-    let requests = DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user.id);
-    const hasItems = requests.length > 0;
+    let requests = [];
+    const hasItems = await (async () => {
+      try {
+        const res = await window.apiClient.operationsRequests.list({ requestedBy: Auth.user?.id, limit: 1000 });
+        requests = (res?.data || []).map(r => this._normalizeOperationsRequest(r));
+        return requests.length > 0;
+      } catch (err) {
+        console.error('[Users.refreshMyRequestsList] failed to load operations requests', err);
+        container.appendChild(renderEmptyStateV2({
+          variant: 'zero-state',
+          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>',
+          title: 'Unable to load requests',
+          body: 'Check your connection and try again.'
+        }));
+        return false;
+      }
+    })();
 
     // Apply category filter
     if (activeFilters.category && activeFilters.category.size > 0) {
@@ -3219,9 +3227,15 @@ const Users = {
         const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel Request' });
         cancelBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
-            DB.delete('operationsRequests', r.id);
-            Users.invalidateMyRequestsCount();
+          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+            try {
+              await window.apiClient.operationsRequests.remove(r.id);
+              Users.invalidateMyRequestsCount();
+              window.apiClient.operationsRequests.invalidateCounts();
+            } catch (e) {
+              Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+              return;
+            }
             if (location.hash.includes('/')) {
               location.hash = location.hash.split('/')[0];
             } else {
@@ -3306,7 +3320,17 @@ const Users = {
           label: 'Cancel Request',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-          onClick: () => Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); Users.invalidateMyRequestsCount(); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+            try {
+              await window.apiClient.operationsRequests.remove(r.id);
+              Users.invalidateMyRequestsCount();
+              window.apiClient.operationsRequests.invalidateCounts();
+            } catch (e) {
+              Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+              return;
+            }
+            App.handleRoute();
+          }, 'danger')
         });
       }
       return menu;
@@ -3362,7 +3386,17 @@ const Users = {
       if (r.status === 'pending') {
         const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel' });
         cancelBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); Users.invalidateMyRequestsCount(); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+            try {
+              await window.apiClient.operationsRequests.remove(r.id);
+              Users.invalidateMyRequestsCount();
+              window.apiClient.operationsRequests.invalidateCounts();
+            } catch (e) {
+              Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+              return;
+            }
+            App.handleRoute();
+          }, 'danger');
         });
         rightActions.appendChild(cancelBtn);
       }

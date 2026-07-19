@@ -281,12 +281,17 @@ const Transmittal = {
       console.error('Failed to load transmittal counts', e);
     }
 
-    archiveCount += DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'transmittal' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity)) return false;
-      if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    }).length;
+    try {
+      const opRes = await window.apiClient.operationsRequests.list({ type: 'transmittal', status: 'rejected' });
+      const rejectedRequests = opRes.data || [];
+      archiveCount += rejectedRequests.filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      }).length;
+    } catch (e) {
+      console.error('Failed to load rejected transmittal requests', e);
+    }
 
     const tabs = [
       { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count },
@@ -1220,15 +1225,20 @@ const Transmittal = {
       return;
     }
 
-    // Fulfill pending operations request if any (operationsRequests module is still localStorage).
-    const reqId = this.prefilledRequestId || (payload.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === payload.workRequestId && r.type === 'transmittal' && r.status === 'pending')[0]?.id : null);
-    if (reqId) {
-      DB.update('operationsRequests', reqId, {
-        status: 'fulfilled',
-        fulfilledBy: Auth.user.id,
-        fulfilledAt: new Date().toISOString(),
-        linkedRecordId: this.detailId
-      });
+    // Fulfill pending operations request if any.
+    try {
+      const reqId = this.prefilledRequestId || (payload.workRequestId
+        ? (await window.apiClient.operationsRequests.list({ workRequestId: payload.workRequestId, type: 'transmittal', status: 'pending' })).data?.[0]?.id
+        : null);
+      if (reqId) {
+        await window.apiClient.operationsRequests.update(reqId, {
+          status: 'fulfilled',
+          fulfilledBy: Auth.user.id,
+          fulfilledAt: new Date().toISOString()
+        });
+      }
+    } catch (e) {
+      console.error('Failed to fulfill transmittal request', e);
     }
     this.prefilledRequestId = null;
     this.prefilledWrId = null;
@@ -1246,7 +1256,7 @@ const Transmittal = {
   // ============================================================
   // Detail View
   // ============================================================
-  showRequestTransmittalModal() {
+  async showRequestTransmittalModal() {
     const entity = Auth.activeEntity;
     const wrs = (window.apiClient.workRequestCache._wrs || []).filter(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
@@ -1259,13 +1269,19 @@ const Transmittal = {
     selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
     const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
-    wrs.forEach(wr => {
+    for (const wr of wrs) {
       const clientName = this.getClientName(wr.clientId);
-      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'transmittal' && r.status === 'pending');
-      if (pending.length === 0) {
+      try {
+        const opRes = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, type: 'transmittal', status: 'pending' });
+        const pending = opRes.data || [];
+        if (pending.length === 0) {
+          wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${clientName}` }));
+        }
+      } catch (e) {
+        console.error('Failed to check pending transmittal requests', e);
         wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${clientName}` }));
       }
-    });
+    }
     selectGroup.appendChild(wrSelect);
     wrapper.appendChild(selectGroup);
 
@@ -1282,23 +1298,25 @@ const Transmittal = {
     const overlay = Workflow.showModal('Request Transmittal', wrapper);
 
     overlay.querySelector('#btn-cancel-trans-opreq').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', () => {
+    overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', async () => {
       const wrId = wrSelect.value;
       if (!wrId) { alert('Please select a work request.'); return; }
       const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#trans-opreq-notes').value.trim();
       const record = {
-        id: generateId('opreq'),
         type: 'transmittal',
         workRequestId: wrId,
         clientId: wr?.clientId,
         requestedBy: Auth.user.id,
-        requestedAt: new Date().toISOString(),
         status: 'pending',
-        rejectionReason: '',
         notes
       };
-      DB.insert('operationsRequests', record);
+      try {
+        await window.apiClient.operationsRequests.create(record);
+      } catch (e) {
+        Workflow.showMessage('Request Failed', e.message || 'Unable to submit transmittal request.', 'error');
+        return;
+      }
       overlay.remove();
       Workflow.showMessage('Request Submitted', 'Your transmittal request has been submitted to Documentation for review.', 'success');
       App.handleRoute();
@@ -2064,12 +2082,17 @@ const Transmittal = {
     const acknowledged = all.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived === true);
     const cancelled = [];
 
-    const rejectedTransmittalRequests = DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'transmittal' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity)) return false;
-      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    });
+    let rejectedTransmittalRequests = [];
+    try {
+      const opRes = await window.apiClient.operationsRequests.list({ type: 'transmittal', status: 'rejected' });
+      rejectedTransmittalRequests = (opRes.data || []).filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected transmittal requests', e);
+    }
 
     const buildItem = (t, category) => {
       const wrTitle = this.getWorkRequestTitle(t.workRequestId);

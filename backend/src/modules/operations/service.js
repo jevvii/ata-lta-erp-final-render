@@ -578,6 +578,128 @@ const getTaskRelated = async ({ id, entityId }) => {
   };
 };
 
+// ============================================================
+// Retainer Templates
+// ============================================================
+
+const listRetainerTemplates = async ({ entityId }) => {
+  const { data, error } = await supabaseAdmin
+    .from('retainer_templates')
+    .select('*, clients(name)')
+    .eq('entity_id', entityId)
+    .is('deleted_at', null)
+    .order('name', { ascending: true });
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list retainer templates' });
+  }
+
+  return data || [];
+};
+
+const createRetainerTemplate = async ({ entityId, userId, data }) => {
+  const row = {
+    entity_id: entityId,
+    name: data.name,
+    description: data.description || null,
+    client_id: data.clientId || null,
+    schedule: data.schedule || null,
+    pf_amount: data.pfAmount || 0,
+    tasks: data.tasks || [],
+    created_by: userId,
+  };
+
+  const { data: template, error } = await supabaseAdmin
+    .from('retainer_templates')
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create retainer template' });
+  }
+
+  return template;
+};
+
+const updateRetainerTemplate = async ({ entityId, id, data }) => {
+  const updates = { updated_at: new Date().toISOString() };
+
+  if (data.name !== undefined) updates.name = data.name;
+  if (data.description !== undefined) updates.description = data.description;
+  if (data.clientId !== undefined) updates.client_id = data.clientId;
+  if (data.schedule !== undefined) updates.schedule = data.schedule;
+  if (data.pfAmount !== undefined) updates.pf_amount = data.pfAmount;
+  if (data.tasks !== undefined) updates.tasks = data.tasks;
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('retainer_templates')
+    .update(updates)
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .is('deleted_at', null)
+    .select()
+    .single();
+
+  if (error || !updated) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Retainer template not found' });
+  }
+
+  return updated;
+};
+
+const deleteRetainerTemplate = async ({ entityId, id }) => {
+  const { error } = await supabaseAdmin
+    .from('retainer_templates')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to delete retainer template' });
+  }
+
+  return true;
+};
+
+// ============================================================
+// Ground Workers
+// ============================================================
+
+const listGroundWorkers = async ({ entityId }) => {
+  const { data, error } = await supabaseAdmin
+    .from('ground_workers')
+    .select('*')
+    .eq('entity_id', entityId)
+    .order('name', { ascending: true });
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list ground workers' });
+  }
+
+  return data || [];
+};
+
+const createGroundWorker = async ({ entityId, userId, data }) => {
+  const row = {
+    entity_id: entityId,
+    name: data.name,
+    created_by: userId,
+  };
+
+  const { data: worker, error } = await supabaseAdmin
+    .from('ground_workers')
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create ground worker' });
+  }
+
+  return worker;
+};
+
 module.exports = {
   listWorkRequests,
   createWorkRequest,
@@ -592,4 +714,10 @@ module.exports = {
   resolveEntityId,
   getWorkRequestRelated,
   getTaskRelated,
+  listRetainerTemplates,
+  createRetainerTemplate,
+  updateRetainerTemplate,
+  deleteRetainerTemplate,
+  listGroundWorkers,
+  createGroundWorker,
 };

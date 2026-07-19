@@ -41,12 +41,16 @@ const DEFAULT_API_URL = 'http://localhost:3000/v1';
 const BUNDLES = {
   shell: ['utils.js', 'apiClient.js', 'auth.js', 'app.js'],
   vendor: ['dataTable.js', 'kanban.js', 'datepicker.js', 'timepicker.js'],
-  // data.js remains in the core bundle because clients.js and pendingChanges.js
-  // still reference DB.* fallbacks. Once those modules stop using localStorage
-  // fallbacks, data.js can be removed from production bundles.
-  'modules-core': ['data.js', 'dashboard.js', 'clients.js', 'workflow.js'],
+  // data.js has been removed from the production core bundle. It is now only
+  // built into the 'demo' bundle, which is not loaded by the production
+  // index.html. clients.js no longer has a localStorage erp_clients fallback,
+  // and pendingChanges.js hydration no longer depends on data.js seed init.
+  'modules-core': ['dashboard.js', 'clients.js', 'workflow.js'],
   'modules-billing': ['billing.js', 'disbursement.js', 'transmittal.js'],
   'modules-admin': ['pendingChanges.js', 'users.js', 'reports.js', 'profile.js', 'dms.js'],
+  // Demo-only bundle: contains the legacy localStorage seed/DB implementation.
+  // Not referenced by dist/index.html in production.
+  demo: ['data.js'],
 };
 
 function getApiUrl() {

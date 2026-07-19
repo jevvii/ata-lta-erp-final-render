@@ -137,4 +137,143 @@ describe('/v1/disbursements', () => {
     expect(afterSeed.body.data.archived).toBe(1);
     expect(afterSeed.body.data.rejected).toBe(1);
   });
+
+  it('creates and lists disbursement templates', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    await request(app)
+      .post('/v1/disbursements/templates')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        name: 'Monthly Transport',
+        category: 'Transportation',
+        amount: 1500,
+        fundSource: 'Firm Fund',
+        schedule: 'Monthly',
+        description: 'Recurring monthly transport allowance',
+      })
+      .expect(201);
+
+    const res = await request(app)
+      .get('/v1/disbursements/templates')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].name).toBe('Monthly Transport');
+  });
+
+  it('updates and deletes a disbursement template', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/disbursements/templates')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        name: 'Stationery',
+        category: 'Supplies',
+        amount: 500,
+      })
+      .expect(201);
+
+    const updated = await request(app)
+      .put(`/v1/disbursements/templates/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ amount: 750 })
+      .expect(200);
+
+    expect(updated.body.data.amount).toBe(750);
+
+    await request(app)
+      .delete(`/v1/disbursements/templates/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(204);
+  });
+
+  it('creates a disbursement linked to a task and filters by linkedTaskId', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const taskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+    const created = await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validDisbursement, linkedTaskId: taskId })
+      .expect(201);
+
+    expect(created.body.data.linked_task_id).toBe(taskId);
+
+    const list = await request(app)
+      .get(`/v1/disbursements?linkedTaskId=${taskId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].linked_task_id).toBe(taskId);
+  });
+
+  it('returns awaitingRelease count only for users who can release', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    mockTables.disbursements.set('approved-disb', {
+      id: 'approved-disb',
+      entity_id: 'ent-ata',
+      category: 'Meals',
+      description: 'Approved expense',
+      amount: 800,
+      fund_source: 'Firm Fund',
+      status: 'Approved',
+      archived: false,
+    });
+
+    const adminCounts = await request(app)
+      .get('/v1/disbursements/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(adminCounts.body.data.awaitingRelease).toBe(1);
+
+    const ops = registerUser({
+      email: 'ops@ata-lta.ph',
+      name: 'Operations Staff',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    const opsCounts = await request(app)
+      .get('/v1/disbursements/counts')
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(opsCounts.body.data.awaitingRelease).toBe(0);
+  });
 });

@@ -199,27 +199,90 @@ const deleteUser = async ({ id, deletedBy: _deletedBy }) => {
   return true;
 };
 
-const listPendingApprovals = async ({ entityId, user: _user }) => {
-  const { data, error } = await supabaseAdmin
+const toApiPendingChange = (row) => ({
+  id: row.id,
+  tableName: row.table_name,
+  parentRecordId: row.parent_record_id || null,
+  proposedData: row.proposed_data,
+  submittedBy: row.submitted_by,
+  status: row.status,
+  createdAt: row.created_at,
+});
+
+const listPendingApprovals = async ({ entityId, user: _user, status, tableName, parentRecordId, submittedBy } = {}) => {
+  let query = supabaseAdmin
     .from('pending_changes')
     .select('*')
-    .eq('entity_id', entityId)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
+    .eq('entity_id', entityId);
+
+  if (status) {
+    query = query.eq('status', status);
+  } else {
+    query = query.eq('status', 'pending');
+  }
+
+  if (tableName) {
+    query = query.eq('table_name', tableName);
+  }
+
+  if (parentRecordId !== undefined && parentRecordId !== null && parentRecordId !== '') {
+    query = query.eq('parent_record_id', parentRecordId);
+  }
+
+  if (submittedBy) {
+    query = query.eq('submitted_by', submittedBy);
+  }
+
+  const { data, error } = await query.order('created_at', { ascending: false });
 
   if (error) {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list pending approvals' });
   }
 
-  return (data || []).map((row) => ({
-    id: row.id,
-    tableName: row.table_name,
-    parentRecordId: row.parent_record_id || null,
-    proposedData: row.proposed_data,
-    submittedBy: row.submitted_by,
-    status: row.status,
-    createdAt: row.created_at,
-  }));
+  return (data || []).map(toApiPendingChange);
+};
+
+const createPendingChange = async ({ entityId, userId, data }) => {
+  const now = new Date().toISOString();
+  const record = {
+    entity_id: entityId,
+    table_name: data.tableName,
+    parent_record_id: data.parentRecordId || null,
+    proposed_data: data.proposedData,
+    submitted_by: userId,
+    status: 'pending',
+    created_at: now,
+  };
+
+  const { data: inserted, error } = await supabaseAdmin
+    .from('pending_changes')
+    .insert(record)
+    .select();
+
+  if (error || !inserted?.length) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create pending change' });
+  }
+
+  return toApiPendingChange(inserted[0]);
+};
+
+const getPendingChangeById = async ({ entityId, id }) => {
+  const { data, error } = await supabaseAdmin
+    .from('pending_changes')
+    .select('*')
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .maybeSingle();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve pending change' });
+  }
+
+  if (!data) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Pending change not found' });
+  }
+
+  return toApiPendingChange(data);
 };
 
 const applyPendingChange = async (change, user) => {
@@ -324,6 +387,83 @@ const getAuditLogCount = async ({ entityCode }) => {
   return count || 0;
 };
 
+/**
+ * List audit log entries with optional filters and pagination.
+ * @param {object} params
+ * @param {string} params.entityCode
+ * @param {object} params.filters
+ * @returns {Promise<{ data: object[], meta: object }>}
+ */
+const getAuditLogs = async ({ entityCode, filters = {} }) => {
+  const {
+    userId,
+    action,
+    table,
+    from,
+    to,
+    limit = 20,
+    offset = 0,
+  } = filters;
+
+  let query = supabaseAdmin
+    .from('audit_logs')
+    .select('*', { count: 'exact' });
+
+  if (entityCode && entityCode !== 'ALL') {
+    query = query.eq('entity', entityCode);
+  }
+
+  if (userId) {
+    query = query.eq('user_id', userId);
+  }
+
+  if (action) {
+    query = query.eq('action', action);
+  }
+
+  if (table) {
+    query = query.eq('table_name', table);
+  }
+
+  if (from) {
+    query = query.gte('created_at', from);
+  }
+
+  if (to) {
+    query = query.lte('created_at', to);
+  }
+
+  const { data, error, count } = await query
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list audit logs' });
+  }
+
+  const rows = data || [];
+  const total = count !== undefined && count !== null ? count : rows.length;
+
+  return {
+    data: rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      tableName: row.table_name,
+      recordId: row.record_id,
+      entity: row.entity,
+      userId: row.user_id,
+      details: row.details,
+      createdAt: row.created_at,
+    })),
+    meta: {
+      total,
+      limit,
+      offset,
+      hasMore: offset + rows.length < total,
+    },
+  };
+};
+
 const rejectPending = async ({ id, user, reason }) => {
   const { data: change, error } = await supabaseAdmin
     .from('pending_changes')
@@ -356,8 +496,11 @@ module.exports = {
   updateUser,
   deleteUser,
   listPendingApprovals,
+  createPendingChange,
+  getPendingChangeById,
   approvePending,
   rejectPending,
   resolveEntityId,
   getAuditLogCount,
+  getAuditLogs,
 };

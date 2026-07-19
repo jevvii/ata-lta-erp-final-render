@@ -27,6 +27,7 @@ const createDisbursementSchema = z.object({
   employeeId: z.string().uuid().optional().nullable(),
   linkedInvoiceId: z.string().uuid().optional().nullable(),
   linkedWorkRequestId: z.string().uuid().optional().nullable(),
+  linkedTaskId: z.string().uuid().optional().nullable(),
   dueDate: z.string().optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
 });
@@ -53,11 +54,26 @@ const releasePaymentSchema = z.object({
   date: z.string().optional(),
 });
 
+/**
+ * Schema for a disbursement template.
+ */
+const disbursementTemplateSchema = z.object({
+  name: z.string().min(1).max(255),
+  category: z.string().min(1).max(50),
+  amount: z.number().nonnegative().default(0),
+  fundSource: z.enum(FUND_SOURCES).optional().nullable(),
+  schedule: z.string().max(50).optional().nullable(),
+  description: z.string().max(2000).optional().nullable(),
+  linkedWorkRequestId: z.string().uuid().optional().nullable(),
+  linkedInvoiceId: z.string().uuid().optional().nullable(),
+});
+
 module.exports = {
   createDisbursementSchema,
   updateDisbursementSchema,
   rejectSchema,
   releasePaymentSchema,
+  disbursementTemplateSchema,
   FUND_SOURCES,
   DISBURSEMENT_CATEGORIES,
 };

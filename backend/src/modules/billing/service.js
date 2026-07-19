@@ -24,7 +24,9 @@ const AppError = require('../../lib/AppError');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {} }) => {
-  const { status, clientId, search, archived, page = 1, limit = 50 } = filters;
+  const {
+    status, clientId, linkedTaskId, search, archived, page = 1, limit = 50,
+  } = filters;
   const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
@@ -45,6 +47,7 @@ const listInvoices = async ({ entityId, filters = {} }) => {
     if (status) query = query.eq('status', status);
   }
   if (clientId) query = query.eq('client_id', clientId);
+  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
     query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
   }
@@ -83,6 +86,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
     invoice_number: data.invoiceNumber,
     client_id: data.clientId,
     work_request_id: data.workRequestId || null,
+    linked_task_id: data.linkedTaskId || null,
     entity_id: entityId,
     issue_date: data.issueDate,
     due_date: data.dueDate,
@@ -214,6 +218,7 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
 
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.workRequestId !== undefined) updates.work_request_id = data.workRequestId;
+  if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.invoiceNumber !== undefined) updates.invoice_number = data.invoiceNumber;
   if (data.issueDate !== undefined) updates.issue_date = data.issueDate;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;

@@ -32,6 +32,7 @@ const disbursementsRouter = require('./modules/disbursements/routes');
 const transmittalsRouter = require('./modules/transmittals/routes');
 const reportsRouter = require('./modules/reports/routes');
 const adminRouter = require('./modules/admin/routes');
+const operationsRequestsRouter = require('./modules/operationsRequests/routes');
 
 const app = express();
 
@@ -159,6 +160,7 @@ app.use('/v1/disbursements', disbursementsRouter);
 app.use('/v1/transmittals', transmittalsRouter);
 app.use('/v1/reports', reportsRouter);
 app.use('/v1/admin', adminRouter);
+app.use('/v1/operations-requests', operationsRequestsRouter);
 
 // 404 handler
 app.use((req, res, _next) => {

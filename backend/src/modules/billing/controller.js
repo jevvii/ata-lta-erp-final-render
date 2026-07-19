@@ -40,6 +40,7 @@ const listInvoices = async (req, res, next) => {
     const filters = {
       status: req.query.status,
       clientId: req.query.clientId,
+      linkedTaskId: req.query.linkedTaskId,
       search: req.query.search,
       archived: req.query.archived,
       page: parseInt(req.query.page, 10) || 1,

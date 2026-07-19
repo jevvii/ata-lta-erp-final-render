@@ -2,75 +2,198 @@
  * Admin Review Gate — Pending Changes
  * Structural mutations are staged for Admin approval.
  * All non-Admin roles (Manager, Accounting, Operations, Documentation, HR)
- * stage changes in pendingChanges for Admin review.
+ * stage changes through the pending-approvals API for Admin review.
+ *
+ * Refactor notes:
+ * - No module-level Map or localStorage; all pending records live on the server.
+ * - Lists/reads/writes go through apiClient.pendingApprovals.
+ * - Admin bypass uses the relevant resource APIs directly (workRequests, clients,
+ *   invoices, disbursements, transmittals, tasks).
+ * - Diff rendering uses the API caches for workRequests/clients and falls back
+ *   to null when no cache entry exists.
  */
 
 const PendingChanges = {
   editingPendingId: null,
 
   /**
+   * Normalize a pending-approval record from the API to the shape the UI expects.
+   * The backend stores snake_case and exposes camelCase with `tableName`/`createdAt`;
+   * the legacy UI uses `table`/`submittedAt`.
+   */
+  _normalize(pc) {
+    if (!pc) return pc;
+    return {
+      ...pc,
+      table: pc.table || pc.tableName,
+      submittedAt: pc.submittedAt || pc.createdAt || pc.created_at,
+      submittedBy: pc.submittedBy || pc.submitted_by,
+      reviewedBy: pc.reviewedBy || pc.reviewed_by,
+      reviewedAt: pc.reviewedAt || pc.reviewed_at,
+      rejectionReason: pc.rejectionReason || pc.rejection_reason
+    };
+  },
+
+  _api() {
+    return (typeof window !== 'undefined' && window.apiClient) || null;
+  },
+
+  /**
+   * Look up the current approved record for diff/approval logic.
+   * Uses API caches only; no legacy DB fallback.
+   */
+  _getCurrentRecord(table, id) {
+    if (!id) return null;
+    const api = this._api();
+    if (table === 'workRequests' && api && api.workRequestCache) {
+      return api.workRequestCache.getById(id);
+    }
+    if (table === 'clients' && api && api.clientCache) {
+      return api.clientCache.getById(id);
+    }
+    return null;
+  },
+
+  /**
    * Submit a structural change for review.
    * Admin bypasses the gate for everything.
    * Manager bypasses for tasks only (WRs still need Admin approval).
-   * All other roles stage changes in pendingChanges.
+   * All other roles stage changes via the pending-approvals API.
    */
-   submit(table, record, isNew) {
+  async submit(table, record, isNew) {
+    const api = this._api();
+    if (!api) return { approved: false, pendingId: null };
+
     if (Auth.canBypassReview(table)) {
-      const cleanRecord = { ...record };
-      delete cleanRecord.tasks;
-      if (isNew) {
-        DB.insert(table, cleanRecord);
-      } else {
-        DB.update(table, cleanRecord.id, cleanRecord);
-      }
+      await this._adminBypass(table, record, isNew);
       return { approved: true };
     }
 
-    if (PendingChanges.editingPendingId) {
-      const pendingId = PendingChanges.editingPendingId;
-      PendingChanges.editingPendingId = null; // Reset
-
-      DB.update('pendingChanges', pendingId, {
-        proposedData: deepClone(record),
-        submittedAt: new Date().toISOString(),
-        status: 'pending',
-        rejectionReason: '',
-        reviewedBy: '',
-        reviewedAt: ''
+    if (this.editingPendingId) {
+      const pendingId = this.editingPendingId;
+      this.editingPendingId = null;
+      // Server-side pending changes are immutable; resubmit as a new pending
+      // record and treat the old one as withdrawn.
+      const existing = await this.getById(pendingId);
+      if (!existing) return { approved: false, pendingId };
+      const pc = await api.pendingApprovals.create({
+        tableName: table,
+        parentRecordId: isNew ? null : record.id,
+        proposedData: deepClone(record)
       });
-      return { approved: false, pendingId };
+      await api.pendingApprovals.reject(pendingId, { reason: 'Withdrawn by submitter (resubmitted)' }).catch(() => {});
+      return { approved: false, pendingId: pc.id };
     }
 
-    const pc = {
-      id: generateId('pc'),
-      table,
+    const pc = await api.pendingApprovals.create({
+      tableName: table,
       parentRecordId: isNew ? null : record.id,
-      proposedData: deepClone(record),
-      submittedBy: Auth.user.id,
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-      rejectionReason: '',
-      reviewedBy: '',
-      reviewedAt: ''
-    };
-    DB.insert('pendingChanges', pc);
+      proposedData: deepClone(record)
+    });
     return { approved: false, pendingId: pc.id };
   },
 
-  getAllPending() {
-    return DB.getWhere('pendingChanges', pc => pc.status === 'pending');
+  /**
+   * Admin bypass: apply the change directly through the relevant resource API.
+   */
+  async _adminBypass(table, record, isNew) {
+    const api = this._api();
+    if (!api) return;
+    const cleanRecord = { ...record };
+    delete cleanRecord.tasks;
+
+    if (table === 'workRequests') {
+      const tasks = record.tasks || [];
+      if (isNew) {
+        await api.workRequests.create(cleanRecord);
+      } else {
+        await api.workRequests.update(record.id, cleanRecord);
+        const existing = await api.workRequests.listTasks(record.id);
+        for (const t of existing || []) {
+          await api.workRequests.removeTask(record.id, t.id);
+        }
+        for (const t of tasks) {
+          await api.workRequests.createTask(record.id, t);
+        }
+      }
+      return;
+    }
+
+    if (table === 'tasks') {
+      const wrId = record.workRequestId;
+      if (isNew) {
+        await api.workRequests.createTask(wrId, cleanRecord);
+      } else {
+        await api.workRequests.updateTask(wrId, record.id, cleanRecord);
+      }
+      return;
+    }
+
+    if (table === 'clients') {
+      if (isNew) {
+        await api.clients.create(cleanRecord);
+      } else {
+        await api.clients.update(record.id, cleanRecord);
+      }
+      return;
+    }
+
+    if (table === 'invoices') {
+      if (isNew) {
+        await api.invoices.create(cleanRecord);
+      } else {
+        await api.invoices.update(record.id, cleanRecord);
+      }
+      return;
+    }
+
+    if (table === 'disbursements') {
+      if (isNew) {
+        await api.disbursements.create(cleanRecord);
+      } else {
+        await api.disbursements.update(record.id, cleanRecord);
+      }
+      return;
+    }
+
+    if (table === 'transmittals') {
+      if (isNew) {
+        await api.transmittals.create(cleanRecord);
+      } else {
+        await api.transmittals.update(record.id, cleanRecord);
+      }
+      return;
+    }
+
+    throw new Error('Unsupported pending change table for admin bypass: ' + table);
   },
 
-  getPendingForUser(userId) {
-    return DB.getWhere('pendingChanges', pc => pc.submittedBy === userId && pc.status === 'pending');
+  async getAllPending() {
+    const api = this._api();
+    if (!api) return [];
+    const res = await api.pendingApprovals.list({ status: 'pending' });
+    return (res?.data || []).map(pc => this._normalize(pc));
   },
 
-  getRejectedForUser(userId) {
-    return DB.getWhere('pendingChanges', pc => pc.submittedBy === userId && pc.status === 'rejected');
+  async getPendingForUser(userId) {
+    const api = this._api();
+    if (!api) return [];
+    const res = await api.pendingApprovals.list({ status: 'pending', submittedBy: userId });
+    return (res?.data || []).map(pc => this._normalize(pc));
   },
 
-  getById(id) {
-    return DB.getById('pendingChanges', id);
+  async getRejectedForUser(userId) {
+    const api = this._api();
+    if (!api) return [];
+    const res = await api.pendingApprovals.list({ status: 'rejected', submittedBy: userId });
+    return (res?.data || []).map(pc => this._normalize(pc));
+  },
+
+  async getById(id) {
+    const api = this._api();
+    if (!api || !id) return null;
+    const res = await api.pendingApprovals.get(id);
+    return res?.data ? this._normalize(res.data) : null;
   },
 
   /**
@@ -80,156 +203,62 @@ const PendingChanges = {
    */
   canApproveChange(pc) {
     if (!pc) return false;
-    return Auth.canApproveChange(pc.table);
+    return Auth.canApproveChange(pc.table || pc.tableName);
   },
 
-  approve(pendingId) {
-    const pc = DB.getById('pendingChanges', pendingId);
-    if (!pc || pc.status !== 'pending') return false;
-
-    if (pc.table === 'workRequests') {
-      const record = deepClone(pc.proposedData);
-      const tasks = record.tasks || [];
-      delete record.tasks;
-
-      if (pc.parentRecordId) {
-        DB.update('workRequests', pc.parentRecordId, record);
-        // Clear existing tasks
-        const existing = DB.getWhere('tasks', t => t.workRequestId === pc.parentRecordId);
-        existing.forEach(t => DB.delete('tasks', t.id));
-        // Insert updated tasks
-        tasks.forEach(t => {
-          t.workRequestId = pc.parentRecordId;
-          DB.insert('tasks', t);
-        });
-      } else {
-        DB.insert('workRequests', record);
-        // Insert new tasks
-        tasks.forEach(t => {
-          t.workRequestId = record.id;
-          DB.insert('tasks', t);
-        });
-      }
-    } else {
-      if (pc.parentRecordId) {
-        DB.update(pc.table, pc.parentRecordId, pc.proposedData);
-      } else {
-        DB.insert(pc.table, pc.proposedData);
-      }
-    }
-
-    // Back-linking logic upon approval
-    if (pc.table === 'invoices') {
-      const record = pc.proposedData;
-      const isNew = !pc.parentRecordId;
-      const inv = isNew ? null : DB.getById('invoices', pc.parentRecordId);
-
-      // Clean up old WR back-link if WR changed during edit
-      if (!isNew && inv && inv.workRequestId && inv.workRequestId !== (record.workRequestId || null)) {
-        const oldWr = DB.getById('workRequests', inv.workRequestId);
-        if (oldWr && oldWr.linkedInvoiceId === record.id) {
-          DB.update('workRequests', oldWr.id, { linkedInvoiceId: null });
-        }
-      }
-
-      // Link to WR if selected
-      if (record.workRequestId) {
-        const wr = DB.getById('workRequests', record.workRequestId);
-        if (wr) {
-          DB.update('workRequests', wr.id, { linkedInvoiceId: record.id });
-        }
-      }
-    } else if (pc.table === 'transmittals') {
-      const record = pc.proposedData;
-      const isNew = !pc.parentRecordId;
-      const old = isNew ? null : DB.getById('transmittals', pc.parentRecordId);
-
-      // Clean up old WR link if WR changed
-      if (old && old.workRequestId && old.workRequestId !== (record.workRequestId || null)) {
-        const oldWr = DB.getById('workRequests', old.workRequestId);
-        if (oldWr) {
-          const linkedIds = (oldWr.linkedTransmittalIds || []).filter(id => id !== record.id);
-          DB.update('workRequests', oldWr.id, { linkedTransmittalIds: linkedIds });
-        }
-      }
-
-      // Link to Work Request
-      if (record.workRequestId) {
-        const wr = DB.getById('workRequests', record.workRequestId);
-        if (wr) {
-          const linkedIds = new Set(wr.linkedTransmittalIds || []);
-          linkedIds.add(record.id);
-          DB.update('workRequests', wr.id, { linkedTransmittalIds: Array.from(linkedIds) });
-        }
-      }
-    } else if (pc.table === 'clients') {
-      const record = pc.proposedData;
-      if (record.status === 'Archived' && pc.parentRecordId) {
-        const clientId = pc.parentRecordId;
-        // Cascade to Work Requests (set status to 'Cancelled')
-        const wrs = DB.getWhere('workRequests', wr => wr.clientId === clientId);
-        wrs.forEach(wr => {
-          DB.update('workRequests', wr.id, { status: 'Cancelled', updatedAt: new Date().toISOString() });
-
-          // Cascade to Documents
-          const docs = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
-          docs.forEach(doc => {
-            DB.update('documents', doc.id, { status: 'Archived', archived: true });
-          });
-        });
-      }
-    }
-
-    DB.update('pendingChanges', pendingId, {
-      status: 'approved',
-      reviewedBy: Auth.user.id,
-      reviewedAt: new Date().toISOString()
-    });
-
+  async approve(pendingId) {
+    const api = this._api();
+    if (!api) return false;
+    await api.pendingApprovals.approve(pendingId);
     return true;
   },
 
-  reject(pendingId, reason) {
-    const pc = DB.getById('pendingChanges', pendingId);
-    if (!pc || pc.status !== 'pending') return false;
-
-    if (pc.table === 'invoices' && pc.parentRecordId) {
-      DB.update('invoices', pc.parentRecordId, { status: 'Draft', rejectionReason: reason || '' });
-    }
-
-    DB.update('pendingChanges', pendingId, {
-      status: 'rejected',
-      rejectionReason: reason,
-      reviewedBy: Auth.user.id,
-      reviewedAt: new Date().toISOString()
-    });
-
+  async reject(pendingId, reason) {
+    const api = this._api();
+    if (!api) return false;
+    await api.pendingApprovals.reject(pendingId, { reason });
     return true;
   },
 
-  resubmit(pendingId) {
-    const pc = DB.getById('pendingChanges', pendingId);
+  async resubmit(pendingId) {
+    const pc = await this.getById(pendingId);
     if (!pc || pc.status !== 'rejected') return false;
 
-    DB.update('pendingChanges', pendingId, {
-      status: 'pending',
-      rejectionReason: '',
-      reviewedBy: '',
-      reviewedAt: ''
-    });
+    const api = this._api();
+    if (!api) return false;
 
+    // Server-side pending changes are immutable; create a fresh pending record
+    // with the same proposed data and mark the rejected one as withdrawn.
+    await api.pendingApprovals.create({
+      tableName: pc.table || pc.tableName,
+      parentRecordId: pc.parentRecordId,
+      proposedData: deepClone(pc.proposedData)
+    });
+    await api.pendingApprovals.reject(pendingId, { reason: 'Resubmitted by submitter' }).catch(() => {});
     return true;
   },
 
-  delete(pendingId) {
-    DB.delete('pendingChanges', pendingId);
+  /**
+   * Withdraw/delete a pending change. The backend does not expose a delete
+   * endpoint, so a pending record is withdrawn by rejecting it with a submitter
+   * reason. Already-rejected records are left unchanged.
+   */
+  async delete(pendingId) {
+    const api = this._api();
+    if (!api) return false;
+    const pc = await this.getById(pendingId);
+    if (!pc || pc.status === 'approved') return false;
+    if (pc.status === 'pending') {
+      await api.pendingApprovals.reject(pendingId, { reason: 'Withdrawn by submitter' });
+    }
+    return true;
   },
 
   /**
    * Build a simple key-value diff between current and proposed records.
    */
   buildDiff(pc) {
-    const current = pc.parentRecordId ? DB.getById(pc.table, pc.parentRecordId) : null;
+    const current = pc.parentRecordId ? this._getCurrentRecord(pc.table, pc.parentRecordId) : null;
     const proposed = pc.proposedData;
     const diffs = [];
 

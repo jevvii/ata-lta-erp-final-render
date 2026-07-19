@@ -28,6 +28,7 @@ const listDocuments = async (req, res, next) => {
       lifecycle: req.query.lifecycle,
       clientId: req.query.clientId,
       workRequestId: req.query.workRequestId,
+      linkedTaskId: req.query.linkedTaskId,
       search: req.query.search,
       archived: req.query.archived === 'true' ? true : req.query.archived === 'false' ? false : undefined,
       page: parseInt(req.query.page, 10) || 1,

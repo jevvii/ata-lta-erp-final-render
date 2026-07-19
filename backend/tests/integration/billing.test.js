@@ -334,4 +334,33 @@ describe('/v1/invoices', () => {
     expect(afterArchive.body.data.active).toBe(0);
     expect(afterArchive.body.data.archived).toBe(1);
   });
+
+  it('creates an invoice linked to a task and filters by linkedTaskId', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const taskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+
+    const created = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validInvoice, linkedTaskId: taskId })
+      .expect(201);
+
+    expect(created.body.data.linked_task_id).toBe(taskId);
+
+    const list = await request(app)
+      .get(`/v1/invoices?linkedTaskId=${taskId}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].linked_task_id).toBe(taskId);
+  });
 });

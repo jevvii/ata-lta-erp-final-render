@@ -61,7 +61,7 @@ const generateStoragePath = ({ entityCode, clientId, workRequestId, documentId, 
  */
 const listDocuments = async ({ entityId, filters = {} }) => {
   const {
-    category, status, lifecycle, clientId, workRequestId,
+    category, status, lifecycle, clientId, workRequestId, linkedTaskId,
     search, archived, page = 1, limit = 50,
   } = filters;
 
@@ -76,6 +76,7 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   if (lifecycle) query = query.eq('document_lifecycle', lifecycle);
   if (clientId) query = query.eq('client_id', clientId);
   if (workRequestId) query = query.eq('work_request_id', workRequestId);
+  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (typeof archived === 'boolean') query = query.eq('archived', archived);
   if (search) {
     query = query.or(`original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`);
@@ -121,6 +122,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     file_name: sanitizeFileName(data.fileName),
     original_name: data.originalName || data.fileName,
     work_request_id: data.workRequestId || null,
+    linked_task_id: data.linkedTaskId || null,
     client_id: data.clientId || null,
     document_type: data.documentType || null,
     category: data.category || null,
@@ -218,6 +220,7 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
   if (data.documentType !== undefined) updates.document_type = data.documentType;
   if (data.category !== undefined) updates.category = data.category;
   if (data.description !== undefined) updates.description = data.description;
+  if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.scannedBy !== undefined) updates.scanned_by = data.scannedBy;
   if (data.envelopeId !== undefined) updates.envelope_id = data.envelopeId;
   if (data.storedLocation !== undefined) updates.stored_location = data.storedLocation;

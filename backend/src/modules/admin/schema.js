@@ -20,8 +20,26 @@ const rejectPendingSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+const createPendingSchema = z.object({
+  tableName: z.string().min(1).max(100),
+  parentRecordId: z.string().uuid().optional().nullable(),
+  proposedData: z.record(z.any()),
+});
+
+const listAuditQuerySchema = z.object({
+  userId: z.string().min(1).optional(),
+  action: z.string().min(1).optional(),
+  table: z.string().min(1).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 module.exports = {
   createUserSchema,
   updateUserSchema,
   rejectPendingSchema,
+  createPendingSchema,
+  listAuditQuerySchema,
 };

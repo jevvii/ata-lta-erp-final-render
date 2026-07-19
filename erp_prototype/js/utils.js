@@ -184,22 +184,28 @@ function generateSequentialId(prefix, table) {
 
 /**
  * Generate the next sequential invoice number for an entity.
- * Mirrors the legacy Billing.nextInvoiceNumber behavior so it can be used
- * from the operations workflow without requiring the billing bundle.
+ * Uses the invoices API instead of the local DB so generated numbers stay
+ * in sync with the server-side sequence.
  */
-function nextInvoiceNumber(entity) {
+async function nextInvoiceNumber(entity) {
   const year = new Date().getFullYear();
   const prefix = entity + '-SI-' + year + '-';
-  if (typeof DB === 'undefined' || !DB.getWhere) {
+  try {
+    const api = (typeof window !== 'undefined' && window.apiClient) || null;
+    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }) : null;
+    const list = res?.data || [];
+    const maxNum = list.reduce((max, inv) => {
+      const numStr = inv.invoice_number || inv.invoiceNumber || '';
+      if (!numStr.startsWith(prefix)) return max;
+      const parts = numStr.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      return !isNaN(num) && num > max ? num : max;
+    }, 0);
+    return prefix + String(maxNum + 1).padStart(3, '0');
+  } catch (e) {
+    console.error('[nextInvoiceNumber] failed to load invoices', e);
     return prefix + '001';
   }
-  const existing = DB.getWhere('invoices', inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix));
-  const maxNum = existing.reduce((max, inv) => {
-    const parts = inv.invoiceNumber.split('-');
-    const num = parseInt(parts[parts.length - 1], 10);
-    return num > max ? num : max;
-  }, 0);
-  return prefix + String(maxNum + 1).padStart(3, '0');
 }
 
 /**
@@ -975,7 +981,7 @@ function getTaskAllAssigneeNames(task) {
   if (task.assigneeName) names.add(task.assigneeName);
   (task.coAssignees || []).forEach(n => { if (n) names.add(n); });
   if (!task.assigneeName && (task.assigneeId || task.assignedTo)) {
-    const u = DB.getById('users', task.assigneeId || task.assignedTo);
+    const u = window.apiClient?.userCache?.getById(task.assigneeId || task.assignedTo);
     if (u?.name) names.add(u.name);
   }
   return Array.from(names);
@@ -3343,25 +3349,9 @@ const JiraBacklogList = {
     const rows = [];
     const checkBoxes = [];
 
-    const defaultBulkActions = (ids) => [
-      {
-        text: 'Delete',
-        className: 'btn btn-danger btn-sm',
-        onClick: (selectedIds) => {
-          const label = selectedIds.length === 1 ? 'template' : 'templates';
-          Workflow.showConfirm('Delete Templates', `Are you sure you want to delete these ${selectedIds.length} ${label}?`, () => {
-            selectedIds.forEach(id => {
-              if (rowIdPrefix === 'RT') DB.delete('retainerTemplates', id);
-              else if (rowIdPrefix === 'BL') DB.delete('billingTemplates', id);
-              else if (rowIdPrefix === 'DT') DB.delete('disbursementTemplates', id);
-            });
-            App.handleRoute();
-          }, 'danger');
-        }
-      }
-    ];
-
-    const currentBulkActions = bulkActions || defaultBulkActions;
+    // Bulk actions must be supplied by the caller. No default destructive action
+    // is provided, preventing accidental deletes tied to legacy local DB state.
+    const currentBulkActions = bulkActions || (() => []);
 
     const updateSelection = () => {
       const selectedIds = [];

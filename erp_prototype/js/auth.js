@@ -208,8 +208,8 @@ const Auth = {
     if (!wr) return false;
     if (wr.submittedBy === this.user.id || wr.assignedTo === this.user.id || wr.requestedBy === this.user.id) return true;
     
-    // Check tasks
-    const tasks = wr.tasks || (wr.isPendingApproval ? [] : DB.getWhere('tasks', t => t.workRequestId === wr.id));
+    // Check tasks from the cached work request (workRequestCache always includes tasks).
+    const tasks = wr.tasks || [];
     const isAssigned = tasks.some(t => {
       if (t.assigneeId === this.user.id || t.assignedTo === this.user.id) return true;
       if (t.assigneeName && t.assigneeName === this.user.name) return true;
@@ -245,16 +245,19 @@ const Auth = {
     if (!this.user) return false;
     const departments = this.user.departments || [];
     if (this.user.role === 'Admin' || departments.includes('Accounting')) return true;
+    // Resolve the linked work request from the API cache only.
+    const wr = d.linkedWorkRequestId && window.apiClient?.workRequestCache
+      ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId)
+      : null;
+
     // Managerial users can see linked disbursements when they can view the work request.
     if (this.isManagerial()) {
       if (!d.linkedWorkRequestId) return false;
-      const wr = DB.getById('workRequests', d.linkedWorkRequestId);
       return wr && this.canViewWr(wr);
     }
     // Staff users can see WR-linked disbursements if they can view the WR,
     // or non-linked disbursements they personally requested.
     if (d.linkedWorkRequestId) {
-      const wr = DB.getById('workRequests', d.linkedWorkRequestId);
       return wr && this.canViewWr(wr);
     }
     return d.requestedBy === this.user.id;

@@ -569,6 +569,117 @@ const Workflow = {
   expandedTaskIds: new Set(),
   lastRenderedWrId: null,
 
+  _retainerTemplates: null,
+  _retainerTemplatesPromise: null,
+  _groundWorkers: null,
+  _groundWorkersPromise: null,
+
+  async _loadGroundWorkers() {
+    if (this._groundWorkers) return this._groundWorkers;
+    if (this._groundWorkersPromise) return this._groundWorkersPromise;
+    this._groundWorkersPromise = window.apiClient.groundWorkers.list({})
+      .then(res => {
+        this._groundWorkers = res.data || [];
+        return this._groundWorkers;
+      })
+      .catch(err => {
+        console.error('[Workflow] failed to load ground workers', err);
+        this._groundWorkers = [];
+        return this._groundWorkers;
+      })
+      .finally(() => { this._groundWorkersPromise = null; });
+    return this._groundWorkersPromise;
+  },
+
+  async _loadRetainerTemplates() {
+    if (this._retainerTemplates) return this._retainerTemplates;
+    if (this._retainerTemplatesPromise) return this._retainerTemplatesPromise;
+    this._retainerTemplatesPromise = window.apiClient.operations.listTemplates()
+      .then(res => {
+        this._retainerTemplates = res.data || [];
+        return this._retainerTemplates;
+      })
+      .catch(err => {
+        console.error('[Workflow] failed to load retainer templates', err);
+        this._retainerTemplates = [];
+        return this._retainerTemplates;
+      })
+      .finally(() => { this._retainerTemplatesPromise = null; });
+    return this._retainerTemplatesPromise;
+  },
+
+  _getRetainerTemplateById(id) {
+    return (this._retainerTemplates || []).find(t => t.id === id);
+  },
+  _getGroundWorkerById(id) {
+    return (this._groundWorkers || []).find(g => g.id === id);
+  },
+  _getGroundWorkerByName(name) {
+    const trimmed = (name || '').trim().toLowerCase();
+    if (!trimmed) return null;
+    return (this._groundWorkers || []).find(g => g.name.toLowerCase() === trimmed);
+  },
+  _getRetainerTemplatesWhere(predicate) {
+    return (this._retainerTemplates || []).filter(predicate);
+  },
+  _getAllGroundWorkers() {
+    return this._groundWorkers || [];
+  },
+  getGroundWorkerNames() {
+    return (this._groundWorkers || []).map(g => g.name);
+  },
+  async _addGroundWorker(name) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return null;
+    const existing = this._getGroundWorkerByName(trimmed);
+    if (existing) return existing;
+    try {
+      const res = await window.apiClient.groundWorkers.create({ name: trimmed });
+      const gw = res.data || { id: generateId('gw'), name: trimmed };
+      if (!this._groundWorkers) this._groundWorkers = [];
+      this._groundWorkers.push(gw);
+      return gw;
+    } catch (e) {
+      console.error('[Workflow] failed to create ground worker', e);
+      return { id: generateId('gw'), name: trimmed };
+    }
+  },
+  async _addRetainerTemplate(record) {
+    if (!record || !record.name) return null;
+    try {
+      const res = await window.apiClient.operations.createTemplate(record);
+      const created = res.data;
+      if (!this._retainerTemplates) this._retainerTemplates = [];
+      this._retainerTemplates.push(created);
+      return created;
+    } catch (e) {
+      console.error('[Workflow] failed to create retainer template', e);
+      return null;
+    }
+  },
+  async _updateRetainerTemplate(id, record) {
+    const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
+    if (idx === -1) return null;
+    try {
+      const res = await window.apiClient.operations.updateTemplate(id, record);
+      const updated = res.data;
+      this._retainerTemplates[idx] = updated;
+      return updated;
+    } catch (e) {
+      console.error('[Workflow] failed to update retainer template', e);
+      return null;
+    }
+  },
+  async _deleteRetainerTemplate(id) {
+    const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
+    try {
+      await window.apiClient.operations.deleteTemplate(id);
+      if (idx !== -1) this._retainerTemplates.splice(idx, 1);
+    } catch (e) {
+      console.error('[Workflow] failed to delete retainer template', e);
+    }
+  },
+
   isCompleted(itemOrTask) {
     return !!(itemOrTask && (itemOrTask.status === 'Completed' || itemOrTask.completed));
   },
@@ -627,23 +738,24 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId: null, assigneeName }.
    */
-  resolveAssignee(name) {
+  async resolveAssignee(name) {
     if (!name) return { id: null, name: null };
     const trimmed = name.trim();
     if (!trimmed) return { id: null, name: null };
-    
+
+    await this._loadGroundWorkers();
+
     // Check system users first
     const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === trimmed.toLowerCase());
     if (user) return { id: user.id, name: user.name };
-    
+
     // Check ground workers next
-    const gw = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === trimmed.toLowerCase());
+    const gw = this._getGroundWorkerByName(trimmed);
     if (gw) return { id: gw.id, name: gw.name };
-    
+
     // Generate and register new ground worker
-    const newGwId = generateId('gw');
-    DB.insert('groundWorkers', { id: newGwId, name: trimmed });
-    return { id: newGwId, name: trimmed };
+    const newGw = await this._addGroundWorker(trimmed);
+    return { id: newGw.id, name: newGw.name };
   },
 
   /**
@@ -652,13 +764,18 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId, assigneeName }.
    */
-  createGroundWorkerDropdown({ selectedGroundWorkerName, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
+  async createGroundWorkerDropdown({ selectedGroundWorkerName, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      this._loadGroundWorkers()
+    ]);
+
     const buildOptions = () => {
       const systemUsers = (window.apiClient.userCache._users || []) || [];
-      const groundWorkers = DB.getAll('groundWorkers') || [];
+      const groundWorkers = this._groundWorkers || [];
       const systemUserNames = systemUsers.map(u => u.name);
       const prioritySet = new Set([...(priorityNames || []), ...systemUserNames].filter(Boolean));
-      
+
       const addedNames = new Set();
       const options = [];
 
@@ -704,7 +821,7 @@ const Workflow = {
 
     let lastAppliedName = (selectedGroundWorkerName || '').trim();
 
-    const applyValue = () => {
+    const applyValue = async () => {
       const val = dropdown.value;
       const text = dropdown.searchText.trim();
       let name = '';
@@ -716,7 +833,7 @@ const Workflow = {
           name = u.name;
           resolvedId = u.id;
         } else {
-          const gw = (DB.getAll('groundWorkers') || []).find(g => g.id === val);
+          const gw = this._getGroundWorkerById(val);
           if (gw) {
             name = gw.name;
             resolvedId = gw.id;
@@ -731,7 +848,7 @@ const Workflow = {
       if (name === lastAppliedName) return;
 
       if (name && !resolvedId) {
-        const res = this.resolveAssignee(name);
+        const res = await this.resolveAssignee(name);
         resolvedId = res.id;
         name = res.name;
       }
@@ -747,7 +864,7 @@ const Workflow = {
       if (user) {
         dropdown.value = user.id;
       } else {
-        const gw = (DB.getAll('groundWorkers') || []).find(g => g.name.toLowerCase() === nameLower);
+        const gw = this._getGroundWorkerByName(selectedGroundWorkerName);
         if (gw) {
           dropdown.value = gw.id;
         } else {
@@ -765,18 +882,18 @@ const Workflow = {
     // Apply only on explicit selection, Enter, or blur — not on every keystroke.
     dropdown.addEventListener('change', () => {
       cancelBlurCommit();
-      applyValue();
+      applyValue().catch(() => {});
     });
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         cancelBlurCommit();
-        applyValue();
+        applyValue().catch(() => {});
       }
     });
     input.addEventListener('blur', () => {
       cancelBlurCommit();
-      blurTimeout = setTimeout(applyValue, 150);
+      blurTimeout = setTimeout(() => applyValue().catch(() => {}), 150);
     });
     input.addEventListener('focus', cancelBlurCommit);
 
@@ -1478,10 +1595,11 @@ const Workflow = {
    * Open a modal with the full billing/invoice creation form,
    * pre-populated from the given work request.
    */
-  openGenerateBillingModal(wr, preselectedTask) {
+  async openGenerateBillingModal(wr, preselectedTask) {
     const entity = Auth.activeEntity;
     const client = window.apiClient.clientCache.getById(wr.clientId);
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+    const invoiceNumber = await Utils.nextInvoiceNumber(entity);
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-billing-form', class: 'form-stacked' });
@@ -1554,7 +1672,7 @@ const Workflow = {
     numGroup.appendChild(el('label', { text: 'Invoice Number' }));
     numGroup.appendChild(el('input', {
       type: 'text', name: 'invoiceNumber',
-      value: Utils.nextInvoiceNumber(entity),
+      value: invoiceNumber,
       readonly: true,
       style: 'background: #f1f5f9; cursor: default;'
     }));
@@ -2101,10 +2219,10 @@ const Workflow = {
       let handler = null;
       if (Auth.can(cfg.createPerm)) {
         title = cfg.createTitle;
-        handler = () => cfg.createHandler(this, wr, t);
+        handler = async () => cfg.createHandler(this, wr, t);
       } else if (Auth.can(cfg.requestPerm)) {
         title = cfg.requestTitle;
-        handler = () => this.submitOperationsRequest(cfg.type, wr, t);
+        handler = async () => this.submitOperationsRequest(cfg.type, wr, t);
       }
 
       if (title && handler) {
@@ -2563,22 +2681,22 @@ const Workflow = {
       // Full-page retainer template form: breadcrumb with view switcher + save/cancel
       container.classList.add('operations-tab-page');
       const isNew = !this.templateEditingId;
-      const template = isNew ? null : DB.getById('retainerTemplates', this.templateEditingId);
+      const template = isNew ? null : this._getRetainerTemplateById(this.templateEditingId);
       const fullPageRoute = isNew ? '#operations/templateForm/new' : `#operations/templateForm/${this.templateEditingId}`;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'retainer-template-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const templateEditingId = this.templateEditingId;
           closeFormPanelAndRoute('#operations');
           this.templateEditingId = templateEditingId;
-          this.openRetainerTemplateForm(PaneMode.SIDE_PEEK);
+          await this.openRetainerTemplateForm(PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const templateEditingId = this.templateEditingId;
           closeFormPanelAndRoute('#operations');
           this.templateEditingId = templateEditingId;
-          this.openRetainerTemplateForm(PaneMode.CENTER_PEEK);
+          await this.openRetainerTemplateForm(PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
           window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
@@ -2601,15 +2719,15 @@ const Workflow = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'add-task-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const wrId = this.addTaskWrId;
           closeFormPanelAndRoute('#operations/detail/' + wrId);
-          this.showAddTaskPanel(wrId, PaneMode.SIDE_PEEK);
+          await this.showAddTaskPanel(wrId, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const wrId = this.addTaskWrId;
           closeFormPanelAndRoute('#operations/detail/' + wrId);
-          this.showAddTaskPanel(wrId, PaneMode.CENTER_PEEK);
+          await this.showAddTaskPanel(wrId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
           window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
@@ -2632,15 +2750,15 @@ const Workflow = {
     } else if (this.view === 'form') {
       container.appendChild(this.renderForm());
     } else if (this.view === 'detail') {
-      container.appendChild(this.renderDetail());
+      container.appendChild(await this.renderDetail());
     } else if (this.view === 'templates') {
-      container.appendChild(this.renderTemplates());
+      container.appendChild(await this.renderTemplates());
     } else if (this.view === 'templateForm') {
-      container.appendChild(this.renderTemplateForm({ hideHeader: true }));
+      container.appendChild(await this.renderTemplateForm({ hideHeader: true }));
     } else if (this.view === 'archive') {
       container.appendChild(this.renderArchive());
     } else if (this.view === 'addTask' && this.addTaskWrId) {
-      const form = this.renderAddTaskForm(this.addTaskWrId, { hideHeader: true });
+      const form = await this.renderAddTaskForm(this.addTaskWrId, { hideHeader: true });
       if (form) {
         container.appendChild(el('div', { class: 'page-content-section' }, [form]));
       } else {
@@ -2686,7 +2804,7 @@ const Workflow = {
       return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
     }).length;
 
-    const templateCount = DB.getWhere('retainerTemplates', t => {
+    const templateCount = this._retainerTemplates.filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
       if (entity === 'ALL') {
         return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
@@ -4286,7 +4404,7 @@ const Workflow = {
     container.appendChild(list);
   },
 
-  showTaskSidePane(taskId, triggerElement) {
+  async showTaskSidePane(taskId, triggerElement) {
     let task = WorkflowData.getTaskById(taskId);
     let pendingWr = null;
     if (!task) {
@@ -4442,7 +4560,7 @@ const Workflow = {
 
     if (wr && wr.status === 'Draft' && !wr.isPendingApproval) {
       // Editable mode: dropdown for primary assignee + co-assignee picker
-      const gwDropdown = this.createGroundWorkerDropdown({
+      const gwDropdown = await this.createGroundWorkerDropdown({
         selectedGroundWorkerName: task.assigneeName || '',
         placeholder: 'Assign primary employee...',
         className: 'side-pane-primary-assignee-dropdown',
@@ -4459,7 +4577,7 @@ const Workflow = {
       });
       assigneeValEl.appendChild(gwDropdown);
 
-      const coPicker = this.renderTaskCoAssigneePicker(
+      const coPicker = await this.renderTaskCoAssigneePicker(
         task,
         { primaryName: task.assigneeName || '', className: 'side-pane-coassignee-dropdown' },
         true,
@@ -4498,29 +4616,29 @@ const Workflow = {
     descSection.appendChild(el('div', { class: 'side-pane-description', text: task.description || 'Provide an overview of the task and related details.' }));
     paneContent.appendChild(descSection);
 
-    const [checklistHeaderToggle, checklistContentToggle] = createCollapsibleSection('Sub-tasks / Requirements Checklist', true, (cont) => {
+    const [checklistHeaderToggle, checklistContentToggle] = createCollapsibleSection('Sub-tasks / Requirements Checklist', true, async (cont) => {
       const listContainer = el('div', { class: 'details-content-list' });
       let populatePrereqSelect = () => {};
       
       const normalizedChecklist = task.checklist || [];
 
-      const renderChecklist = () => {
+      const renderChecklist = async () => {
         listContainer.innerHTML = '';
         if (normalizedChecklist.length === 0) {
           listContainer.appendChild(renderEmptyState('No checklist items'));
         } else {
-          normalizedChecklist.forEach((item, idx) => {
+          for (const [idx, item] of normalizedChecklist.entries()) {
             const blocked = isChecklistBlocked(item, normalizedChecklist);
             const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
             const row = el('div', { class: classNames('checklist-item', blocked && 'locked', this.getCompletedClass(item)) });
-            
+
             const cb = el('input', { type: 'checkbox' });
             cb.checked = !!item.completed;
             if (!disableIfPending(cb, wr)) {
               cb.disabled = blocked;
               if (blocked) cb.title = 'Locked';
             }
-            
+
             if (!wr || !wr.isPendingApproval) {
               cb.addEventListener('change', () => {
                 this.toggleChecklistItem(task, item.id, cb.checked);
@@ -4543,7 +4661,7 @@ const Workflow = {
 
             if (allowAssignChecklist) {
               const assigneeWrap = el('div', { class: 'task-assignee-wrapper' });
-              const assigneeDropdown = this.createGroundWorkerDropdown({
+              const assigneeDropdown = await this.createGroundWorkerDropdown({
                 selectedGroundWorkerName: item.assigneeName,
                 placeholder: 'Assign...',
                 className: 'checklist-assignee-dropdown',
@@ -4563,7 +4681,7 @@ const Workflow = {
               }
               assigneeWrap.appendChild(assigneeDropdown);
 
-              const coAssigneePicker = this.renderChecklistCoAssigneePicker(
+              const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
                 task,
                 item,
                 { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
@@ -4625,9 +4743,9 @@ const Workflow = {
                   actions.appendChild(reassignBtn);
                   actions.appendChild(deleteAllBtn);
                   content.appendChild(actions);
-                  
+
                   const overlay = this.showModal('Delete Checklist Item', content, null);
-                  
+
                   reassignBtn.addEventListener('click', () => {
                     overlay.remove();
                     const tObj = WorkflowData.getTaskById(task.id) || task;
@@ -4638,7 +4756,7 @@ const Workflow = {
                     this.showTaskSidePane(taskId, triggerElement);
                     App.handleRoute();
                   });
-                  
+
                   deleteAllBtn.addEventListener('click', () => {
                     overlay.remove();
                     const tObj = WorkflowData.getTaskById(task.id) || task;
@@ -4654,7 +4772,7 @@ const Workflow = {
             row.appendChild(actionsDiv);
 
             listContainer.appendChild(row);
-          });
+          }
         }
       };
 
@@ -4777,7 +4895,7 @@ const Workflow = {
         cont.appendChild(addChecklistRow);
       }
 
-      renderChecklist();
+      await renderChecklist();
     });
     paneContent.appendChild(checklistHeaderToggle);
     paneContent.appendChild(checklistContentToggle);
@@ -5132,7 +5250,7 @@ const Workflow = {
         let billingHandler = null;
         if (Auth.can('billing:edit')) {
           billingTitle = 'Generate Billing';
-          billingHandler = () => this.openGenerateBillingModal(wr, task);
+          billingHandler = async () => this.openGenerateBillingModal(wr, task);
         } else if (Auth.can('billing:request')) {
           billingTitle = 'Request Billing';
           billingHandler = () => this.submitOperationsRequest('billing', wr, task);
@@ -5290,7 +5408,7 @@ const Workflow = {
   // ============================================================
   // Create / Edit Form
   // ============================================================
-  renderForm() {
+  async renderForm() {
     if (!Auth.can('workflow:edit')) {
       this.view = 'list';
       App.handleRoute();
@@ -5384,7 +5502,7 @@ const Workflow = {
     form.appendChild(descSection);
 
     // Use Retainer Template button (only on creation, not edit) — placed above tasks
-    const templates = DB.getWhere('retainerTemplates', t => t.entity === entity);
+    const templates = this._retainerTemplates.filter(t => t.entity === entity);
     let selectedTemplateId = null;
     let templateBtnRef = null;
     if (!wr && templates.length > 0) {
@@ -5418,11 +5536,11 @@ const Workflow = {
       const clientSel = form.querySelector('[name="clientId"]');
       const prioritySel = form.querySelector('[name="priority"]');
       dropdownItems.forEach(item => {
-        item.addEventListener('click', () => {
+        item.addEventListener('click', async () => {
           const templateId = item.dataset.templateId;
           selectedTemplateId = templateId;
           const tasksList = document.getElementById('task-rows');
-          const template = templateId ? DB.getById('retainerTemplates', templateId) : null;
+          const template = templateId ? this._getRetainerTemplateById(templateId) : null;
 
           dropdownItems.forEach(di => di.classList.remove('active'));
           item.classList.add('active');
@@ -5477,8 +5595,8 @@ const Workflow = {
               if (prioritySel) prioritySel.value = 'Urgent';
 
               while (tasksList.firstChild) tasksList.removeChild(tasksList.firstChild);
-              this.addTaskRow(tasksList);
-              this.addTaskRow(tasksList);
+              await this.addTaskRow(tasksList);
+              await this.addTaskRow(tasksList);
               this.updatePredecessorOptions(tasksList);
 
               this.setTemplateFieldsLocked(form, tasksList, false);
@@ -5528,17 +5646,17 @@ const Workflow = {
       'data-role': 'add-task',
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add task'
     });
-    addTaskBtn.addEventListener('click', () => this.addTaskRow(tasksList, null, true));
+    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList, null, true));
     tasksSection.appendChild(addTaskBtn);
     form.appendChild(tasksSection);
 
     // Pre-populate existing tasks if editing
     if (wr) {
       const existingTasks = wr.tasks || WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
-      existingTasks.forEach(t => this.addTaskRow(tasksList, t));
+      for (const t of existingTasks) await this.addTaskRow(tasksList, t);
     } else {
-      this.addTaskRow(tasksList);
-      this.addTaskRow(tasksList);
+      await this.addTaskRow(tasksList);
+      await this.addTaskRow(tasksList);
     }
     this.updatePredecessorOptions(tasksList);
 
@@ -5548,7 +5666,7 @@ const Workflow = {
     return container;
   },
 
-  addTaskRow(container, taskData, collapseOthers = false) {
+  async addTaskRow(container, taskData, collapseOthers = false) {
     if (collapseOthers) {
       container.querySelectorAll('.task-row, .notion-line-item-row, .wr-task-row').forEach(r => r.classList.add('collapsed'));
     }
@@ -5584,7 +5702,7 @@ const Workflow = {
     row.appendChild(titleIn);
 
     // Ground worker assignee — typable dropdown like the filter tray
-    const gwDropdown = this.createGroundWorkerDropdown({
+    const gwDropdown = await this.createGroundWorkerDropdown({
       selectedGroundWorkerName: taskData?.assigneeName || '',
       placeholder: 'Employee...',
       className: 'task-assignee-groundworker',
@@ -5616,7 +5734,7 @@ const Workflow = {
     };
     renderCoChips();
 
-    const coAssigneeDropdown = this.createGroundWorkerDropdown({
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: '+ Co-assignee',
       className: 'inline-coassignee-dropdown',
       onChange: ({ assigneeName }) => {
@@ -5628,8 +5746,7 @@ const Workflow = {
           coAssignees.push(name);
           const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
-            const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
-            if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
+            this._addGroundWorker(name);
           }
           renderCoChips();
         }
@@ -5784,17 +5901,17 @@ const Workflow = {
     return true;
   },
 
-  loadTemplateTasks(templateId, container) {
+  async loadTemplateTasks(templateId, container) {
     if (!templateId) {
       this.showMessage('Error', 'Please select a retainer template first.', 'danger');
       return;
     }
-    const template = DB.getById('retainerTemplates', templateId);
+    const template = this._getRetainerTemplateById(templateId);
     if (!template) return;
     while (container.firstChild) container.removeChild(container.firstChild);
-    (template.tasks || []).forEach(task => {
-      this.addTaskRow(container, task);
-    });
+    for (const task of (template.tasks || [])) {
+      await this.addTaskRow(container, task);
+    }
     this.updatePredecessorOptions(container);
   },
 
@@ -6010,7 +6127,7 @@ const Workflow = {
           predecessors: predId ? [predId] : []
         };
       });
-      DB.insert('retainerTemplates', {
+      this._addRetainerTemplate({
         id: tmplId,
         name: record.title + ' Template',
         description: record.description,
@@ -6047,7 +6164,7 @@ const Workflow = {
     if (clear) clear.style.display = 'none';
   },
 
-  renderTaskCoAssigneePicker(t, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onChange) {
+  async renderTaskCoAssigneePicker(t, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onChange) {
     const wrap = el('div', { class: 'task-coassignee-wrap', style: 'margin-top:4px;' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
 
@@ -6073,17 +6190,16 @@ const Workflow = {
 
     if (showChips) wrap.appendChild(chipsWrap);
     if (editable) {
-      const addDropdown = this.createGroundWorkerDropdown({
+      const addDropdown = await this.createGroundWorkerDropdown({
         placeholder: '+ Co-assignee',
         className,
-        onChange: ({ assigneeName }) => {
+        onChange: async ({ assigneeName }) => {
           const name = assigneeName?.trim();
           if (!name) return;
           const coAssignees = t.coAssignees || [];
           if (coAssignees.includes(name)) { this.clearDropdown(addDropdown); return; }
           if (name === primaryName) { this.clearDropdown(addDropdown); return; }
-          const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
-          if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
+          await this._addGroundWorker(name);
           const updated = [...coAssignees, name];
           WorkflowData.updateTask(t.id, { coAssignees: updated, updatedAt: new Date().toISOString() });
           this.clearDropdown(addDropdown);
@@ -6096,7 +6212,7 @@ const Workflow = {
     return wrap;
   },
 
-  renderChecklistCoAssigneePicker(task, item, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onUpdate) {
+  async renderChecklistCoAssigneePicker(task, item, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onUpdate) {
     const wrap = el('div', { class: 'task-coassignee-wrap', style: 'margin-top:4px;' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
 
@@ -6121,17 +6237,16 @@ const Workflow = {
 
     if (showChips) wrap.appendChild(chipsWrap);
     if (editable) {
-      const addDropdown = this.createGroundWorkerDropdown({
+      const addDropdown = await this.createGroundWorkerDropdown({
         placeholder: '+ Co-assignee',
         className,
-        onChange: ({ assigneeName }) => {
+        onChange: async ({ assigneeName }) => {
           const name = assigneeName?.trim();
           if (!name) return;
           const coAssignees = item.coAssignees || [];
           if (coAssignees.includes(name)) { this.clearDropdown(addDropdown); return; }
           if (name === primaryName) { this.clearDropdown(addDropdown); return; }
-          const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
-          if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
+          await this._addGroundWorker(name);
           const updated = [...coAssignees, name];
           item.coAssignees = updated;
           this.clearDropdown(addDropdown);
@@ -6180,7 +6295,7 @@ const Workflow = {
     return assigneeWrap;
   },
 
-  renderDetail() {
+  async renderDetail() {
     let wr = WorkflowData.getWorkRequestById(this.detailWrId);
     if (!wr) {
       const pc = DB.getById('pendingChanges', this.detailWrId) || 
@@ -6439,13 +6554,13 @@ const Workflow = {
         class: this.taskViewMode === mode ? 'active' : ''
       });
       viewButtons[mode] = btn;
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', async () => {
         if (this.taskViewMode === mode) return;
         this.taskViewMode = mode;
         Object.keys(viewButtons).forEach(m => {
           viewButtons[m].classList.toggle('active', m === mode);
         });
-        renderGroups();
+        await renderGroups();
       });
       viewToggle.appendChild(btn);
     });
@@ -6458,7 +6573,7 @@ const Workflow = {
     ((window.apiClient.userCache._users || []) || []).forEach(u => {
       if (u.name) uniqueEmpNames.add(u.name.trim());
     });
-    (DB.getAll('groundWorkers') || []).forEach(gw => {
+    this._groundWorkers.forEach(gw => {
       if (gw.name) uniqueEmpNames.add(gw.name.trim());
     });
     sortedTasks.forEach(t => {
@@ -6477,9 +6592,9 @@ const Workflow = {
       maxWidth: '180px'
     });
     empFilter.value = container.employeeFilter || '';
-    const updateEmpFilter = () => {
+    const updateEmpFilter = async () => {
       container.employeeFilter = (empFilter.searchText || '').trim() || empFilter.value || null;
-      renderGroups();
+      await renderGroups();
     };
     empFilter.addEventListener('change', updateEmpFilter);
     empFilter.addEventListener('input', updateEmpFilter);
@@ -6525,7 +6640,7 @@ const Workflow = {
       }
       chip.appendChild(document.createTextNode(filter));
       filterButtons[filter] = chip;
-      chip.addEventListener('click', () => {
+      chip.addEventListener('click', async () => {
         if (container.activeFilters.has(filter)) {
           container.activeFilters.delete(filter);
         } else {
@@ -6533,7 +6648,7 @@ const Workflow = {
           container.activeFilters.add(filter);
         }
         updateToolbar();
-        renderGroups();
+        await renderGroups();
       });
       filterChips.appendChild(chip);
     });
@@ -6563,9 +6678,9 @@ const Workflow = {
       placeholder: 'Search tasks, assignees, records…',
       id: 'taskSearch'
     });
-    searchInput.addEventListener('input', (e) => {
+    searchInput.addEventListener('input', async (e) => {
       container.searchQuery = e.target.value.toLowerCase();
-      renderGroups();
+      await renderGroups();
     });
 
     searchWrap.appendChild(searchIcon);
@@ -6590,8 +6705,8 @@ const Workflow = {
         actionsWrap.appendChild(addTaskBtn);
         actionsWrap.appendChild(note);
       } else {
-        addTaskBtn.addEventListener('click', () => {
-          this.showAddTaskPanel(wr.id);
+        addTaskBtn.addEventListener('click', async () => {
+          await this.showAddTaskPanel(wr.id);
         });
         actionsWrap.appendChild(addTaskBtn);
       }
@@ -6670,9 +6785,9 @@ const Workflow = {
         actions.push({
           text: wr.isPendingApproval ? '+ Add First Task' : '+ Add First Task',
           className: 'btn btn-primary btn-sm',
-          onClick: () => {
+          onClick: async () => {
             if (wr.isPendingApproval) return;
-            this.showAddTaskPanel(wr.id);
+            await this.showAddTaskPanel(wr.id);
           }
         });
       }
@@ -6692,7 +6807,7 @@ const Workflow = {
       container.appendChild(emptyState);
     }
 
-    const updateBulkBar = () => {
+    const updateBulkBar = async () => {
       bulkBar.innerHTML = '';
       const count = container.selectedTaskIds.size;
       if (count === 0) {
@@ -6735,7 +6850,7 @@ const Workflow = {
       bulkBar.appendChild(requestLogsBtn);
 
       const assignWrap = el('div', { class: 'bulk-assign-wrap', style: 'display:flex; align-items:center; gap:8px;' });
-      const assignDropdown = this.createGroundWorkerDropdown({
+      const assignDropdown = await this.createGroundWorkerDropdown({
         selectedGroundWorkerName: '',
         placeholder: 'Assign to...',
         maxWidth: '180px',
@@ -6744,9 +6859,9 @@ const Workflow = {
       });
       assignWrap.appendChild(assignDropdown);
       const assignBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Assign' });
-      assignBtn.addEventListener('click', () => {
+      assignBtn.addEventListener('click', async () => {
         const name = (assignDropdown.searchText || '').trim();
-        const res = this.resolveAssignee(name);
+        const res = await this.resolveAssignee(name);
         const selected = sortedTasks.filter(t => container.selectedTaskIds.has(t.id));
         // Bulk assign dropdown is single-select, so only one name can be chosen.
         // Treat that single name as the primary assignee and clear any co-assignees.
@@ -6896,15 +7011,15 @@ const Workflow = {
       bulkBar.appendChild(logTimeBtn);
 
       const clearLink = el('a', { href: 'javascript:void(0)', class: 'bulk-clear-link', text: 'Clear' });
-      clearLink.addEventListener('click', () => {
+      clearLink.addEventListener('click', async () => {
         container.selectedTaskIds.clear();
-        updateBulkBar();
-        renderGroups();
+        await updateBulkBar();
+        await renderGroups();
       });
       bulkBar.appendChild(clearLink);
     };
 
-    const renderGroups = () => {
+    const renderGroups = async () => {
       listWrapper.innerHTML = '';
       if (tasks.length === 0) return;
 
@@ -6987,7 +7102,7 @@ const Workflow = {
       });
 
       const hasActiveFilters = query || container.employeeFilter || activeFilters.length > 0;
-      const clearTaskFilters = () => {
+      const clearTaskFilters = async () => {
         container.activeFilters.clear();
         container.searchQuery = '';
         container.employeeFilter = null;
@@ -7000,7 +7115,7 @@ const Workflow = {
         const searchInput = document.getElementById('taskSearch');
         if (searchInput) searchInput.value = '';
         updateToolbar();
-        renderGroups();
+        await renderGroups();
       };
 
       if (filteredTasks.length === 0) {
@@ -7027,14 +7142,14 @@ const Workflow = {
               {
                 text: '+ Add Task',
                 className: 'btn btn-primary btn-sm',
-                onClick: () => {
-                  this.showAddTaskPanel(wr.id);
+                onClick: async () => {
+                  await this.showAddTaskPanel(wr.id);
                 }
               }
             ]
           }));
         }
-        updateBulkBar();
+        await updateBulkBar();
         return;
       }
 
@@ -7297,7 +7412,7 @@ const Workflow = {
         });
         rowCheckbox.checked = selected;
         if (!disableIfPending(rowCheckbox, wr)) {
-          rowCheckbox.addEventListener('click', (e) => {
+          rowCheckbox.addEventListener('click', async (e) => {
             e.stopPropagation();
             if (rowCheckbox.checked) {
               container.selectedTaskIds.add(t.id);
@@ -7306,7 +7421,7 @@ const Workflow = {
               container.selectedTaskIds.delete(t.id);
               rowEl.classList.remove('selected');
             }
-            updateBulkBar();
+            await updateBulkBar();
           });
         }
         cellCheckbox.appendChild(rowCheckbox);
@@ -7350,7 +7465,7 @@ const Workflow = {
 
         if (wr.status === 'Draft') {
           // Ground worker assignee — typable dropdown like the filter tray
-          const gwDropdown = this.createGroundWorkerDropdown({
+          const gwDropdown = await this.createGroundWorkerDropdown({
             selectedGroundWorkerName: t.assigneeName || '',
             placeholder: 'Employee...',
             className: 'inline-ground-worker-autocomplete',
@@ -7373,7 +7488,7 @@ const Workflow = {
 
           const assigneeWrap = el('div', { class: 'task-assignee-wrapper' });
           assigneeWrap.appendChild(gwDropdown);
-          assigneeWrap.appendChild(this.renderTaskCoAssigneePicker(t, { primaryName: t.assigneeName || '', className: 'inline-coassignee-dropdown' }, isDraft && !wr.isPendingApproval, true));
+          assigneeWrap.appendChild(await this.renderTaskCoAssigneePicker(t, { primaryName: t.assigneeName || '', className: 'inline-coassignee-dropdown' }, isDraft && !wr.isPendingApproval, true));
           cellAssignee.appendChild(assigneeWrap);
         } else {
           cellAssignee.appendChild(this.renderAssigneeAvatarsList(allAssigneeNames));
@@ -7718,7 +7833,7 @@ const Workflow = {
         const allowAddRequirements = allowAssignChecklist;
         const normalizedChecklist = t.checklist || [];
 
-        const renderChecklist = () => {
+        const renderChecklist = async () => {
           checklistList.innerHTML = '';
           if (normalizedChecklist.length === 0) {
             checklistList.appendChild(renderEmptyState('No checklist items'));
@@ -7746,14 +7861,14 @@ const Workflow = {
               cb.addEventListener('change', (e) => {
                 e.stopPropagation();
                 this.toggleChecklistItem(t, item.id, cb.checked);
-                renderChecklist();
+                await renderChecklist();
               });
               row.appendChild(cb);
               row.appendChild(textWrap);
 
               if (allowAssignChecklist) {
                 const assigneeWrap = el('div', { class: 'task-assignee-wrapper' });
-                const assigneeDropdown = this.createGroundWorkerDropdown({
+                const assigneeDropdown = await this.createGroundWorkerDropdown({
                   selectedGroundWorkerName: item.assigneeName,
                   placeholder: 'Assign...',
                   className: 'checklist-assignee-dropdown',
@@ -7762,13 +7877,13 @@ const Workflow = {
                     item.assigneeName = assigneeName || null;
                     item.assigneeId = assigneeId || null;
                     WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                    renderChecklist();
+                    await renderChecklist();
                     App.handleRoute();
                   }
                 });
                 assigneeWrap.appendChild(assigneeDropdown);
 
-                const coAssigneePicker = this.renderChecklistCoAssigneePicker(
+                const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
                   t,
                   item,
                   { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
@@ -7776,7 +7891,7 @@ const Workflow = {
                   true,
                   () => {
                     WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                    renderChecklist();
+                    await renderChecklist();
                     App.handleRoute();
                   }
                 );
@@ -7820,7 +7935,7 @@ const Workflow = {
                   if (!item.timeLogs || item.timeLogs.length === 0) {
                     normalizedChecklist.splice(idx, 1);
                     WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                    renderChecklist();
+                    await renderChecklist();
                     populatePrereqSelect();
                   } else {
                     const content = el('div');
@@ -7971,7 +8086,7 @@ const Workflow = {
               selectedPrereqId = null;
               predBtn.textContent = '— Dependency —';
               populatePrereqSelect();
-              renderChecklist();
+              await renderChecklist();
             });
           }
           addChecklistRow.appendChild(newItemInput);
@@ -7981,7 +8096,7 @@ const Workflow = {
           checklistSection.appendChild(addChecklistRow);
         }
         leftPane.appendChild(checklistSection);
-        renderChecklist();
+        await renderChecklist();
 
         // --- Collapsed Row Toolbar (Quick Actions) ---
         const detailToolbar = el('div', { class: 'detail-toolbar' });
@@ -8341,10 +8456,10 @@ const Workflow = {
       listWrapper.appendChild(groupEl);
     }
 
-    updateBulkBar();
+    await updateBulkBar();
     };
 
-    renderGroups();
+    await renderGroups();
 
     container.appendChild(listWrapper);
 
@@ -9274,7 +9389,7 @@ const Workflow = {
     });
   },
 
-  renderAddTaskForm(wrId, opts = {}) {
+  async renderAddTaskForm(wrId, opts = {}) {
     const { hideHeader = false } = opts;
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
@@ -9379,7 +9494,7 @@ const Workflow = {
         });
         row.appendChild(prereqSelect);
 
-        const assigneeDropdown = this.createGroundWorkerDropdown({
+        const assigneeDropdown = await this.createGroundWorkerDropdown({
           selectedGroundWorkerName: item.assigneeName,
           placeholder: 'Assign...',
           maxWidth: '140px',
@@ -9395,7 +9510,7 @@ const Workflow = {
         delBtn.addEventListener('click', () => {
           checklistItems.splice(idx, 1);
           checklistFromTemplate = false;
-          renderChecklist();
+          await renderChecklist();
         });
         row.appendChild(delBtn);
         list.appendChild(row);
@@ -9409,7 +9524,7 @@ const Workflow = {
       checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistFromTemplate = false;
       checklistInput.value = '';
-      renderChecklist();
+      await renderChecklist();
     };
     addChecklistBtn.addEventListener('click', addChecklistItem);
     checklistInput.addEventListener('keydown', (e) => {
@@ -9437,7 +9552,7 @@ const Workflow = {
         }
         checklistFromTemplate = false;
       }
-      renderChecklist();
+      await renderChecklist();
       renderCoAssigneeChips();
     });
 
@@ -9445,7 +9560,7 @@ const Workflow = {
     assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
 
     // Ground worker assignee — typable dropdown like the filter tray
-    const gwDropdown = this.createGroundWorkerDropdown({
+    const gwDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Employee...',
       className: 'modal-task-assignee',
       onChange: () => {} // value read at submit time
@@ -9462,7 +9577,7 @@ const Workflow = {
     coAssigneeGroup.appendChild(el('label', { text: 'Co-assignees' }));
 
     const coAssigneeChips = el('div', { class: 'co-assignee-chips' });
-    const coAssigneeDropdown = this.createGroundWorkerDropdown({
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Add co-assignee...',
       className: 'modal-co-assignee',
       onChange: ({ assigneeName }) => {
@@ -9477,10 +9592,7 @@ const Workflow = {
           coAssignees.push(name);
           const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
-            const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
-            if (!existing) {
-              DB.insert('groundWorkers', { id: generateId('gw'), name });
-            }
+            this._addGroundWorker(name);
           }
           renderCoAssigneeChips();
         }
@@ -9676,8 +9788,8 @@ const Workflow = {
     return form;
   },
 
-  showAddTaskPanel(wrId, mode = null) {
-    const form = this.renderAddTaskForm(wrId, { hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null });
+  async showAddTaskPanel(wrId, mode = null) {
+    const form = await this.renderAddTaskForm(wrId, { hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null });
     if (!form) return;
     const fullPageRoute = '#operations/addTask/' + wrId;
     openFormPanel({
@@ -9724,14 +9836,14 @@ const Workflow = {
    * Opens the Retainer Template form in a shared side-peek panel, optionally forcing
    * a specific pane mode. Used by the full-page view switcher.
    */
-  openRetainerTemplateForm(mode = null) {
+  async openRetainerTemplateForm(mode = null) {
     const isNew = !this.templateEditingId;
-    const template = isNew ? null : DB.getById('retainerTemplates', this.templateEditingId);
+    const template = isNew ? null : this._getRetainerTemplateById(this.templateEditingId);
     const fullPageRoute = isNew ? '#operations/templateForm/new' : `#operations/templateForm/${this.templateEditingId}`;
     openFormPanel({
       icon: '📋',
       title: ' ',
-      formContent: this.renderTemplateForm({ hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null }),
+      formContent: await this.renderTemplateForm({ hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null }),
       formId: 'template-form',
       mode,
       viewContext: 'retainer-template-form',
@@ -9762,7 +9874,7 @@ const Workflow = {
     // Assignee Group
     const assigneeGroup = el('div', { class: 'form-group' });
     assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
-    const gwDropdown = this.createGroundWorkerDropdown({
+    const gwDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Employee...',
       className: 'modal-task-assignee',
       selectedGroundWorkerName: task.assigneeName || '',
@@ -9778,7 +9890,7 @@ const Workflow = {
     const coAssigneeGroup = el('div', { class: 'form-group' });
     coAssigneeGroup.appendChild(el('label', { text: 'Co-assignees' }));
     const coAssigneeChips = el('div', { class: 'co-assignee-chips' });
-    const coAssigneeDropdown = this.createGroundWorkerDropdown({
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Add co-assignee...',
       className: 'modal-co-assignee',
       onChange: ({ assigneeName }) => {
@@ -9793,8 +9905,7 @@ const Workflow = {
           coAssignees.push(name);
           const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
           if (!isUser) {
-            const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === name.toLowerCase());
-            if (!existing) DB.insert('groundWorkers', { id: generateId('gw'), name });
+            this._addGroundWorker(name);
           }
           renderCoAssigneeChips();
         }
@@ -9874,7 +9985,7 @@ const Workflow = {
         });
         row.appendChild(prereqSelect);
 
-        const assigneeDropdown = this.createGroundWorkerDropdown({
+        const assigneeDropdown = await this.createGroundWorkerDropdown({
           selectedGroundWorkerName: item.assigneeName,
           placeholder: 'Assign...',
           maxWidth: '140px',
@@ -9889,7 +10000,7 @@ const Workflow = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: '×' });
         delBtn.addEventListener('click', () => {
           checklistItems.splice(idx, 1);
-          renderChecklist();
+          await renderChecklist();
         });
         row.appendChild(delBtn);
         list.appendChild(row);
@@ -9902,7 +10013,7 @@ const Workflow = {
       if (!val) return;
       checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistInput.value = '';
-      renderChecklist();
+      await renderChecklist();
     };
     addChecklistBtn.addEventListener('click', addChecklistItem);
     checklistInput.addEventListener('keydown', (e) => {
@@ -9912,7 +10023,7 @@ const Workflow = {
       }
     });
 
-    renderChecklist();
+    await renderChecklist();
 
     // Due Date
     form.appendChild(el('div', { class: 'form-group' }, [
@@ -10373,15 +10484,16 @@ const Workflow = {
   // ============================================================
   // Retainer Templates
   // ============================================================
-  renderTemplates() {
+  async renderTemplates() {
     if (!Auth.can('workflow:approve')) {
       this.view = 'list';
       App.handleRoute();
       return el('div');
     }
 
+    await Promise.all([this._loadRetainerTemplates(), window.apiClient.clientCache.ensure()]);
     const entity = Auth.activeEntity;
-    const templates = DB.getWhere('retainerTemplates', t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
 
     const wrapper = el('div', { class: 'page-content-section' });
 
@@ -10435,10 +10547,10 @@ const Workflow = {
             this.showConfirm(
               title,
               message,
-              () => {
-                ids.forEach(id => {
-                  DB.delete('retainerTemplates', id);
-                });
+              async () => {
+                for (const id of ids) {
+                  await this._deleteRetainerTemplate(id);
+                }
                 App.handleRoute();
               },
               'danger'
@@ -10450,9 +10562,9 @@ const Workflow = {
         {
           text: '+ Create Template',
           className: 'btn btn-primary btn-sm',
-          onClick: () => {
+          onClick: async () => {
             this.templateEditingId = null;
-            this.openRetainerTemplateForm();
+            await this.openRetainerTemplateForm();
           }
         }
       ],
@@ -10460,17 +10572,17 @@ const Workflow = {
         {
           text: 'Edit',
           className: 'btn btn-secondary btn-xs',
-          onClick: () => {
+          onClick: async () => {
             this.templateEditingId = item.id;
-            this.openRetainerTemplateForm();
+            await this.openRetainerTemplateForm();
           }
         },
         {
           text: 'Delete',
           className: 'btn btn-danger btn-xs',
           onClick: () => {
-            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, () => {
-              DB.delete('retainerTemplates', item.id);
+            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, async () => {
+              await this._deleteRetainerTemplate(item.id);
               App.handleRoute();
             }, 'danger');
           }
@@ -10482,7 +10594,7 @@ const Workflow = {
     return wrapper;
   },
 
-  renderTemplateForm(opts = {}) {
+  async renderTemplateForm(opts = {}) {
     if (!Auth.can('workflow:approve')) {
       this.view = 'list';
       App.handleRoute();
@@ -10491,7 +10603,7 @@ const Workflow = {
 
     const { hideHeader = false } = opts || {};
     const entity = Auth.activeEntity;
-    const template = this.templateEditingId ? DB.getById('retainerTemplates', this.templateEditingId) : null;
+    const template = this.templateEditingId ? this._getRetainerTemplateById(this.templateEditingId) : null;
     const container = el('div', { class: 'page' });
 
     const form = el('form', { id: 'template-form', class: 'form-stacked notion-form' });
@@ -10507,7 +10619,7 @@ const Workflow = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
           this.showConfirm('Delete Template', 'Are you sure you want to delete this template?', () => {
-            DB.delete('retainerTemplates', template.id);
+            this._deleteRetainerTemplate(template.id);
             this.view = 'templates'; 
             this.templateEditingId = null; 
             closeFormPanelAndRoute('#operations');
@@ -10573,15 +10685,15 @@ const Workflow = {
     tasksSection.appendChild(tasksList);
 
     const addTaskBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Task' });
-    addTaskBtn.addEventListener('click', () => this.addTaskRow(tasksList));
+    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList));
     tasksSection.appendChild(addTaskBtn);
 
     form.appendChild(tasksSection);
 
     if (template && template.tasks) {
-      template.tasks.forEach(t => this.addTaskRow(tasksList, t));
+      for (const t of template.tasks) await this.addTaskRow(tasksList, t);
     } else {
-      this.addTaskRow(tasksList);
+      await this.addTaskRow(tasksList);
     }
     this.updatePredecessorOptions(tasksList);
 
@@ -10609,10 +10721,7 @@ const Workflow = {
 
       // Auto-register new ground workers
       if (groundWorkerName) {
-        const existing = (DB.getAll('groundWorkers') || []).find(gw => gw.name.toLowerCase() === groundWorkerName.toLowerCase());
-        if (!existing) {
-          DB.insert('groundWorkers', { id: generateId('gw'), name: groundWorkerName });
-        }
+        this._addGroundWorker(groundWorkerName);
       }
 
       const predKeysStr = row.dataset.predKeys || '';
@@ -10673,11 +10782,11 @@ const Workflow = {
     };
 
     if (this.templateEditingId) {
-      record.createdAt = DB.getById('retainerTemplates', this.templateEditingId)?.createdAt || now;
-      DB.update('retainerTemplates', this.templateEditingId, record);
+      record.createdAt = this._getRetainerTemplateById(this.templateEditingId)?.createdAt || now;
+      this._updateRetainerTemplate(this.templateEditingId, record);
     } else {
       record.createdAt = now;
-      DB.insert('retainerTemplates', record);
+      this._addRetainerTemplate(record);
     }
 
     this.view = 'templates';
@@ -10787,7 +10896,7 @@ const Workflow = {
   },
 
   async generateFromTemplate(templateId) {
-    const template = DB.getById('retainerTemplates', templateId);
+    const template = this._getRetainerTemplateById(templateId);
     if (!template) return;
     const now = new Date();
     const nowIso = now.toISOString();
@@ -10844,7 +10953,7 @@ const Workflow = {
     let generatedCount = 0;
 
     for (const templateId of templateIds) {
-      const template = DB.getById('retainerTemplates', templateId);
+      const template = this._getRetainerTemplateById(templateId);
       if (!template) continue;
 
       const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
@@ -10901,3 +11010,5 @@ const Workflow = {
     App.handleRoute();
   }
 };
+
+

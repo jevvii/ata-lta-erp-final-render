@@ -28,6 +28,9 @@ const mockTables = {
   transmittals: new Map(),
   transmittal_items: new Map(),
   documents: new Map(),
+  disbursement_templates: new Map(),
+  retainer_templates: new Map(),
+  ground_workers: new Map(),
 };
 
 let sequence = 0;

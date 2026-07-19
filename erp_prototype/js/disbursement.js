@@ -21,6 +21,89 @@ const Disbursement = {
   _archiveLimit: 20,
   _lastArchiveMeta: {},
 
+  // API-backed disbursement template cache
+  _templates: [],
+  _templatesPromise: null,
+
+  normalizeTemplate(doc) {
+    if (!doc) return doc;
+    return {
+      id: doc.id,
+      name: doc.name,
+      entity: doc.entity_id || doc.entity,
+      category: doc.category || '',
+      amount: parseFloat(doc.amount) || 0,
+      fundSource: doc.fund_source || doc.fundSource || 'Firm Fund',
+      schedule: doc.schedule || '',
+      description: doc.description || '',
+      linkedWorkRequestId: doc.linked_work_request_id || doc.linkedWorkRequestId || null,
+      linkedInvoiceId: doc.linked_invoice_id || doc.linkedInvoiceId || null,
+      createdAt: doc.created_at || doc.createdAt,
+      updatedAt: doc.updated_at || doc.updatedAt,
+      clientName: doc.clients?.name || doc.clientName || null
+    };
+  },
+
+  toApiTemplate(record) {
+    return {
+      name: record.name,
+      category: record.category,
+      amount: parseFloat(record.amount) || 0,
+      fundSource: record.fundSource || 'Firm Fund',
+      schedule: record.schedule || null,
+      description: record.description || null,
+      linkedWorkRequestId: record.linkedWorkRequestId || null,
+      linkedInvoiceId: record.linkedInvoiceId || null
+    };
+  },
+
+  async fetchTemplates() {
+    try {
+      const res = await window.apiClient.disbursements.listTemplates();
+      return (res.data || []).map(t => this.normalizeTemplate(t));
+    } catch (e) {
+      console.error('Failed to fetch disbursement templates', e);
+      return [];
+    }
+  },
+
+  async loadTemplates() {
+    if (this._templatesPromise) return this._templatesPromise;
+    this._templatesPromise = (async () => {
+      try {
+        const entity = Auth.activeEntity;
+        const all = await this.fetchTemplates();
+        this._templates = all.filter(t => {
+          if (entity === 'ALL') {
+            return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
+          }
+          return (t.entity || '').toUpperCase() === entity.toUpperCase();
+        });
+      } catch (e) {
+        console.error('Failed to load disbursement templates', e);
+        this._templates = [];
+      } finally {
+        this._templatesPromise = null;
+      }
+      return this._templates;
+    })();
+    return this._templatesPromise;
+  },
+
+  async getTemplateById(id) {
+    if (!id) return null;
+    const cached = (this._templates || []).find(t => t.id === id);
+    if (cached) return JSON.parse(JSON.stringify(cached));
+    try {
+      await this.loadTemplates();
+      const template = (this._templates || []).find(t => t.id === id) || null;
+      return template ? JSON.parse(JSON.stringify(template)) : null;
+    } catch (e) {
+      console.error('Failed to fetch template by id', id, e);
+      return null;
+    }
+  },
+
   /**
    * Convert a backend disbursement row (snake_case, joined clients.name)
    * into the camelCase shape expected by the UI.
@@ -162,6 +245,20 @@ const Disbursement = {
     return this._counts;
   },
 
+  async _loadPrefilledOpReq() {
+    if (!this.prefilledRequestId) {
+      this._prefilledOpReq = null;
+      return;
+    }
+    try {
+      const res = await window.apiClient.operationsRequests.get(this.prefilledRequestId);
+      this._prefilledOpReq = res.data || null;
+    } catch (err) {
+      console.error('Failed to load prefilled operations request', this.prefilledRequestId, err);
+      this._prefilledOpReq = null;
+    }
+  },
+
   async render() {
     const container = el('div', { class: 'page' });
 
@@ -187,7 +284,7 @@ const Disbursement = {
             this.detailId = d.id;
             openFormPanel({
               icon: '💰', title: 'Edit Expense',
-              formContent: this.renderForm(), formId: 'disbursement-form',
+              formContent: this.renderForm({ existing: d }), formId: 'disbursement-form',
               viewContext: 'expense-form',
               fullPageRoute: `#disbursement/form/${d.id}`,
               actions: [
@@ -203,18 +300,15 @@ const Disbursement = {
         if (Auth.can('disbursement:delete')) {
           const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
           deleteBtn.addEventListener('click', () => {
-            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
-              // Unlink from WR if linked
-              if (d.linkedWorkRequestId) {
-                const wr = DB.getById('workRequests', d.linkedWorkRequestId);
-                if (wr) {
-                  const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
-                  DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
-                }
+            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
+              try {
+                await window.apiClient.disbursements.remove(d.id);
+                location.hash = '#disbursement';
+                Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+              } catch (e) {
+                console.error('Failed to delete disbursement', e);
+                Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
               }
-              DB.delete('disbursements', d.id);
-              location.hash = '#disbursement';
-              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
             }, 'danger');
           });
           actions.appendChild(deleteBtn);
@@ -222,9 +316,14 @@ const Disbursement = {
         if (d.status === 'Draft' && Auth.can('disbursement:create')) {
           const submitBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Submit Expense', style: 'margin-right:8px;' });
           submitBtn.addEventListener('click', () => {
-            Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
-              DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
-              App.handleRoute();
+            Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', async () => {
+              try {
+                await window.apiClient.disbursements.submit(d.id);
+                App.handleRoute();
+              } catch (e) {
+                console.error('Failed to submit disbursement', e);
+                Workflow.showMessage('Submit Failed', e.message || 'Unable to submit disbursement.', 'error');
+              }
             }, 'success');
           });
           actions.appendChild(submitBtn);
@@ -286,7 +385,7 @@ const Disbursement = {
     } else if (this.view === 'templateForm') {
       container.classList.add('disbursement-tab-page');
       const isNew = !this.templateEditingId;
-      const template = isNew ? null : DB.getById('disbursementTemplates', this.templateEditingId);
+      const template = isNew ? null : await this.getTemplateById(this.templateEditingId);
       const fullPageRoute = isNew ? '#disbursement/templateForm/new' : `#disbursement/templateForm/${this.templateEditingId}`;
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
@@ -326,12 +425,15 @@ const Disbursement = {
     }
 
     if (this.view === 'list') container.appendChild(await this.renderList());
-    else if (this.view === 'form') container.appendChild(this.renderForm({ hideHeader: true }));
+    else if (this.view === 'form') {
+      await this._loadPrefilledOpReq();
+      container.appendChild(this.renderForm({ hideHeader: true, existing }));
+    }
     else if (this.view === 'detail') container.appendChild(await this.renderDetail());
     else if (this.view === 'report') container.appendChild(await this.renderReport());
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
-    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
+    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true, template }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -357,7 +459,7 @@ const Disbursement = {
 
     const dbCount = counts.active;
 
-    const templateCount = DB.getWhere('disbursementTemplates', t => {
+    const templateCount = (this._templates || []).filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
       if (entity === 'ALL') {
         return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
@@ -466,12 +568,13 @@ const Disbursement = {
     this.detailId = disbId;
     const isNew = !disbId;
     const existing = isNew ? null : await this.loadDisbursement(disbId);
+    await this._loadPrefilledOpReq();
     const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${disbId}`;
 
     openFormPanel({
       icon: '💰',
       title: isNew ? 'File Expense' : `Edit Expense — ${existing?.description || ''}`.trim(),
-      formContent: this.renderForm(),
+      formContent: this.renderForm({ existing }),
       formId: 'disbursement-form',
       mode,
       viewContext: 'expense-form',
@@ -973,7 +1076,9 @@ const Disbursement = {
         const newOrder = (idx + 1) * 1000;
         if (d.boardOrder !== newOrder) {
           d.boardOrder = newOrder;
-          DB.update('disbursements', d.id, { boardOrder: newOrder });
+          window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
+            console.error('Failed to update disbursement board order', d.id, e);
+          });
         }
       });
       const colPendingItems = items.filter(d => phase.statuses.includes(d.status) && d.pendingChangeId);
@@ -1071,17 +1176,15 @@ const Disbursement = {
           label: 'Delete',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
-            if (d.linkedWorkRequestId) {
-              const wr = DB.getById('workRequests', d.linkedWorkRequestId);
-              if (wr) {
-                const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
-                DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
-              }
+          onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
+            try {
+              await window.apiClient.disbursements.remove(d.id);
+              App.handleRoute();
+              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+            } catch (e) {
+              console.error('Failed to delete disbursement', e);
+              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
             }
-            DB.delete('disbursements', d.id);
-            App.handleRoute();
-            Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
           }, 'danger')
         });
       }
@@ -1090,9 +1193,14 @@ const Disbursement = {
           label: 'Submit Expense',
           className: 'primary',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
-          onClick: () => Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
-            DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
-            App.handleRoute();
+          onClick: () => Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', async () => {
+            try {
+              await window.apiClient.disbursements.submit(d.id);
+              App.handleRoute();
+            } catch (e) {
+              console.error('Failed to submit disbursement', e);
+              Workflow.showMessage('Submit Failed', e.message || 'Unable to submit disbursement.', 'error');
+            }
           }, 'success')
         });
       }
@@ -1127,8 +1235,10 @@ const Disbursement = {
       orderField: 'boardOrder',
       onDrop({ item, targetStatus, newOrder, fromStatus }) {
         if (fromStatus === targetStatus) {
-          DB.update('disbursements', item.id, { boardOrder: newOrder });
-          App.handleRoute();
+          window.apiClient.disbursements.update(item.id, { boardOrder: newOrder }).then(() => App.handleRoute()).catch(e => {
+            console.error('Failed to update board order', e);
+            Workflow.showMessage('Update Failed', e.message || 'Unable to move disbursement.', 'error');
+          });
           return;
         }
 
@@ -1157,24 +1267,32 @@ const Disbursement = {
         }
 
         const label = item.category + ' — ' + formatPHP(item.amount);
-        const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('disbursement:release');
-        const applyMove = () => {
-          // Non-managerial marking as Released must submit for admin approval.
-          const nextStatus = (targetStatus === 'Released' && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
-          const changes = { boardOrder: newOrder, status: nextStatus, updatedAt: new Date().toISOString() };
-          if (nextStatus === 'Release Pending Approval') {
-            changes.releaseRequestedBy = Auth.user.id;
-            changes.releaseRequestedAt = new Date().toISOString();
+        const applyMove = async () => {
+          try {
+            if (targetStatus === 'Pending') {
+              await window.apiClient.disbursements.submit(item.id);
+            } else if (targetStatus === 'Approved') {
+              await window.apiClient.disbursements.approve(item.id);
+            } else if (targetStatus === 'Released') {
+              self.showReleaseDialog(item.id);
+              return;
+            } else if (targetStatus === 'Funded') {
+              await window.apiClient.disbursements.fund(item.id);
+            } else {
+              await window.apiClient.disbursements.update(item.id, { boardOrder: newOrder, status: targetStatus });
+            }
+            App.handleRoute();
+          } catch (e) {
+            console.error('Failed to move disbursement', e);
+            Workflow.showMessage('Update Failed', e.message || 'Unable to move disbursement.', 'error');
           }
-          DB.update('disbursements', item.id, changes);
-          App.handleRoute();
         };
 
         // Confirm critical transitions
         if (['Approved', 'Released', 'Funded'].includes(targetStatus)) {
           const msgs = {
             'Approved': `Approve disbursement "${label}"?`,
-            'Released': canReleaseDirectly ? `Mark disbursement "${label}" as Released?` : `Submit disbursement "${label}" for release approval?`,
+            'Released': `Release disbursement "${label}"? This will open the release dialog to record payment details.`,
             'Funded': `Mark disbursement "${label}" as Funded? This confirms funds have been credited.`
           };
           Workflow.showConfirm('Confirm Status Change', msgs[targetStatus], applyMove, 'success');
@@ -1260,7 +1378,7 @@ const Disbursement = {
   // Expense Filing Form
   // ============================================================
   renderForm(opts = {}) {
-    const { hideHeader = false } = opts;
+    const { hideHeader = false, existing = null } = opts;
     // Allow access if user can create new disbursements OR can edit existing ones
     const isNew = !this.detailId;
     if (isNew && !Auth.can('disbursement:create')) {
@@ -1275,8 +1393,7 @@ const Disbursement = {
     }
 
     const entity = Auth.activeEntity;
-    const existing = this.detailId ? DB.getById('disbursements', this.detailId) : null;
-    const opReq = this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId) : null;
+    const opReq = this._prefilledOpReq || null;
     const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : null;
 
     const container = el('div');
@@ -1486,16 +1603,20 @@ const Disbursement = {
     const invBody = el('div', { class: 'notion-toggle-body' });
     const invSel = el('select', { name: 'linkedInvoiceId', class: 'notion-prop-select' });
     invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
-    DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
-      const client = window.apiClient.clientCache.getById(inv.clientId);
-      const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
-      if (existing && existing.linkedInvoiceId === inv.id) opt.selected = true;
-      invSel.appendChild(opt);
-    });
     invBody.appendChild(invSel);
     invGroup.appendChild(invToggle);
     invGroup.appendChild(invBody);
     form.appendChild(invGroup);
+
+    window.apiClient.invoices.list({ status: 'Draft,Sent,Partially Paid,Paid', limit: 200 }).then(res => {
+      const invoices = (res.data || []).filter(inv => (inv.entity || '').toUpperCase() === (entity || '').toUpperCase() && inv.status !== 'Cancelled');
+      invoices.forEach(inv => {
+        const client = window.apiClient.clientCache.getById(inv.clientId);
+        const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
+        if (existing && existing.linkedInvoiceId === inv.id) opt.selected = true;
+        invSel.appendChild(opt);
+      });
+    }).catch(e => console.error('Failed to load invoices for disbursement form', e));
 
     invToggle.addEventListener('click', () => {
       invGroup.classList.toggle('open');
@@ -1537,80 +1658,52 @@ const Disbursement = {
 
     // On create, a receipt must be attached (or already provided via a fulfilled operations request).
     const hasExistingReceipt = !isNew && (existing?.receiptFilename || null);
-    const hasPrefilledReceipt = isNew && (this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId)?.receiptFilename : null);
+    const hasPrefilledReceipt = isNew && (this._prefilledOpReq?.receiptFilename || null);
     if (isNew && !receiptFile && !hasPrefilledReceipt) {
       Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
       return;
     }
 
-    const record = {
-      category: data.category,
-      description: data.description.trim(),
-      amount: parseFloat(data.amount) || 0,
-      fundSource: data.fundSource,
-      linkedInvoiceId: data.linkedInvoiceId || null,
-      linkedWorkRequestId: data.linkedWorkRequestId || null,
-      linkedTaskId: data.linkedTaskId || null,
-      entity: entity,
-      employeeId: Auth.user.id,
-      requestedBy: Auth.user.id,
-      status: isNew ? 'Draft' : (existing?.status || 'Draft'),
-      submittedAt: new Date().toISOString(),
-      receiptFilename: receiptFile ? receiptFile.name : (isNew ? null : (existing?.receiptFilename || null))
+    const payload = {
+      ...this.toApiPayload(data),
+      clientId: this.prefilledClientId || null,
+      employeeId: Auth.user.id
     };
 
-    if (!isNew) {
-      record.id = this.detailId;
-      if (existing) {
-        record.createdAt = existing.createdAt;
-        record.submittedAt = existing.submittedAt;
-        record.requestedBy = existing.requestedBy || Auth.user.id;
-        record.paymentHandledBy = existing.paymentHandledBy || '';
-        record.paymentDetails = existing.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
+    let record;
+    try {
+      if (isNew) {
+        const res = await window.apiClient.disbursements.create(payload);
+        record = this.normalizeDisbursement(res.data);
+        this._detailCache[record.id] = record;
+      } else {
+        const res = await window.apiClient.disbursements.update(this.detailId, payload);
+        record = this.normalizeDisbursement(res.data);
+        this._detailCache[this.detailId] = record;
       }
-    } else {
-      record.id = generateSequentialId('dis', 'disbursements');
-      record.createdAt = new Date().toISOString();
-    }
-
-    // Clean up old WR link if WR changed or was removed
-    if (existing && existing.linkedWorkRequestId && existing.linkedWorkRequestId !== (record.linkedWorkRequestId || null)) {
-      const oldWr = window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId) || DB.getById('workRequests', existing.linkedWorkRequestId);
-      if (oldWr) {
-        const linkedIds = (oldWr.linkedDisbursementIds || []).filter(id => id !== record.id);
-        DB.update('workRequests', oldWr.id, { linkedDisbursementIds: linkedIds });
-      }
-    }
-
-    // If linked to a WR, update WR's linkedDisbursementIds
-    if (record.linkedWorkRequestId) {
-      const wr = window.apiClient.workRequestCache.getById(record.linkedWorkRequestId) || DB.getById('workRequests', record.linkedWorkRequestId);
-      if (wr) {
-        const linkedIds = new Set(wr.linkedDisbursementIds || []);
-        linkedIds.add(record.id);
-        DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
-      }
-    }
-
-    if (isNew) {
-      DB.insert('disbursements', record);
-    } else {
-      DB.update('disbursements', record.id, record);
+    } catch (e) {
+      console.error('Failed to save disbursement', e);
+      Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
+      return;
     }
 
     // Fulfill pending operations request if any
-    const reqId = this.prefilledRequestId || (record.linkedWorkRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.linkedWorkRequestId && r.type === 'disbursement' && r.status === 'pending')[0]?.id : null);
-    if (reqId) {
-      DB.update('operationsRequests', reqId, {
-        status: 'fulfilled',
-        fulfilledBy: Auth.user.id,
-        fulfilledAt: new Date().toISOString(),
-        linkedRecordId: record.id
-      });
+    try {
+      let reqId = this.prefilledRequestId || null;
+      if (!reqId && record.linkedWorkRequestId) {
+        const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'disbursement', workRequestId: record.linkedWorkRequestId, limit: 1 });
+        reqId = (opReqRes.data || [])[0]?.id || null;
+      }
+      if (reqId) {
+        await window.apiClient.operationsRequests.update(reqId, { status: 'fulfilled', fulfilledBy: Auth.user.id });
+      }
+    } catch (e) {
+      console.error('Failed to fulfill disbursement operations request', e);
     }
     this.prefilledRequestId = null;
     this.prefilledWrId = null;
     this.prefilledClientId = null;
+    this._prefilledOpReq = null;
 
     const msgConfig = {
       title: isNew ? 'Expense Submitted' : 'Expense Updated',
@@ -1621,7 +1714,7 @@ const Disbursement = {
     closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
-  showRequestDisbursementModal() {
+  async showRequestDisbursementModal() {
     const entity = Auth.activeEntity;
     let wrs = window.apiClient.workRequestCache._wrs || [];
     wrs = wrs.filter(wr => {
@@ -1632,6 +1725,15 @@ const Disbursement = {
 
     wrs = wrs.filter(wr => Auth.canViewWr(wr));
 
+    let pendingRequests = [];
+    try {
+      const pendingRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'disbursement' });
+      pendingRequests = pendingRes.data || [];
+    } catch (e) {
+      console.error('Failed to load pending disbursement requests', e);
+    }
+    const pendingWrIds = new Set(pendingRequests.map(r => r.work_request_id || r.workRequestId).filter(Boolean));
+
     const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
     const selectGroup = el('div', { class: 'form-group' });
     selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
@@ -1639,8 +1741,7 @@ const Disbursement = {
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
     wrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
-      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'disbursement' && r.status === 'pending');
-      if (pending.length === 0) {
+      if (!pendingWrIds.has(wr.id)) {
         wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
       }
     });
@@ -1660,26 +1761,27 @@ const Disbursement = {
     const overlay = Workflow.showModal('Request Disbursement', wrapper);
 
     overlay.querySelector('#btn-cancel-disb-opreq').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', () => {
+    overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', async () => {
       const wrId = wrSelect.value;
       if (!wrId) { alert('Please select a work request.'); return; }
       const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#disb-opreq-notes').value.trim();
       const record = {
-        id: generateId('opreq'),
         type: 'disbursement',
         workRequestId: wrId,
-        clientId: wr?.clientId,
-        requestedBy: Auth.user.id,
-        requestedAt: new Date().toISOString(),
-        status: 'pending',
-        rejectionReason: '',
+        clientId: wr?.clientId || null,
+        amount: null,
         notes
       };
-      DB.insert('operationsRequests', record);
-      overlay.remove();
-      Workflow.showMessage('Request Submitted', 'Your disbursement request has been submitted to Accounting for review.', 'success');
-      App.handleRoute();
+      try {
+        await window.apiClient.operationsRequests.create(record);
+        overlay.remove();
+        Workflow.showMessage('Request Submitted', 'Your disbursement request has been submitted to Accounting for review.', 'success');
+        App.handleRoute();
+      } catch (err) {
+        console.error('Failed to create disbursement request', err);
+        Workflow.showMessage('Request Failed', err.message || 'Unable to submit disbursement request.', 'error');
+      }
     });
   },
 
@@ -1856,56 +1958,40 @@ const Disbursement = {
 
         const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject', style: 'margin-left: 8px;' });
         rejectBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Reject Expense', 'Are you sure you want to reject this request?', () => {
+          Workflow.showConfirm('Reject Expense', 'Are you sure you want to reject this request?', async () => {
             const reason = prompt('Enter rejection reason:');
-            if (reason) { this.reject(d.id, reason); App.handleRoute(); }
+            if (!reason) return;
+            try {
+              await this.reject(d.id, reason);
+              App.handleRoute();
+            } catch (e) {
+              // error surfaced by reject()
+            }
           }, 'danger');
         });
         actions.appendChild(rejectBtn);
         container.appendChild(actions);
       }
-    } else if (d.status === 'Approved') {
-        const isHandler = d.paymentHandledBy === Auth.user.id;
-        const canMarkReleased = Auth.can('disbursement:mark_released');
-
-        if (isHandler) {
-          // Assigned handler can authorize & release funds
-          const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
-          const releaseBtn = el('button', { class: 'btn btn-primary', text: 'Authorize & Release Funds' });
-          releaseBtn.addEventListener('click', () => { this.showReleaseDialog(d.id); });
-          actions.appendChild(releaseBtn);
-          container.appendChild(actions);
-        } else if (canMarkReleased) {
-          // Manager can mark as released (pending Admin approval)
-          const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
-          actions.appendChild(el('p', { style: 'font-size:0.875rem;color:#64748b;margin-bottom:var(--spacing-sm);', text: 'As a Manager, you can mark this for release. This will require Admin approval.' }));
-          const markReleaseBtn = el('button', { class: 'btn btn-warning', text: 'Mark as Released (Pending Admin Approval)' });
-          markReleaseBtn.addEventListener('click', () => {
-            Workflow.showConfirm('Mark as Released', 'This will submit a release request to Admin for final approval. Continue?', () => {
-              DB.update('disbursements', d.id, {
-                status: 'Release Pending Approval',
-                releaseRequestedBy: Auth.user.id,
-                releaseRequestedAt: new Date().toISOString()
-              });
-              Workflow.showMessage('Release Requested', 'This disbursement has been marked for release. An Admin will need to approve and finalize the release.', 'info');
-              App.handleRoute();
-            });
-          });
-          actions.appendChild(markReleaseBtn);
-          container.appendChild(actions);
-        } else {
-          const handler = DB.getById('users', d.paymentHandledBy);
-          container.appendChild(renderEmptyState(`Waiting for release authorization from ${handler?.name || 'assigned handler'}`));
-        }
+    } else if (d.status === 'Approved' && (Auth.can('disbursement:mark_released') || Auth.can('disbursement:approve'))) {
+      const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+      const releaseBtn = el('button', { class: 'btn btn-primary', text: 'Authorize & Release Funds' });
+      releaseBtn.addEventListener('click', () => { this.showReleaseDialog(d.id); });
+      actions.appendChild(releaseBtn);
+      container.appendChild(actions);
     } else if (d.status === 'Released' && (canApprove || Auth.can('disbursement:release') || Auth.user?.departments?.includes('Accounting'))) {
       // Final funding step after release.
       const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
       const fundBtn = el('button', { class: 'btn btn-success', text: 'Mark as Funded' });
       fundBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Mark as Funded', `Confirm that funds for "${d.category}" have been credited?`, () => {
-          DB.update('disbursements', d.id, { status: 'Funded', fundedBy: Auth.user.id, fundedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-          Workflow.showMessage('Funded', 'Disbursement marked as funded.', 'success');
-          App.handleRoute();
+        Workflow.showConfirm('Mark as Funded', `Confirm that funds for "${d.category}" have been credited?`, async () => {
+          try {
+            await window.apiClient.disbursements.fund(d.id);
+            Workflow.showMessage('Funded', 'Disbursement marked as funded.', 'success');
+            App.handleRoute();
+          } catch (e) {
+            console.error('Failed to fund disbursement', e);
+            Workflow.showMessage('Fund Failed', e.message || 'Unable to mark disbursement as funded.', 'error');
+          }
         }, 'success');
       });
       actions.appendChild(fundBtn);
@@ -1933,42 +2019,15 @@ const Disbursement = {
       return;
     }
 
-    await window.apiClient.userCache.ensure();
-
-    const form = el('form', { class: 'form-stacked' });
-
-    const handlerGroup = el('div', { class: 'form-group' });
-    handlerGroup.appendChild(el('label', { text: 'Assign Release Handler *' }));
-    const handlerSel = el('select', { name: 'handlerId', required: true, class: 'form-select' });
-    handlerSel.appendChild(el('option', { value: '', text: '— Select Handler —' }));
-    (window.apiClient.userCache._users || []).filter(u => Auth.ALL_ROLES.includes(u.role) && u.id !== d.requestedBy).forEach(u => {
-      handlerSel.appendChild(el('option', { value: u.id, text: u.name + ' (' + u.role + ')' }));
-    });
-    handlerGroup.appendChild(handlerSel);
-    form.appendChild(handlerGroup);
-
-    const submitBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Approve & Assign' });
-    form.appendChild(submitBtn);
-
-    const overlay = Workflow.showModal('Approve Expense & Assign Handler', form);
-
-    form.addEventListener('submit', (e) => {
-      e.preventDefault();
-      if (!validateRequiredFields(form)) return;
-      const handlerId = handlerSel.value;
-      if (handlerId === d.requestedBy) {
-        Workflow.showMessage('Conflict', 'The requester cannot be assigned as their own release handler.', 'warning');
-        return;
+    Workflow.showConfirm('Approve Expense', `Approve disbursement "${d.category}" (${formatPHP(d.amount)})?`, async () => {
+      try {
+        await window.apiClient.disbursements.approve(id);
+        App.handleRoute();
+      } catch (e) {
+        console.error('Failed to approve disbursement', e);
+        Workflow.showMessage('Approval Failed', e.message || 'Unable to approve disbursement.', 'error');
       }
-      DB.update('disbursements', d.id, {
-        status: 'Approved',
-        paymentHandledBy: handlerId,
-        approvedBy: Auth.user.id,
-        approvedAt: new Date().toISOString()
-      });
-      overlay.remove();
-      App.handleRoute();
-    });
+    }, 'success');
   },
 
   async showReleaseDialog(id, adminRelease) {
@@ -2019,40 +2078,50 @@ const Disbursement = {
 
     const overlay = Workflow.showModal('Authorize Fund Release', form);
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const fd = new FormData(form);
       const file = form.querySelector('input[name="releaseDoc"]').files[0];
-      
-      this.release(id, {
-        method: fd.get('method'),
-        reference: fd.get('reference'),
-        date: fd.get('date'),
-        processedBy: Auth.user.id,
-        filename: file?.name || 'Authorized_Release.pdf'
+
+      try {
+        await this.release(id, {
+          method: fd.get('method'),
+          reference: fd.get('reference'),
+          date: fd.get('date'),
+          filename: file?.name || 'Authorized_Release.pdf'
+        });
+        overlay.remove();
+        App.handleRoute();
+      } catch (e) {
+        // error surfaced by release()
+      }
+    });
+  },
+
+  async release(id, pd) {
+    try {
+      await window.apiClient.disbursements.release(id, {
+        method: pd.method,
+        reference: pd.reference,
+        bank: pd.bank,
+        date: pd.date
       });
-      overlay.remove();
-      App.handleRoute();
-    });
+    } catch (e) {
+      console.error('Failed to release disbursement', e);
+      Workflow.showMessage('Release Failed', e.message || 'Unable to release disbursement.', 'error');
+      throw e;
+    }
   },
 
-  release(id, pd) {
-    DB.update('disbursements', id, {
-      status: 'Released',
-      releasedBy: Auth.user.id,
-      releasedAt: new Date().toISOString(),
-      paymentDetails: pd,
-      releaseFilename: pd.filename
-    });
-  },
-
-  reject(id, reason) {
-    DB.update('disbursements', id, {
-      status: 'Rejected',
-      rejectedBy: Auth.user.id,
-      rejectionReason: reason
-    });
+  async reject(id, reason) {
+    try {
+      await window.apiClient.disbursements.reject(id, { reason });
+    } catch (e) {
+      console.error('Failed to reject disbursement', e);
+      Workflow.showMessage('Reject Failed', e.message || 'Unable to reject disbursement.', 'error');
+      throw e;
+    }
   },
 
   // ============================================================
@@ -2581,9 +2650,10 @@ const Disbursement = {
   // ============================================================
   // Templates View
   // ============================================================
-  renderTemplates() {
+  async renderTemplates() {
     const entity = Auth.activeEntity;
-    const templates = DB.getWhere('disbursementTemplates', t => t.entity === entity);
+    await this.loadTemplates();
+    const templates = this._templates;
 
     const wrapper = el('div', { class: 'page-content-section' });
 
@@ -2631,9 +2701,15 @@ const Disbursement = {
             text: 'Delete',
             className: 'btn btn-danger btn-xs',
             onClick: () => {
-              Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, () => {
-                DB.delete('disbursementTemplates', t.id);
-                App.handleRoute();
+              Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, async () => {
+                try {
+                  await window.apiClient.disbursements.deleteTemplate(t.id);
+                  this._templates = this._templates.filter(temp => temp.id !== t.id);
+                  App.handleRoute();
+                } catch (e) {
+                  console.error('Failed to delete template', t.id, e);
+                  Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
+                }
               }, 'danger');
             }
           }
@@ -2648,43 +2724,29 @@ const Disbursement = {
             const message = ids.length === 1
               ? 'Are you sure you want to generate a disbursement for this selected template?'
               : `Are you sure you want to generate disbursements for all ${ids.length} selected templates?`;
-            Workflow.showConfirm(title, message, () => {
+            Workflow.showConfirm(title, message, async () => {
               let count = 0;
-              ids.forEach(id => {
+              for (const id of ids) {
                 const t = templates.find(temp => temp.id === id);
                 if (t) {
-                  const record = {
-                    id: generateSequentialId('dis', 'disbursements'),
-                    category: t.category,
-                    description: t.description || t.name,
-                    amount: t.amount,
-                    fundSource: t.fundSource,
-                    linkedInvoiceId: t.linkedInvoiceId || null,
-                    linkedWorkRequestId: t.linkedWorkRequestId || null,
-                    entity: t.entity,
-                    fromTemplate: t.id,
-                    employeeId: Auth.user.id,
-                    requestedBy: Auth.user.id,
-                    status: 'Draft',
-                    submittedAt: new Date().toISOString(),
-                    createdAt: new Date().toISOString(),
-                    receiptFilename: null,
-                    paymentHandledBy: '',
-                    paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
-                  };
-                  DB.insert('disbursements', record);
-
-                  if (record.linkedWorkRequestId) {
-                    const wr = DB.getById('workRequests', record.linkedWorkRequestId);
-                    if (wr) {
-                      const linkedIds = new Set(wr.linkedDisbursementIds || []);
-                      linkedIds.add(record.id);
-                      DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
-                    }
+                  try {
+                    await window.apiClient.disbursements.create({
+                      category: t.category,
+                      description: t.description || t.name,
+                      amount: t.amount,
+                      fundSource: t.fundSource,
+                      linkedInvoiceId: t.linkedInvoiceId || null,
+                      linkedWorkRequestId: t.linkedWorkRequestId || null,
+                      clientId: null,
+                      employeeId: Auth.user.id,
+                      notes: null
+                    });
+                    count++;
+                  } catch (e) {
+                    console.error('Failed to generate disbursement from template', e);
                   }
-                  count++;
                 }
-              });
+              }
               Workflow.showMessage('Success', `Generated ${count} disbursement${count === 1 ? '' : 's'} successfully.`, 'success');
               this.view = 'list';
               App.handleRoute();
@@ -2699,11 +2761,15 @@ const Disbursement = {
             const message = ids.length === 1
               ? 'Are you sure you want to delete this selected template?'
               : `Are you sure you want to delete these ${ids.length} selected templates?`;
-            Workflow.showConfirm(title, message, () => {
-              ids.forEach(id => {
-                DB.delete('disbursementTemplates', id);
-              });
-              App.handleRoute();
+            Workflow.showConfirm(title, message, async () => {
+              try {
+                await Promise.all(ids.map(id => window.apiClient.disbursements.deleteTemplate(id)));
+                this._templates = this._templates.filter(temp => !ids.includes(temp.id));
+                App.handleRoute();
+              } catch (e) {
+                console.error('Failed to bulk delete templates', e);
+                Workflow.showMessage('Delete Failed', e.message || 'Unable to delete templates.', 'error');
+              }
             }, 'danger');
           }
         }
@@ -2715,9 +2781,8 @@ const Disbursement = {
   },
 
   renderTemplateForm(opts = {}) {
-    const { hideHeader = false } = opts;
+    const { hideHeader = false, template = null } = opts;
     const entity = Auth.activeEntity;
-    const template = this.templateEditingId ? DB.getById('disbursementTemplates', this.templateEditingId) : null;
     const container = el('div', { class: 'page' });
 
     const form = el('form', { id: 'disb-tpl-form', class: 'form-stacked notion-form' });
@@ -2729,11 +2794,17 @@ const Disbursement = {
       if (template) {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, () => {
-            DB.delete('disbursementTemplates', template.id);
-            this.view = 'templates';
-            this.templateEditingId = null;
-            closeFormPanelAndRoute('#disbursement');
+          Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, async () => {
+            try {
+              await window.apiClient.disbursements.deleteTemplate(template.id);
+              this._templates = this._templates.filter(t => t.id !== template.id);
+              this.view = 'templates';
+              this.templateEditingId = null;
+              closeFormPanelAndRoute('#disbursement');
+            } catch (e) {
+              console.error('Failed to delete template', template.id, e);
+              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
+            }
           }, 'danger');
         });
         topActions.appendChild(delBtn);
@@ -2799,8 +2870,8 @@ const Disbursement = {
     wrGroup.appendChild(el('label', { text: 'Linked Work Request (optional)' }));
     const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+    (window.apiClient.workRequestCache._wrs || []).filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       wrSel.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
     });
     if (template) wrSel.value = template.linkedWorkRequestId || '';
@@ -2811,53 +2882,73 @@ const Disbursement = {
     invGroup.appendChild(el('label', { text: 'Linked Invoice (optional)' }));
     const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
     invSel.appendChild(el('option', { value: '', text: '— None —' }));
-    DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
-      const client = DB.getById('clients', inv.clientId);
-      invSel.appendChild(el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') }));
-    });
-    if (template) invSel.value = template.linkedInvoiceId || '';
     invGroup.appendChild(invSel);
     form.appendChild(invGroup);
 
+    window.apiClient.invoices.list({ status: 'Draft,Sent,Partially Paid,Paid', limit: 200 }).then(res => {
+      const invoices = (res.data || []).filter(inv => (inv.entity || '').toUpperCase() === (entity || '').toUpperCase() && inv.status !== 'Cancelled');
+      invoices.forEach(inv => {
+        const client = window.apiClient.clientCache.getById(inv.clientId);
+        const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
+        if (template && template.linkedInvoiceId === inv.id) opt.selected = true;
+        invSel.appendChild(opt);
+      });
+    }).catch(e => console.error('Failed to load invoices for template form', e));
+
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (!validateRequiredFields(form)) return;
-      const data = Object.fromEntries(new FormData(form).entries());
-      const templateData = {
-        id: template ? template.id : generateId('dtpl'),
-        entity: entity,
-        name: data.name.trim(),
-        category: data.category,
-        amount: parseFloat(data.amount) || 0,
-        fundSource: data.fundSource,
-        schedule: data.schedule || '',
-        description: data.description || '',
-        linkedWorkRequestId: data.linkedWorkRequestId || null,
-        linkedInvoiceId: data.linkedInvoiceId || null,
-        createdAt: template ? template.createdAt : new Date().toISOString(),
-        createdBy: template ? template.createdBy : Auth.user.id
-      };
-      if (template) {
-        DB.update('disbursementTemplates', template.id, templateData);
-      } else {
-        DB.insert('disbursementTemplates', templateData);
-      }
-      this.view = 'templates';
-      this.templateEditingId = null;
-      closeFormPanelAndRoute('#disbursement');
+      this.submitTemplateForm(form, template).catch(err => console.error('submitTemplateForm error', err));
     });
 
     container.appendChild(form);
     return container;
   },
 
-  showTemplateForm(existing = null, mode = null) {
+  async submitTemplateForm(form, template) {
+    if (!validateRequiredFields(form)) return;
+    const data = Object.fromEntries(new FormData(form).entries());
+    const payload = {
+      name: data.name.trim(),
+      category: data.category,
+      amount: parseFloat(data.amount) || 0,
+      fundSource: data.fundSource,
+      schedule: data.schedule || null,
+      description: data.description || null,
+      linkedWorkRequestId: data.linkedWorkRequestId || null,
+      linkedInvoiceId: data.linkedInvoiceId || null
+    };
+
+    try {
+      if (template) {
+        const res = await window.apiClient.disbursements.updateTemplate(template.id, payload);
+        const updated = this.normalizeTemplate(res.data);
+        const idx = this._templates.findIndex(t => t.id === updated.id);
+        if (idx >= 0) this._templates[idx] = updated;
+        else this._templates.push(updated);
+      } else {
+        const res = await window.apiClient.disbursements.createTemplate(payload);
+        const created = this.normalizeTemplate(res.data);
+        this._templates.push(created);
+      }
+    } catch (e) {
+      console.error('Failed to save disbursement template', e);
+      Workflow.showMessage('Save Failed', e.message || 'Unable to save template.', 'error');
+      return;
+    }
+
+    this.view = 'templates';
+    this.templateEditingId = null;
+    closeFormPanelAndRoute('#disbursement');
+  },
+
+  async showTemplateForm(existing = null, mode = null) {
     this.templateEditingId = existing ? existing.id : null;
+    const template = this.templateEditingId ? (await this.getTemplateById(this.templateEditingId) || existing) : null;
     const fullPageRoute = this.templateEditingId ? `#disbursement/templateForm/${this.templateEditingId}` : '#disbursement/templateForm/new';
     openFormPanel({
       icon: '📋',
       title: ' ',
-      formContent: this.renderTemplateForm(),
+      formContent: this.renderTemplateForm({ template }),
       formId: 'disb-tpl-form',
       mode,
       viewContext: 'disbursement-template-form',
@@ -2870,50 +2961,39 @@ const Disbursement = {
     });
   },
 
-  generateFromTemplate(template) {
-    const record = {
-      id: generateSequentialId('dis', 'disbursements'),
-      category: template.category,
-      description: template.description || template.name,
-      amount: template.amount,
-      fundSource: template.fundSource,
-      linkedInvoiceId: template.linkedInvoiceId || null,
-      linkedWorkRequestId: template.linkedWorkRequestId || null,
-      entity: template.entity,
-      fromTemplate: template.id,
-      employeeId: Auth.user.id,
-      requestedBy: Auth.user.id,
-      status: 'Draft',
-      submittedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-      receiptFilename: null,
-      paymentHandledBy: '',
-      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
-    };
-
-    DB.insert('disbursements', record);
-
-    // Link to WR if applicable
-    if (record.linkedWorkRequestId) {
-      const wr = DB.getById('workRequests', record.linkedWorkRequestId);
-      if (wr) {
-        const linkedIds = new Set(wr.linkedDisbursementIds || []);
-        linkedIds.add(record.id);
-        DB.update('workRequests', wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
-      }
+  async generateFromTemplate(template) {
+    try {
+      await window.apiClient.disbursements.create({
+        category: template.category,
+        description: template.description || template.name,
+        amount: template.amount,
+        fundSource: template.fundSource,
+        linkedInvoiceId: template.linkedInvoiceId || null,
+        linkedWorkRequestId: template.linkedWorkRequestId || null,
+        clientId: null,
+        employeeId: Auth.user.id,
+        notes: null
+      });
+      Workflow.showMessage('Template Success', 'Disbursement generated from template: ' + template.name, 'success');
+      this.view = 'list';
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to generate disbursement from template', e);
+      Workflow.showMessage('Generation Failed', e.message || 'Unable to generate disbursement.', 'error');
     }
-
-    Workflow.showMessage('Template Success', 'Disbursement generated from template: ' + template.name, 'success');
-    this.view = 'list';
-    App.handleRoute();
   },
 
   async archiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || d.archived) return;
-    DB.update('disbursements', id, { archived: true, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
-    App.handleRoute();
+    try {
+      await window.apiClient.disbursements.update(id, { archived: true });
+      Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to archive disbursement', e);
+      Workflow.showMessage('Archive Failed', e.message || 'Unable to archive disbursement.', 'error');
+    }
   },
 
   async bulkArchiveDisbursements(ids) {
@@ -2929,10 +3009,17 @@ const Disbursement = {
 
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} funded disbursement(s)?`,
-      () => {
-        const now = new Date().toISOString();
-        eligible.forEach(d => DB.update('disbursements', d.id, { archived: true, updatedAt: now }));
-        Workflow.showMessage('Archived', `${eligible.length} disbursement(s) archived.`, 'success');
+      async () => {
+        let count = 0;
+        for (const d of eligible) {
+          try {
+            await window.apiClient.disbursements.update(d.id, { archived: true });
+            count++;
+          } catch (e) {
+            console.error('Failed to archive disbursement', d.id, e);
+          }
+        }
+        Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
         App.handleRoute();
       },
       'warning'
@@ -2942,9 +3029,14 @@ const Disbursement = {
   async unarchiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || !d.archived) return;
-    DB.update('disbursements', id, { archived: false, updatedAt: new Date().toISOString() });
-    Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
-    App.handleRoute();
+    try {
+      await window.apiClient.disbursements.update(id, { archived: false });
+      Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
+      App.handleRoute();
+    } catch (e) {
+      console.error('Failed to unarchive disbursement', e);
+      Workflow.showMessage('Unarchive Failed', e.message || 'Unable to unarchive disbursement.', 'error');
+    }
   },
 
   async permanentDeleteDisbursement(id) {
@@ -2956,17 +3048,15 @@ const Disbursement = {
     }
     Workflow.showConfirm('Permanently Delete Disbursement',
       `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
-      () => {
-        if (d.linkedWorkRequestId) {
-          const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) || DB.getById('workRequests', d.linkedWorkRequestId);
-          if (wr) {
-            const linkedIds = (wr.linkedDisbursementIds || []).filter(x => x !== d.id);
-            DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
-          }
+      async () => {
+        try {
+          await window.apiClient.disbursements.remove(id);
+          App.handleRoute();
+          Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+        } catch (e) {
+          console.error('Failed to delete disbursement', e);
+          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
         }
-        DB.delete('disbursements', id);
-        App.handleRoute();
-        Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
       },
       'danger'
     );
@@ -2998,20 +3088,29 @@ const Disbursement = {
     const funded = archivedDisbursements.filter(d => d.status === 'Funded' && d.archived === true);
     const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled');
 
-    const rejectedDisbursementChanges = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'disbursements' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      if (!entFilter(data.entity)) return false;
-      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    });
-
-    const rejectedDisbursementRequests = DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'disbursement' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity)) return false;
-      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    });
+    let rejectedDisbursementChanges = [];
+    let rejectedDisbursementRequests = [];
+    try {
+      const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'disbursements' });
+      rejectedDisbursementChanges = (pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!entFilter(data.entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected disbursement changes', e);
+    }
+    try {
+      const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'disbursement' });
+      rejectedDisbursementRequests = (opReqRes.data || []).filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected disbursement requests', e);
+    }
 
     const buildItem = (d, category) => {
       const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));

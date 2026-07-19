@@ -233,22 +233,27 @@ const Clients = {
       return uEnt === entity.toUpperCase();
     };
 
-    const rejectedClientChanges = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'clients' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      if (!entFilter(data.entity)) return false;
-      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    });
-
-    const rejectedClientRequests = DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'client' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity)) return false;
-      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    });
-
-    const rejectedCount = rejectedClientChanges.length + rejectedClientRequests.length;
+    let rejectedCount = 0;
+    try {
+      const [pendingRes, opRes] = await Promise.all([
+        window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'clients' }),
+        window.apiClient.operationsRequests.list({ type: 'client', status: 'rejected' })
+      ]);
+      const rejectedClientChanges = (pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!entFilter(data.entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        return true;
+      });
+      const rejectedClientRequests = (opRes.data || []).filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      });
+      rejectedCount = rejectedClientChanges.length + rejectedClientRequests.length;
+    } catch (e) {
+      console.error('Failed to load rejected client records', e);
+    }
     const archiveCount = archivedCount + rejectedCount;
 
     const tabs = [
@@ -1173,27 +1178,33 @@ const Clients = {
     }
   },
 
-  archiveClientRequest(clientId) {
+  async archiveClientRequest(clientId) {
     if (Auth.user?.role !== 'Admin') {
       alert('Permission denied. Only Admins can archive clients.');
       return;
     }
     // Check if there is already a pending change to archive this client
-    const pending = DB.getWhere('pendingChanges', pc => 
-      pc.table === 'clients' && 
-      pc.parentRecordId === clientId && 
-      pc.status === 'pending' && 
-      pc.proposedData && 
-      pc.proposedData.status === 'Archived'
-    );
-    if (pending.length > 0) {
-      alert('An archive request for this client is already pending approval.');
-      return;
+    try {
+      const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'pending', tableName: 'clients', parentRecordId: clientId });
+      const pending = (pendingRes.data || []).filter(pc => pc.proposedData && pc.proposedData.status === 'Archived');
+      if (pending.length > 0) {
+        alert('An archive request for this client is already pending approval.');
+        return;
+      }
+    } catch (e) {
+      console.error('Failed to check pending client archive requests', e);
     }
 
     if (!confirm('Are you sure you want to request archiving this client? This requires Admin approval.')) return;
 
-    const client = DB.getById('clients', clientId);
+    let client;
+    try {
+      const res = await window.apiClient.clients.get(clientId);
+      client = res.data;
+    } catch (e) {
+      console.error('Failed to load client for archive request', e);
+      return;
+    }
     if (!client) return;
 
     const proposed = deepClone(client);
@@ -1201,18 +1212,16 @@ const Clients = {
     proposed.updatedAt = new Date().toISOString();
 
     const pc = {
-      id: generateId('pc'),
-      table: 'clients',
+      tableName: 'clients',
       parentRecordId: clientId,
-      proposedData: proposed,
-      submittedBy: Auth.user.id,
-      submittedAt: new Date().toISOString(),
-      status: 'pending',
-      rejectionReason: '',
-      reviewedBy: '',
-      reviewedAt: ''
+      proposedData: proposed
     };
-    DB.insert('pendingChanges', pc);
+    try {
+      await window.apiClient.pendingApprovals.create(pc);
+    } catch (e) {
+      Workflow.showMessage('Archive Request Failed', e.message || 'Unable to submit archive request.', 'error');
+      return;
+    }
 
     alert('Archive request submitted for Admin approval.');
     App.handleRoute();
@@ -1227,71 +1236,6 @@ const Clients = {
     await this.archiveClientsDirectly(clientIds);
   },
 
-  async migrateClientsFromLocalStorage() {
-    if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can migrate clients.');
-      return;
-    }
-
-    const raw = localStorage.getItem('erp_clients');
-    if (!raw) {
-      alert('No prototype client data found in localStorage.');
-      return;
-    }
-
-    let source;
-    try {
-      source = JSON.parse(raw);
-    } catch (e) {
-      alert('Unable to parse localStorage client data.');
-      return;
-    }
-
-    const clients = Array.isArray(source) ? source : [];
-    if (!clients.length) {
-      alert('No clients to migrate.');
-      return;
-    }
-
-    if (!confirm(`Migrate ${clients.length} prototype client(s) to the backend?`)) return;
-
-    let migrated = 0;
-    let skipped = 0;
-    for (const c of clients) {
-      const payload = {
-        name: c.name || c.companyName || 'Unnamed Client',
-        tin: c.tin || '000-000-000-00000',
-        rdoCode: c.rdoCode || c.rdo_code || '',
-        address: c.address || '',
-        tradeName: c.tradeName || c.trade_name || '',
-        entity: (c.entity || Auth.activeEntity || 'ATA').toUpperCase(),
-        retainer: !!(c.retainer || c.isRetainer),
-        contactDetails: (c.contactDetails || c.contact_details || []).map(cd => ({
-          type: cd.type || 'other',
-          value: cd.value || '',
-          label: cd.label || ''
-        })),
-        relatedCompanies: (c.relatedCompanies || c.related_companies || []).map(rc => ({
-          relatedClientId: rc.clientId || rc.related_client_id || rc.relatedClientId,
-          relationship: rc.relationType || rc.relationship || ''
-        }))
-      };
-
-      try {
-        await window.apiClient.clients.create(payload);
-        migrated++;
-      } catch (e) {
-        if (e.message && e.message.includes('already exists')) {
-          skipped++;
-        } else {
-          console.error('Migration client failed', c, e);
-        }
-      }
-    }
-
-    alert(`Migration complete. Migrated ${migrated}, skipped ${skipped}.`);
-    App.handleRoute();
-  },
 
   async archiveClientsDirectly(clientIds) {
     if (Auth.user?.role !== 'Admin') {
@@ -1322,7 +1266,7 @@ const Clients = {
     App.handleRoute();
   },
 
-  archiveClientsRequest(clientIds) {
+  async archiveClientsRequest(clientIds) {
     if (Auth.user?.role !== 'Admin') {
       alert('Permission denied. Only Admins can archive clients.');
       return;
@@ -1332,40 +1276,36 @@ const Clients = {
     if (!confirm(`Are you sure you want to request archiving ${label}? This requires Admin approval.`)) return;
 
     let requestedCount = 0;
-    clientIds.forEach(clientId => {
-      const pending = DB.getWhere('pendingChanges', pc =>
-        pc.table === 'clients' &&
-        pc.parentRecordId === clientId &&
-        pc.status === 'pending' &&
-        pc.proposedData &&
-        pc.proposedData.status === 'Archived'
-      );
-      if (pending.length > 0) return;
+    let lastError = null;
+    for (const clientId of clientIds) {
+      try {
+        const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'pending', tableName: 'clients', parentRecordId: clientId });
+        const pending = (pendingRes.data || []).filter(pc => pc.proposedData && pc.proposedData.status === 'Archived');
+        if (pending.length > 0) continue;
 
-      const client = DB.getById('clients', clientId);
-      if (!client) return;
+        const clientRes = await window.apiClient.clients.get(clientId);
+        const client = clientRes.data;
+        if (!client) continue;
 
-      const proposed = deepClone(client);
-      proposed.status = 'Archived';
-      proposed.updatedAt = new Date().toISOString();
+        const proposed = deepClone(client);
+        proposed.status = 'Archived';
+        proposed.updatedAt = new Date().toISOString();
 
-      const pc = {
-        id: generateId('pc'),
-        table: 'clients',
-        parentRecordId: clientId,
-        proposedData: proposed,
-        submittedBy: Auth.user.id,
-        submittedAt: new Date().toISOString(),
-        status: 'pending',
-        rejectionReason: '',
-        reviewedBy: '',
-        reviewedAt: ''
-      };
-      DB.insert('pendingChanges', pc);
-      requestedCount++;
-    });
+        await window.apiClient.pendingApprovals.create({
+          tableName: 'clients',
+          parentRecordId: clientId,
+          proposedData: proposed
+        });
+        requestedCount++;
+      } catch (e) {
+        lastError = e;
+        console.error('Failed to submit client archive request', clientId, e);
+      }
+    }
 
-    if (requestedCount === 0) {
+    if (requestedCount === 0 && lastError) {
+      Workflow.showMessage('Archive Request Failed', lastError.message || 'Unable to submit archive requests.', 'error');
+    } else if (requestedCount === 0) {
       alert('Archive requests for the selected clients are already pending approval.');
     } else {
       alert(requestedCount === 1 ? 'Archive request submitted for Admin approval.' : `${requestedCount} archive requests submitted for Admin approval.`);
@@ -1438,20 +1378,27 @@ const Clients = {
 
     let archived = await this.getArchivedClients(query);
 
-    const rejectedClientChanges = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'clients' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      if (!entFilter(data.entity)) return false;
-      if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    });
-
-    const rejectedClientRequests = DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'client' || r.status !== 'rejected') return false;
-      if (!entFilter(r.entity)) return false;
-      if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    });
+    let rejectedClientChanges = [];
+    let rejectedClientRequests = [];
+    try {
+      const [pendingRes, opRes] = await Promise.all([
+        window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'clients' }),
+        window.apiClient.operationsRequests.list({ type: 'client', status: 'rejected' })
+      ]);
+      rejectedClientChanges = (pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!entFilter(data.entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        return true;
+      });
+      rejectedClientRequests = (opRes.data || []).filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        return true;
+      });
+    } catch (e) {
+      console.error('Failed to load rejected client records', e);
+    }
 
     const canEdit = Auth.can('clients:edit');
 

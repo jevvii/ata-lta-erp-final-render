@@ -10,6 +10,7 @@ const {
   updateDisbursementSchema,
   rejectSchema,
   releasePaymentSchema,
+  disbursementTemplateSchema,
 } = require('./schema');
 const service = require('./service');
 const AppError = require('../../lib/AppError');
@@ -33,6 +34,7 @@ const listDisbursements = async (req, res, next) => {
       status: req.query.status,
       category: req.query.category,
       fundSource: req.query.fundSource,
+      linkedTaskId: req.query.linkedTaskId,
       search: req.query.search,
       archived: req.query.archived,
       page: parseInt(req.query.page, 10) || 1,
@@ -135,6 +137,20 @@ const releaseDisbursement = async (req, res, next) => {
 };
 
 /** @type {import('express').RequestHandler} */
+const fundDisbursement = async (req, res, next) => {
+  try {
+    const data = await service.fundDisbursement({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
 const rejectDisbursement = async (req, res, next) => {
   try {
     const validated = rejectSchema.parse(req.body);
@@ -160,6 +176,59 @@ const getDisbursementCounts = async (req, res, next) => {
   }
 };
 
+/** @type {import('express').RequestHandler} */
+const listDisbursementTemplates = async (req, res, next) => {
+  try {
+    const data = await service.listDisbursementTemplates({ entityId: req.activeEntity });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const createDisbursementTemplate = async (req, res, next) => {
+  try {
+    const validated = disbursementTemplateSchema.parse(req.body);
+    const data = await service.createDisbursementTemplate({
+      entityId: req.activeEntity,
+      userId: req.user.id,
+      data: validated,
+    });
+    res.status(201).json({ data });
+  } catch (err) {
+    handleZodError(err, next);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const updateDisbursementTemplate = async (req, res, next) => {
+  try {
+    const validated = disbursementTemplateSchema.partial().parse(req.body);
+    const data = await service.updateDisbursementTemplate({
+      entityId: req.activeEntity,
+      id: req.params.templateId,
+      data: validated,
+    });
+    res.json({ data });
+  } catch (err) {
+    handleZodError(err, next);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const deleteDisbursementTemplate = async (req, res, next) => {
+  try {
+    await service.deleteDisbursementTemplate({
+      entityId: req.activeEntity,
+      id: req.params.templateId,
+    });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   disbursementsController: {
     listDisbursements,
@@ -169,7 +238,12 @@ module.exports = {
     submitDisbursement,
     approveDisbursement,
     releaseDisbursement,
+    fundDisbursement,
     rejectDisbursement,
     getDisbursementCounts,
+    listDisbursementTemplates,
+    createDisbursementTemplate,
+    updateDisbursementTemplate,
+    deleteDisbursementTemplate,
   },
 };

@@ -22,6 +22,27 @@ router.get('/counts',
 // Resolve entity code → UUID for all remaining routes in this module
 router.use(resolveEntity());
 
+// --- Disbursement Templates (must come before /:id routes) ---
+router.get('/templates',
+  requirePermission('disbursement:view'),
+  disbursementsController.listDisbursementTemplates,
+);
+router.post('/templates',
+  requirePermission('disbursement:create'),
+  audit('disbursement-template.create', { table: 'disbursement_templates' }),
+  disbursementsController.createDisbursementTemplate,
+);
+router.put('/templates/:templateId',
+  requirePermission('disbursement:edit'),
+  audit('disbursement-template.update', { table: 'disbursement_templates' }),
+  disbursementsController.updateDisbursementTemplate,
+);
+router.delete('/templates/:templateId',
+  requirePermission('disbursement:edit'),
+  audit('disbursement-template.delete', { table: 'disbursement_templates' }),
+  disbursementsController.deleteDisbursementTemplate,
+);
+
 router.get('/',
   requirePermission('disbursement:view'),
   disbursementsController.listDisbursements,
@@ -60,6 +81,12 @@ router.post('/:id/release',
   requirePermission('disbursement:mark_released'),
   audit('disbursement.release', { table: 'disbursements' }),
   disbursementsController.releaseDisbursement,
+);
+
+router.post('/:id/fund',
+  requirePermission('disbursement:mark_released'),
+  audit('disbursement.fund', { table: 'disbursements' }),
+  disbursementsController.fundDisbursement,
 );
 
 router.post('/:id/reject',
