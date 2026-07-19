@@ -172,6 +172,23 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+/**
+ * Check whether a record's entity code matches the active entity scope.
+ * When the active entity is 'ALL', matches any entity the current user belongs to.
+ * @param {string} recordEntity - The entity code on the record (e.g. 'ATA', 'LTA').
+ * @param {string} [activeEntity] - The active entity scope; defaults to Auth.activeEntity.
+ * @returns {boolean}
+ */
+function matchesEntity(recordEntity, activeEntity) {
+  const active = activeEntity || (typeof Auth !== 'undefined' ? Auth.activeEntity : null) || '';
+  const rec = (recordEntity || '').toUpperCase();
+  if (active === 'ALL') {
+    const userEnts = (typeof Auth !== 'undefined' && Auth.user?.entities) || [];
+    return userEnts.map(e => e.toUpperCase()).includes(rec);
+  }
+  return rec === active.toUpperCase();
+}
+
 function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }

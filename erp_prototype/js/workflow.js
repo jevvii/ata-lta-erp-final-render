@@ -5656,7 +5656,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client' }));
     const clientSel = el('select', { name: 'clientId', class: 'notion-prop-select', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (wr && wr.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
@@ -5693,7 +5693,10 @@ const Workflow = {
     assigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Assignee' }));
     const assigneeSel = el('select', { name: 'assignedTo', class: 'notion-prop-select', required: true });
     assigneeSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    (window.apiClient.userCache._users || []).filter(u => u.entities.includes(entity) || u.entities.includes(entity.toLowerCase())).forEach(u => {
+    (window.apiClient.userCache._users || []).filter(u => {
+      if (entity === 'ALL') return u.entities.some(e => (Auth.user?.entities || []).map(ae => ae.toUpperCase()).includes(e.toUpperCase()));
+      return u.entities.includes(entity) || u.entities.includes(entity.toLowerCase());
+    }).forEach(u => {
       const opt = el('option', { value: u.id, text: u.name });
       if (wr && wr.assignedTo === u.id) opt.selected = true;
       assigneeSel.appendChild(opt);
@@ -10927,7 +10930,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { text: 'Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (template && template.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);

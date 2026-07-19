@@ -1521,7 +1521,7 @@ const Disbursement = {
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
     const formWrs = window.apiClient.workRequestCache._wrs || [];
-    formWrs.filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
+    formWrs.filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       const opt = el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') });
       if (existing && existing.linkedWorkRequestId === wr.id) opt.selected = true;
@@ -1610,7 +1610,7 @@ const Disbursement = {
     form.appendChild(invGroup);
 
     window.apiClient.invoices.list({ status: 'Draft,Sent,Partially Paid,Paid', limit: 200 }).then(res => {
-      const invoices = (res.data || []).filter(inv => (inv.entity || '').toUpperCase() === (entity || '').toUpperCase() && inv.status !== 'Cancelled');
+      const invoices = (res.data || []).filter(inv => matchesEntity(inv.entity, entity) && inv.status !== 'Cancelled');
       invoices.forEach(inv => {
         const client = window.apiClient.clientCache.getById(inv.clientId);
         const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
@@ -2871,7 +2871,7 @@ const Disbursement = {
     wrGroup.appendChild(el('label', { text: 'Linked Work Request (optional)' }));
     const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    (window.apiClient.workRequestCache._wrs || []).filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
+    (window.apiClient.workRequestCache._wrs || []).filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       wrSel.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
     });
@@ -2887,7 +2887,7 @@ const Disbursement = {
     form.appendChild(invGroup);
 
     window.apiClient.invoices.list({ status: 'Draft,Sent,Partially Paid,Paid', limit: 200 }).then(res => {
-      const invoices = (res.data || []).filter(inv => (inv.entity || '').toUpperCase() === (entity || '').toUpperCase() && inv.status !== 'Cancelled');
+      const invoices = (res.data || []).filter(inv => matchesEntity(inv.entity, entity) && inv.status !== 'Cancelled');
       invoices.forEach(inv => {
         const client = window.apiClient.clientCache.getById(inv.clientId);
         const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
