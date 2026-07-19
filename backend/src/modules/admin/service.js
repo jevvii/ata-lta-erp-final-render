@@ -300,6 +300,30 @@ const approvePending = async ({ id, user }) => {
   return { id, status: 'approved' };
 };
 
+/**
+ * Count audit log entries for the active entity.
+ * @param {object} params
+ * @param {string} params.entityCode
+ * @returns {Promise<number>}
+ */
+const getAuditLogCount = async ({ entityCode }) => {
+  let query = supabaseAdmin
+    .from('audit_logs')
+    .select('*', { count: 'exact', head: true });
+
+  if (entityCode && entityCode !== 'ALL') {
+    query = query.eq('entity', entityCode);
+  }
+
+  const { count, error } = await query;
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to count audit logs' });
+  }
+
+  return count || 0;
+};
+
 const rejectPending = async ({ id, user, reason }) => {
   const { data: change, error } = await supabaseAdmin
     .from('pending_changes')
@@ -335,4 +359,5 @@ module.exports = {
   approvePending,
   rejectPending,
   resolveEntityId,
+  getAuditLogCount,
 };

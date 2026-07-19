@@ -24,7 +24,8 @@ const AppError = require('../../lib/AppError');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {} }) => {
-  const { status, clientId, search, page = 1, limit = 50 } = filters;
+  const { status, clientId, search, archived, page = 1, limit = 50 } = filters;
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('invoices')
@@ -32,7 +33,17 @@ const listInvoices = async ({ entityId, filters = {} }) => {
     .eq('entity_id', entityId)
     .is('deleted_at', null);
 
-  if (status) query = query.eq('status', status);
+  if (isArchived) {
+    if (status === 'Paid') {
+      query = query.eq('status', 'Paid').eq('archived', true);
+    } else if (status === 'Cancelled') {
+      query = query.eq('status', 'Cancelled');
+    } else {
+      query = query.or('and(status.eq.Paid,archived.eq.true),status.eq.Cancelled');
+    }
+  } else {
+    if (status) query = query.eq('status', status);
+  }
   if (clientId) query = query.eq('client_id', clientId);
   if (search) {
     query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
@@ -656,6 +667,96 @@ const getAgingReport = async ({ entityId }) => {
 };
 
 // ============================================================
+// Counts for tab badges (no full-table scans)
+// ============================================================
+
+/**
+ * Count invoices grouped for module tab badges.
+ * @param {object} params
+ * @param {string} params.entityId
+ * @returns {Promise<{ active: number, archived: number, rejected: number, templates: number }>}
+ */
+const VALID_ENTITY_CODES = ['ATA', 'LTA'];
+
+const getInvoiceCounts = async ({ entityId, user }) => {
+  const resolve = async (code) => {
+    const { data } = await supabaseAdmin.from('entities').select('id').eq('code', code).maybeSingle();
+    return data?.id;
+  };
+
+  const entityIds = [];
+  if (entityId === 'ALL') {
+    const codes = (user?.entities || []).filter((c) => VALID_ENTITY_CODES.includes(c.toUpperCase()));
+    const resolved = await Promise.all(codes.map(resolve));
+    entityIds.push(...resolved.filter(Boolean));
+  } else {
+    entityIds.push(entityId);
+  }
+
+  if (entityIds.length === 0) {
+    return { active: 0, archived: 0, rejected: 0, templates: 0 };
+  }
+
+  const runCount = async (query) => {
+    const { count, error } = await query;
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to count invoices',
+      });
+    }
+    return count || 0;
+  };
+
+  const baseQuery = () => supabaseAdmin
+    .from('invoices')
+    .select('*', { count: 'exact', head: true })
+    .in('entity_id', entityIds)
+    .is('deleted_at', null);
+
+  const [total, cancelled, paidArchived, pendingRejected, opsRejected, templates] = await Promise.all([
+    runCount(baseQuery()),
+    runCount(baseQuery().eq('status', 'Cancelled')),
+    runCount(baseQuery().eq('status', 'Paid').eq('archived', true)),
+    runCount(
+      supabaseAdmin
+        .from('pending_changes')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .eq('table_name', 'invoices')
+        .eq('status', 'rejected')
+    ),
+    runCount(
+      supabaseAdmin
+        .from('operations_requests')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .eq('type', 'billing')
+        .eq('status', 'rejected')
+    ),
+    runCount(
+      supabaseAdmin
+        .from('billing_templates')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .is('deleted_at', null)
+    ),
+  ]);
+
+  const active = total - cancelled - paidArchived;
+  const archived = cancelled + paidArchived;
+  const rejected = pendingRejected + opsRejected;
+
+  return {
+    active: Math.max(active, 0),
+    archived,
+    rejected,
+    templates,
+  };
+};
+
+// ============================================================
 // Billing Templates
 // ============================================================
 
@@ -792,6 +893,7 @@ module.exports = {
   generateInvoicePdf,
   generateVoucherPdf,
   getAgingReport,
+  getInvoiceCounts,
   listTemplates,
   createTemplate,
   updateTemplate,

@@ -2883,7 +2883,7 @@ const ArchivePage = {
    * @param {string} [opts.emptyText] - message shown when archive is empty.
    * @returns {HTMLElement}
    */
-  render({ module, categoryLabels = {}, categories, emptyText = 'Archive is empty.', bulkActions }) {
+  render({ module, categoryLabels = {}, categories, emptyText = 'Archive is empty.', bulkActions, pagination }) {
     const wrapper = el('div');
     const storageKey = 'erp_archive_category_' + (typeof module === 'string' ? module : (module?.constructor?.name || 'module'));
     let selected = sessionStorage.getItem(storageKey) || 'all';
@@ -2968,7 +2968,45 @@ const ArchivePage = {
       wrapper.appendChild(this.renderCategoryCard(cat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
     });
 
+    if (pagination) {
+      wrapper.appendChild(this.renderPagination(pagination));
+    }
+
     return wrapper;
+  },
+
+  renderPagination({ page = 1, limit = 20, total = 0, onPage }) {
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const hasPrev = page > 1;
+    const hasNext = page < totalPages;
+
+    const wrap = el('div', { class: 'archive-pagination', style: 'display:flex;align-items:center;gap:var(--spacing-md);margin-top:var(--spacing-lg);' });
+    const info = el('span', { class: 'archive-pagination-info', text: `Page ${page} of ${totalPages} (${total} total)`, style: 'min-width:120px;text-align:center;color:var(--color-text-muted);font-size:0.875rem;' });
+
+    const prevBtn = el('button', {
+      class: 'btn btn-secondary btn-sm' + (hasPrev ? '' : ' disabled'),
+      type: 'button',
+      text: 'Previous',
+      disabled: !hasPrev
+    });
+    prevBtn.addEventListener('click', () => {
+      if (hasPrev && typeof onPage === 'function') onPage(page - 1);
+    });
+
+    const nextBtn = el('button', {
+      class: 'btn btn-secondary btn-sm' + (hasNext ? '' : ' disabled'),
+      type: 'button',
+      text: 'Next',
+      disabled: !hasNext
+    });
+    nextBtn.addEventListener('click', () => {
+      if (hasNext && typeof onPage === 'function') onPage(page + 1);
+    });
+
+    wrap.appendChild(prevBtn);
+    wrap.appendChild(info);
+    wrap.appendChild(nextBtn);
+    return wrap;
   },
 
   renderSimpleItem(item, idx, selectable) {

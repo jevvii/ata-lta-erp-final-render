@@ -12,7 +12,14 @@ const { requirePermission } = require('../../middleware/rbac');
 const { audit } = require('../../middleware/audit');
 const { resolveEntity } = require('../../middleware/resolveEntity');
 
-// Resolve entity code → UUID for all routes in this module
+// --- Badge Counts (before resolveEntity so ALL can be summed) ---
+router.get('/counts',
+  resolveEntity({ allowAll: true }),
+  requirePermission('billing:view'),
+  billingController.getInvoiceCounts,
+);
+
+// Resolve entity code → UUID for all remaining routes in this module
 router.use(resolveEntity());
 
 // --- Billing Templates (must come before /:id routes) ---

@@ -14,8 +14,46 @@ const Users = {
     date: ''
   },
   pendingCategory: sessionStorage.getItem('admin_pending_category') || 'all',
+  _counts: { audit: 0, myRequests: 0 },
+  _countTs: { audit: 0, myRequests: 0 },
 
-  render() {
+  /**
+   * Cached count of the current user's operations requests.
+   * Keeps the tab-badge scan out of the render hot path.
+   */
+  async countMyRequests() {
+    const now = Date.now();
+    if (this._countTs.myRequests && (now - this._countTs.myRequests) < 30 * 1000) {
+      return this._counts.myRequests;
+    }
+    const count = DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user?.id).length;
+    this._counts.myRequests = count;
+    this._countTs.myRequests = now;
+    return count;
+  },
+
+  invalidateMyRequestsCount() {
+    this._countTs.myRequests = 0;
+  },
+
+  /**
+   * Pre-fetch tab-badge counts so renderTabNav can read them synchronously.
+   */
+  async loadCounts() {
+    const canManageUsers = Auth.can('users:view');
+    try {
+      const [auditRes, myRequests] = await Promise.all([
+        canManageUsers ? window.apiClient.admin.auditCount() : Promise.resolve({ data: { total: 0 } }),
+        this.countMyRequests(),
+      ]);
+      this._counts.audit = auditRes?.data?.total || 0;
+      this._counts.myRequests = myRequests || 0;
+    } catch (err) {
+      console.error('Failed to load admin counts', err);
+    }
+  },
+
+  async render() {
     const container = el('div', { class: 'page admin-tab-page' });
 
     const isAdmin = Auth.user.role === 'Admin';
@@ -154,6 +192,7 @@ const Users = {
               onClick: () => {
                 Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
                   DB.delete('operationsRequests', r.id);
+                  Users.invalidateMyRequestsCount();
                   location.hash = '#admin';
                 }, 'danger');
               }
@@ -267,6 +306,7 @@ const Users = {
     }
 
     // Internal Admin tabs use the same module-tab-link style as other pages
+    await this.loadCounts();
     container.appendChild(this.renderTabNav());
 
     if (this.view === 'users' && canManageUsers) {
@@ -304,7 +344,7 @@ const Users = {
 
     if (canManageUsers) {
       const userCount = (this.users || []).length;
-      const auditCount = (DB.getAll('auditLog') || []).length;
+      const auditCount = this._counts.audit;
       const pendingCount = (() => {
         if (typeof this.getPendingCategories !== 'function') return 0;
         const categories = this.getPendingCategories();
@@ -328,8 +368,7 @@ const Users = {
     const hasManagement = departments.includes('Management');
     const showRequestsTab = hasOperations || hasManagement;
     if (showRequestsTab) {
-      const myRequestsCount = DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user.id).length;
-      tabs.push({ key: 'myRequests', label: 'My Requests', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>', count: myRequestsCount });
+      tabs.push({ key: 'myRequests', label: 'My Requests', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>', count: this._counts.myRequests });
     }
     const isManager = hasManagement;
     if (isManager) {
@@ -581,6 +620,7 @@ const Users = {
       cancelBtn.addEventListener('click', () => {
         Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
           DB.delete('operationsRequests', r.id);
+          Users.invalidateMyRequestsCount();
           if (location.hash.includes('/')) {
             location.hash = location.hash.split('/')[0];
           } else {
@@ -3181,6 +3221,7 @@ const Users = {
           e.stopPropagation();
           Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
             DB.delete('operationsRequests', r.id);
+            Users.invalidateMyRequestsCount();
             if (location.hash.includes('/')) {
               location.hash = location.hash.split('/')[0];
             } else {
@@ -3265,7 +3306,7 @@ const Users = {
           label: 'Cancel Request',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-          onClick: () => Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); Users.invalidateMyRequestsCount(); App.handleRoute(); }, 'danger')
         });
       }
       return menu;
@@ -3321,7 +3362,7 @@ const Users = {
       if (r.status === 'pending') {
         const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel' });
         cancelBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => { DB.delete('operationsRequests', r.id); Users.invalidateMyRequestsCount(); App.handleRoute(); }, 'danger');
         });
         rightActions.appendChild(cancelBtn);
       }

@@ -236,6 +236,7 @@ const WorkflowData = {
     } catch (e) {
       console.error('Failed to update work request', e);
     }
+    this.invalidateRelatedForWorkRequest(id);
     return updated;
   },
 
@@ -273,6 +274,7 @@ const WorkflowData = {
     } catch (e) {
       console.error('Failed to update task', e);
     }
+    this.invalidateRelatedForTask(id);
     return updated;
   },
 
@@ -284,6 +286,7 @@ const WorkflowData = {
     } catch (e) {
       console.error('Failed to delete work request', e);
     }
+    this.invalidateRelatedForWorkRequest(id);
   },
 
   async deleteTask(id) {
@@ -304,6 +307,235 @@ const WorkflowData = {
     } catch (e) {
       console.error('Failed to delete task', e);
     }
+    this.invalidateRelatedForTask(id);
+    this.invalidateRelatedForWorkRequest(wrId);
+  },
+
+  // ============================================================
+  // Related financial / document cache (replaces DB.getWhere scans)
+  // ============================================================
+  _relatedByWr: new Map(),
+  _relatedByTask: new Map(),
+  _relatedLoading: new Map(),
+  _relatedTaskLoading: new Map(),
+
+  _emptyWrRelated() {
+    return { invoices: [], disbursements: [], transmittals: [], documents: [] };
+  },
+  _emptyTaskRelated() {
+    return { invoices: [], disbursements: [] };
+  },
+
+  _normalizeRelatedInvoice(inv) {
+    if (!inv) return inv;
+    const local = DB.getById('invoices', inv.id);
+    return {
+      ...inv,
+      id: inv.id,
+      invoiceNumber: inv.invoice_number || inv.invoiceNumber || '',
+      clientId: inv.client_id || inv.clientId || null,
+      workRequestId: inv.work_request_id || inv.workRequestId || null,
+      status: inv.status || 'Draft',
+      issueDate: inv.issue_date || inv.issueDate || null,
+      dueDate: inv.due_date || inv.dueDate || null,
+      total: typeof inv.total === 'number' ? inv.total : (parseFloat(inv.total) || 0),
+      amountPaid: typeof inv.amount_paid === 'number' ? inv.amount_paid : (parseFloat(inv.amount_paid) || 0),
+      balance: typeof inv.balance === 'number' ? inv.balance : (parseFloat(inv.balance) || 0),
+      subtotal: typeof inv.subtotal === 'number' ? inv.subtotal : (parseFloat(inv.subtotal) || 0),
+      linkedTaskId: inv.linked_task_id || inv.linkedTaskId || local?.linkedTaskId || null,
+    };
+  },
+
+  _normalizeRelatedDisbursement(d) {
+    if (!d) return d;
+    const local = DB.getById('disbursements', d.id);
+    return {
+      ...d,
+      id: d.id,
+      category: d.category || '',
+      description: d.description || '',
+      amount: typeof d.amount === 'number' ? d.amount : (parseFloat(d.amount) || 0),
+      status: d.status || 'Draft',
+      fundSource: d.fund_source || d.fundSource || '',
+      linkedInvoiceId: d.linked_invoice_id || d.linkedInvoiceId || null,
+      linkedWorkRequestId: d.linked_work_request_id || d.linkedWorkRequestId || null,
+      clientId: d.client_id || d.clientId || null,
+      employeeId: d.employee_id || d.employeeId || null,
+      submittedAt: d.submitted_at || d.submittedAt || d.created_at || d.createdAt || null,
+      linkedTaskId: d.linked_task_id || d.linkedTaskId || local?.linkedTaskId || null,
+    };
+  },
+
+  _normalizeRelatedTransmittal(t) {
+    if (!t) return t;
+    return {
+      ...t,
+      id: t.id,
+      trackingNumber: t.tracking_number || t.trackingNumber || '',
+      status: t.status || 'Draft',
+      workRequestId: t.work_request_id || t.workRequestId || null,
+      sentAt: t.sent_at || t.sentAt || null,
+      clientId: t.client_id || t.clientId || null,
+      items: t.items || t.transmittal_items || [],
+    };
+  },
+
+  _normalizeRelatedDocument(doc) {
+    if (!doc) return doc;
+    return {
+      ...doc,
+      id: doc.id,
+      fileName: doc.file_name || doc.fileName || '',
+      workRequestId: doc.work_request_id || doc.workRequestId || null,
+      documentType: doc.document_type || doc.documentType || null,
+      category: doc.category || '',
+      documentLifecycle: doc.document_lifecycle || doc.documentLifecycle || 'collected',
+      lifecycleState: doc.document_lifecycle || doc.documentLifecycle || doc.lifecycleState || 'collected',
+      status: doc.status || 'active',
+      archived: doc.archived ?? false,
+    };
+  },
+
+  _buildRelatedFromDb(wrId) {
+    const wr = this.getWorkRequestById(wrId) || DB.getById('workRequests', wrId) || {};
+    return {
+      invoices: DB.getWhere('invoices', inv => inv.workRequestId === wrId || wr.linkedInvoiceId === inv.id)
+        .map(inv => this._normalizeRelatedInvoice(inv)),
+      disbursements: DB.getWhere('disbursements', d => d.linkedWorkRequestId === wrId || (wr.linkedDisbursementIds || []).includes(d.id))
+        .map(d => this._normalizeRelatedDisbursement(d)),
+      transmittals: DB.getWhere('transmittals', t => t.workRequestId === wrId || (wr.linkedTransmittalIds || []).includes(t.id))
+        .map(t => this._normalizeRelatedTransmittal(t)),
+      documents: DB.getWhere('documents', doc => doc.workRequestId === wrId)
+        .map(doc => this._normalizeRelatedDocument(doc)),
+    };
+  },
+
+  _buildTaskRelatedFromDb(taskId) {
+    return {
+      invoices: DB.getWhere('invoices', inv => inv.linkedTaskId === taskId)
+        .map(inv => this._normalizeRelatedInvoice(inv)),
+      disbursements: DB.getWhere('disbursements', d => d.linkedTaskId === taskId)
+        .map(d => this._normalizeRelatedDisbursement(d)),
+    };
+  },
+
+  async loadRelatedForWorkRequest(id) {
+    if (!id) return this._emptyWrRelated();
+    if (this._relatedLoading.has(id)) return this._relatedLoading.get(id);
+    const promise = window.apiClient.workRequests.getRelated(id)
+      .then(res => {
+        const data = res?.data || {};
+        const normalized = {
+          invoices: (data.invoices || []).map(inv => this._normalizeRelatedInvoice(inv)),
+          disbursements: (data.disbursements || []).map(d => this._normalizeRelatedDisbursement(d)),
+          transmittals: (data.transmittals || []).map(t => this._normalizeRelatedTransmittal(t)),
+          documents: (data.documents || []).map(doc => this._normalizeRelatedDocument(doc)),
+        };
+        this._relatedByWr.set(id, normalized);
+        return normalized;
+      })
+      .catch(err => {
+        console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
+        if (!this._relatedByWr.has(id)) {
+          this._relatedByWr.set(id, this._buildRelatedFromDb(id));
+        }
+        return this._relatedByWr.get(id);
+      })
+      .finally(() => {
+        this._relatedLoading.delete(id);
+      });
+    this._relatedLoading.set(id, promise);
+    return promise;
+  },
+
+  async loadRelatedForTask(id) {
+    if (!id) return this._emptyTaskRelated();
+    if (this._relatedTaskLoading.has(id)) return this._relatedTaskLoading.get(id);
+    const task = this.getTaskById(id) || DB.getById('tasks', id);
+    const wrId = task ? task.workRequestId || task.work_request_id : null;
+    const promise = (async () => {
+      if (wrId) {
+        // Derive from the WR-related cache when available to avoid an extra round trip.
+        const wrRelated = await this.loadRelatedForWorkRequest(wrId);
+        const filtered = {
+          invoices: wrRelated.invoices.filter(inv => inv.linkedTaskId === id),
+          disbursements: wrRelated.disbursements.filter(d => d.linkedTaskId === id),
+        };
+        this._relatedByTask.set(id, filtered);
+        return filtered;
+      }
+      // No parent WR available; fall back to the task endpoint.
+      const res = await window.apiClient.tasks.getRelated(id);
+      const data = res?.data || {};
+      const normalized = {
+        invoices: (data.invoices || []).map(inv => this._normalizeRelatedInvoice(inv)),
+        disbursements: (data.disbursements || []).map(d => this._normalizeRelatedDisbursement(d)),
+      };
+      this._relatedByTask.set(id, normalized);
+      return normalized;
+    })()
+      .catch(err => {
+        console.error(`[WorkflowData] failed to load related for task ${id}`, err);
+        if (!this._relatedByTask.has(id)) {
+          this._relatedByTask.set(id, this._buildTaskRelatedFromDb(id));
+        }
+        return this._relatedByTask.get(id);
+      })
+      .finally(() => {
+        this._relatedTaskLoading.delete(id);
+      });
+    this._relatedTaskLoading.set(id, promise);
+    return promise;
+  },
+
+  getRelatedForWorkRequest(id) {
+    if (!id) return this._emptyWrRelated();
+    if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
+    // Cold fallback: local DB scan, then refresh from the backend asynchronously.
+    const fallback = this._buildRelatedFromDb(id);
+    this._relatedByWr.set(id, fallback);
+    this.loadRelatedForWorkRequest(id).catch(() => {});
+    return fallback;
+  },
+
+  getRelatedForTask(id) {
+    if (!id) return this._emptyTaskRelated();
+    if (this._relatedByTask.has(id)) return this._relatedByTask.get(id);
+    const task = this.getTaskById(id) || DB.getById('tasks', id);
+    if (task) {
+      const wrId = task.workRequestId || task.work_request_id;
+      if (wrId && this._relatedByWr.has(wrId)) {
+        const wrRelated = this._relatedByWr.get(wrId);
+        const filtered = {
+          invoices: wrRelated.invoices.filter(inv => inv.linkedTaskId === id),
+          disbursements: wrRelated.disbursements.filter(d => d.linkedTaskId === id),
+        };
+        this._relatedByTask.set(id, filtered);
+        return filtered;
+      }
+    }
+    // Cold fallback: local DB scan, then refresh from the backend asynchronously.
+    const fallback = this._buildTaskRelatedFromDb(id);
+    this._relatedByTask.set(id, fallback);
+    this.loadRelatedForTask(id).catch(() => {});
+    return fallback;
+  },
+
+  invalidateRelatedForWorkRequest(id) {
+    this._relatedByWr.delete(id);
+    this._relatedLoading.delete(id);
+  },
+
+  invalidateRelatedForTask(id) {
+    this._relatedByTask.delete(id);
+    this._relatedTaskLoading.delete(id);
+  },
+
+  invalidateRelated() {
+    this._relatedByWr.clear();
+    this._relatedByTask.clear();
+    this._relatedLoading.clear();
+    this._relatedTaskLoading.clear();
   }
 };
 
@@ -566,9 +798,10 @@ const Workflow = {
     }
     
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
-    const invoices = DB.getWhere('invoices', inv => inv.workRequestId === wrId || wr.linkedInvoiceId === inv.id);
-    const disbursements = DB.getWhere('disbursements', d => d.linkedWorkRequestId === wrId || (wr.linkedDisbursementIds || []).includes(d.id));
-    const transmittals = DB.getWhere('transmittals', t => t.workRequestId === wrId || (wr.linkedTransmittalIds || []).includes(t.id));
+    const related = WorkflowData.getRelatedForWorkRequest(wrId);
+    const invoices = related.invoices;
+    const disbursements = related.disbursements;
+    const transmittals = related.transmittals;
 
     // Four lifecycle stages: Draft -> Pre-processing -> Processing -> Completed.
     // Billing and Disbursement are no longer lifecycle phases; they can be generated
@@ -626,8 +859,9 @@ const Workflow = {
             // Task-level Linkage Gate:
             tasks.forEach(t => {
                 const title = t.title.toLowerCase();
-                const hasInv = DB.getWhere('invoices', inv => inv.linkedTaskId === t.id).length > 0;
-                const hasDisb = DB.getWhere('disbursements', d => d.linkedTaskId === t.id).length > 0;
+                const taskRelated = WorkflowData.getRelatedForTask(t.id);
+                const hasInv = taskRelated.invoices.length > 0;
+                const hasDisb = taskRelated.disbursements.length > 0;
 
                 if ((title.includes('invoice') || title.includes('bill')) && !hasInv) {
                     canTransition = false;
@@ -656,11 +890,11 @@ const Workflow = {
             missing.push('At least one linked invoice must be Sent, Partially Paid, or Paid');
           }
         }
-        const wrLevelDisbursements = DB.getWhere('disbursements', d => d.linkedWorkRequestId === wrId || (wr.linkedDisbursementIds || []).includes(d.id));
+        const wrLevelDisbursements = WorkflowData.getRelatedForWorkRequest(wrId).disbursements;
         tasks.forEach(t => {
           const title = t.title.toLowerCase();
           if (title.includes('expense') || title.includes('disburse') || title.includes('payment') || title.includes('reimburse')) {
-            const hasTaskDisb = DB.getWhere('disbursements', d => d.linkedTaskId === t.id).length > 0;
+            const hasTaskDisb = WorkflowData.getRelatedForTask(t.id).disbursements.length > 0;
             const hasWrDisb = wrLevelDisbursements.length > 0;
             if (!hasTaskDisb && !hasWrDisb) {
               canTransition = false;
@@ -2207,6 +2441,14 @@ const Workflow = {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       const canEdit = Auth.can('workflow:edit') && !wr.isPendingApproval;
       const isArchived = wr && wr.status === 'Cancelled';
+
+      // Preload related records so badge/render helpers use the API-backed cache
+      // instead of scanning the local DB on every render.
+      await WorkflowData.loadRelatedForWorkRequest(wr.id);
+      if (wr.tasks) {
+        await Promise.all(wr.tasks.map(t => WorkflowData.loadRelatedForTask(t.id)));
+      }
+
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       const h1 = el('h1', { class: 'breadcrumb-h1' });
       const opLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Operations' });
@@ -4965,8 +5207,9 @@ const Workflow = {
   },
 
   getFinanceBadgeForWr(wr) {
-    const invoices = DB.getWhere('invoices', inv => inv.workRequestId === wr.id || wr.linkedInvoiceId === inv.id);
-    const disbursements = DB.getWhere('disbursements', d => d.linkedWorkRequestId === wr.id || (wr.linkedDisbursementIds || []).includes(d.id));
+    const related = WorkflowData.getRelatedForWorkRequest(wr.id);
+    const invoices = related.invoices;
+    const disbursements = related.disbursements;
 
     let text = 'NO FINANCES';
     let cls = 'badge-muted';
@@ -5000,7 +5243,7 @@ const Workflow = {
   },
 
   getDocBadgeForWr(wr) {
-    const documents = DB.getWhere('documents', doc => doc.workRequestId === wr.id);
+    const documents = WorkflowData.getRelatedForWorkRequest(wr.id).documents;
 
     let text = 'NO DOCUMENTS';
     let cls = 'badge-danger';
@@ -7250,7 +7493,8 @@ const Workflow = {
         const cellLinked = el('div', { class: 'cell' });
         const linkedWrap = el('div', { style: 'display:flex; flex-direction:column; gap:4px;' });
         
-        let linkedInv = DB.getWhere('invoices', inv => inv.linkedTaskId === t.id)[0];
+        const taskRelated = WorkflowData.getRelatedForTask(t.id);
+        let linkedInv = taskRelated.invoices[0];
         if (!linkedInv) {
           const pc = DB.getWhere('pendingChanges', p => p.table === 'invoices' && p.status === 'pending' && p.proposedData && p.proposedData.linkedTaskId === t.id)[0];
           if (pc) {
@@ -7259,7 +7503,7 @@ const Workflow = {
             linkedInv.pendingChangeId = pc.id;
           }
         }
-        const linkedDisb = DB.getWhere('disbursements', d => d.linkedTaskId === t.id);
+        const linkedDisb = taskRelated.disbursements;
         
         if (linkedInv) {
           const badgeText = '📄 ' + linkedInv.invoiceNumber + (linkedInv.status === 'Pending' ? ' (Pending)' : '');
@@ -8113,7 +8357,8 @@ const Workflow = {
     const grid = el('div', { class: 'financials-grid' });
 
     // Fetch related records
-    const approvedInvs = DB.getWhere('invoices', inv => inv.workRequestId === wr.id || wr.linkedInvoiceId === inv.id);
+    const wrRelated = WorkflowData.getRelatedForWorkRequest(wr.id);
+    const approvedInvs = wrRelated.invoices;
     const pendingInvs = DB.getWhere('pendingChanges', pc => {
       if (pc.table !== 'invoices' || pc.status !== 'pending') return false;
       const inv = pc.proposedData;
@@ -8134,8 +8379,8 @@ const Workflow = {
       }
     });
 
-    const disbursements = DB.getWhere('disbursements', d => d.linkedWorkRequestId === wr.id || (wr.linkedDisbursementIds || []).includes(d.id));
-    const transmittals = DB.getWhere('transmittals', t => t.workRequestId === wr.id || (wr.linkedTransmittalIds || []).includes(t.id));
+    const disbursements = wrRelated.disbursements;
+    const transmittals = wrRelated.transmittals;
 
     // Invoices Column
     const invCol = el('div', { class: 'financial-card' });

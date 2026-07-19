@@ -453,6 +453,131 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
   return true;
 };
 
+/**
+ * Fetch related financial and document records linked to a work request.
+ * Read-only; uses indexed work_request_id / linked_work_request_id columns.
+ * @param {object} params
+ * @param {string} params.id - Work request UUID
+ * @param {string} params.entityId - Entity UUID
+ * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
+ */
+const getWorkRequestRelated = async ({ id, entityId }) => {
+  const { data: wr, error: wrErr } = await supabaseAdmin
+    .from('work_requests')
+    .select('id')
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (wrErr || !wr) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  }
+
+  const [
+    { data: invoices },
+    { data: disbursements },
+    { data: transmittals },
+    { data: documents },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name)')
+      .eq('entity_id', entityId)
+      .eq('work_request_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('disbursements')
+      .select('*, clients(name)')
+      .eq('entity_id', entityId)
+      .eq('linked_work_request_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('transmittals')
+      .select('*, clients(name)')
+      .eq('entity_id', entityId)
+      .eq('work_request_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('documents')
+      .select('*')
+      .eq('entity_id', entityId)
+      .eq('work_request_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+  ]);
+
+  return {
+    invoices: invoices || [],
+    disbursements: disbursements || [],
+    transmittals: transmittals || [],
+    documents: documents || [],
+  };
+};
+
+/**
+ * Fetch related financial records linked to a task.
+ * Because task linkage is stored through the parent work request, the endpoint
+ * returns invoices/disbursements for the task's work request; callers filter by
+ * linkedTaskId when they need task-scoped records.
+ * @param {object} params
+ * @param {string} params.id - Task UUID
+ * @param {string} params.entityId - Entity UUID
+ * @returns {Promise<{ invoices: object[], disbursements: object[] }>}
+ */
+const getTaskRelated = async ({ id, entityId }) => {
+  const { data: task, error: taskErr } = await supabaseAdmin
+    .from('tasks')
+    .select('id, work_request_id')
+    .eq('id', id)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (taskErr || !task) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  }
+
+  const { data: wr } = await supabaseAdmin
+    .from('work_requests')
+    .select('id')
+    .eq('id', task.work_request_id)
+    .eq('entity_id', entityId)
+    .is('deleted_at', null)
+    .maybeSingle();
+
+  if (!wr) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  }
+
+  const [
+    { data: invoices },
+    { data: disbursements },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name)')
+      .eq('entity_id', entityId)
+      .eq('work_request_id', task.work_request_id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('disbursements')
+      .select('*, clients(name)')
+      .eq('entity_id', entityId)
+      .eq('linked_work_request_id', task.work_request_id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+  ]);
+
+  return {
+    invoices: invoices || [],
+    disbursements: disbursements || [],
+  };
+};
+
 module.exports = {
   listWorkRequests,
   createWorkRequest,
@@ -465,4 +590,6 @@ module.exports = {
   updateTask,
   deleteTask,
   resolveEntityId,
+  getWorkRequestRelated,
+  getTaskRelated,
 };

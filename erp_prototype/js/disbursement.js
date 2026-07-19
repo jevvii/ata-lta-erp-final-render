@@ -16,6 +16,10 @@ const Disbursement = {
   _items: null,
   _promise: null,
   _detailCache: {},
+  _counts: null, // cached tab-badge counts from the backend
+  _archivePage: 1,
+  _archiveLimit: 20,
+  _lastArchiveMeta: {},
 
   /**
    * Convert a backend disbursement row (snake_case, joined clients.name)
@@ -111,6 +115,19 @@ const Disbursement = {
     return this._promise;
   },
 
+  async fetchDisbursements(query = {}) {
+    try {
+      const res = await window.apiClient.disbursements.list(query);
+      this._lastDisbursementMeta = res.meta || {};
+      return (res.data || []).map(d => this.normalizeDisbursement(d));
+    } catch (e) {
+      console.error('Failed to fetch disbursements', e);
+      Workflow.showMessage('Disbursements', e.message || 'Unable to load disbursements.', 'error');
+      this._lastDisbursementMeta = {};
+      return [];
+    }
+  },
+
   invalidateCache() {
     this._items = null;
     this._detailCache = {};
@@ -128,6 +145,21 @@ const Disbursement = {
       console.error('Failed to load disbursement', id, err);
       return null;
     }
+  },
+
+  /**
+   * Fetch badge counts from the API and cache them on the module.
+   * The backend sums across entities when Auth.activeEntity is 'ALL'.
+   */
+  async loadCounts() {
+    try {
+      const res = await window.apiClient.disbursements.counts();
+      this._counts = res?.data || { active: 0, archived: 0, rejected: 0 };
+    } catch (err) {
+      console.error('Failed to load disbursement counts', err);
+      this._counts = { active: 0, archived: 0, rejected: 0 };
+    }
+    return this._counts;
   },
 
   async render() {
@@ -286,7 +318,11 @@ const Disbursement = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Disbursement' }));
       container.appendChild(titleBar);
-      container.appendChild(await this.renderTabNav());
+
+      // Pre-fetch badge counts so renderTabNav can read them synchronously.
+      await this.loadCounts();
+
+      container.appendChild(this.renderTabNav());
     }
 
     if (this.view === 'list') container.appendChild(await this.renderList());
@@ -309,7 +345,7 @@ const Disbursement = {
     App.updateStickyOffsets();
   },
 
-  async renderTabNav() {
+  renderTabNav() {
     const entity = Auth.activeEntity;
     const entMatch = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -317,12 +353,9 @@ const Disbursement = {
       return uEnt === entity.toUpperCase();
     };
 
-    const disbursements = await this.loadDisbursements();
+    const counts = this._counts || { active: 0, archived: 0, rejected: 0 };
 
-    const dbCount = disbursements.filter(d => {
-      if (!entMatch(d.entity)) return false;
-      return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
-    }).length;
+    const dbCount = counts.active;
 
     const templateCount = DB.getWhere('disbursementTemplates', t => {
       const tEnt = (t.entity || '').toUpperCase();
@@ -332,27 +365,7 @@ const Disbursement = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveDbCount = disbursements.filter(d => {
-      if (!entMatch(d.entity)) return false;
-      if (d.status === 'Cancelled') return true;
-      if (d.status === 'Funded' && d.archived) return true;
-      return false;
-    }).length;
-
-    const rejectedCount = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'disbursements' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      if (!entMatch(data.entity)) return false;
-      if (!Auth.isManagerial() && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    }).length + DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'disbursement' || r.status !== 'rejected') return false;
-      if (!entMatch(r.entity)) return false;
-      if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    }).length;
-
-    const archiveCount = archiveDbCount + rejectedCount;
+    const archiveCount = counts.archived + counts.rejected;
 
     const tabs = [
       { key: 'list', label: 'Disbursements', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: dbCount },
@@ -2959,7 +2972,7 @@ const Disbursement = {
     );
   },
 
-  renderArchive() {
+  async renderArchive() {
     const entity = Auth.activeEntity;
     const self = this;
     const isManagerial = Auth.isManagerial();
@@ -2970,8 +2983,20 @@ const Disbursement = {
       return uEnt === entity.toUpperCase();
     };
 
-    const funded = DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Funded' && d.archived === true);
-    const cancelled = DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Cancelled');
+    let archivedDisbursements = [];
+    try {
+      archivedDisbursements = await this.fetchDisbursements({
+        archived: true,
+        page: this._archivePage,
+        limit: this._archiveLimit,
+      });
+      this._lastArchiveMeta = this._lastDisbursementMeta || {};
+    } catch (e) {
+      this._lastArchiveMeta = {};
+    }
+
+    const funded = archivedDisbursements.filter(d => d.status === 'Funded' && d.archived === true);
+    const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled');
 
     const rejectedDisbursementChanges = DB.getWhere('pendingChanges', pc => {
       if (pc.table !== 'disbursements' || pc.status !== 'rejected') return false;
@@ -3050,6 +3075,11 @@ const Disbursement = {
       };
     };
 
+    const meta = this._lastArchiveMeta || {};
+    const page = meta.page || this._archivePage || 1;
+    const limit = meta.limit || this._archiveLimit || 20;
+    const total = meta.total || 0;
+
     return ArchivePage.render({
       module: 'disbursement',
       categoryLabels: { accomplished: 'Funded', cancelled: 'Cancelled', rejected: 'Rejected' },
@@ -3062,7 +3092,16 @@ const Disbursement = {
         ]
       },
       emptyText: 'Archive is empty.',
-      renderCallback: () => self.renderArchive()
+      renderCallback: () => self.renderArchive(),
+      pagination: {
+        page,
+        limit,
+        total,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      }
     });
   },
 

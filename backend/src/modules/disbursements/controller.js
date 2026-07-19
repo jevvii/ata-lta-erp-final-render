@@ -34,6 +34,7 @@ const listDisbursements = async (req, res, next) => {
       category: req.query.category,
       fundSource: req.query.fundSource,
       search: req.query.search,
+      archived: req.query.archived,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
@@ -149,6 +150,16 @@ const rejectDisbursement = async (req, res, next) => {
   }
 };
 
+/** @type {import('express').RequestHandler} */
+const getDisbursementCounts = async (req, res, next) => {
+  try {
+    const data = await service.getDisbursementCounts({ entityId: req.activeEntity, user: req.user });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   disbursementsController: {
     listDisbursements,
@@ -159,5 +170,6 @@ module.exports = {
     approveDisbursement,
     releaseDisbursement,
     rejectDisbursement,
+    getDisbursementCounts,
   },
 };

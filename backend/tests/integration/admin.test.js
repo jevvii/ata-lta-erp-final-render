@@ -135,4 +135,30 @@ describe('/v1/admin', () => {
     const audit = Array.from(mockTables.audit_logs.values());
     expect(audit.some((a) => a.action === 'pending.approved')).toBe(true);
   });
+
+  it('returns the audit log count for the active entity', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+
+    await request(app)
+      .post('/v1/admin/users')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        email: 'audited@ata-lta.ph',
+        name: 'Audited User',
+        role: 'Accounting',
+        entities: ['ATA'],
+        departments: ['Accounting'],
+        password: 'password123',
+      })
+      .expect(201);
+
+    const res = await request(app)
+      .get('/v1/admin/audit/count')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data.total).toBeGreaterThanOrEqual(1);
+  });
 });

@@ -10,6 +10,10 @@ const Billing = {
   templateEditingId: null,
   currentListPage: 1,
   pendingPrefill: null, // { clientId, workRequestId } — set when generating billing from a WR
+  _counts: null, // cached tab-badge counts from the backend
+  _archivePage: 1,
+  _archiveLimit: 20,
+  _lastArchiveMeta: {},
 
   getInvoiceById(id) {
     if (!id) return null;
@@ -24,6 +28,21 @@ const Billing = {
     }
     if (inv) inv = this.normalizeInvoice(inv);
     return inv;
+  },
+
+  /**
+   * Fetch badge counts from the API and cache them on the module.
+   * The backend sums across entities when Auth.activeEntity is 'ALL'.
+   */
+  async loadCounts() {
+    try {
+      const res = await window.apiClient.invoices.counts();
+      this._counts = { ...(res?.data || {}), templates: (res?.data?.templates || 0) };
+    } catch (err) {
+      console.error('Failed to load invoice counts', err);
+      this._counts = { active: 0, archived: 0, rejected: 0, templates: 0 };
+    }
+    return this._counts;
   },
 
   async render() {
@@ -132,6 +151,9 @@ const Billing = {
       titleBar.appendChild(el('h1', { text: 'Billing' }));
       container.appendChild(titleBar);
 
+      // Pre-fetch badge counts so renderTabNav can read them synchronously.
+      await this.loadCounts();
+
       // Tab navigation
       container.appendChild(this.renderTabNav());
     }
@@ -145,7 +167,7 @@ const Billing = {
       this.renderAging().then(el => agingContainer.appendChild(el));
     }
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
-    else if (this.view === 'archive') container.appendChild(this.renderArchive());
+    else if (this.view === 'archive') container.appendChild(await this.renderArchive());
     else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
@@ -161,41 +183,10 @@ const Billing = {
   },
 
   renderTabNav() {
-    const entity = Auth.activeEntity;
-
-    const invoiceCount = DB.getWhere('invoices', inv => {
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(inv.entity) : inv.entity === entity);
-      return matchesEntity && inv.status !== 'Cancelled' && !inv.archived;
-    }).length + DB.getWhere('pendingChanges', pc => pc.table === 'invoices' && pc.status === 'pending').length;
-
-    const templateCount = (DB.getAll('billingTemplates') || []).length;
-
-    const archiveInvCount = DB.getWhere('invoices', inv => {
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(inv.entity) : inv.entity === entity);
-      if (!matchesEntity) return false;
-      if (inv.status === 'Cancelled') return true;
-      if (inv.status === 'Paid' && inv.archived) return true;
-      return false;
-    }).length;
-
-    const rejectedCount = DB.getWhere('pendingChanges', pc => {
-      if (pc.table !== 'invoices' || pc.status !== 'rejected') return false;
-      const data = pc.proposedData || {};
-      const ent = data.entity || '';
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(ent) : ent === entity);
-      if (!matchesEntity) return false;
-      if (!Auth.isManagerial() && pc.submittedBy !== Auth.user.id) return false;
-      return true;
-    }).length + DB.getWhere('operationsRequests', r => {
-      if (r.type !== 'billing' || r.status !== 'rejected') return false;
-      const ent = (r.entity || '').toUpperCase();
-      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(ent) : ent === entity.toUpperCase());
-      if (!matchesEntity) return false;
-      if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
-      return true;
-    }).length;
-
-    const archiveCount = archiveInvCount + rejectedCount;
+    const counts = this._counts || { active: 0, archived: 0, rejected: 0, templates: 0 };
+    const invoiceCount = counts.active;
+    const templateCount = counts.templates;
+    const archiveCount = counts.archived + counts.rejected;
 
     const tabs = [
       { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount },
@@ -3530,7 +3521,7 @@ const Billing = {
     );
   },
 
-  renderArchive() {
+  async renderArchive() {
     const entity = Auth.activeEntity;
     const self = this;
     const isManagerial = Auth.isManagerial();
@@ -3540,8 +3531,20 @@ const Billing = {
       return ent.toUpperCase() === entity.toUpperCase();
     };
 
-    const paid = DB.getWhere('invoices', inv => entFilter(inv.entity || '') && inv.status === 'Paid' && inv.archived === true);
-    const cancelled = DB.getWhere('invoices', inv => entFilter(inv.entity || '') && inv.status === 'Cancelled');
+    let archivedInvoices = [];
+    try {
+      archivedInvoices = await this.fetchInvoices({
+        archived: true,
+        page: this._archivePage,
+        limit: this._archiveLimit,
+      });
+      this._lastArchiveMeta = this._lastInvoiceMeta || {};
+    } catch (e) {
+      this._lastArchiveMeta = {};
+    }
+
+    const paid = archivedInvoices.filter(inv => inv.status === 'Paid' && inv.archived === true);
+    const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled');
 
     const rejectedInvoiceChanges = DB.getWhere('pendingChanges', pc => {
       if (pc.table !== 'invoices' || pc.status !== 'rejected') return false;
@@ -3629,6 +3632,11 @@ const Billing = {
       };
     };
 
+    const meta = this._lastArchiveMeta || {};
+    const page = meta.page || this._archivePage || 1;
+    const limit = meta.limit || this._archiveLimit || 20;
+    const total = meta.total || 0;
+
     return ArchivePage.render({
       module: 'billing',
       categoryLabels: { accomplished: 'Paid', cancelled: 'Cancelled', rejected: 'Rejected' },
@@ -3641,7 +3649,16 @@ const Billing = {
         ]
       },
       emptyText: 'Archive is empty.',
-      renderCallback: () => self.renderArchive()
+      renderCallback: () => self.renderArchive(),
+      pagination: {
+        page,
+        limit,
+        total,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      }
     });
   },
 

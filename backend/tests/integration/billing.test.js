@@ -292,4 +292,46 @@ describe('/v1/invoices', () => {
       .set('X-Active-Entity', 'LTA')
       .expect(404);
   });
+
+  it('returns tab-badge counts scoped to the active entity', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validInvoice)
+      .expect(201);
+
+    const counts = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(counts.body.data.active).toBe(1);
+    expect(counts.body.data.archived).toBe(0);
+    expect(counts.body.data.rejected).toBe(0);
+
+    await request(app)
+      .put(`/v1/invoices/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ status: 'Paid', archived: true })
+      .expect(200);
+
+    const afterArchive = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(afterArchive.body.data.active).toBe(0);
+    expect(afterArchive.body.data.archived).toBe(1);
+  });
 });

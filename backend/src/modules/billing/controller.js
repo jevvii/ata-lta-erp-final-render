@@ -41,6 +41,7 @@ const listInvoices = async (req, res, next) => {
       status: req.query.status,
       clientId: req.query.clientId,
       search: req.query.search,
+      archived: req.query.archived,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
@@ -163,6 +164,16 @@ const getAgingReport = async (req, res, next) => {
   }
 };
 
+/** @type {import('express').RequestHandler} */
+const getInvoiceCounts = async (req, res, next) => {
+  try {
+    const data = await service.getInvoiceCounts({ entityId: req.activeEntity, user: req.user });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ============================================================
 // Template Handlers
 // ============================================================
@@ -231,6 +242,7 @@ module.exports = {
     getInvoicePdf,
     getVoucherPdf,
     getAgingReport,
+    getInvoiceCounts,
     listTemplates,
     createTemplate,
     updateTemplate,

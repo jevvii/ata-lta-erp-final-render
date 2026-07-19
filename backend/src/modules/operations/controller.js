@@ -217,6 +217,26 @@ const removeTask = async (req, res, next) => {
   }
 };
 
+const getRelated = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const related = await operationsService.getWorkRequestRelated({ id: req.params.id, entityId });
+    res.status(200).json({ data: related });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getTaskRelated = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const related = await operationsService.getTaskRelated({ id: req.params.id, entityId });
+    res.status(200).json({ data: related });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   operationsController: {
     list,
@@ -228,5 +248,7 @@ module.exports = {
     createTask,
     updateTask,
     removeTask,
+    getRelated,
+    getTaskRelated,
   },
 };

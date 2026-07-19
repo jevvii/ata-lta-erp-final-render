@@ -23,4 +23,7 @@ router.get('/pending-approvals', auth, entityScope, requirePermission('approve_c
 router.post('/pending-approvals/:id/approve', auth, entityScope, requirePermission('approve_change:*'), audit('pending.approved', { table: 'pending_changes' }), adminController.approvePending);
 router.post('/pending-approvals/:id/reject', auth, entityScope, requirePermission('approve_change:*'), audit('pending.rejected', { table: 'pending_changes' }), adminController.rejectPending);
 
+// Audit log count (for admin tab badge)
+router.get('/audit/count', auth, entityScope, requirePermission('users:view'), adminController.getAuditLogCount);
+
 module.exports = router;

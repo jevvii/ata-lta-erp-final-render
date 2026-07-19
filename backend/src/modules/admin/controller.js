@@ -150,6 +150,15 @@ const rejectPending = async (req, res, next) => {
   }
 };
 
+const getAuditLogCount = async (req, res, next) => {
+  try {
+    const total = await adminService.getAuditLogCount({ entityCode: req.activeEntity });
+    res.status(200).json({ data: { total } });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   adminController: {
     listUsers,
@@ -160,5 +169,6 @@ module.exports = {
     listPendingApprovals,
     approvePending,
     rejectPending,
+    getAuditLogCount,
   },
 };

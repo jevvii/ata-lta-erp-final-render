@@ -151,6 +151,34 @@
   const patch = (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) });
   const del = (path) => request(path, { method: 'DELETE' });
 
+  // Lightweight 30-second cache for tab-badge count endpoints.
+  const countCache = new Map();
+  const COUNT_TTL_MS = 30 * 1000;
+
+  const cachedCount = (cacheKey, fetcher, fallback) => {
+    const now = Date.now();
+    const cached = countCache.get(cacheKey);
+    if (cached && now - cached.ts < COUNT_TTL_MS) return Promise.resolve(cached.value);
+    return fetcher().then((value) => {
+      countCache.set(cacheKey, { ts: Date.now(), value });
+      return value;
+    }).catch((err) => {
+      console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
+      return fallback;
+    });
+  };
+
+  const invalidateCountCache = (prefix) => {
+    for (const key of countCache.keys()) {
+      if (key.startsWith(prefix)) countCache.delete(key);
+    }
+  };
+
+  const countUrl = (path, entityId) => {
+    const entity = entityId || getActiveEntity() || '';
+    return `${path}?entityId=${encodeURIComponent(entity)}`;
+  };
+
   // Resource-specific API helpers (stubs for now)
   window.apiClient = {
     get,
@@ -353,10 +381,15 @@
       get: (id) => get(`/work-requests/${id}`),
       update: (id, data) => put(`/work-requests/${id}`, data),
       remove: (id) => del(`/work-requests/${id}`),
+      getRelated: (id) => get(`/work-requests/${id}/related`),
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
       updateTask: (wrId, taskId, data) => put(`/work-requests/${wrId}/tasks/${taskId}`, data),
       removeTask: (wrId, taskId) => del(`/work-requests/${wrId}/tasks/${taskId}`),
+    },
+
+    tasks: {
+      getRelated: (id) => get(`/tasks/${id}/related`),
     },
 
     invoices: {
@@ -367,17 +400,23 @@
         return get(`/invoices${q ? '?' + q : ''}`);
       },
       aging: () => get('/invoices/aging'),
-      create: (data) => post('/invoices', data),
+      counts: (entityId) => cachedCount(
+        `invoices.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/invoices/counts', entityId)),
+        { data: { active: 0, archived: 0, rejected: 0, templates: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('invoices.counts'),
+      create: (data) => post('/invoices', data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       get: (id) => get(`/invoices/${id}`),
-      update: (id, data) => put(`/invoices/${id}`, data),
-      remove: (id) => del(`/invoices/${id}`),
-      recordPayment: (id, data) => post(`/invoices/${id}/payments`, data),
+      update: (id, data) => put(`/invoices/${id}`, data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      remove: (id) => del(`/invoices/${id}`).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      recordPayment: (id, data) => post(`/invoices/${id}/payments`, data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       pdf: (id) => get(`/invoices/${id}/pdf`),
       voucher: (id) => get(`/invoices/${id}/voucher`),
       listTemplates: () => get('/invoices/templates'),
-      createTemplate: (data) => post('/invoices/templates', data),
-      updateTemplate: (id, data) => put(`/invoices/templates/${id}`, data),
-      deleteTemplate: (id) => del(`/invoices/templates/${id}`),
+      createTemplate: (data) => post('/invoices/templates', data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      updateTemplate: (id, data) => put(`/invoices/templates/${id}`, data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      deleteTemplate: (id) => del(`/invoices/templates/${id}`).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
     },
 
     disbursements: {
@@ -387,13 +426,19 @@
         const q = qs.toString();
         return get(`/disbursements${q ? '?' + q : ''}`);
       },
-      create: (data) => post('/disbursements', data),
+      counts: (entityId) => cachedCount(
+        `disbursements.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/disbursements/counts', entityId)),
+        { data: { active: 0, archived: 0, rejected: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('disbursements.counts'),
+      create: (data) => post('/disbursements', data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       get: (id) => get(`/disbursements/${id}`),
-      update: (id, data) => put(`/disbursements/${id}`, data),
-      submit: (id) => post(`/disbursements/${id}/submit`),
-      approve: (id) => post(`/disbursements/${id}/approve`),
-      release: (id) => post(`/disbursements/${id}/release`),
-      reject: (id, data) => post(`/disbursements/${id}/reject`, data),
+      update: (id, data) => put(`/disbursements/${id}`, data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      submit: (id) => post(`/disbursements/${id}/submit`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      approve: (id) => post(`/disbursements/${id}/approve`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      release: (id) => post(`/disbursements/${id}/release`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      reject: (id, data) => post(`/disbursements/${id}/reject`, data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
     },
 
     transmittals: {
@@ -421,13 +466,19 @@
 
     admin: {
       listUsers: () => get('/admin/users'),
-      createUser: (data) => post('/admin/users', data),
+      createUser: (data) => post('/admin/users', data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
       getUser: (id) => get(`/admin/users/${id}`),
-      updateUser: (id, data) => put(`/admin/users/${id}`, data),
-      deleteUser: (id) => del(`/admin/users/${id}`),
+      updateUser: (id, data) => put(`/admin/users/${id}`, data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+      deleteUser: (id) => del(`/admin/users/${id}`).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
       listPendingApprovals: () => get('/admin/pending-approvals'),
-      approvePending: (id) => post(`/admin/pending-approvals/${id}/approve`),
-      rejectPending: (id, data) => post(`/admin/pending-approvals/${id}/reject`, data),
+      approvePending: (id) => post(`/admin/pending-approvals/${id}/approve`).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+      rejectPending: (id, data) => post(`/admin/pending-approvals/${id}/reject`, data).then((res) => { invalidateCountCache('admin.auditCount'); return res; }),
+      auditCount: (entityId) => cachedCount(
+        `admin.auditCount:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/admin/audit/count', entityId)),
+        { data: { total: 0 } }
+      ),
+      invalidateAuditCount: () => invalidateCountCache('admin.auditCount'),
     },
   };
 })();
