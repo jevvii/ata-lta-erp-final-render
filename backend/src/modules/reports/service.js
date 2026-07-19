@@ -322,23 +322,11 @@ const getAnalyticsForEntityCode = async (codeOrUuid) => {
  * @returns {Promise<object>}
  */
 const getDashboardSummary = async ({ entityId }) => {
-  // Consolidated view: compute both entities in parallel.
+  // Consolidated view for ALL: the RPC path is single-entity only, so we
+  // always compute both entities in parallel through the JS aggregator.
   if (entityId === 'ALL') {
     const cached = getCachedAnalytics('ALL');
     if (cached) return cached;
-
-    try {
-      const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', { entity_id: entityId });
-      if (!error && data) {
-        const result = Array.isArray(data) ? data[0] : data;
-        if (result && typeof result === 'object') {
-          setCachedAnalytics('ALL', result);
-          return result;
-        }
-      }
-    } catch (rpcErr) {
-      logger.warn('getDashboardSummary rpc fallback', { entityId, error: rpcErr.message });
-    }
 
     const [ataAnalytics, ltaAnalytics, ataCalendar, ltaCalendar] = await Promise.all([
       getAnalyticsForEntityCode('ATA'),

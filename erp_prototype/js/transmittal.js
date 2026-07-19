@@ -434,6 +434,12 @@ const Transmittal = {
   },
 
   generateTrackingNumber(entity) {
+    return (typeof Utils !== 'undefined' && typeof Utils.generateTrackingNumber === 'function')
+      ? Utils.generateTrackingNumber(entity)
+      : Transmittal._legacyGenerateTrackingNumber(entity);
+  },
+
+  _legacyGenerateTrackingNumber(entity) {
     const year = new Date().getFullYear();
     const prefix = entity + '-TX-' + year + '-';
     // Prefix uniqueness is best-effort; the backend enforces uniqueness via DB unique index.
@@ -456,7 +462,7 @@ const Transmittal = {
   },
 
   getWorkRequestTitle(wrId) {
-    const wr = DB.getById('workRequests', wrId);
+    const wr = window.apiClient.workRequestCache.getById(wrId);
     return wr?.title || '—';
   },
 
@@ -469,7 +475,8 @@ const Transmittal = {
 
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
     ]);
 
     const wrapper = el('div');
@@ -510,10 +517,13 @@ const Transmittal = {
       });
     };
 
-    const getWorkRequestOptions = () => DB.getWhere('workRequests', wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
-    }).map(wr => ({ value: wr.id, label: wr.title }));
+    const getWorkRequestOptions = () => {
+      const wrs = window.apiClient.workRequestCache._wrs || [];
+      return wrs.filter(wr => {
+        const wrEnt = (wr.entity || '').toUpperCase();
+        return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
+      }).map(wr => ({ value: wr.id, label: wr.title }));
+    };
 
     const getClientOptions = () => {
       const allClients = window.apiClient.clientCache._clients || [];
@@ -530,9 +540,12 @@ const Transmittal = {
         const userEnts = (u.entities || []).map(e => e.toUpperCase());
         return entity === 'ALL' ? userEnts.some(e => Auth.user.entities.map(ae => ae.toUpperCase()).includes(e)) : userEnts.includes(entity.toUpperCase());
       }).forEach(u => set.add(u.name));
-      (DB.getAll('tasks') || []).forEach(t => {
-        const name = (t.assigneeName || '').trim();
-        if (name) set.add(name);
+      const wrs = window.apiClient.workRequestCache._wrs || [];
+      wrs.forEach(wr => {
+        (wr.tasks || []).forEach(t => {
+          const name = (t.assigneeName || '').trim();
+          if (name) set.add(name);
+        });
       });
       return Array.from(set).map(n => ({ value: n, label: n }));
     };
@@ -824,7 +837,7 @@ const Transmittal = {
       const progressMap = { 'Draft': 0, 'Sent': 50, 'Acknowledged': 100 };
       const progress = progressMap[t.status] || 0;
 
-      const wr = DB.getById('workRequests', t.workRequestId);
+      const wr = window.apiClient.workRequestCache.getById(t.workRequestId);
       const detail = wr ? wr.title : '';
 
       return buildCompactBoardCard({
@@ -1059,7 +1072,8 @@ const Transmittal = {
       while (wrSel.firstChild) wrSel.removeChild(wrSel.firstChild);
       wrSel.appendChild(el('option', { value: '', text: '— Select —' }));
       let matchedCurrent = false;
-      DB.getWhere('workRequests', wr => {
+      const allWrs = window.apiClient.workRequestCache._wrs || [];
+      allWrs.filter(wr => {
         if (wr.entity !== entity) return false;
         return extraWrIds.has(wr.id) || !selectedClientId || wr.clientId === selectedClientId;
       }).forEach(wr => {
@@ -1073,7 +1087,7 @@ const Transmittal = {
     clientSel.addEventListener('change', () => populateWRs());
 
     wrSel.addEventListener('change', () => {
-      const wr = DB.getById('workRequests', wrSel.value);
+      const wr = window.apiClient.workRequestCache.getById(wrSel.value);
       if (wr?.clientId && clientSel.value !== wr.clientId) {
         clientSel.value = wr.clientId;
         const extra = new Set(wr.id ? [wr.id] : []);
@@ -1234,7 +1248,7 @@ const Transmittal = {
   // ============================================================
   showRequestTransmittalModal() {
     const entity = Auth.activeEntity;
-    const wrs = DB.getWhere('workRequests', wr => {
+    const wrs = (window.apiClient.workRequestCache._wrs || []).filter(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
       return wrEnt === entity.toUpperCase();
@@ -1271,13 +1285,13 @@ const Transmittal = {
     overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', () => {
       const wrId = wrSelect.value;
       if (!wrId) { alert('Please select a work request.'); return; }
-      const wr = DB.getById('workRequests', wrId);
+      const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#trans-opreq-notes').value.trim();
       const record = {
         id: generateId('opreq'),
         type: 'transmittal',
         workRequestId: wrId,
-        clientId: wr.clientId,
+        clientId: wr?.clientId,
         requestedBy: Auth.user.id,
         requestedAt: new Date().toISOString(),
         status: 'pending',
@@ -1364,7 +1378,7 @@ const Transmittal = {
   async buildLetterPreview(t) {
     await window.apiClient.clientCache.ensure();
     const client = window.apiClient.clientCache.getById(t.clientId);
-    const wr = DB.getById('workRequests', t.workRequestId);
+    const wr = window.apiClient.workRequestCache.getById(t.workRequestId);
     const entity = t.entity || 'ATA';
     const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
 
@@ -1675,7 +1689,7 @@ const Transmittal = {
 
     await window.apiClient.clientCache.ensure();
     const client = window.apiClient.clientCache.getById(t.clientId);
-    const wr = DB.getById('workRequests', t.workRequestId);
+    const wr = window.apiClient.workRequestCache.getById(t.workRequestId);
     const entity = t.entity || 'ATA';
     const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
 

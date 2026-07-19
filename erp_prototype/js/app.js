@@ -7,6 +7,46 @@ const App = {
   currentModule: null,
   _routeId: 0,
   _lastNavTime: 0,
+  _bundlePromises: {},
+
+  /**
+   * Load a route-specific JS bundle on demand. Each bundle is only injected
+   * once; subsequent calls return the same promise. This keeps the initial
+   * page weight low while preserving the global-variable module contract.
+   */
+  loadBundle(name) {
+    if (this._bundlePromises[name]) return this._bundlePromises[name];
+    const bundles = (typeof window !== 'undefined' && window.__ERP_BUNDLES__) || {};
+    const url = bundles[name];
+    if (!url) return Promise.resolve();
+    const promise = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = url;
+      s.async = true;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error('Failed to load bundle ' + name));
+      document.body.appendChild(s);
+    });
+    this._bundlePromises[name] = promise;
+    return promise;
+  },
+
+  /**
+   * Ensure the lazy bundle required by a route is loaded before the route
+   * handler tries to use its module globals.
+   */
+  async ensureRouteBundle(baseHash) {
+    const map = {
+      '#billing': 'billing',
+      '#disbursement': 'billing',
+      '#transmittal': 'billing',
+      '#reports': 'admin',
+      '#admin': 'admin',
+      '#profile': 'admin',
+    };
+    const bundle = map[baseHash];
+    if (bundle) await this.loadBundle(bundle);
+  },
 
   /**
    * Theme management: manual toggle with OS preference fallback.
@@ -273,9 +313,25 @@ const App = {
     });
     
     sel.onchange = (ev) => {
-      Auth.switchEntity(ev.target.value);
+      const newEntity = ev.target.value;
+      Auth.switchEntity(newEntity);
       this.updateEntityBadge();
-      
+
+      // When switching into consolidated mode, reset persisted filters so stale
+      // per-entity filters (client, status, assignee, etc.) don't hide records
+      // from the other entity. The backend falls back to the user's first real
+      // entity for non-report modules, so starting with a clean filter state is
+      // the safest UX.
+      if (newEntity === 'ALL') {
+        try {
+          Object.keys(sessionStorage).forEach((key) => {
+            if (key.startsWith('erp_filters_') || key.startsWith('erp_group_') || key.startsWith('erp_sort_')) {
+              sessionStorage.removeItem(key);
+            }
+          });
+        } catch (e) { /* ignore storage errors */ }
+      }
+
       // Clean up module states for any detail/form view
       if (typeof Workflow !== 'undefined') {
         Workflow.view = 'list';
@@ -312,8 +368,26 @@ const App = {
   updateEntityBadge() {
     const badge = document.getElementById('entity-badge');
     if (!badge) return;
-    badge.textContent = Auth.activeEntity || '';
     badge.className = 'badge';
+
+    if (Auth.activeEntity === 'ALL') {
+      const rawHash = location.hash || '#dashboard';
+      const baseHash = rawHash.split('?')[0].split('/')[0];
+      // Reports and dashboard are the only modules that return true consolidated
+      // data for ALL. Every other module falls back to the user's first real entity.
+      const isConsolidatedRoute = ['#dashboard', '#reports'].includes(baseHash);
+      if (isConsolidatedRoute) {
+        badge.textContent = 'Consolidated';
+        badge.classList.add('badge-all');
+      } else {
+        const firstRealEntity = (Auth.user?.entities || []).find((e) => e !== 'ALL') || '';
+        badge.textContent = firstRealEntity ? `Viewing ${firstRealEntity}` : '';
+        badge.classList.add('badge-neutral');
+      }
+      return;
+    }
+
+    badge.textContent = Auth.activeEntity || '';
     if (Auth.activeEntity === 'ATA') badge.classList.add('badge-ata');
     else if (Auth.activeEntity === 'LTA') badge.classList.add('badge-lta');
   },
@@ -441,6 +515,19 @@ const App = {
     }
   },
 
+  /**
+   * Read the performance.measure entry for a completed route switch and hand
+   * it to ErpTelemetry. Safe to call even when telemetry is unavailable.
+   */
+  _reportRouteTelemetry(routeId, baseHash, cached) {
+    if (typeof window.ErpTelemetry !== 'undefined' && typeof window.ErpTelemetry.recordRouteSwitch === 'function') {
+      const measure = performance.getEntriesByName('route-switch-' + routeId, 'measure')[0];
+      if (measure) {
+        window.ErpTelemetry.recordRouteSwitch(baseHash, measure.duration, cached);
+      }
+    }
+  },
+
   async handleRoute() {
     const routeId = ++this._routeId;
     performance.mark('route-start-' + routeId);
@@ -462,6 +549,9 @@ const App = {
     const parts = rawHash.split('?');
     const pathParts = parts[0].split('/');
     const baseHash = pathParts[0];
+
+    // Load the route-specific bundle on demand before the module is used.
+    await this.ensureRouteBundle(baseHash);
 
     // Auto-update module view state from route detail/form paths
     // Only override module views when the URL explicitly specifies a sub-path (detail/form).
@@ -608,6 +698,7 @@ const App = {
       if (routeId !== this._routeId) {
         performance.mark('route-end-' + routeId);
         performance.measure('route-switch-' + routeId, 'route-start-' + routeId, 'route-end-' + routeId);
+        this._reportRouteTelemetry(routeId, baseHash, hasCache);
         return;
       }
 
@@ -620,6 +711,7 @@ const App = {
 
       performance.mark('route-end-' + routeId);
       performance.measure('route-switch-' + routeId, 'route-start-' + routeId, 'route-end-' + routeId);
+      this._reportRouteTelemetry(routeId, baseHash, hasCache);
 
       if (module.init) module.init();
       this.highlightNav(rawHash);

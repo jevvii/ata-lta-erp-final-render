@@ -51,6 +51,74 @@ if (sessionStorage.getItem('is_syncing') === 'true') {
   window.LoadingManager.start();
 }
 
+/**
+ * Lightweight, privacy-safe telemetry for the ERP SPA.
+ *
+ * - In development (localhost / 127.0.0.1 / *.local), route-switch durations are
+ *   logged to the console from the matching performance.measure entries.
+ * - In UAT / production, a capped summary is stored in sessionStorage under
+ *   __erp_perf__ (last 50 entries). No user-identifiable data is recorded and
+ *   nothing is sent to an external service.
+ */
+window.ErpTelemetry = {
+  STORAGE_KEY: '__erp_perf__',
+  MAX_ENTRIES: 50,
+
+  isDev() {
+    try {
+      const host = location.hostname;
+      return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
+    } catch (e) {
+      return false;
+    }
+  },
+
+  /**
+   * Record a route switch measurement.
+   * @param {string} routeName - Base hash route (e.g. #dashboard).
+   * @param {number} duration - Duration in milliseconds.
+   * @param {boolean} cached - Whether the route rendered from module cache.
+   */
+  recordRouteSwitch(routeName, duration, cached) {
+    const entry = {
+      route: routeName,
+      duration: typeof duration === 'number' ? Math.round(duration * 100) / 100 : 0,
+      cached: !!cached,
+      ts: Date.now()
+    };
+
+    if (this.isDev()) {
+      console.log(
+        `[ERP Telemetry] route switch ${entry.route}: ${entry.duration.toFixed(2)}ms (${entry.cached ? 'cached' : 'fresh'})`
+      );
+      return;
+    }
+
+    try {
+      const raw = sessionStorage.getItem(this.STORAGE_KEY);
+      const entries = raw ? JSON.parse(raw) : [];
+      entries.push(entry);
+      while (entries.length > this.MAX_ENTRIES) entries.shift();
+      sessionStorage.setItem(this.STORAGE_KEY, JSON.stringify(entries));
+    } catch (e) {
+      // Ignore storage errors (private mode, quota exceeded, etc.).
+    }
+  },
+
+  /**
+   * Read the current telemetry summary from sessionStorage.
+   * Useful for ad-hoc debugging or future dashboard instrumentation.
+   */
+  getPerfSummary() {
+    try {
+      const raw = sessionStorage.getItem(this.STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+};
+
 function formatPHP(n) {
   return '₱' + Number(n).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -112,6 +180,38 @@ function generateSequentialId(prefix, table) {
     }
   });
   return prefix + '-' + String(max + 1).padStart(4, '0');
+}
+
+/**
+ * Generate the next sequential invoice number for an entity.
+ * Mirrors the legacy Billing.nextInvoiceNumber behavior so it can be used
+ * from the operations workflow without requiring the billing bundle.
+ */
+function nextInvoiceNumber(entity) {
+  const year = new Date().getFullYear();
+  const prefix = entity + '-SI-' + year + '-';
+  if (typeof DB === 'undefined' || !DB.getWhere) {
+    return prefix + '001';
+  }
+  const existing = DB.getWhere('invoices', inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix));
+  const maxNum = existing.reduce((max, inv) => {
+    const parts = inv.invoiceNumber.split('-');
+    const num = parseInt(parts[parts.length - 1], 10);
+    return num > max ? num : max;
+  }, 0);
+  return prefix + String(maxNum + 1).padStart(3, '0');
+}
+
+/**
+ * Generate a random tracking number for an entity.
+ * Mirrors the legacy Transmittal.generateTrackingNumber behavior so it can be
+ * used from the operations workflow without requiring the transmittal bundle.
+ */
+function generateTrackingNumber(entity) {
+  const year = new Date().getFullYear();
+  const prefix = entity + '-TX-' + year + '-';
+  const suffix = String(Math.floor(Math.random() * 900) + 100).padStart(3, '0');
+  return prefix + suffix;
 }
 
 function showFieldError(field, message) {
@@ -1897,7 +1997,9 @@ window.Utils = {
   skeletonRow,
   skeletonText,
   skeletonAvatar,
-  renderRouteSkeleton
+  renderRouteSkeleton,
+  nextInvoiceNumber,
+  generateTrackingNumber
 };
 
 /**

@@ -291,7 +291,7 @@ const Disbursement = {
 
     if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') container.appendChild(this.renderForm({ hideHeader: true }));
-    else if (this.view === 'detail') container.appendChild(this.renderDetail());
+    else if (this.view === 'detail') container.appendChild(await this.renderDetail());
     else if (this.view === 'report') container.appendChild(await this.renderReport());
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
@@ -511,7 +511,8 @@ const Disbursement = {
 
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
     ]);
 
     const groupOptions = [
@@ -521,11 +522,11 @@ const Disbursement = {
         return u?.name || 'Unassigned';
       }},
       { key: 'workRequest', label: 'Work Request', getName: d => {
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
         return wr?.title || 'No Work Request';
       }},
       { key: 'client', label: 'Client', getName: d => {
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
         const client = wr
           ? window.apiClient.clientCache.getById(wr.clientId)
           : window.apiClient.clientCache.getById(d.clientId);
@@ -578,25 +579,35 @@ const Disbursement = {
       });
     };
 
-    const getWorkRequestOptions = () => DB.getWhere('workRequests', wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase()) && Auth.canViewWr(wr);
-    }).map(wr => {
-      const client = DB.getById('clients', wr.clientId);
-      return { value: wr.id, label: wr.title + ' — ' + (client?.name || '—') };
-    });
+    const getWorkRequestOptions = () => {
+      const wrs = window.apiClient.workRequestCache._wrs || [];
+      return wrs.filter(wr => {
+        const wrEnt = (wr.entity || '').toUpperCase();
+        return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase()) && Auth.canViewWr(wr);
+      }).map(wr => {
+        const client = window.apiClient.clientCache.getById(wr.clientId);
+        return { value: wr.id, label: wr.title + ' — ' + (client?.name || '—') };
+      });
+    };
 
-    const getClientOptions = () => DB.getWhere('clients', c => {
-      const clientEnt = (c.entity || '').toUpperCase();
-      return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
-    }).map(c => ({ value: c.id, label: c.name }));
+    const getClientOptions = () => {
+      const clients = window.apiClient.clientCache._clients || [];
+      return clients.filter(c => {
+        const clientEnt = (c.entity || '').toUpperCase();
+        return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt) : clientEnt === entity.toUpperCase();
+      }).map(c => ({ value: c.id, label: c.name }));
+    };
 
     const getEmployeeOptions = () => {
       const set = new Set();
-      DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role)).forEach(u => set.add(u.name));
-      (DB.getAll('tasks') || []).forEach(t => {
-        const name = (t.assigneeName || '').trim();
-        if (name) set.add(name);
+      const users = window.apiClient.userCache._users || [];
+      users.filter(u => Auth.ALL_ROLES.includes(u.role)).forEach(u => set.add(u.name));
+      const wrs = window.apiClient.workRequestCache._wrs || [];
+      wrs.forEach(wr => {
+        (wr.tasks || []).forEach(t => {
+          const name = (t.assigneeName || '').trim();
+          if (name) set.add(name);
+        });
       });
       return Array.from(set).map(n => ({ value: n, label: n }));
     };
@@ -688,14 +699,14 @@ const Disbursement = {
     if (activeFilters.client && activeFilters.client.size > 0) {
       items = items.filter(d => {
         if (!d.linkedWorkRequestId) return false;
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
         return wr && activeFilters.client.has(wr.clientId);
       });
     }
     if (activeFilters.employee && activeFilters.employee.size > 0) {
       items = items.filter(d => {
         const empId = d.employeeId || d.requestedBy;
-        const u = empId ? DB.getById('users', empId) : null;
+        const u = empId ? window.apiClient.userCache.getById(empId) : null;
         return u && activeFilters.employee.has(u.name);
       });
     }
@@ -733,7 +744,7 @@ const Disbursement = {
     // Text search filter
     if (this.searchQuery) {
       items = items.filter(d => {
-        const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
+        const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
         const client = wr
           ? window.apiClient.clientCache.getById(wr.clientId)
           : window.apiClient.clientCache.getById(d.clientId);
@@ -802,12 +813,12 @@ const Disbursement = {
           if (d.fromTemplate) line.appendChild(this.recurringBadge(d));
           cell.appendChild(line);
           if (d.linkedWorkRequestId) {
-            const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+            const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
             if (wr) {
               const sub = el('div', { style: 'font-size: 0.725rem; color: var(--color-text-muted);' });
               let suffix = ' (Entire WR)';
               if (d.linkedTaskId) {
-                const task = DB.getById('tasks', d.linkedTaskId);
+                const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
                 if (task) suffix = ` (Task: ${task.title})`;
               }
               sub.appendChild(el('span', { text: '🔗 ' + wr.title + suffix, style: 'font-weight: 500;' }));
@@ -971,7 +982,7 @@ const Disbursement = {
     const seqMap = getChronologicalSequenceMap('disbursements');
 
     const renderCard = (d) => {
-      const emp = DB.getById('users', self.getEmployeeId(d));
+      const emp = window.apiClient.userCache.getById(self.getEmployeeId(d));
       const source = self.getFundSource(d);
 
       const statusPriorityClass = {
@@ -999,11 +1010,11 @@ const Disbursement = {
 
       const descParts = [];
       if (d.linkedWorkRequestId) {
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
         if (wr) {
           let linked = wr.title;
           if (d.linkedTaskId) {
-            const task = DB.getById('tasks', d.linkedTaskId);
+            const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
             if (task) linked += ` (Task: ${task.title})`;
           }
           descParts.push(linked);
@@ -1191,7 +1202,7 @@ const Disbursement = {
   renderCompactListView(container, items) {
     const list = el('div', { class: 'list-view' });
     items.forEach(d => {
-      const emp = DB.getById('users', this.getEmployeeId(d));
+      const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));
       const item = el('div', { class: 'list-item', style: 'cursor: pointer;' });
       item.addEventListener('click', (e) => {
         if (e.target.closest('button, a, input, select')) return;
@@ -1207,11 +1218,11 @@ const Disbursement = {
       left.appendChild(titleRow);
       let wrMeta = '';
       if (d.linkedWorkRequestId) {
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
         if (wr) {
           wrMeta = ' • WR: ' + wr.title;
           if (d.linkedTaskId) {
-            const task = DB.getById('tasks', d.linkedTaskId);
+            const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
             if (task) wrMeta += ` (Task: ${task.title})`;
           } else {
             wrMeta += ' (Entire WR)';
@@ -1378,8 +1389,9 @@ const Disbursement = {
     if (prefill) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+    const formWrs = window.apiClient.workRequestCache._wrs || [];
+    formWrs.filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const opt = el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') });
       if (existing && existing.linkedWorkRequestId === wr.id) opt.selected = true;
       else if (!existing && prefill && prefill.workRequestId === wr.id) opt.selected = true;
@@ -1443,7 +1455,8 @@ const Disbursement = {
       taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
       const wrId = wrSel.value;
       if (wrId) {
-        DB.getWhere('tasks', t => t.workRequestId === wrId).forEach(t => {
+        const wr = window.apiClient.workRequestCache.getById(wrId);
+        (wr?.tasks || []).forEach(t => {
           const opt = el('option', { value: t.id, text: t.title });
           if (existing && existing.linkedTaskId === t.id) opt.selected = true;
           else if (!existing && opReq && opReq.linkedTaskId === t.id) opt.selected = true;
@@ -1461,7 +1474,7 @@ const Disbursement = {
     const invSel = el('select', { name: 'linkedInvoiceId', class: 'notion-prop-select' });
     invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
     DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
-      const client = DB.getById('clients', inv.clientId);
+      const client = window.apiClient.clientCache.getById(inv.clientId);
       const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
       if (existing && existing.linkedInvoiceId === inv.id) opt.selected = true;
       invSel.appendChild(opt);
@@ -1485,13 +1498,13 @@ const Disbursement = {
     const initialClientFund = existing && existing.fundSource === 'Client Fund';
     if (initialClientFund) invGroup.classList.remove('hidden');
 
-    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form); });
+    form.addEventListener('submit', e => { e.preventDefault(); this.submitForm(form).catch(err => console.error('submitForm error', err)); });
 
     container.appendChild(form);
     return container;
   },
 
-  submitForm(form) {
+  async submitForm(form) {
     if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
@@ -1507,8 +1520,10 @@ const Disbursement = {
       return;
     }
 
+    const existing = isNew ? null : await this.loadDisbursement(this.detailId);
+
     // On create, a receipt must be attached (or already provided via a fulfilled operations request).
-    const hasExistingReceipt = !isNew && (DB.getById('disbursements', this.detailId)?.receiptFilename || null);
+    const hasExistingReceipt = !isNew && (existing?.receiptFilename || null);
     const hasPrefilledReceipt = isNew && (this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId)?.receiptFilename : null);
     if (isNew && !receiptFile && !hasPrefilledReceipt) {
       Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
@@ -1526,20 +1541,19 @@ const Disbursement = {
       entity: entity,
       employeeId: Auth.user.id,
       requestedBy: Auth.user.id,
-      status: isNew ? 'Draft' : (DB.getById('disbursements', this.detailId)?.status || 'Draft'),
+      status: isNew ? 'Draft' : (existing?.status || 'Draft'),
       submittedAt: new Date().toISOString(),
-      receiptFilename: receiptFile ? receiptFile.name : (isNew ? null : (DB.getById('disbursements', this.detailId)?.receiptFilename || null))
+      receiptFilename: receiptFile ? receiptFile.name : (isNew ? null : (existing?.receiptFilename || null))
     };
 
     if (!isNew) {
       record.id = this.detailId;
-      const old = DB.getById('disbursements', this.detailId);
-      if (old) {
-        record.createdAt = old.createdAt;
-        record.submittedAt = old.submittedAt;
-        record.requestedBy = old.requestedBy || Auth.user.id;
-        record.paymentHandledBy = old.paymentHandledBy || '';
-        record.paymentDetails = old.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
+      if (existing) {
+        record.createdAt = existing.createdAt;
+        record.submittedAt = existing.submittedAt;
+        record.requestedBy = existing.requestedBy || Auth.user.id;
+        record.paymentHandledBy = existing.paymentHandledBy || '';
+        record.paymentDetails = existing.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
       }
     } else {
       record.id = generateSequentialId('dis', 'disbursements');
@@ -1547,9 +1561,8 @@ const Disbursement = {
     }
 
     // Clean up old WR link if WR changed or was removed
-    const old = isNew ? null : DB.getById('disbursements', this.detailId);
-    if (old && old.linkedWorkRequestId && old.linkedWorkRequestId !== (record.linkedWorkRequestId || null)) {
-      const oldWr = DB.getById('workRequests', old.linkedWorkRequestId);
+    if (existing && existing.linkedWorkRequestId && existing.linkedWorkRequestId !== (record.linkedWorkRequestId || null)) {
+      const oldWr = window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId) || DB.getById('workRequests', existing.linkedWorkRequestId);
       if (oldWr) {
         const linkedIds = (oldWr.linkedDisbursementIds || []).filter(id => id !== record.id);
         DB.update('workRequests', oldWr.id, { linkedDisbursementIds: linkedIds });
@@ -1558,7 +1571,7 @@ const Disbursement = {
 
     // If linked to a WR, update WR's linkedDisbursementIds
     if (record.linkedWorkRequestId) {
-      const wr = DB.getById('workRequests', record.linkedWorkRequestId);
+      const wr = window.apiClient.workRequestCache.getById(record.linkedWorkRequestId) || DB.getById('workRequests', record.linkedWorkRequestId);
       if (wr) {
         const linkedIds = new Set(wr.linkedDisbursementIds || []);
         linkedIds.add(record.id);
@@ -1597,7 +1610,8 @@ const Disbursement = {
 
   showRequestDisbursementModal() {
     const entity = Auth.activeEntity;
-    let wrs = DB.getWhere('workRequests', wr => {
+    let wrs = window.apiClient.workRequestCache._wrs || [];
+    wrs = wrs.filter(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
       return wrEnt === entity.toUpperCase();
@@ -1611,7 +1625,7 @@ const Disbursement = {
     const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
     wrs.forEach(wr => {
-      const client = DB.getById('clients', wr.clientId);
+      const client = window.apiClient.clientCache.getById(wr.clientId);
       const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'disbursement' && r.status === 'pending');
       if (pending.length === 0) {
         wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
@@ -1636,13 +1650,13 @@ const Disbursement = {
     overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', () => {
       const wrId = wrSelect.value;
       if (!wrId) { alert('Please select a work request.'); return; }
-      const wr = DB.getById('workRequests', wrId);
+      const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#disb-opreq-notes').value.trim();
       const record = {
         id: generateId('opreq'),
         type: 'disbursement',
         workRequestId: wrId,
-        clientId: wr.clientId,
+        clientId: wr?.clientId,
         requestedBy: Auth.user.id,
         requestedAt: new Date().toISOString(),
         status: 'pending',
@@ -1659,17 +1673,17 @@ const Disbursement = {
   // ============================================================
   // Detail View (with approval actions)
   // ============================================================
-  renderDetail() {
-    const d = DB.getById('disbursements', this.detailId);
+  async renderDetail() {
+    const d = await this.loadDisbursement(this.detailId);
     if (!d) { location.hash = '#disbursement'; return el('div'); }
 
     if (!Auth.canViewDisbursement(d)) {
       location.hash = '#disbursement';
       return el('div');
     }
-    const emp = DB.getById('users', this.getEmployeeId(d));
-    const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
-    const client = wr ? DB.getById('clients', wr.clientId) : null;
+    const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));
+    const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
+    const client = wr ? window.apiClient.clientCache.getById(wr.clientId) : null;
 
     const container = el('div', { class: 'invoice-detail' });
 
@@ -1690,7 +1704,7 @@ const Disbursement = {
 
     // Linked Work Request / Task info card
     if (d.linkedWorkRequestId) {
-      const linkedWr = DB.getById('workRequests', d.linkedWorkRequestId);
+      const linkedWr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
       if (linkedWr) {
         const linkCard = el('div', {
           style: 'background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
@@ -1715,7 +1729,7 @@ const Disbursement = {
         linkCard.appendChild(wrLink);
 
         if (d.linkedTaskId) {
-          const linkedTask = DB.getById('tasks', d.linkedTaskId);
+          const linkedTask = (linkedWr.tasks || []).find(t => t.id === d.linkedTaskId);
           if (linkedTask) {
             linkCard.appendChild(el('div', {
               text: '↳ Scope: Task — ' + linkedTask.title,
@@ -1776,7 +1790,7 @@ const Disbursement = {
       payHist.appendChild(el('h3', { text: 'Payment Details' }));
       
       const pd = d.paymentDetails;
-      const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
+      const handler = d.paymentHandledBy ? window.apiClient.userCache.getById(d.paymentHandledBy) : null;
       
       const pCard = el('div', { class: 'card', style: 'margin-bottom:12px; padding:16px; border:1px solid #e2e8f0; border-radius: 12px;' });
 
@@ -1894,8 +1908,8 @@ const Disbursement = {
     return container;
   },
 
-  showApproveDialog(id) {
-    const d = DB.getById('disbursements', id);
+  async showApproveDialog(id) {
+    const d = await this.loadDisbursement(id);
     if (!d) return;
     if (!this.PENDING_APPROVAL_STATUSES.includes(d.status)) {
       Workflow.showMessage('Error', 'This disbursement is not pending approval.', 'danger');
@@ -1906,13 +1920,15 @@ const Disbursement = {
       return;
     }
 
+    await window.apiClient.userCache.ensure();
+
     const form = el('form', { class: 'form-stacked' });
 
     const handlerGroup = el('div', { class: 'form-group' });
     handlerGroup.appendChild(el('label', { text: 'Assign Release Handler *' }));
     const handlerSel = el('select', { name: 'handlerId', required: true, class: 'form-select' });
     handlerSel.appendChild(el('option', { value: '', text: '— Select Handler —' }));
-    DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role) && u.id !== d.requestedBy).forEach(u => {
+    (window.apiClient.userCache._users || []).filter(u => Auth.ALL_ROLES.includes(u.role) && u.id !== d.requestedBy).forEach(u => {
       handlerSel.appendChild(el('option', { value: u.id, text: u.name + ' (' + u.role + ')' }));
     });
     handlerGroup.appendChild(handlerSel);
@@ -1942,8 +1958,8 @@ const Disbursement = {
     });
   },
 
-  showReleaseDialog(id, adminRelease) {
-    const d = DB.getById('disbursements', id);
+  async showReleaseDialog(id, adminRelease) {
+    const d = await this.loadDisbursement(id);
     if (!d) return;
     if (adminRelease && !Auth.can('disbursement:approve')) {
       Workflow.showMessage('Unauthorized', 'You do not have permission to approve release requests.', 'danger');
@@ -2048,17 +2064,17 @@ const Disbursement = {
   },
 
   _getSanitizedViewModel(d) {
-    const emp = DB.getById('users', this.getEmployeeId(d));
-    const requester = DB.getById('users', d.requestedBy);
+    const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));
+    const requester = window.apiClient.userCache.getById(d.requestedBy);
     let approverId = d.approvedBy || d.accountingApprovedBy;
     if (!approverId && (d.status === 'Approved' || d.status === 'Released')) {
-      const adminUser = DB.getWhere('users', u => u.role === 'Admin' || (u.departments || []).includes('Management'))[0];
+      const adminUser = (window.apiClient.userCache._users || []).find(u => u.role === 'Admin' || (u.departments || []).includes('Management'));
       if (adminUser) approverId = adminUser.id;
     }
-    const approver = approverId ? DB.getById('users', approverId) : null;
-    const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
-    const releaser = d.releasedBy ? DB.getById('users', d.releasedBy) : null;
-    const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
+    const approver = approverId ? window.apiClient.userCache.getById(approverId) : null;
+    const handler = d.paymentHandledBy ? window.apiClient.userCache.getById(d.paymentHandledBy) : null;
+    const releaser = d.releasedBy ? window.apiClient.userCache.getById(d.releasedBy) : null;
+    const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
 
     return {
       empName: escapeHtml(emp?.name || '—'),
@@ -2879,17 +2895,18 @@ const Disbursement = {
     App.handleRoute();
   },
 
-  archiveDisbursement(id) {
-    const d = DB.getById('disbursements', id);
+  async archiveDisbursement(id) {
+    const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || d.archived) return;
     DB.update('disbursements', id, { archived: true, updatedAt: new Date().toISOString() });
     Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
     App.handleRoute();
   },
 
-  bulkArchiveDisbursements(ids) {
+  async bulkArchiveDisbursements(ids) {
+    await this.loadDisbursements();
     const eligible = (ids || [])
-      .map(id => DB.getById('disbursements', id))
+      .map(id => (this._items || []).find(d => d.id === id))
       .filter(d => d && d.status === 'Funded' && !d.archived);
 
     if (eligible.length === 0) {
@@ -2909,16 +2926,16 @@ const Disbursement = {
     );
   },
 
-  unarchiveDisbursement(id) {
-    const d = DB.getById('disbursements', id);
+  async unarchiveDisbursement(id) {
+    const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || !d.archived) return;
     DB.update('disbursements', id, { archived: false, updatedAt: new Date().toISOString() });
     Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
     App.handleRoute();
   },
 
-  permanentDeleteDisbursement(id) {
-    const d = DB.getById('disbursements', id);
+  async permanentDeleteDisbursement(id) {
+    const d = await this.loadDisbursement(id);
     if (!d) return;
     if (Auth.user?.role !== 'Admin' && !Auth.can('disbursement:delete') && !Auth.isManagerial()) {
       Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete disbursements.', 'danger');
@@ -2928,7 +2945,7 @@ const Disbursement = {
       `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
       () => {
         if (d.linkedWorkRequestId) {
-          const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+          const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) || DB.getById('workRequests', d.linkedWorkRequestId);
           if (wr) {
             const linkedIds = (wr.linkedDisbursementIds || []).filter(x => x !== d.id);
             DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
@@ -2972,7 +2989,7 @@ const Disbursement = {
     });
 
     const buildItem = (d, category) => {
-      const emp = DB.getById('users', this.getEmployeeId(d));
+      const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));
       return {
         id: d.id,
         category,
@@ -3016,7 +3033,7 @@ const Disbursement = {
         category: 'rejected',
         title,
         meta: [
-          { icon: ArchivePage.icons.client, text: (DB.getById('users', isOpReq ? record.requestedBy : data.requestedBy)?.name) || '—' },
+          { icon: ArchivePage.icons.client, text: (window.apiClient.userCache.getById(isOpReq ? record.requestedBy : data.requestedBy)?.name) || '—' },
           { icon: ArchivePage.icons.date, text: formatDate(record.reviewedAt || record.updatedAt || record.requestedAt) },
           { icon: ArchivePage.icons.status, text: `Reason: ${reason}` }
         ],
@@ -3052,9 +3069,10 @@ const Disbursement = {
   // ============================================================
   // Reimbursement Summary Report
   // ============================================================
-  renderReport() {
+  async renderReport() {
     const entity = Auth.activeEntity;
-    const items = DB.getWhere('disbursements', d => {
+    await this.loadDisbursements();
+    const items = (this._items || []).filter(d => {
       const dEnt = (d.entity || '').toUpperCase();
       if (entity === 'ALL') {
         return Auth.user.entities.map(ae => ae.toUpperCase()).includes(dEnt);
@@ -3071,7 +3089,7 @@ const Disbursement = {
     // By Employee
     const byEmployee = {};
     items.forEach(d => {
-      const empName = DB.getById('users', this.getEmployeeId(d))?.name || 'Unknown';
+      const empName = window.apiClient.userCache.getById(this.getEmployeeId(d))?.name || 'Unknown';
       if (!byEmployee[empName]) byEmployee[empName] = { count: 0, total: 0 };
       byEmployee[empName].count++;
       byEmployee[empName].total += d.amount;

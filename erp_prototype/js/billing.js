@@ -8,6 +8,7 @@ const Billing = {
   view: 'list', // 'list' | 'form' | 'detail' | 'aging' | 'templates' | 'templateForm'
   detailId: null,
   templateEditingId: null,
+  currentListPage: 1,
   pendingPrefill: null, // { clientId, workRequestId } — set when generating billing from a WR
 
   getInvoiceById(id) {
@@ -25,7 +26,7 @@ const Billing = {
     return inv;
   },
 
-  render() {
+  async render() {
     const container = el('div', { class: 'page' });
     
     if (this.view === 'detail' && this.detailId) {
@@ -135,10 +136,14 @@ const Billing = {
       container.appendChild(this.renderTabNav());
     }
 
-    if (this.view === 'list') container.appendChild(this.renderList());
+    if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') container.appendChild(this.renderForm(this.detailId));
     else if (this.view === 'detail') container.appendChild(this.renderDetail());
-    else if (this.view === 'aging') container.appendChild(this.renderAging());
+    else if (this.view === 'aging') {
+      const agingContainer = el('div');
+      container.appendChild(agingContainer);
+      this.renderAging().then(el => agingContainer.appendChild(el));
+    }
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(this.renderArchive());
     else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true }));
@@ -408,13 +413,15 @@ const Billing = {
     };
   },
 
-  async fetchInvoices() {
+  async fetchInvoices(query = {}) {
     try {
-      const res = await window.apiClient.invoices.list({ limit: 1000 });
+      const res = await window.apiClient.invoices.list(query);
+      this._lastInvoiceMeta = res.meta || {};
       return (res.data || []).map(inv => this.normalizeInvoice(inv));
     } catch (e) {
       console.error('Failed to fetch invoices', e);
       Workflow.showMessage('Invoices', e.message || 'Unable to load invoices.', 'error');
+      this._lastInvoiceMeta = {};
       return [];
     }
   },
@@ -546,9 +553,22 @@ const Billing = {
     const contentContainer = el('div');
     wrapper.appendChild(contentContainer);
 
+    const pageLimit = 50;
+    let currentPage = this.currentListPage || 1;
+
     const refresh = async () => {
       contentContainer.replaceChildren();
-      const apiInvoices = await this.fetchInvoices();
+      const serverQuery = {
+        page: currentPage,
+        limit: pageLimit,
+        sortBy: 'createdAt',
+        sortOrder: 'desc'
+      };
+      if (activeFilters.status.size === 1) serverQuery.status = Array.from(activeFilters.status)[0];
+      if (activeFilters.client.size === 1) serverQuery.clientId = Array.from(activeFilters.client)[0];
+      if (searchQuery) serverQuery.search = searchQuery;
+
+      const apiInvoices = await this.fetchInvoices(serverQuery);
       const baseInvoices = apiInvoices.filter(inv => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
         return matchesEntity && inv.status !== 'Cancelled' && !inv.archived;
@@ -643,6 +663,33 @@ const Billing = {
       } else {
         this.refreshListCompact(contentContainer, invoices);
       }
+
+      // Pagination controls (server-side)
+      const meta = this._lastInvoiceMeta || {};
+      const totalServerItems = meta.total || 0;
+      const totalPages = Math.max(1, Math.ceil(totalServerItems / pageLimit));
+      const paginationBar = el('div', { class: 'pagination-bar', style: 'display:flex; justify-content:center; align-items:center; gap:12px; margin-top:16px;' });
+      const prevBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Previous', disabled: currentPage <= 1 });
+      const pageInfo = el('span', { text: `Page ${currentPage} of ${totalPages}` });
+      const nextBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Next', disabled: currentPage >= totalPages });
+      prevBtn.addEventListener('click', () => {
+        if (currentPage > 1) {
+          currentPage--;
+          this.currentListPage = currentPage;
+          refresh();
+        }
+      });
+      nextBtn.addEventListener('click', () => {
+        if (currentPage < totalPages) {
+          currentPage++;
+          this.currentListPage = currentPage;
+          refresh();
+        }
+      });
+      paginationBar.appendChild(prevBtn);
+      paginationBar.appendChild(pageInfo);
+      paginationBar.appendChild(nextBtn);
+      contentContainer.appendChild(paginationBar);
     };
 
     (async () => {
@@ -651,12 +698,14 @@ const Billing = {
         moduleName: 'billing',
         searchConfig: {
           placeholder: 'Search billing...',
-          onSearch: (q) => { searchQuery = q; refresh(); }
+          onSearch: (q) => { searchQuery = q; currentPage = 1; this.currentListPage = 1; refresh(); }
         },
         categories,
         activeFilters,
         onFilterChange: () => {
           saveCurrentFilters();
+          currentPage = 1;
+          this.currentListPage = 1;
           refresh();
         },
         viewMode,
@@ -1204,7 +1253,8 @@ const Billing = {
     if (prefill) clientSelAttrs.disabled = true;
     const clientSel = el('select', clientSelAttrs);
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+    const allClients = window.apiClient.clientCache._clients || [];
+    allClients.filter(c => (c.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (inv && inv.clientId === c.id) opt.selected = true;
       else if (!inv && prefill && prefill.clientId === c.id) opt.selected = true;
@@ -1221,8 +1271,8 @@ const Billing = {
     if (prefill) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    const wrs = window.apiClient.workRequestCache._wrs || DB.getWhere('workRequests', wr => wr.entity === entity);
-    wrs.forEach(wr => {
+    const wrs = window.apiClient.workRequestCache._wrs || [];
+    wrs.filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
       const opt = el('option', { value: wr.id, text: wr.title });
       if (inv && inv.workRequestId === wr.id) opt.selected = true;
       else if (!inv && prefill && prefill.workRequestId === wr.id) opt.selected = true;
@@ -1246,7 +1296,7 @@ const Billing = {
       const wrId = wrSel.value;
       if (wrId) {
         const wr = window.apiClient.workRequestCache.getById(wrId);
-        const tasks = (wr?.tasks || []).length ? wr.tasks : DB.getWhere('tasks', t => t.workRequestId === wrId);
+        const tasks = wr?.tasks || [];
         tasks.forEach(t => {
           const opt = el('option', { value: t.id, text: t.title });
           if (inv && inv.linkedTaskId === t.id) opt.selected = true;
@@ -1273,7 +1323,11 @@ const Billing = {
     // Invoice Number (auto)
     const numProp = el('div', { class: 'notion-prop' });
     numProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="2"/><line x1="16" y1="3" x2="16" y2="7"/><line x1="8" y1="3" x2="8" y2="7"/><line x1="4" y1="11" x2="20" y2="11"/></svg> Invoice Number' }));
-    numProp.appendChild(el('input', { type: 'text', name: 'invoiceNumber', class: 'notion-prop-input', value: inv ? inv.invoiceNumber : this.nextInvoiceNumber(entity), readonly: true }));
+    const numInput = el('input', { type: 'text', name: 'invoiceNumber', class: 'notion-prop-input', value: inv ? inv.invoiceNumber : '', readonly: true });
+    if (!inv) {
+      this.nextInvoiceNumber(entity, this.currentListPage || 1).then(n => { numInput.value = n; }).catch(() => {});
+    }
+    numProp.appendChild(numInput);
     propsGrid.appendChild(numProp);
 
     form.appendChild(propsGrid);
@@ -1383,16 +1437,30 @@ const Billing = {
     if (totEl) totEl.textContent = formatPHP(subtotal);
   },
 
-  nextInvoiceNumber(entity) {
+  nextInvoiceNumber(entity, page = 1) {
+    return (typeof Utils !== 'undefined' && typeof Utils.nextInvoiceNumber === 'function')
+      ? Utils.nextInvoiceNumber(entity, page)
+      : Billing._legacyNextInvoiceNumber(entity, page);
+  },
+
+  async _legacyNextInvoiceNumber(entity, page = 1) {
     const year = new Date().getFullYear();
     const prefix = entity + '-SI-' + year + '-';
-    const existing = DB.getWhere('invoices', inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix));
-    const maxNum = existing.reduce((max, inv) => {
-      const parts = inv.invoiceNumber.split('-');
-      const num = parseInt(parts[parts.length - 1], 10);
-      return num > max ? num : max;
-    }, 0);
-    return prefix + String(maxNum + 1).padStart(3, '0');
+    try {
+      // Scan only the current/most-recent page for the latest sequential number.
+      const list = await this.fetchInvoices({ page, limit: 1, sortBy: 'createdAt', sortOrder: 'desc' });
+      const maxNum = list
+        .filter(inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix))
+        .reduce((max, inv) => {
+          const parts = inv.invoiceNumber.split('-');
+          const num = parseInt(parts[parts.length - 1], 10);
+          return num > max ? num : max;
+        }, 0);
+      return prefix + String(maxNum + 1).padStart(3, '0');
+    } catch (e) {
+      console.error('Failed to compute next invoice number', e);
+      return prefix + '001';
+    }
   },
 
   async submitForm(form) {
@@ -1570,11 +1638,7 @@ const Billing = {
 
   showRequestInvoiceModal() {
     const entity = Auth.activeEntity;
-    const allWrs = window.apiClient.workRequestCache._wrs || DB.getWhere('workRequests', wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
-      return wrEnt === entity.toUpperCase();
-    });
+    const allWrs = window.apiClient.workRequestCache._wrs || [];
     const wrs = allWrs.filter(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
@@ -1613,7 +1677,7 @@ const Billing = {
       const wrId = wrSelect.value;
       if (wrId) {
         const wr = window.apiClient.workRequestCache.getById(wrId);
-        const tasks = (wr?.tasks || []).length ? wr.tasks : (DB.getWhere('tasks', t => t.workRequestId === wrId) || []);
+        const tasks = wr?.tasks || [];
         tasks.forEach(t => {
           taskSelect.appendChild(el('option', { value: t.id, text: t.title }));
         });
@@ -1775,7 +1839,7 @@ const Billing = {
         linkCard.appendChild(wrLink);
 
         if (inv.linkedTaskId) {
-          const linkedTask = DB.getById('tasks', inv.linkedTaskId);
+          const linkedTask = (linkedWr.tasks || []).find(t => t.id === inv.linkedTaskId);
           if (linkedTask) {
             linkCard.appendChild(el('div', {
               text: '↳ Scope: Task — ' + linkedTask.title,
@@ -3584,29 +3648,37 @@ const Billing = {
   // ============================================================
   // Aging Report
   // ============================================================
-  renderAging() {
-    const entity = Auth.activeEntity;
-    const today = new Date();
-    const invoices = DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Paid' && inv.status !== 'Cancelled' && !inv.archived);
-
+  async renderAging() {
     const container = el('div', { class: 'page-content-section' });
+    try {
+      const res = await window.apiClient.invoices.aging();
+      const details = res.data?.details || {};
+      const summary = res.data?.summary || {};
+      const bucketMap = {
+        '0-30': { keys: ['current', '1-30'], label: '0-30 Days' },
+        '31-60': { keys: ['31-60'], label: '31-60 Days' },
+        '61-90': { keys: ['61-90'], label: '61-90 Days' },
+        '90+': { keys: ['90+'], label: '90+ Days' }
+      };
 
-    const buckets = { '0-30': [], '31-60': [], '61-90': [], '90+': [] };
-    invoices.forEach(inv => {
-      const days = Math.floor((today - new Date(inv.dueDate)) / (1000 * 60 * 60 * 24));
-      if (days <= 30) buckets['0-30'].push(inv);
-      else if (days <= 60) buckets['31-60'].push(inv);
-      else if (days <= 90) buckets['61-90'].push(inv);
-      else buckets['90+'].push(inv);
-    });
-
-    const grid = el('div', { class: 'kpi-grid' });
-    Object.entries(buckets).forEach(([label, invs]) => {
-      const total = invs.reduce((sum, inv) => sum + (inv.total - this.getPaidAmount(inv)), 0);
-      grid.appendChild(this.kpiCard(label + ' Days', invs.length + ' invoices', formatPHP(total)));
-    });
-    container.appendChild(grid);
-
+      const grid = el('div', { class: 'kpi-grid' });
+      Object.entries(bucketMap).forEach(([bucketKey, { keys, label }]) => {
+        let total = 0;
+        let count = 0;
+        keys.forEach(k => {
+          const b = details[k];
+          if (b) {
+            total += b.total || 0;
+            count += (b.invoices || []).length;
+          }
+        });
+        grid.appendChild(this.kpiCard(label, count + ' invoices', formatPHP(total)));
+      });
+      container.appendChild(grid);
+    } catch (e) {
+      console.error('Failed to load aging report', e);
+      container.appendChild(renderEmptyState('Unable to load aging report', e.message, { variant: 'zero-state' }));
+    }
     return container;
   },
 

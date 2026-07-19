@@ -445,9 +445,9 @@ const Users = {
 
   renderRequestDetailContent(r, isFullPage = false) {
     const self = this;
-    const wr = DB.getById('workRequests', r.workRequestId);
-    const client = DB.getById('clients', r.clientId);
-    const submitter = DB.getById('users', r.requestedBy);
+    const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
+    const client = window.apiClient.clientCache.getById(r.clientId);
+    const submitter = window.apiClient.userCache.getById(r.requestedBy);
 
     const wrapper = el('div', { class: 'form-stacked notion-form', style: 'padding: var(--spacing-xs); display: flex; flex-direction: column; gap: var(--spacing-md);' });
 
@@ -542,7 +542,7 @@ const Users = {
 
     // Fulfillment Details or Rejection Details
     if (r.status === 'fulfilled') {
-      const fulfiller = DB.getById('users', r.fulfilledBy);
+      const fulfiller = window.apiClient.userCache.getById(r.fulfilledBy);
       wrapper.appendChild(el('h4', { text: 'Fulfillment Info', style: 'margin-top:var(--spacing-sm); margin-bottom:var(--spacing-xs); font-size:0.875rem; color:var(--success);' }));
       const fulfillBox = el('div', {
         style: 'background: color-mix(in oklab, var(--success), transparent 95%); border: 1px solid color-mix(in oklab, var(--success), transparent 70%); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size:0.875rem;'
@@ -552,7 +552,7 @@ const Users = {
       ]);
       wrapper.appendChild(fulfillBox);
     } else if (r.status === 'rejected') {
-      const rejecter = r.fulfilledBy ? DB.getById('users', r.fulfilledBy) : null;
+      const rejecter = r.fulfilledBy ? window.apiClient.userCache.getById(r.fulfilledBy) : null;
       wrapper.appendChild(el('h4', { text: 'Rejection Info', style: 'margin-top:var(--spacing-sm); margin-bottom:var(--spacing-xs); font-size:0.875rem; color:var(--danger);' }));
       const rejectBox = el('div', {
         style: 'background: color-mix(in oklab, var(--danger), transparent 95%); border: 1px solid color-mix(in oklab, var(--danger), transparent 70%); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size:0.875rem;'
@@ -1037,8 +1037,8 @@ const Users = {
       });
     };
 
-    const getUserOptions = () => DB.getAll('users').map(u => ({ value: u.name, label: u.name }));
-    const getClientOptions = () => DB.getAll('clients').map(c => ({ value: c.name, label: c.name }));
+    const getUserOptions = () => (window.apiClient.userCache._users || []).map(u => ({ value: u.name, label: u.name }));
+    const getClientOptions = () => (window.apiClient.clientCache._clients || []).map(c => ({ value: c.name, label: c.name }));
     const getDueDateOptions = () => [
       { value: 'Overdue', label: 'Overdue' },
       { value: 'Due Today', label: 'Due Today' },
@@ -1111,7 +1111,7 @@ const Users = {
     });
 
     if (activeFilters && activeFilters.user && activeFilters.user.size > 0) {
-      logs = logs.filter(l => activeFilters.user.has(l.userName || (DB.getById('users', l.userId)?.name)));
+      logs = logs.filter(l => activeFilters.user.has(l.userName || (window.apiClient.userCache.getById(l.userId)?.name)));
     }
     if (activeFilters && activeFilters.client && activeFilters.client.size > 0) {
       logs = logs.filter(l => {
@@ -1214,7 +1214,7 @@ const Users = {
     };
 
     const items = logs.map((l, idx) => {
-      const user = DB.getById('users', l.userId);
+      const user = window.apiClient.userCache.getById(l.userId);
       const userName = user ? user.name : (l.userName || l.userId);
       const initials = userName.split(' ').map(p => p[0]).slice(0, 2).join('').toUpperCase();
       const avatarStyle = user?.avatarUrl ? `background-image:url('${escapeHtml(user.avatarUrl)}'); background-size:cover; background-position:center;` : '';
@@ -1281,12 +1281,12 @@ const Users = {
     allPendingChanges.forEach(pc => {
       const isNew = !pc.parentRecordId;
       const data = pc.proposedData || {};
-      const submitter = DB.getById('users', pc.submittedBy);
+      const submitter = window.apiClient.userCache.getById(pc.submittedBy);
 
       // Resolve the entity for the pending change
       let itemEntity = data.entity;
       if (pc.table === 'workRequestPhaseRouting') {
-        const wr = DB.getById('workRequests', pc.parentRecordId);
+        const wr = window.apiClient.workRequestCache.getById(pc.parentRecordId);
         itemEntity = wr?.entity;
       }
       if (!itemEntity || itemEntity === 'ALL') {
@@ -1312,7 +1312,7 @@ const Users = {
           raw: pc
         });
       } else if (pc.table === 'workRequestPhaseRouting') {
-        const wr = DB.getById('workRequests', pc.parentRecordId);
+        const wr = window.apiClient.workRequestCache.getById(pc.parentRecordId);
         wrPhaseRouting.push({
           type: 'change',
           kind: 'wrPhaseRouting',
@@ -1374,7 +1374,7 @@ const Users = {
         });
       } else if (pc.table === 'tasks') {
         const wrId = data.workRequestId;
-        const wr = wrId ? DB.getById('workRequests', wrId) : null;
+        const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
         taskCreation.push({
           type: 'change',
           kind: 'taskCreation',
@@ -1394,7 +1394,7 @@ const Users = {
 
     // Disbursement submissions awaiting approval
     DB.getWhere('disbursements', d => entFilter(d.entity) && ['Submitted', 'Under Review'].includes(d.status)).forEach(d => {
-      const submitter = DB.getById('users', d.requestedBy);
+      const submitter = window.apiClient.userCache.getById(d.requestedBy);
       disbursementToRelease.push({
         type: 'record',
         kind: 'disbursementCreation',
@@ -1413,7 +1413,7 @@ const Users = {
 
     // Release-pending disbursements
     DB.getWhere('disbursements', d => entFilter(d.entity) && d.status === 'Release Pending Approval').forEach(d => {
-      const submitter = DB.getById('users', d.releaseRequestedBy || d.requestedBy);
+      const submitter = window.apiClient.userCache.getById(d.releaseRequestedBy || d.requestedBy);
       disbursementToRelease.push({
         type: 'record',
         kind: 'disbursementRelease',
@@ -1432,7 +1432,7 @@ const Users = {
 
     // Release-pending invoices (billing release)
     DB.getWhere('invoices', inv => entFilter(inv.entity) && inv.status === 'Release Pending Approval').forEach(inv => {
-      const submitter = DB.getById('users', inv.releaseRequestedBy || inv.createdBy);
+      const submitter = window.apiClient.userCache.getById(inv.releaseRequestedBy || inv.createdBy);
       billingToRelease.push({
         type: 'record',
         kind: 'billingRelease',
@@ -1451,7 +1451,7 @@ const Users = {
 
     // Release-pending transmittals
     DB.getWhere('transmittals', t => entFilter(t.entity) && t.status === 'Release Pending Approval').forEach(t => {
-      const submitter = DB.getById('users', t.releaseRequestedBy || t.createdBy);
+      const submitter = window.apiClient.userCache.getById(t.releaseRequestedBy || t.createdBy);
       transmittalSent.push({
         type: 'record',
         kind: 'transmittalRelease',
@@ -1856,7 +1856,7 @@ const Users = {
           title = `Transmittal: #${data.transmittalNumber || data.id}`;
         } else if (pc.table === 'tasks') {
            const wrId = data.workRequestId;
-           const wr = wrId ? DB.getById('workRequests', wrId) : null;
+           const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
            title = `Task: ${data.title}`;
            subtitle = wr ? `For WR: ${wr.title}` : 'Pending task approval';
          } else if (pc.table === 'clients') {
@@ -1926,7 +1926,7 @@ const Users = {
         }
       ],
       renderCard(item) {
-        const submitter = DB.getById('users', item.submittedBy);
+        const submitter = window.apiClient.userCache.getById(item.submittedBy);
         const avatars = submitter ? [{ name: submitter.name, avatarUrl: submitter.avatarUrl }] : [];
         const isExpense = item.type === 'disbursement';
         const key = (isExpense ? 'EXP-' : 'BIL-') + (isExpense ? expNumber++ : billNumber++);
@@ -2007,7 +2007,7 @@ const Users = {
     
     const tbody = el('tbody');
     items.forEach(item => {
-      const submitter = DB.getById('users', item.submittedBy);
+      const submitter = window.apiClient.userCache.getById(item.submittedBy);
       const tr = el('tr', { style: 'cursor: pointer;' });
       tr.addEventListener('click', () => {
         if (item.type === 'disbursement') {
@@ -2061,7 +2061,7 @@ const Users = {
   renderListView(container, items) {
     const list = el('div', { class: 'list-view' });
     items.forEach(item => {
-      const submitter = DB.getById('users', item.submittedBy);
+      const submitter = window.apiClient.userCache.getById(item.submittedBy);
       const row = el('div', { class: 'list-item', style: 'cursor: pointer;' });
       row.addEventListener('click', () => {
         if (item.type === 'disbursement') {
@@ -2574,7 +2574,7 @@ const Users = {
     }
 
     // Submitter Info
-    const submitter = DB.getById('users', pc.submittedBy);
+    const submitter = window.apiClient.userCache.getById(pc.submittedBy);
     const submitterName = submitter ? submitter.name : pc.submittedBy;
     const submitterInitials = getInitials(submitterName);
 
@@ -2663,14 +2663,14 @@ const Users = {
 
     if (pc.table === 'tasks') {
       // Work Request
-      const wr = proposed.workRequestId ? DB.getById('workRequests', proposed.workRequestId) : null;
+      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
       const wrVal = wr 
         ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || proposed.workRequestId })
         : el('span', { text: proposed.workRequestId || 'None' });
       propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
 
       // Assignee
-      const assignee = proposed.assigneeId ? DB.getById('users', proposed.assigneeId) : null;
+      const assignee = proposed.assigneeId ? window.apiClient.userCache.getById(proposed.assigneeId) : null;
       const assigneeVal = assignee 
         ? el('span', { text: assignee.name })
         : el('span', { class: 'notion-property-value-warning', html: `⚠️ Not set` });
@@ -2707,7 +2707,7 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Predecessors', Icons.predecessors, predVal));
 
     } else if (pc.table === 'workRequests') {
-      const client = proposed.clientId ? DB.getById('clients', proposed.clientId) : null;
+      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
       
       const statusVal = el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' });
@@ -2717,14 +2717,14 @@ const Users = {
       const priorityVal = el('span', { class: 'badge badge-info', text: priority });
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, priorityVal));
 
-      const assignee = proposed.assigneeId ? DB.getById('users', proposed.assigneeId) : null;
+      const assignee = proposed.assigneeId ? window.apiClient.userCache.getById(proposed.assigneeId) : null;
       propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, el('span', { text: assignee ? assignee.name : 'Not set' })));
 
     } else if (pc.table === 'invoices') {
-      const client = proposed.clientId ? DB.getById('clients', proposed.clientId) : null;
+      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
 
-      const wr = proposed.workRequestId ? DB.getById('workRequests', proposed.workRequestId) : null;
+      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
       propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, el('span', { text: wr ? wr.title : 'None' })));
 
       propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate) })));
@@ -2732,10 +2732,10 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Total amount', Icons.amount, el('span', { text: formatPHP(proposed.total), style: 'font-weight: 700;' })));
 
     } else if (pc.table === 'transmittals') {
-      const client = proposed.clientId ? DB.getById('clients', proposed.clientId) : null;
+      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
 
-      const wr = proposed.workRequestId ? DB.getById('workRequests', proposed.workRequestId) : null;
+      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
       propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, el('span', { text: wr ? wr.title : 'None' })));
 
       propertyGrid.appendChild(createPropertyRow('Date', Icons.dueDate, el('span', { text: formatDate(proposed.date) })));
@@ -2750,7 +2750,7 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Retainer status', Icons.status, el('span', { text: proposed.retainer ? 'Yes' : 'No' })));
 
     } else if (pc.table === 'disbursements') {
-      const client = proposed.clientId ? DB.getById('clients', proposed.clientId) : null;
+      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
       propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
       propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
@@ -3155,10 +3155,10 @@ const Users = {
 
       tr.appendChild(el('td', { text: this._requestTypeLabel(r.type) }));
 
-      const wr = DB.getById('workRequests', r.workRequestId);
+      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
       tr.appendChild(el('td', { text: wr ? wr.title : '—' }));
 
-      const client = DB.getById('clients', r.clientId);
+      const client = window.apiClient.clientCache.getById(r.clientId);
       tr.appendChild(el('td', { text: client ? client.name : '—' }));
 
       tr.appendChild(el('td', { text: formatDate(r.requestedAt) }));
@@ -3190,7 +3190,7 @@ const Users = {
         });
         tdAct.appendChild(cancelBtn);
       } else if (r.status === 'fulfilled') {
-        const fulfiller = DB.getById('users', r.fulfilledBy);
+        const fulfiller = window.apiClient.userCache.getById(r.fulfilledBy);
         tdAct.appendChild(el('span', { text: `Fulfilled by ${fulfiller ? fulfiller.name : 'System'} on ${formatDate(r.fulfilledAt)}`, style: 'color: var(--color-text-muted); font-size: 0.8125rem; margin-left: 4px;' }));
       } else if (r.status === 'rejected') {
         tdAct.appendChild(el('span', { text: r.rejectionReason ? `Reason: ${r.rejectionReason}` : 'No reason provided', style: 'color: var(--color-danger); font-size: 0.8125rem; margin-left: 4px;' }));
@@ -3219,8 +3219,8 @@ const Users = {
 
     let cardNumber = 1;
     const renderCard = (r) => {
-      const wr = DB.getById('workRequests', r.workRequestId);
-      const client = DB.getById('clients', r.clientId);
+      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
+      const client = window.apiClient.clientCache.getById(r.clientId);
       const statusPriorityMap = {
         'pending': 'card-v2-priority-medium',
         'fulfilled': 'card-v2-priority-low',
@@ -3230,7 +3230,7 @@ const Users = {
 
       let detail = '';
       if (r.status === 'fulfilled') {
-        const fulfiller = DB.getById('users', r.fulfilledBy);
+        const fulfiller = window.apiClient.userCache.getById(r.fulfilledBy);
         detail = `Fulfilled by ${fulfiller ? fulfiller.name : 'System'}`;
       } else if (r.status === 'rejected' && r.rejectionReason) {
         detail = r.rejectionReason;
@@ -3294,8 +3294,8 @@ const Users = {
       const item = el('div', { class: 'list-item' });
       const left = el('div');
       left.appendChild(el('div', { class: 'list-item-title', text: self._requestTypeLabel(r.type) }));
-      const wr = DB.getById('workRequests', r.workRequestId);
-      const client = DB.getById('clients', r.clientId);
+      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
+      const client = window.apiClient.clientCache.getById(r.clientId);
       const metaParts = [
         client ? client.name : '',
         wr ? wr.title : '',
@@ -3304,7 +3304,7 @@ const Users = {
       ].filter(Boolean);
       left.appendChild(el('div', { class: 'list-item-meta', text: metaParts.join(' • ') }));
       if (r.status === 'fulfilled') {
-        const fulfiller = DB.getById('users', r.fulfilledBy);
+        const fulfiller = window.apiClient.userCache.getById(r.fulfilledBy);
         left.appendChild(el('div', { class: 'list-item-meta', text: `Fulfilled by ${fulfiller ? fulfiller.name : 'System'} on ${formatDate(r.fulfilledAt)}`, style: 'color:var(--color-success);' }));
       }
       if (r.status === 'rejected' && r.rejectionReason) {

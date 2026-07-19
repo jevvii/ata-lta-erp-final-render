@@ -297,7 +297,8 @@ const Clients = {
     this.clearNode(container);
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
     ]);
     const clients = await this.getFilteredClients(query);
 
@@ -651,7 +652,7 @@ const Clients = {
 
       // Right section (Work requests)
       const rightSec = el('div', { class: 'jira-accordion-details-section' });
-      const clientWrs = DB.getWhere('workRequests', wr => wr.clientId === client.id);
+      const clientWrs = (window.apiClient.workRequestCache._wrs || []).filter(wr => wr.clientId === client.id);
       rightSec.appendChild(el('div', { class: 'jira-accordion-details-title', text: `Work Requests (${clientWrs.length})` }));
       detailsContainer.appendChild(rightSec);
 
@@ -772,7 +773,8 @@ const Clients = {
     }
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
     ]);
     this.clearNode(container);
 
@@ -1424,7 +1426,8 @@ const Clients = {
     const isManagerial = Auth.isManagerial();
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
     ]);
 
     const entFilter = ent => {

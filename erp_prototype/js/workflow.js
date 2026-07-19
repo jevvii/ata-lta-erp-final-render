@@ -1320,7 +1320,7 @@ const Workflow = {
     numGroup.appendChild(el('label', { text: 'Invoice Number' }));
     numGroup.appendChild(el('input', {
       type: 'text', name: 'invoiceNumber',
-      value: Billing.nextInvoiceNumber(entity),
+      value: Utils.nextInvoiceNumber(entity),
       readonly: true,
       style: 'background: #f1f5f9; cursor: default;'
     }));
@@ -1700,7 +1700,7 @@ const Workflow = {
     tnGroup.appendChild(el('label', { text: 'Tracking Number' }));
     tnGroup.appendChild(el('input', {
       type: 'text', name: 'trackingNumber',
-      value: Transmittal.generateTrackingNumber(entity),
+      value: Utils.generateTrackingNumber(entity),
       readonly: true,
       style: 'background: #f1f5f9; cursor: default;'
     }));
@@ -1811,7 +1811,7 @@ const Workflow = {
         id: generateId('tx'),
         workRequestId: data.workRequestId,
         clientId: data.clientId,
-        trackingNumber: data.trackingNumber || Transmittal.generateTrackingNumber(entity),
+        trackingNumber: data.trackingNumber || Utils.generateTrackingNumber(entity),
         status: 'Draft',
         items,
         notes: data.notes || '',
@@ -6067,8 +6067,8 @@ const Workflow = {
               style: 'margin-left:6px;padding:1px 6px;font-size:10px;background:color-mix(in oklab, var(--warn), transparent 85%);color:color-mix(in oklab, var(--warn), black 30%);border:none;border-radius: 12px;cursor:pointer;font-weight:600;'
             });
             goBtn.addEventListener('click', () => {
-              if (hint.route === '#billing') { Billing.view = 'list'; Billing.detailId = null; }
-              if (hint.route === '#disbursement') { Disbursement.view = 'list'; Disbursement.detailId = null; }
+              if (hint.route === '#billing' && typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; }
+              if (hint.route === '#disbursement' && typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; }
               location.hash = hint.route;
             });
             hintEl.appendChild(goBtn);

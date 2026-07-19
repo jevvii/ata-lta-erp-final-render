@@ -108,17 +108,13 @@
   - Confirm update flow fires `sw-update-available` event.
 
 ### Phase 5 — consolidated view completeness
-- [ ] **5.1 Decide on `ALL` strategy for non-report modules**
-  - Option A: keep current fallback to first real entity (safe, but not truly consolidated).
-  - Option B: implement true consolidation in backend services by querying both `ATA`/`LTA` and merging results; update pagination meta to reflect combined totals.
-- [ ] **5.2 If Option B**, update these services/controllers:
-  - `clients/service.js`
-  - `operations/service.js`
-  - `billing/service.js`
-  - `disbursements/service.js`
-  - `transmittals/service.js`
-  - `documents/service.js`
-- [ ] **5.3 Frontend entity switcher** should reset filters when switching to `ALL` and show a clear “Consolidated” indicator.
+- [x] **5.1 Decide on `ALL` strategy for non-report modules**
+  - **Option A chosen** (2026-07-19). Option B would require merging paginated results across two Supabase queries with correct sorting and totals, plus frontend form support for mixed-entity records. The risk of breaking the existing 83 passing tests and the performance wins from earlier phases outweighs the benefit for list/form modules. Reports and dashboard already return true consolidated analytics for `ALL`.
+- [x] **5.2 Backend fallback consistency**
+  - No service changes required. `backend/src/middleware/resolveEntity.js` already falls back non-consolidation endpoints to the user's first real entity when `X-Active-Entity: ALL` is sent and `allowAll` is not set. `backend/src/app.js` applies `auth` + `entityScope` globally before all module routers, so the behavior is uniform across clients, operations, billing, disbursements, transmittals, and documents.
+- [x] **5.3 Frontend entity switcher**
+  - `erp_prototype/js/app.js` now clears `erp_filters_*`, `erp_group_*`, and `erp_sort_*` sessionStorage keys when switching to `ALL`.
+  - `updateEntityBadge()` shows **“Consolidated”** (`badge-all`) on `#dashboard`/`#reports` and **“Viewing {first entity}”** (`badge-neutral`) on all other modules while `ALL` is active.
 
 ### Phase 6 — cleanup before commit
 - [ ] **6.1 Remove `dist/` and `.gz`/`.br` artifacts** from the working tree (they should be generated at deploy time, not committed).

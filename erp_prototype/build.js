@@ -41,11 +41,12 @@ const DEFAULT_API_URL = 'http://localhost:3000/v1';
 const BUNDLES = {
   shell: ['utils.js', 'apiClient.js', 'auth.js', 'app.js'],
   vendor: ['dataTable.js', 'kanban.js', 'datepicker.js', 'timepicker.js'],
-  modules: [
-    'data.js', 'dashboard.js', 'clients.js', 'workflow.js', 'logos.js',
-    'billing.js', 'disbursement.js', 'dms.js', 'reports.js', 'transmittal.js',
-    'pendingChanges.js', 'users.js', 'profile.js',
-  ],
+  // data.js remains in the core bundle because clients.js and pendingChanges.js
+  // still reference DB.* fallbacks. Once those modules stop using localStorage
+  // fallbacks, data.js can be removed from production bundles.
+  'modules-core': ['data.js', 'dashboard.js', 'clients.js', 'workflow.js'],
+  'modules-billing': ['billing.js', 'disbursement.js', 'transmittal.js'],
+  'modules-admin': ['pendingChanges.js', 'users.js', 'reports.js', 'profile.js', 'dms.js'],
 };
 
 function getApiUrl() {
@@ -187,14 +188,50 @@ function generateIndexHtml(sourceHtml, manifest, apiOrigin) {
   html = html.replace(/<\/head>/i, `${preconnect}</head>`);
 
   // Replace every script tag (including inline blocks) in the source with the production bundle tags.
-  const buildHash = manifest.modules ? manifest.modules.split('.')[1] : Date.now();
+  const coreName = manifest['modules-core'] || '';
+  const buildHash = coreName ? coreName.split('.')[1] : Date.now();
   const scriptBlock = `  <script src="env.js"></script>
-  <script src="${manifest.shell}"></script>
+  <script>
+    window.__ERP_BUNDLES__ = {
+      billing: ${JSON.stringify(manifest['modules-billing'] || '')},
+      admin: ${JSON.stringify(manifest['modules-admin'] || '')}
+    };
+  </script>
+  <script src="${manifest.shell}" defer></script>
   <script src="${manifest.vendor}" defer></script>
-  <script src="${manifest.modules}" defer></script>
+  <script src="${manifest['modules-core']}" defer></script>
   <script>
     (function () {
+      function loadScript(src) {
+        return new Promise(function (resolve, reject) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.async = true;
+          s.onload = resolve;
+          s.onerror = function () { reject(new Error('Failed to load ' + src)); };
+          document.body.appendChild(s);
+        });
+      }
+      function loadLazyBundles() {
+        var bundles = window.__ERP_BUNDLES__ || {};
+        if (bundles.billing) loadScript(bundles.billing).catch(function () {});
+        if (bundles.admin) loadScript(bundles.admin).catch(function () {});
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadLazyBundles);
+      } else {
+        loadLazyBundles();
+      }
+
       if (!('serviceWorker' in navigator)) return;
+
+      // Dev-only listener for the custom SW update event.
+      if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+        window.addEventListener('sw-update-available', function (e) {
+          console.log('[SW] sw-update-available event dispatched:', e.detail);
+        });
+      }
+
       navigator.serviceWorker.register('/sw.js?v=${buildHash}')
         .then(function (registration) {
           registration.addEventListener('updatefound', function () {
@@ -202,6 +239,7 @@ function generateIndexHtml(sourceHtml, manifest, apiOrigin) {
             if (!installing) return;
             installing.addEventListener('statechange', function () {
               if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                window.dispatchEvent(new CustomEvent('sw-update-available', { detail: { registration: registration } }));
                 console.log('[SW] New version available — hard refresh to update.');
               }
             });
@@ -238,6 +276,7 @@ async function buildWithEsbuild(manifestTarget, apiUrl, apiOrigin) {
   }
 
   const manifest = {};
+  let lastMetafile = null;
 
   for (const [name, files] of Object.entries(BUNDLES)) {
     const entryPath = path.join(TMP_DIR, `${name}.js`);
@@ -261,6 +300,12 @@ async function buildWithEsbuild(manifestTarget, apiUrl, apiOrigin) {
     const outFile = Object.keys(result.metafile.outputs).find((f) => f.endsWith('.js'));
     if (!outFile) throw new Error(`No output for bundle ${name}`);
     manifest[name] = path.relative(DIST, outFile).replace(/\\/g, '/');
+    lastMetafile = result.metafile;
+  }
+
+  // Write metafile for bundle profiling (dev/build analysis only).
+  if (lastMetafile) {
+    fs.writeFileSync(path.join(DIST, 'metafile.json'), JSON.stringify(lastMetafile, null, 2));
   }
 
   const cssSource = fs.readFileSync(path.join(CSS_DIR, 'styles.css'), 'utf8');

@@ -96,9 +96,9 @@ async function runTests() {
   try {
     indexHtml = await fetchText(`${BASE}/`);
     const hasShell = indexHtml.body.includes('id="app-shell"');
-    // Source dev mode loads individual scripts; production bundle loads shell/modules bundles.
+    // Source dev mode loads individual scripts; production bundle loads shell + route-specific bundles.
     const hasApiClient = indexHtml.body.includes('js/apiClient.js');
-    const hasBundles = /shell\.\w+\.js/.test(indexHtml.body) && /modules\.\w+\.js/.test(indexHtml.body);
+    const hasBundles = /shell\.\w+\.js/.test(indexHtml.body) && /modules-core\.\w+\.js/.test(indexHtml.body);
     log('index.html shell loaded', hasShell && (hasApiClient || hasBundles), `status=${indexHtml.status}, source=${hasApiClient}, bundled=${hasBundles}`);
   } catch (e) {
     log('index.html shell loaded', false, e.message);

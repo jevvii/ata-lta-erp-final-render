@@ -286,7 +286,7 @@
       async ensure() {
         if (this._wrs && !this._stale()) return this._wrs;
         if (this._promise) return this._promise;
-        this._promise = window.apiClient.workRequests.list({}).then(res => {
+        this._promise = window.apiClient.workRequests.list({ includeTasks: true }).then(res => {
           this._wrs = res.data || [];
           this._loadedAt = Date.now();
           return this._wrs;
@@ -366,6 +366,7 @@
         const q = qs.toString();
         return get(`/invoices${q ? '?' + q : ''}`);
       },
+      aging: () => get('/invoices/aging'),
       create: (data) => post('/invoices', data),
       get: (id) => get(`/invoices/${id}`),
       update: (id, data) => put(`/invoices/${id}`, data),

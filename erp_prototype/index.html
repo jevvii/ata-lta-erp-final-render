@@ -114,7 +114,6 @@
   <script src="js/dashboard.js" defer></script>
   <script src="js/clients.js" defer></script>
   <script src="js/workflow.js" defer></script>
-  <script src="js/logos.js" defer></script>
   <script src="js/billing.js" defer></script>
   <script src="js/disbursement.js" defer></script>
   <script src="js/dms.js" defer></script>
@@ -128,6 +127,11 @@
     (function () {
       if (!('serviceWorker' in navigator)) return;
 
+      // Log the custom update event in development for visibility.
+      window.addEventListener('sw-update-available', function (e) {
+        console.log('[SW] sw-update-available event dispatched:', e.detail);
+      });
+
       // In development, check for updates periodically but never auto-reload.
       // The user can hard-refresh when they want fresh code. Auto-reload on every
       // service worker activation breaks login/forms during active development.
@@ -138,6 +142,7 @@
             if (!installing) return;
             installing.addEventListener('statechange', function () {
               if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                window.dispatchEvent(new CustomEvent('sw-update-available', { detail: { registration: registration } }));
                 console.log('[SW] New version available — hard refresh to update.');
               }
             });

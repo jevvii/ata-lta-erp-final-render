@@ -19,3 +19,8 @@ erp_prototype/.env
 
 # Generated SPA runtime config (built by erp_prototype/build.js or dev-server.js)
 erp_prototype/env.js
+
+# Build temp / precompressed artifacts
+erp_prototype/.build-tmp/
+*.gz
+*.br
