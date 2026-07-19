@@ -13,20 +13,47 @@ const App = {
    * Load a route-specific JS bundle on demand. Each bundle is only injected
    * once; subsequent calls return the same promise. This keeps the initial
    * page weight low while preserving the global-variable module contract.
+   *
+   * Supports two modes:
+   *  - Production: window.__ERP_BUNDLES__ maps bundle names to hashed URLs.
+   *  - Dev: window.__ERP_DEV_BUNDLES__ maps bundle names to arrays of
+   *    individual source file paths (loaded sequentially to preserve order).
    */
   loadBundle(name) {
     if (this._bundlePromises[name]) return this._bundlePromises[name];
+
+    // Production mode: single hashed bundle file
     const bundles = (typeof window !== 'undefined' && window.__ERP_BUNDLES__) || {};
     const url = bundles[name];
-    if (!url) return Promise.resolve();
-    const promise = new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = url;
-      s.async = true;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('Failed to load bundle ' + name));
-      document.body.appendChild(s);
-    });
+    if (url) {
+      const promise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('Failed to load bundle ' + name));
+        document.body.appendChild(s);
+      });
+      this._bundlePromises[name] = promise;
+      return promise;
+    }
+
+    // Dev mode: load individual script files sequentially
+    const devBundles = (typeof window !== 'undefined' && window.__ERP_DEV_BUNDLES__) || {};
+    const files = devBundles[name];
+    if (!files || files.length === 0) return Promise.resolve();
+
+    const promise = files.reduce((chain, file) => {
+      return chain.then(() => new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = file;
+        s.async = false; // preserve execution order
+        s.onload = resolve;
+        s.onerror = () => { console.warn('[App] Failed to load dev bundle file: ' + file); resolve(); };
+        document.body.appendChild(s);
+      }));
+    }, Promise.resolve());
+
     this._bundlePromises[name] = promise;
     return promise;
   },
@@ -43,6 +70,7 @@ const App = {
       '#reports': 'admin',
       '#admin': 'admin',
       '#profile': 'admin',
+      '#dms': 'admin',
     };
     const bundle = map[baseHash];
     if (bundle) await this.loadBundle(bundle);
@@ -177,18 +205,18 @@ const App = {
   async updateSidebarNotifications() {
     const entity = Auth.activeEntity;
 
-    // Fetch lightweight badge counts from the API (cached for 30s by apiClient).
-    let disbCounts = null;
-    let opsCounts = null;
-    try {
-      disbCounts = await window.apiClient.disbursements.counts(entity);
-    } catch (err) {
-      console.error('[App.updateSidebarNotifications] disbursement counts failed', err);
+    // Fetch lightweight badge counts from the API in parallel (cached for 30s by apiClient).
+    const [disbResult, opsResult] = await Promise.allSettled([
+      window.apiClient.disbursements.counts(entity),
+      window.apiClient.operationsRequests.counts(entity),
+    ]);
+    const disbCounts = disbResult.status === 'fulfilled' ? disbResult.value : null;
+    const opsCounts = opsResult.status === 'fulfilled' ? opsResult.value : null;
+    if (disbResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] disbursement counts failed', disbResult.reason);
     }
-    try {
-      opsCounts = await window.apiClient.operationsRequests.counts(entity);
-    } catch (err) {
-      console.error('[App.updateSidebarNotifications] operations request counts failed', err);
+    if (opsResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] operations request counts failed', opsResult.reason);
     }
 
     // Disbursement nav badge only surfaces work awaiting release.
@@ -427,8 +455,8 @@ const App = {
         // Reset module view to 'list' when clicking a nav link directly
         const moduleViewMap = {
           '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; },
-          '#billing': () => { Billing.view = 'list'; Billing.detailId = null; },
-          '#disbursement': () => { Disbursement.view = 'list'; Disbursement.detailId = null; },
+          '#billing': () => { if (typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; } },
+          '#disbursement': () => { if (typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; } },
           '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } },
           '#admin': () => { if (typeof Users !== 'undefined') { Users.view = 'users'; Users.editingId = null; Users.pendingDetailId = null; } }
         };
@@ -656,16 +684,24 @@ const App = {
       }
     }
 
-    const moduleMap = {
-      '#dashboard': Dashboard,
-      '#clients': Clients,
-      '#operations': Workflow,
-      '#billing': Billing,
-      '#disbursement': Disbursement,
-      '#transmittal': Transmittal,
-      '#reports': Reports,
-      '#admin': Users,
-      '#profile': Profile
+    // Resolve the module for the current route. Lazy-loaded modules use `const`
+    // declarations which create global-scope variables accessible by bare name
+    // but NOT via window.X. We use a resolver function so the bare reference is
+    // only evaluated for the matched route (after ensureRouteBundle has loaded it).
+    const resolveModule = (hash) => {
+      switch (hash) {
+        case '#dashboard':    return Dashboard;
+        case '#clients':      return Clients;
+        case '#operations':   return Workflow;
+        case '#billing':      return typeof Billing !== 'undefined' ? Billing : undefined;
+        case '#disbursement': return typeof Disbursement !== 'undefined' ? Disbursement : undefined;
+        case '#transmittal':  return typeof Transmittal !== 'undefined' ? Transmittal : undefined;
+        case '#reports':      return typeof Reports !== 'undefined' ? Reports : undefined;
+        case '#admin':        return typeof Users !== 'undefined' ? Users : undefined;
+        case '#profile':      return typeof Profile !== 'undefined' ? Profile : undefined;
+        case '#dms':          return typeof DMS !== 'undefined' ? DMS : undefined;
+        default:              return undefined;
+      }
     };
 
     // Restrict reports and disbursement based on RBAC
@@ -682,13 +718,13 @@ const App = {
        return;
     }
 
-    const module = moduleMap[baseHash];
+    const module = resolveModule(baseHash);
     const previousModuleKey = this.currentModule;
     this.currentModule = baseHash.replace('#', '');
     const content = document.getElementById('content');
 
     if (module && module.render) {
-      const previousModule = moduleMap[`#${previousModuleKey}`];
+      const previousModule = resolveModule(`#${previousModuleKey}`);
       if (previousModule && previousModule !== module && typeof previousModule.cleanup === 'function') {
         previousModule.cleanup();
       }

@@ -133,7 +133,7 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
 
   let query = supabaseAdmin
     .from('clients')
-    .select('*')
+    .select('*', { count: 'exact' })
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
@@ -142,7 +142,16 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
     query = query.eq('status', status);
   }
 
-  const { data, error } = await query;
+  if (search) {
+    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
+  }
+
+  if (isPaginated) {
+    const offset = (pageNum - 1) * limitNum;
+    query = query.range(offset, offset + limitNum - 1);
+  }
+
+  const { data, error, count } = await query;
 
   if (error) {
     throw new AppError({
@@ -153,16 +162,6 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
   }
 
   let rows = data || [];
-
-  if (search) {
-    const q = search.toLowerCase();
-    rows = rows.filter(
-      (row) =>
-        (row.name || '').toLowerCase().includes(q) ||
-        (row.trade_name || '').toLowerCase().includes(q) ||
-        (row.tin || '').toLowerCase().includes(q)
-    );
-  }
 
   const clientIds = rows.map((r) => r.id);
   const [related, entityCode] = await Promise.all([
@@ -178,10 +177,8 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
     })
   );
 
-  const total = mapped.length;
-  const result = isPaginated
-    ? mapped.slice((pageNum - 1) * limitNum, pageNum * limitNum)
-    : mapped;
+  const result = mapped;
+  const total = count || 0;
 
   if (!isPaginated) {
     return { data: result };

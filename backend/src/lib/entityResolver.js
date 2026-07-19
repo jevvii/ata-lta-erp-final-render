@@ -39,4 +39,27 @@ const resolveEntityId = async (code) => {
   return data.id;
 };
 
-module.exports = { resolveEntityId };
+// Reverse cache — UUID → code
+const reverseCache = new Map();
+
+/**
+ * Resolve an entity UUID to its code.
+ * @param {string} id — entity UUID
+ * @returns {Promise<string>} — entity code ('ATA' or 'LTA')
+ */
+const resolveEntityCode = async (id) => {
+  if (reverseCache.has(id)) return reverseCache.get(id);
+
+  const { data, error } = await supabaseAdmin
+    .from('entities')
+    .select('code')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (error || !data) return id;
+
+  reverseCache.set(id, data.code);
+  return data.code;
+};
+
+module.exports = { resolveEntityId, resolveEntityCode };
