@@ -2,7 +2,7 @@
  * Document Management System (DMS)
  * Upload, version tracking, handover log, comments, lifecycle, filters, view modes.
  *
- * Migrated from localStorage/DB.* to the Node.js backend API.
+ * Documents are persisted on the backend API with S3/Supabase storage.
  */
 
 const DMS = {

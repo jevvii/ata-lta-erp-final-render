@@ -1,7 +1,7 @@
 /**
  * Reporting & Analytics Module
  *
- * Migrated from localStorage/DB.* calculations to the Node.js backend API.
+ * Reports are rendered from backend endpoints; name lookups use API caches.
  * Uses window.apiClient.reports endpoints and userCache/clientCache for name lookups.
  *
  * Backend gaps to address:

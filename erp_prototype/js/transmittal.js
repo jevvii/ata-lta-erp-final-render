@@ -2,7 +2,7 @@
  * Transmittal Module
  * Create, send, and acknowledge transmittal letters with itemized document lists.
  *
- * Migrated from localStorage (DB.*) to the Node.js backend API.
+ * Backend transmittal responses are snake_case; normalizeTransmittal() maps them to camelCase.
  * Backend transmittal responses are snake_case, so a normalizeTransmittal()
  * helper maps them to the camelCase shape the UI expects.
  */
@@ -825,7 +825,8 @@ const Transmittal = {
       emptyState: { variant: 'compact', title: 'No transmittals', body: '' }
     }));
 
-    const seqMap = getChronologicalSequenceMap('transmittals');
+    const sortedForSeq = [...items].sort((a, b) => sortByDate(a, b, 'createdAt'));
+    const seqMap = new Map(sortedForSeq.map((t, i) => [t.id, i + 1]));
 
     const renderCard = (t) => {
       const clientName = self.getClientName(t.clientId);

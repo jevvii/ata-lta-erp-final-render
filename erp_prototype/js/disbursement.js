@@ -1097,7 +1097,8 @@ const Disbursement = {
       return col;
     });
 
-    const seqMap = getChronologicalSequenceMap('disbursements');
+    const sortedForSeq = [...items].sort((a, b) => sortByDate(a, b, 'createdAt'));
+    const seqMap = new Map(sortedForSeq.map((d, i) => [d.id, i + 1]));
 
     const renderCard = (d) => {
       const emp = window.apiClient.userCache.getById(self.getEmployeeId(d));

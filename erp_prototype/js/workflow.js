@@ -79,12 +79,18 @@ function disableIfPending(element, wr, title = 'Under approval') {
 
 /**
  * API-backed data layer for Work Requests and Tasks.
- * Replaces DB.*('workRequests') and DB.*('tasks') with window.apiClient.workRequests calls.
+ * Uses window.apiClient.workRequests and window.apiClient.tasks endpoints.
  */
 const WorkflowData = {
   _workRequests: null,
   _tasks: null,
   _loadingPromise: null,
+
+  // Pending approvals cache using window.apiClient.pendingApprovals.
+  _pendingApprovals: null,
+  _pendingApprovalsPromise: null,
+  _pendingApprovalsLoadedAt: null,
+  PENDING_APPROVALS_TTL_MS: 30 * 1000,
 
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
@@ -133,6 +139,63 @@ const WorkflowData = {
     this._workRequests = null;
     this._tasks = null;
     this._loadingPromise = null;
+    this._pendingApprovals = null;
+    this._pendingApprovalsPromise = null;
+    this._pendingApprovalsLoadedAt = null;
+  },
+
+  async loadPendingApprovals(force = false) {
+    const now = Date.now();
+    const fresh = this._pendingApprovalsLoadedAt && (now - this._pendingApprovalsLoadedAt < this.PENDING_APPROVALS_TTL_MS);
+    if (!force && this._pendingApprovals && fresh) return this._pendingApprovals;
+    if (this._pendingApprovalsPromise) return this._pendingApprovalsPromise;
+    this._pendingApprovalsPromise = window.apiClient.pendingApprovals.list({})
+      .then(res => {
+        this._pendingApprovals = (res?.data || []).map(pc => this._normalizePendingApproval(pc));
+        this._pendingApprovalsLoadedAt = Date.now();
+        return this._pendingApprovals;
+      })
+      .catch(err => {
+        console.error('[WorkflowData] failed to load pending approvals', err);
+        if (!this._pendingApprovals) this._pendingApprovals = [];
+        return this._pendingApprovals;
+      })
+      .finally(() => { this._pendingApprovalsPromise = null; });
+    return this._pendingApprovalsPromise;
+  },
+
+  invalidatePendingApprovals() {
+    this._pendingApprovals = null;
+    this._pendingApprovalsLoadedAt = null;
+    this._pendingApprovalsPromise = null;
+  },
+
+  getPendingApprovals() {
+    return this._pendingApprovals || [];
+  },
+
+  _normalizePendingApproval(pc) {
+    if (!pc) return pc;
+    return {
+      ...pc,
+      table: pc.table || pc.tableName,
+      tableName: pc.tableName || pc.table,
+      submittedAt: pc.submittedAt || pc.createdAt || pc.created_at,
+      submittedBy: pc.submittedBy || pc.submitted_by,
+      reviewedBy: pc.reviewedBy || pc.reviewed_by,
+      reviewedAt: pc.reviewedAt || pc.reviewed_at,
+      rejectionReason: pc.rejectionReason || pc.rejection_reason
+    };
+  },
+
+  getPendingApprovalByRecordId(recordId, tableName = 'workRequests') {
+    return (this._pendingApprovals || []).find(pc =>
+      pc.tableName === tableName && (pc.parentRecordId === recordId || pc.proposedData?.id === recordId)
+    ) || null;
+  },
+
+  getPendingApprovalsWhere(predicate) {
+    return (this._pendingApprovals || []).filter(predicate);
   },
 
   async ensure() {
@@ -140,6 +203,10 @@ const WorkflowData = {
     if (this._loadingPromise) return this._loadingPromise;
     this._loadingPromise = this._load().finally(() => { this._loadingPromise = null; });
     return this._loadingPromise;
+  },
+
+  async ensurePendingApprovals() {
+    return this.loadPendingApprovals();
   },
 
   async _load(options = {}) {
@@ -312,7 +379,7 @@ const WorkflowData = {
   },
 
   // ============================================================
-  // Related financial / document cache (replaces DB.getWhere scans)
+  // Related financial / document cache using window.apiClient.*.getRelated endpoints.
   // ============================================================
   _relatedByWr: new Map(),
   _relatedByTask: new Map(),
@@ -328,7 +395,6 @@ const WorkflowData = {
 
   _normalizeRelatedInvoice(inv) {
     if (!inv) return inv;
-    const local = DB.getById('invoices', inv.id);
     return {
       ...inv,
       id: inv.id,
@@ -342,13 +408,12 @@ const WorkflowData = {
       amountPaid: typeof inv.amount_paid === 'number' ? inv.amount_paid : (parseFloat(inv.amount_paid) || 0),
       balance: typeof inv.balance === 'number' ? inv.balance : (parseFloat(inv.balance) || 0),
       subtotal: typeof inv.subtotal === 'number' ? inv.subtotal : (parseFloat(inv.subtotal) || 0),
-      linkedTaskId: inv.linked_task_id || inv.linkedTaskId || local?.linkedTaskId || null,
+      linkedTaskId: inv.linked_task_id || inv.linkedTaskId || null,
     };
   },
 
   _normalizeRelatedDisbursement(d) {
     if (!d) return d;
-    const local = DB.getById('disbursements', d.id);
     return {
       ...d,
       id: d.id,
@@ -362,7 +427,7 @@ const WorkflowData = {
       clientId: d.client_id || d.clientId || null,
       employeeId: d.employee_id || d.employeeId || null,
       submittedAt: d.submitted_at || d.submittedAt || d.created_at || d.createdAt || null,
-      linkedTaskId: d.linked_task_id || d.linkedTaskId || local?.linkedTaskId || null,
+      linkedTaskId: d.linked_task_id || d.linkedTaskId || null,
     };
   },
 
@@ -396,26 +461,23 @@ const WorkflowData = {
     };
   },
 
-  _buildRelatedFromDb(wrId) {
-    const wr = this.getWorkRequestById(wrId) || DB.getById('workRequests', wrId) || {};
+  async _buildRelatedFromApi(wrId) {
+    const res = await window.apiClient.workRequests.getRelated(wrId);
+    const data = res?.data || {};
     return {
-      invoices: DB.getWhere('invoices', inv => inv.workRequestId === wrId || wr.linkedInvoiceId === inv.id)
-        .map(inv => this._normalizeRelatedInvoice(inv)),
-      disbursements: DB.getWhere('disbursements', d => d.linkedWorkRequestId === wrId || (wr.linkedDisbursementIds || []).includes(d.id))
-        .map(d => this._normalizeRelatedDisbursement(d)),
-      transmittals: DB.getWhere('transmittals', t => t.workRequestId === wrId || (wr.linkedTransmittalIds || []).includes(t.id))
-        .map(t => this._normalizeRelatedTransmittal(t)),
-      documents: DB.getWhere('documents', doc => doc.workRequestId === wrId)
-        .map(doc => this._normalizeRelatedDocument(doc)),
+      invoices: (data.invoices || []).map(inv => this._normalizeRelatedInvoice(inv)),
+      disbursements: (data.disbursements || []).map(d => this._normalizeRelatedDisbursement(d)),
+      transmittals: (data.transmittals || []).map(t => this._normalizeRelatedTransmittal(t)),
+      documents: (data.documents || []).map(doc => this._normalizeRelatedDocument(doc)),
     };
   },
 
-  _buildTaskRelatedFromDb(taskId) {
+  async _buildTaskRelatedFromApi(taskId) {
+    const res = await window.apiClient.tasks.getRelated(taskId);
+    const data = res?.data || {};
     return {
-      invoices: DB.getWhere('invoices', inv => inv.linkedTaskId === taskId)
-        .map(inv => this._normalizeRelatedInvoice(inv)),
-      disbursements: DB.getWhere('disbursements', d => d.linkedTaskId === taskId)
-        .map(d => this._normalizeRelatedDisbursement(d)),
+      invoices: (data.invoices || []).map(inv => this._normalizeRelatedInvoice(inv)),
+      disbursements: (data.disbursements || []).map(d => this._normalizeRelatedDisbursement(d)),
     };
   },
 
@@ -434,10 +496,10 @@ const WorkflowData = {
         this._relatedByWr.set(id, normalized);
         return normalized;
       })
-      .catch(err => {
+      .catch(async err => {
         console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
         if (!this._relatedByWr.has(id)) {
-          this._relatedByWr.set(id, this._buildRelatedFromDb(id));
+          this._relatedByWr.set(id, await this._buildRelatedFromApi(id));
         }
         return this._relatedByWr.get(id);
       })
@@ -451,7 +513,7 @@ const WorkflowData = {
   async loadRelatedForTask(id) {
     if (!id) return this._emptyTaskRelated();
     if (this._relatedTaskLoading.has(id)) return this._relatedTaskLoading.get(id);
-    const task = this.getTaskById(id) || DB.getById('tasks', id);
+    const task = this.getTaskById(id);
     const wrId = task ? task.workRequestId || task.work_request_id : null;
     const promise = (async () => {
       if (wrId) {
@@ -474,10 +536,10 @@ const WorkflowData = {
       this._relatedByTask.set(id, normalized);
       return normalized;
     })()
-      .catch(err => {
+      .catch(async err => {
         console.error(`[WorkflowData] failed to load related for task ${id}`, err);
         if (!this._relatedByTask.has(id)) {
-          this._relatedByTask.set(id, this._buildTaskRelatedFromDb(id));
+          this._relatedByTask.set(id, await this._buildTaskRelatedFromApi(id));
         }
         return this._relatedByTask.get(id);
       })
@@ -491,8 +553,8 @@ const WorkflowData = {
   getRelatedForWorkRequest(id) {
     if (!id) return this._emptyWrRelated();
     if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
-    // Cold fallback: local DB scan, then refresh from the backend asynchronously.
-    const fallback = this._buildRelatedFromDb(id);
+    // Cold fallback: empty cache, then refresh from the backend asynchronously.
+    const fallback = this._emptyWrRelated();
     this._relatedByWr.set(id, fallback);
     this.loadRelatedForWorkRequest(id).catch(() => {});
     return fallback;
@@ -501,7 +563,7 @@ const WorkflowData = {
   getRelatedForTask(id) {
     if (!id) return this._emptyTaskRelated();
     if (this._relatedByTask.has(id)) return this._relatedByTask.get(id);
-    const task = this.getTaskById(id) || DB.getById('tasks', id);
+    const task = this.getTaskById(id);
     if (task) {
       const wrId = task.workRequestId || task.work_request_id;
       if (wrId && this._relatedByWr.has(wrId)) {
@@ -514,8 +576,8 @@ const WorkflowData = {
         return filtered;
       }
     }
-    // Cold fallback: local DB scan, then refresh from the backend asynchronously.
-    const fallback = this._buildTaskRelatedFromDb(id);
+    // Cold fallback: empty cache, then refresh from the backend asynchronously.
+    const fallback = this._emptyTaskRelated();
     this._relatedByTask.set(id, fallback);
     this.loadRelatedForTask(id).catch(() => {});
     return fallback;
@@ -906,8 +968,7 @@ const Workflow = {
   getPhaseTransitionStatus(wrId) {
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
-      const pc = DB.getById('pendingChanges', wrId) || 
-                 DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === wrId)[0];
+      const pc = WorkflowData.getPendingApprovalByRecordId(wrId, 'workRequests');
       if (pc && pc.table === 'workRequests') {
         return { canTransition: false, reason: 'This Work Request is currently staged and awaiting administrator approval.' };
       }
@@ -1133,7 +1194,7 @@ const Workflow = {
   requestPhaseRouting(wrId, nextPhase) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
-    const existing = DB.getWhere('pendingChanges', pc =>
+    const existing = WorkflowData.getPendingApprovalsWhere(pc =>
       pc.status === 'pending' && pc.table === 'workRequestPhaseRouting' && pc.parentRecordId === wrId
     )[0];
     if (existing) {
@@ -1753,7 +1814,7 @@ const Workflow = {
 
     cancelBtn.addEventListener('click', () => overlay.remove());
 
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
       // Basic validation
       const issueDate = form.querySelector('[name="issueDate"]').value;
       const dueDate = form.querySelector('[name="dueDate"]').value;
@@ -1777,7 +1838,6 @@ const Workflow = {
       });
 
       const record = {
-        id: generateSequentialId('inv', 'invoices'),
         invoiceNumber: data.invoiceNumber,
         clientId: data.clientId,
         workRequestId: data.workRequestId || null,
@@ -1796,14 +1856,14 @@ const Workflow = {
         updatedAt: new Date().toISOString()
       };
 
-      DB.insert('invoices', record);
-
-      // Link invoice back to WR
-      if (data.workRequestId) {
-        const linkedWr = WorkflowData.getWorkRequestById(data.workRequestId);
-        if (linkedWr) {
-          WorkflowData.updateWorkRequest(linkedWr.id, { linkedInvoiceId: record.id });
-        }
+      try {
+        const res = await window.apiClient.invoices.create(record);
+        const created = res?.data || record;
+        WorkflowData.invalidateRelatedForWorkRequest(created.workRequestId || data.workRequestId);
+      } catch (e) {
+        console.error('Failed to create invoice', e);
+        this.showMessage('Error', 'Failed to create invoice: ' + (e.message || 'Unknown error'), 'danger');
+        return;
       }
 
       overlay.remove();
@@ -1823,10 +1883,17 @@ const Workflow = {
    * Open a modal with the disbursement/expense creation form,
    * pre-populated from the given work request.
    */
-  openGenerateDisbursementModal(wr, preselectedTask) {
+  async openGenerateDisbursementModal(wr, preselectedTask) {
     const entity = Auth.activeEntity;
     const client = window.apiClient.clientCache.getById(wr.clientId);
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+    let availableInvoices = [];
+    try {
+      const invRes = await window.apiClient.invoices.list({ workRequestId: wr.id, status: '!Cancelled' });
+      availableInvoices = invRes?.data || [];
+    } catch (e) {
+      console.error('[Workflow] failed to load invoices for disbursement modal', e);
+    }
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-disbursement-form', class: 'form-stacked' });
@@ -1915,7 +1982,7 @@ const Workflow = {
     invGroup.appendChild(el('label', { text: 'Linked Billing Invoice' }));
     const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
     invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
-    DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
+    availableInvoices.forEach(inv => {
       const invClient = window.apiClient.clientCache.getById(inv.clientId);
       invSel.appendChild(el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (invClient?.name || '—') }));
     });
@@ -1951,7 +2018,7 @@ const Workflow = {
 
     cancelBtn.addEventListener('click', () => overlay.remove());
 
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
       // Validation
       const desc = form.querySelector('[name="description"]').value.trim();
       const amtVal = form.querySelector('[name="amount"]').value;
@@ -1970,7 +2037,6 @@ const Workflow = {
       const receiptFile = receiptInput?.files?.[0];
 
       const record = {
-        id: generateSequentialId('dis', 'disbursements'),
         category: data.category,
         description: desc,
         amount: amount,
@@ -1987,16 +2053,14 @@ const Workflow = {
         receiptFilename: receiptFile ? receiptFile.name : null
       };
 
-      DB.insert('disbursements', record);
-
-      // Link disbursement back to WR
-      if (record.linkedWorkRequestId) {
-        const linkedWr = WorkflowData.getWorkRequestById(record.linkedWorkRequestId);
-        if (linkedWr) {
-          const linkedIds = new Set(linkedWr.linkedDisbursementIds || []);
-          linkedIds.add(record.id);
-          WorkflowData.updateWorkRequest(linkedWr.id, { linkedDisbursementIds: Array.from(linkedIds) });
-        }
+      try {
+        const res = await window.apiClient.disbursements.create(record);
+        const created = res?.data || record;
+        WorkflowData.invalidateRelatedForWorkRequest(created.linkedWorkRequestId || data.linkedWorkRequestId);
+      } catch (e) {
+        console.error('Failed to create disbursement', e);
+        this.showMessage('Error', 'Failed to create disbursement: ' + (e.message || 'Unknown error'), 'danger');
+        return;
       }
 
       overlay.remove();
@@ -2016,9 +2080,22 @@ const Workflow = {
    * Open a modal with the transmittal creation form,
    * pre-populated from the given work request.
    */
-  openGenerateTransmittalModal(wr, preselectedTask = null, prefilledRequestId = null) {
+  async openGenerateTransmittalModal(wr, preselectedTask = null, prefilledRequestId = null) {
     const entity = Auth.activeEntity;
     const client = window.apiClient.clientCache.getById(wr.clientId);
+
+    let opReq = null;
+    try {
+      if (prefilledRequestId) {
+        const res = await window.apiClient.operationsRequests.get(prefilledRequestId);
+        opReq = res?.data || null;
+      } else {
+        const res = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, type: 'transmittal', status: 'pending' });
+        opReq = (res?.data || [])[0] || null;
+      }
+    } catch (e) {
+      console.error('[Workflow] failed to load operations request for transmittal modal', e);
+    }
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 16px;' });
     const form = el('form', { id: 'gen-transmittal-form', class: 'form-stacked' });
@@ -2097,8 +2174,7 @@ const Workflow = {
       itemsList.appendChild(row);
     };
 
-    // Retrieve operations request if fulfilling
-    const opReq = prefilledRequestId ? DB.getById('operationsRequests', prefilledRequestId) : DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'transmittal' && r.status === 'pending')[0];
+    // opReq was loaded from the API above.
 
     // Default items
     if (opReq && Array.isArray(opReq.documents) && opReq.documents.length > 0) {
@@ -2140,7 +2216,7 @@ const Workflow = {
 
     cancelBtn.addEventListener('click', () => overlay.remove());
 
-    saveBtn.addEventListener('click', () => {
+    saveBtn.addEventListener('click', async () => {
       // Collect items
       const rows = itemsList.querySelectorAll('.line-item-row');
       const items = [];
@@ -2160,7 +2236,6 @@ const Workflow = {
       const data = Object.fromEntries(new FormData(form).entries());
 
       const record = {
-        id: generateId('tx'),
         workRequestId: data.workRequestId,
         clientId: data.clientId,
         trackingNumber: data.trackingNumber || Utils.generateTrackingNumber(entity),
@@ -2168,36 +2243,36 @@ const Workflow = {
         items,
         notes: data.notes || '',
         entity,
-        sentAt: '',
-        acknowledgedAt: '',
-        sentBy: '',
-        acknowledgedBy: '',
         createdAt: new Date().toISOString(),
         createdBy: Auth.user.id
       };
 
-      DB.insert('transmittals', record);
+      let createdTransmittal;
+      try {
+        const res = await window.apiClient.transmittals.create(record);
+        createdTransmittal = res?.data || record;
+      } catch (e) {
+        console.error('Failed to create transmittal', e);
+        this.showMessage('Error', 'Failed to create transmittal: ' + (e.message || 'Unknown error'), 'danger');
+        return;
+      }
 
       // Fulfill pending operations request if any
-      const reqId = prefilledRequestId || (record.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.workRequestId && r.type === 'transmittal' && r.status === 'pending')[0]?.id : null);
+      const reqId = prefilledRequestId || (opReq ? opReq.id : null);
       if (reqId) {
-        DB.update('operationsRequests', reqId, {
-          status: 'fulfilled',
-          fulfilledBy: Auth.user.id,
-          fulfilledAt: new Date().toISOString(),
-          linkedRecordId: record.id
-        });
-      }
-
-      // Link transmittal back to WR
-      if (record.workRequestId) {
-        const linkedWr = WorkflowData.getWorkRequestById(record.workRequestId);
-        if (linkedWr) {
-          const linkedIds = new Set(linkedWr.linkedTransmittalIds || []);
-          linkedIds.add(record.id);
-          WorkflowData.updateWorkRequest(linkedWr.id, { linkedTransmittalIds: Array.from(linkedIds) });
+        try {
+          await window.apiClient.operationsRequests.update(reqId, {
+            status: 'fulfilled',
+            fulfilledBy: Auth.user.id,
+            fulfilledAt: new Date().toISOString(),
+            linkedRecordId: createdTransmittal.id
+          });
+        } catch (e) {
+          console.error('Failed to fulfill operations request', e);
         }
       }
+
+      WorkflowData.invalidateRelatedForWorkRequest(data.workRequestId);
 
       overlay.remove();
 
@@ -2238,11 +2313,33 @@ const Workflow = {
     return actions;
   },
 
-  submitOperationsRequest(type, wr, preselectedTask = null) {
-    const existing = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === type && r.status === 'pending');
+  async submitOperationsRequest(type, wr, preselectedTask = null) {
+    let existing = [];
+    let rejectedReqs = [];
+    let dmsDocs = [];
+    try {
+      const existingRes = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, type, status: 'pending' });
+      existing = existingRes?.data || [];
+    } catch (e) {
+      console.error('[Workflow] failed to load pending operations requests', e);
+    }
     if (existing.length > 0) {
       this.showMessage('Already Requested', 'A request for this action is already pending review.', 'info');
       return;
+    }
+    try {
+      const rejectedRes = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, type, status: 'rejected' });
+      rejectedReqs = rejectedRes?.data || [];
+    } catch (e) {
+      console.error('[Workflow] failed to load rejected operations requests', e);
+    }
+    if (type === 'transmittal') {
+      try {
+        const docsRes = await window.apiClient.documents.list({ workRequestId: wr.id });
+        dmsDocs = docsRes?.data || [];
+      } catch (e) {
+        console.error('[Workflow] failed to load DMS documents for operations request', e);
+      }
     }
 
     const wrapper = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-md); min-width: 420px; max-width: 500px;' });
@@ -2261,7 +2358,7 @@ const Workflow = {
     ]);
     form.appendChild(contextRow);
 
-    const rejectedReq = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === type && r.status === 'rejected').sort((a,b) => new Date(b.requestedAt) - new Date(a.requestedAt))[0];
+    const rejectedReq = rejectedReqs.sort((a,b) => new Date(b.requestedAt) - new Date(a.requestedAt))[0];
     if (rejectedReq && rejectedReq.rejectionReason) {
       const rejectNote = el('div', { 
         style: 'background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--radius-sm); padding: var(--spacing-sm); margin-bottom: var(--spacing-xs); font-size: 0.8125rem; color: #b91c1c;' 
@@ -2388,8 +2485,7 @@ const Workflow = {
       
       const docListContainer = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-xs); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--spacing-sm); max-height: 150px; overflow-y: auto; background: var(--color-surface);' });
       
-      // Load DMS documents
-      const dmsDocs = DB.getWhere('documents', doc => doc.workRequestId === wr.id) || [];
+      // Load DMS documents (already loaded from API above)
       if (dmsDocs.length === 0) {
         docListContainer.appendChild(el('span', { text: 'No uploaded DMS documents found.', style: 'font-size: 0.75rem; color: var(--color-text-muted); font-style: italic;' }));
       } else {
@@ -2439,11 +2535,10 @@ const Workflow = {
 
     overlay.querySelector('#btn-cancel-opreq').addEventListener('click', () => overlay.remove());
 
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
       const record = {
-        id: generateId('opreq'),
         type,
         workRequestId: wr.id,
         clientId: wr.clientId,
@@ -2515,7 +2610,13 @@ const Workflow = {
         record.notes = notes;
       }
 
-      DB.insert('operationsRequests', record);
+      try {
+        await window.apiClient.operationsRequests.create(record);
+      } catch (e) {
+        console.error('Failed to create operations request', e);
+        this.showMessage('Error', 'Failed to submit request: ' + (e.message || 'Unknown error'), 'danger');
+        return;
+      }
       overlay.remove();
 
       this.showMessage(
@@ -2530,17 +2631,17 @@ const Workflow = {
 
   async render() {
     await WorkflowData.ensure();
+    await WorkflowData.loadPendingApprovals();
     const container = el('div', { class: 'page' });
     if (this.view === 'list') {
       container.classList.add('operations-list-page');
     }
     this._tempTaskMap = buildTaskMap();
-    
+
     if (this.view === 'detail' && this.detailWrId) {
       let wr = WorkflowData.getWorkRequestById(this.detailWrId);
       if (!wr) {
-        const pc = DB.getById('pendingChanges', this.detailWrId) || 
-                   DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === this.detailWrId)[0];
+        const pc = WorkflowData.getPendingApprovalByRecordId(this.detailWrId, 'workRequests');
         if (pc && pc.table === 'workRequests') {
           wr = { ...pc.proposedData };
           wr.id = pc.proposedData.id || pc.id;
@@ -2756,7 +2857,7 @@ const Workflow = {
     } else if (this.view === 'templateForm') {
       container.appendChild(await this.renderTemplateForm({ hideHeader: true }));
     } else if (this.view === 'archive') {
-      container.appendChild(this.renderArchive());
+      container.appendChild(await this.renderArchive());
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       const form = await this.renderAddTaskForm(this.addTaskWrId, { hideHeader: true });
       if (form) {
@@ -2821,7 +2922,7 @@ const Workflow = {
       return false;
     }).length;
 
-    const rejectedCount = DB.getWhere('pendingChanges', pc => {
+    const rejectedCount = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;
       if (!['workRequests', 'tasks'].includes(pc.table)) return false;
       const data = pc.proposedData || {};
@@ -3520,7 +3621,8 @@ const Workflow = {
 
     const refresh = async () => {
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
-      const pendingChanges = DB.getWhere('pendingChanges', pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
+      await WorkflowData.loadPendingApprovals();
+      const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
       const pendingWrs = pendingChanges.map(pc => {
         const wr = { ...pc.proposedData };
         wr.isPendingApproval = true;
@@ -3823,7 +3925,8 @@ const Workflow = {
       { key: 'completed', label: 'Completed', statuses: ['Completed'], targetStatus: 'Completed', color: '#10b981' }
     ];
 
-    const seqMap = getChronologicalSequenceMap('workRequests');
+    const sortedForSeq = [...wrs].sort((a, b) => sortByDate(a, b, 'createdAt'));
+    const seqMap = new Map(sortedForSeq.map((wr, i) => [wr.id, i + 1]));
 
     const renderBoardCard = (wr, phase) => {
       const tasks = wr.isPendingApproval ? (wr.tasks || []) : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
@@ -4408,7 +4511,8 @@ const Workflow = {
     let task = WorkflowData.getTaskById(taskId);
     let pendingWr = null;
     if (!task) {
-      const pendingChanges = DB.getWhere('pendingChanges', pc => pc.status === 'pending' && pc.table === 'workRequests');
+      await WorkflowData.loadPendingApprovals();
+      const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests');
       for (const pc of pendingChanges) {
         const t = (pc.proposedData.tasks || []).find(tk => tk.id === taskId || tk.key === taskId);
         if (t) {
@@ -4426,8 +4530,18 @@ const Workflow = {
     if (!task) return;
     this.ensureTaskChecklistNormalized(task);
 
-    const assignedUser = task.assignedTo || task.assigneeId ? window.apiClient.userCache.getById(task.assignedTo || task.assigneeId) : null;
+    let wrDocs = [];
     const wr = pendingWr || (task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null);
+    if (wr?.id) {
+      try {
+        const docsRes = await window.apiClient.documents.list({ workRequestId: wr.id });
+        wrDocs = docsRes?.data || [];
+      } catch (e) {
+        console.error('[Workflow] failed to load DMS documents for task side pane', e);
+      }
+    }
+
+    const assignedUser = task.assignedTo || task.assigneeId ? window.apiClient.userCache.getById(task.assignedTo || task.assigneeId) : null;
 
     const paneContent = el('div');
 
@@ -4952,7 +5066,7 @@ const Workflow = {
             leftSide.appendChild(driveLink);
           } else {
             if (canEditDms) {
-              const dmsDoc = DB.getWhere('documents', doc => (doc.fileName === fName) && doc.workRequestId === (wr ? wr.id : ''))[0];
+              const dmsDoc = wrDocs.find(doc => (doc.fileName === fName) && doc.workRequestId === (wr ? wr.id : ''));
               if (dmsDoc && dmsDoc.dataUrl) {
                 const link = el('a', {
                   href: '#',
@@ -4981,12 +5095,18 @@ const Workflow = {
             if (!disableIfPending(delBtn, wr)) {
               delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, () => {
+                this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
                   const updatedTaskDocs = task.taskDocuments.filter((_, i) => i !== dIdx);
                   WorkflowData.updateTask(task.id, { taskDocuments: updatedTaskDocs });
-                  const dmsMatch = DB.getWhere('documents', doc => doc.fileName === fName && doc.workRequestId === wr.id)[0];
-                  if (dmsMatch) DB.delete('documents', dmsMatch.id);
-                  this.showTaskSidePane(taskId, triggerElement);
+                  const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
+                  if (dmsMatch) {
+                    try {
+                      await window.apiClient.documents.delete(dmsMatch.id);
+                    } catch (err) {
+                      console.error('Failed to delete DMS document', err);
+                    }
+                  }
+                  await this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
                 }, 'danger');
               });
@@ -5253,7 +5373,7 @@ const Workflow = {
           billingHandler = async () => this.openGenerateBillingModal(wr, task);
         } else if (Auth.can('billing:request')) {
           billingTitle = 'Request Billing';
-          billingHandler = () => this.submitOperationsRequest('billing', wr, task);
+          billingHandler = async () => this.submitOperationsRequest('billing', wr, task);
         }
 
         // Disbursement Card
@@ -5261,10 +5381,10 @@ const Workflow = {
         let disbHandler = null;
         if (Auth.can('disbursement:create')) {
           disbTitle = 'Generate Disbursement';
-          disbHandler = () => this.openGenerateDisbursementModal(wr, task);
+          disbHandler = async () => this.openGenerateDisbursementModal(wr, task);
         } else if (Auth.can('disbursement:request')) {
           disbTitle = 'Request Disbursement';
-          disbHandler = () => this.submitOperationsRequest('disbursement', wr, task);
+          disbHandler = async () => this.submitOperationsRequest('disbursement', wr, task);
         }
 
         // Transmittal Card
@@ -5272,10 +5392,10 @@ const Workflow = {
         let transHandler = null;
         if (Auth.can('transmittal:create')) {
           transTitle = 'Generate Transmittal';
-          transHandler = () => this.openGenerateTransmittalModal(wr, task);
+          transHandler = async () => this.openGenerateTransmittalModal(wr, task);
         } else if (Auth.can('transmittal:request')) {
           transTitle = 'Request Transmittal';
-          transHandler = () => this.submitOperationsRequest('transmittal', wr, task);
+          transHandler = async () => this.submitOperationsRequest('transmittal', wr, task);
         }
 
         const cardsToRender = [];
@@ -6033,7 +6153,7 @@ const Workflow = {
       });
     }
 
-    const recordId = this.editingId || generateSequentialId('wr', 'workRequests');
+    const recordId = this.editingId || generateId('wr');
     const idMap = new Map();
     tasks.forEach(t => idMap.set(t.key, generateId('t')));
 
@@ -6296,10 +6416,19 @@ const Workflow = {
   },
 
   async renderDetail() {
+    await WorkflowData.loadPendingApprovals();
     let wr = WorkflowData.getWorkRequestById(this.detailWrId);
+    let wrDocs = [];
+    if (this.detailWrId) {
+      try {
+        const docsRes = await window.apiClient.documents.list({ workRequestId: this.detailWrId });
+        wrDocs = docsRes?.data || [];
+      } catch (e) {
+        console.error('[Workflow] failed to load DMS documents for detail view', e);
+      }
+    }
     if (!wr) {
-      const pc = DB.getById('pendingChanges', this.detailWrId) || 
-                 DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === this.detailWrId)[0];
+      const pc = WorkflowData.getPendingApprovalByRecordId(this.detailWrId, 'workRequests');
       if (pc && pc.table === 'workRequests') {
         wr = { ...pc.proposedData };
         wr.id = pc.proposedData.id || pc.id;
@@ -6721,7 +6850,7 @@ const Workflow = {
     container.appendChild(bulkBar);
 
     // Pending tasks section — show pending tasks awaiting approval
-    const pendingTaskChanges = DB.getWhere('pendingChanges', pc =>
+    const pendingTaskChanges = WorkflowData.getPendingApprovalsWhere(pc =>
       pc.status === 'pending' && pc.table === 'tasks' && pc.proposedData && pc.proposedData.workRequestId === wr.id
     );
     if (pendingTaskChanges.length > 0) {
@@ -7200,7 +7329,7 @@ const Workflow = {
             cardContainerStyle: { display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' },
             emptyState: { variant: 'compact', title: 'No tasks', body: '' }
           })),
-          renderCard(t) {
+          async renderCard(t) {
             const comp = getTaskChecklistCompletion(t);
             const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? window.apiClient.userCache.getById(t.assigneeId || t.assignedTo)?.name : null);
             const priorityConfig = {
@@ -7386,7 +7515,7 @@ const Workflow = {
 
       let totalHours = 0;
 
-      groupTasks.forEach(t => {
+      for (const t of groupTasks) {
         let finActions = [];
         if (!isArchived) {
           finActions = this.getFinancialQuickActions(wr, t);
@@ -7611,7 +7740,7 @@ const Workflow = {
         const taskRelated = WorkflowData.getRelatedForTask(t.id);
         let linkedInv = taskRelated.invoices[0];
         if (!linkedInv) {
-          const pc = DB.getWhere('pendingChanges', p => p.table === 'invoices' && p.status === 'pending' && p.proposedData && p.proposedData.linkedTaskId === t.id)[0];
+          const pc = WorkflowData.getPendingApprovalsWhere(p => p.table === 'invoices' && p.status === 'pending' && p.proposedData && p.proposedData.linkedTaskId === t.id)[0];
           if (pc) {
             linkedInv = deepClone(pc.proposedData);
             linkedInv.status = 'Pending';
@@ -7838,7 +7967,7 @@ const Workflow = {
           if (normalizedChecklist.length === 0) {
             checklistList.appendChild(renderEmptyState('No checklist items'));
           } else {
-            normalizedChecklist.forEach((item, idx) => {
+            for (const [idx, item] of normalizedChecklist.entries()) {
               const blocked = isChecklistBlocked(item, normalizedChecklist);
               const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
               const row = el('div', { class: 'checklist-item' + (blocked ? ' locked' : '') + (item.completed ? ' completed' : '') });
@@ -7858,7 +7987,7 @@ const Workflow = {
               });
               textWrap.appendChild(categoryBadge);
 
-              cb.addEventListener('change', (e) => {
+              cb.addEventListener('change', async (e) => {
                 e.stopPropagation();
                 this.toggleChecklistItem(t, item.id, cb.checked);
                 await renderChecklist();
@@ -7873,7 +8002,7 @@ const Workflow = {
                   placeholder: 'Assign...',
                   className: 'checklist-assignee-dropdown',
                   priorityNames: getTaskAllAssigneeNames(t),
-                  onChange: ({ assigneeId, assigneeName }) => {
+                  onChange: async ({ assigneeId, assigneeName }) => {
                     item.assigneeName = assigneeName || null;
                     item.assigneeId = assigneeId || null;
                     WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
@@ -7889,7 +8018,7 @@ const Workflow = {
                   { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
                   !isArchived,
                   true,
-                  () => {
+                  async () => {
                     WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                     await renderChecklist();
                     App.handleRoute();
@@ -7930,7 +8059,7 @@ const Workflow = {
               const delBtn = el('button', { type: 'button', class: 'action-btn', text: '×', style: 'border-color:transparent;color:var(--muted);' });
               if (!disableIfPending(delBtn, wr)) {
                 delBtn.title = 'Delete checklist item';
-                delBtn.addEventListener('click', (e) => {
+                delBtn.addEventListener('click', async (e) => {
                   e.stopPropagation();
                   if (!item.timeLogs || item.timeLogs.length === 0) {
                     normalizedChecklist.splice(idx, 1);
@@ -7970,7 +8099,7 @@ const Workflow = {
               row.appendChild(checklistActions);
 
               checklistList.appendChild(row);
-            });
+            }
           }
         };
 
@@ -8076,7 +8205,7 @@ const Workflow = {
             disableForApproval(predBtn);
             disableForApproval(addItemBtn);
           } else {
-            addItemBtn.addEventListener('click', () => {
+            addItemBtn.addEventListener('click', async () => {
               const val = newItemInput.value.trim();
               if (!val) return;
               const prereqId = selectedPrereqId || null;
@@ -8187,9 +8316,9 @@ const Workflow = {
 
             // Only Admin can click to view actual file
             if (canEditDms) {
-              const dmsDoc = DB.getWhere('documents', doc => 
+              const dmsDoc = wrDocs.find(doc =>
                 (doc.fileName === fName) && doc.workRequestId === wr.id
-              )[0];
+              );
               if (dmsDoc && dmsDoc.dataUrl) {
                 const link = el('a', {
                   href: '#',
@@ -8223,11 +8352,17 @@ const Workflow = {
                 delBtn.title = 'Remove Attachment';
                 delBtn.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, () => {
+                  this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
                     const updatedTaskDocs = t.taskDocuments.filter((_, i) => i !== dIdx);
                     WorkflowData.updateTask(t.id, { taskDocuments: updatedTaskDocs });
-                    const dmsMatch = DB.getWhere('documents', doc => doc.fileName === fName && doc.workRequestId === wr.id)[0];
-                    if (dmsMatch) DB.delete('documents', dmsMatch.id);
+                    const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
+                    if (dmsMatch) {
+                      try {
+                        await window.apiClient.documents.delete(dmsMatch.id);
+                      } catch (err) {
+                        console.error('Failed to delete DMS document', err);
+                      }
+                    }
                     App.handleRoute();
                   }, 'danger');
                 });
@@ -8439,7 +8574,7 @@ const Workflow = {
             this.expandedTaskIds.delete(t.id);
           }
         });
-      });
+      }
 
       // Footer totals row
       const footerRow = el('div', {
@@ -8474,7 +8609,7 @@ const Workflow = {
     // Fetch related records
     const wrRelated = WorkflowData.getRelatedForWorkRequest(wr.id);
     const approvedInvs = wrRelated.invoices;
-    const pendingInvs = DB.getWhere('pendingChanges', pc => {
+    const pendingInvs = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.table !== 'invoices' || pc.status !== 'pending') return false;
       const inv = pc.proposedData;
       return inv && (inv.workRequestId === wr.id || wr.linkedInvoiceId === inv.id);
@@ -8632,10 +8767,25 @@ const Workflow = {
     return container;
   },
 
-  showLinkFinancialModal(taskId) {
+  async showLinkFinancialModal(taskId) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     const wr = WorkflowData.getWorkRequestById(task.workRequestId);
+
+    let clientInvoices = [];
+    let availableDisbursements = [];
+    try {
+      const invRes = await window.apiClient.invoices.list({ clientId: wr?.clientId, status: '!Cancelled' });
+      clientInvoices = (invRes?.data || []).filter(inv => !inv.linkedTaskId);
+    } catch (e) {
+      console.error('[Workflow] failed to load invoices for link modal', e);
+    }
+    try {
+      const disbRes = await window.apiClient.disbursements.list({ status: '!Cancelled' });
+      availableDisbursements = (disbRes?.data || []).filter(d => !d.linkedTaskId);
+    } catch (e) {
+      console.error('[Workflow] failed to load disbursements for link modal', e);
+    }
 
     const form = el('form', { class: 'form-stacked' });
     
@@ -8660,21 +8810,19 @@ const Workflow = {
       recSel.innerHTML = '';
       recSel.disabled = false;
       if (typeSel.value === 'invoice') {
-        const invs = DB.getWhere('invoices', inv => inv.clientId === wr.clientId && !inv.linkedTaskId);
-        if (invs.length === 0) {
+        if (clientInvoices.length === 0) {
           recSel.appendChild(el('option', { value: '', text: 'No available invoices for this client' }));
           recSel.disabled = true;
         } else {
-          invs.forEach(inv => recSel.appendChild(el('option', { value: inv.id, text: `${inv.invoiceNumber} (${formatPHP(inv.total)})` })));
+          clientInvoices.forEach(inv => recSel.appendChild(el('option', { value: inv.id, text: `${inv.invoiceNumber || inv.invoice_number} (${formatPHP(inv.total)})` })));
         }
       } else if (typeSel.value === 'disbursement') {
         // Disbursements might not be strictly tied to client, but let's just show those not linked to a task
-        const disbs = DB.getWhere('disbursements', d => !d.linkedTaskId);
-        if (disbs.length === 0) {
+        if (availableDisbursements.length === 0) {
           recSel.appendChild(el('option', { value: '', text: 'No available disbursements' }));
           recSel.disabled = true;
         } else {
-          disbs.forEach(d => recSel.appendChild(el('option', { value: d.id, text: `${d.category} - ${formatPHP(d.amount)}` })));
+          availableDisbursements.forEach(d => recSel.appendChild(el('option', { value: d.id, text: `${d.category} - ${formatPHP(d.amount)}` })));
         }
       } else {
         recSel.disabled = true;
@@ -8685,30 +8833,30 @@ const Workflow = {
     form.appendChild(submitBtn);
 
     const overlay = this.showModal('Link Financial Record', form, null);
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const recId = recSel.value;
       if (!recId) return;
 
-      if (typeSel.value === 'invoice') {
-        DB.update('invoices', recId, { linkedTaskId: taskId, workRequestId: task.workRequestId });
-        if (wr && !wr.linkedInvoiceId) {
-          WorkflowData.updateWorkRequest(wr.id, { linkedInvoiceId: recId });
+      try {
+        if (typeSel.value === 'invoice') {
+          await window.apiClient.invoices.update(recId, { linkedTaskId: taskId, workRequestId: task.workRequestId });
+        } else if (typeSel.value === 'disbursement') {
+          await window.apiClient.disbursements.update(recId, { linkedTaskId: taskId, linkedWorkRequestId: task.workRequestId });
         }
-      } else if (typeSel.value === 'disbursement') {
-        DB.update('disbursements', recId, { linkedTaskId: taskId, linkedWorkRequestId: task.workRequestId });
-        if (wr) {
-          const linkedIds = new Set(wr.linkedDisbursementIds || []);
-          linkedIds.add(recId);
-          WorkflowData.updateWorkRequest(wr.id, { linkedDisbursementIds: Array.from(linkedIds) });
-        }
+        WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+        WorkflowData.invalidateRelatedForTask(taskId);
+      } catch (err) {
+        console.error('Failed to link financial record', err);
+        this.showMessage('Error', 'Failed to link record: ' + (err.message || 'Unknown error'), 'danger');
+        return;
       }
       overlay.remove();
       App.handleRoute();
     });
   },
 
-  showAddDocumentModal(taskId) {
+  async showAddDocumentModal(taskId) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     const wr = WorkflowData.getWorkRequestById(task.workRequestId);
@@ -8722,16 +8870,16 @@ const Workflow = {
     form.appendChild(submitBtn);
 
     const overlay = this.showModal('Upload Document', form, null);
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const file = form.querySelector('input[name="docFile"]').files[0];
       if (!file) return;
 
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = async (ev) => {
         const dataUrl = ev.target.result;
         const now = new Date().toISOString();
-        
+
         // 1. Update taskDocuments metadata
         const entry = {
           fileName: file.name,
@@ -8743,7 +8891,6 @@ const Workflow = {
 
         // 2. Also create a record in DMS documents table so it is viewable
         const dmsRecord = {
-          id: generateId('doc'),
           fileName: file.name,
           workRequestId: task.workRequestId,
           document_type: 'original_scan',
@@ -8761,7 +8908,14 @@ const Workflow = {
           envelopeId: '',
           storedLocation: ''
         };
-        DB.insert('documents', dmsRecord);
+        try {
+          await window.apiClient.documents.create(dmsRecord);
+          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+        } catch (err) {
+          console.error('Failed to create DMS document', err);
+          this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
+          return;
+        }
 
         overlay.remove();
         App.handleRoute();
@@ -8770,7 +8924,7 @@ const Workflow = {
     });
   },
 
-  showAttachmentPopover(taskId, triggerEl, mode) {
+  async showAttachmentPopover(taskId, triggerEl, mode) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     const wr = WorkflowData.getWorkRequestById(task.workRequestId);
@@ -8797,14 +8951,14 @@ const Workflow = {
           const chooseBtn = el('button', { class: 'notion-popover-submit', text: 'Choose a file' });
           
           chooseBtn.addEventListener('click', () => fileInput.click());
-          fileInput.addEventListener('change', () => {
+          fileInput.addEventListener('change', async () => {
             const file = fileInput.files[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = (ev) => {
+            reader.onload = async (ev) => {
               const dataUrl = ev.target.result;
               const now = new Date().toISOString();
-              
+
               const entry = {
                 fileName: file.name,
                 uploadDate: now.slice(0, 10),
@@ -8814,7 +8968,6 @@ const Workflow = {
               WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
               const dmsRecord = {
-                id: generateId('doc'),
                 fileName: file.name,
                 workRequestId: task.workRequestId,
                 document_type: 'original_scan',
@@ -8832,8 +8985,15 @@ const Workflow = {
                 envelopeId: '',
                 storedLocation: ''
               };
-              DB.insert('documents', dmsRecord);
-              
+              try {
+                await window.apiClient.documents.create(dmsRecord);
+                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              } catch (err) {
+                console.error('Failed to create DMS document', err);
+                this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
+                return;
+              }
+
               popover.remove();
               this.showTaskSidePane(taskId, null); // Refresh side pane!
               App.handleRoute();
@@ -8850,10 +9010,10 @@ const Workflow = {
           const linkInput = el('input', { type: 'text', class: 'notion-popover-input', placeholder: 'Paste in link...' });
           const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Link file' });
           
-          submitBtn.addEventListener('click', () => {
+          submitBtn.addEventListener('click', async () => {
             const val = linkInput.value.trim();
             if (!val) return;
-            
+
             let fileName = 'Linked Document';
             try {
               const url = new URL(val);
@@ -8875,7 +9035,6 @@ const Workflow = {
             WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
             const dmsRecord = {
-              id: generateId('doc'),
               fileName: fileName,
               workRequestId: task.workRequestId,
               document_type: 'original_scan',
@@ -8893,8 +9052,15 @@ const Workflow = {
               envelopeId: '',
               storedLocation: ''
             };
-            DB.insert('documents', dmsRecord);
-            
+            try {
+              await window.apiClient.documents.create(dmsRecord);
+              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+            } catch (err) {
+              console.error('Failed to create DMS document', err);
+              this.showMessage('Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
+              return;
+            }
+
             popover.remove();
             this.showTaskSidePane(taskId, null);
             App.handleRoute();
@@ -8913,10 +9079,10 @@ const Workflow = {
           const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Embed Google Drive file' });
           const hint = el('div', { class: 'notion-popover-hint', text: 'Works with any file in your Google Drive' });
           
-          submitBtn.addEventListener('click', () => {
+          submitBtn.addEventListener('click', async () => {
             const val = linkInput.value.trim();
             if (!val) return;
-            
+
             let fileName = 'GDrive Document';
             try {
               const url = new URL(val);
@@ -8939,7 +9105,6 @@ const Workflow = {
             WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
             const dmsRecord = {
-              id: generateId('doc'),
               fileName: fileName,
               workRequestId: task.workRequestId,
               document_type: 'original_scan',
@@ -8957,8 +9122,15 @@ const Workflow = {
               envelopeId: '',
               storedLocation: ''
             };
-            DB.insert('documents', dmsRecord);
-            
+            try {
+              await window.apiClient.documents.create(dmsRecord);
+              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+            } catch (err) {
+              console.error('Failed to create DMS document', err);
+              this.showMessage('Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+              return;
+            }
+
             popover.remove();
             this.showTaskSidePane(taskId, null);
             App.handleRoute();
@@ -8989,7 +9161,7 @@ const Workflow = {
               </div>
               <span style="font-size: 0.75rem; color: var(--color-text-muted);">${f.size}</span>
             `;
-            item.addEventListener('click', () => {
+            item.addEventListener('click', async () => {
               const now = new Date().toISOString();
               const entry = {
                 fileName: f.name,
@@ -9001,7 +9173,6 @@ const Workflow = {
               WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
               const dmsRecord = {
-                id: generateId('doc'),
                 fileName: f.name,
                 workRequestId: task.workRequestId,
                 document_type: 'original_scan',
@@ -9019,8 +9190,15 @@ const Workflow = {
                 envelopeId: '',
                 storedLocation: ''
               };
-              DB.insert('documents', dmsRecord);
-              
+              try {
+                await window.apiClient.documents.create(dmsRecord);
+                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              } catch (err) {
+                console.error('Failed to create DMS document', err);
+                this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+                return;
+              }
+
               popover.remove();
               this.showTaskSidePane(taskId, null);
               App.handleRoute();
@@ -9105,10 +9283,10 @@ const Workflow = {
     document.addEventListener('mousedown', onMouseDown);
   },
 
-  showGoogleDriveChooser(taskId) {
+  async showGoogleDriveChooser(taskId) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    
+
     const driveFiles = [
       { name: 'Operations_Handbook.pdf', size: '2.4 MB' },
       { name: 'Q2_Strategy_Presentation.pdf', size: '5.1 MB' },
@@ -9141,7 +9319,7 @@ const Workflow = {
       item.appendChild(fileLeft);
       item.appendChild(el('span', { text: f.size, style: 'font-size: 0.75rem; color: var(--color-text-muted);' }));
       
-      item.addEventListener('click', () => {
+      item.addEventListener('click', async () => {
         const now = new Date().toISOString();
         const entry = {
           fileName: f.name,
@@ -9151,9 +9329,8 @@ const Workflow = {
         };
         const updatedDocs = [...(task.taskDocuments || []), entry];
         WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-        
+
         const dmsRecord = {
-          id: generateId('doc'),
           fileName: f.name,
           workRequestId: task.workRequestId,
           document_type: 'original_scan',
@@ -9171,8 +9348,15 @@ const Workflow = {
           envelopeId: '',
           storedLocation: ''
         };
-        DB.insert('documents', dmsRecord);
-        
+        try {
+          await window.apiClient.documents.create(dmsRecord);
+          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+        } catch (err) {
+          console.error('Failed to create DMS document', err);
+          this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+          return;
+        }
+
         overlay.remove();
         this.showTaskSidePane(taskId, null);
         App.handleRoute();
@@ -9391,10 +9575,10 @@ const Workflow = {
 
   async renderAddTaskForm(wrId, opts = {}) {
     const { hideHeader = false } = opts;
+    await WorkflowData.loadPendingApprovals();
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
-      const pc = DB.getById('pendingChanges', wrId) || 
-                 DB.getWhere('pendingChanges', p => p.proposedData && p.proposedData.id === wrId)[0];
+      const pc = WorkflowData.getPendingApprovalByRecordId(wrId, 'workRequests');
       if (pc && pc.table === 'workRequests') {
         wr = { ...pc.proposedData };
         wr.id = pc.proposedData.id || pc.id;
@@ -9463,13 +9647,13 @@ const Workflow = {
     checklistGroup.appendChild(checklistContainer);
     form.appendChild(checklistGroup);
 
-    const renderChecklist = () => {
+    const renderChecklist = async () => {
       const existingList = checklistContainer.querySelector('.checklist-items-list');
       if (existingList) existingList.remove();
       if (checklistItems.length === 0) return;
 
       const list = el('div', { class: 'checklist-items-list', style: 'display:flex; flex-direction:column; gap:6px; margin-top:8px;' });
-      checklistItems.forEach((item, idx) => {
+      for (const [idx, item] of checklistItems.entries()) {
         const row = el('div', { style: 'display:flex; align-items:center; gap:8px; padding:6px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius: 12px;' });
         row.appendChild(el('span', { text: item.text, style: 'flex:1; font-size:0.85rem;' }));
         const categoryBadge = el('span', {
@@ -9507,18 +9691,18 @@ const Workflow = {
         row.appendChild(assigneeDropdown);
 
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: '×' });
-        delBtn.addEventListener('click', () => {
+        delBtn.addEventListener('click', async () => {
           checklistItems.splice(idx, 1);
           checklistFromTemplate = false;
           await renderChecklist();
         });
         row.appendChild(delBtn);
         list.appendChild(row);
-      });
+      }
       checklistContainer.insertBefore(list, checklistBuilder);
     };
 
-    const addChecklistItem = () => {
+    const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
       checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
@@ -9534,7 +9718,7 @@ const Workflow = {
       }
     });
 
-    templateSel.addEventListener('change', () => {
+    templateSel.addEventListener('change', async () => {
       const idx = parseInt(templateSel.value, 10);
       if (!isNaN(idx) && this.standardTaskTemplates[idx]) {
         const tmpl = this.standardTaskTemplates[idx];
@@ -9856,7 +10040,7 @@ const Workflow = {
     });
   },
 
-  showEditTaskModal(taskId, onSaved) {
+  async showEditTaskModal(taskId, onSaved) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
     const wr = WorkflowData.getWorkRequestById(task.workRequestId);
@@ -9954,13 +10138,13 @@ const Workflow = {
     checklistGroup.appendChild(checklistContainer);
     form.appendChild(checklistGroup);
 
-    const renderChecklist = () => {
+    const renderChecklist = async () => {
       const existingList = checklistContainer.querySelector('.checklist-items-list');
       if (existingList) existingList.remove();
       if (checklistItems.length === 0) return;
 
       const list = el('div', { class: 'checklist-items-list', style: 'display:flex; flex-direction:column; gap:6px; margin-top:8px;' });
-      checklistItems.forEach((item, idx) => {
+      for (const [idx, item] of checklistItems.entries()) {
         const row = el('div', { style: 'display:flex; align-items:center; gap:8px; padding:6px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius: 12px;' });
         row.appendChild(el('span', { text: item.text, style: 'flex:1; font-size:0.85rem;' }));
         const categoryBadge = el('span', {
@@ -9998,17 +10182,17 @@ const Workflow = {
         row.appendChild(assigneeDropdown);
 
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: '×' });
-        delBtn.addEventListener('click', () => {
+        delBtn.addEventListener('click', async () => {
           checklistItems.splice(idx, 1);
           await renderChecklist();
         });
         row.appendChild(delBtn);
         list.appendChild(row);
-      });
+      }
       checklistContainer.insertBefore(list, checklistBuilder);
     };
 
-    const addChecklistItem = () => {
+    const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
       checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
@@ -10794,7 +10978,8 @@ const Workflow = {
     closeFormPanelAndRoute('#operations');
   },
 
-  renderArchive() {
+  async renderArchive() {
+    await WorkflowData.loadPendingApprovals();
     const entity = Auth.activeEntity;
     const self = this;
     const isManagerial = Auth.isManagerial();
@@ -10808,7 +10993,7 @@ const Workflow = {
     const accomplished = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Completed' && wr.archived === true);
     const cancelled = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Cancelled');
 
-    const rejectedRecords = DB.getWhere('pendingChanges', pc => {
+    const rejectedRecords = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;
       if (pc.table === 'workRequests') return true;
       if (pc.table === 'tasks' && pc.proposedData && pc.proposedData.workRequestId) return true;
@@ -10891,7 +11076,7 @@ const Workflow = {
         rejected: rejectedRecords.map(buildRejectedItem)
       },
       emptyText: 'Archive is empty.',
-      renderCallback: () => self.renderArchive()
+      renderCallback: () => { self.renderArchive().catch(() => {}); }
     });
   },
 
@@ -10905,7 +11090,7 @@ const Workflow = {
 
     const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
     const workRequest = {
-      id: generateSequentialId('wr', 'workRequests'),
+      id: generateId('wr'),
       title: `${template.name} (${titleSuffix})`,
       description: template.description || '',
       clientId: template.clientId,
@@ -10960,7 +11145,7 @@ const Workflow = {
       const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
 
       const workRequest = {
-        id: generateSequentialId('wr', 'workRequests'),
+        id: generateId('wr'),
         title: `${template.name} (${titleSuffix})`,
         description: template.description || '',
         clientId: template.clientId,

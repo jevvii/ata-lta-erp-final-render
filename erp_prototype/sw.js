@@ -27,7 +27,6 @@ const SHELL_URLS = [
   '/js/kanban.js',
   '/js/datepicker.js',
   '/js/timepicker.js',
-  '/js/data.js',
   '/js/dashboard.js',
   '/js/clients.js',
   '/js/workflow.js',

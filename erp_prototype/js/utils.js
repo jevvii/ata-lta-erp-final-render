@@ -161,26 +161,6 @@ function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }
 
-/**
- * Generate a sequential, zero-padded ID for a given table/prefix.
- * Falls back to a random ID if the table is not available.
- */
-function generateSequentialId(prefix, table) {
-  if (typeof DB === 'undefined' || !DB.getAll) {
-    return generateId(prefix);
-  }
-  const all = DB.getAll(table);
-  const re = new RegExp('^' + prefix + '-(\\d+)$');
-  let max = 0;
-  all.forEach(r => {
-    const m = String(r.id || '').match(re);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (!isNaN(n) && n > max) max = n;
-    }
-  });
-  return prefix + '-' + String(max + 1).padStart(4, '0');
-}
 
 /**
  * Generate the next sequential invoice number for an entity.
@@ -3588,20 +3568,4 @@ const JiraBacklogList = {
     return container;
   }
 };
-
-function getChronologicalSequenceMap(table) {
-  const items = DB.getAll(table) || [];
-  items.sort((a, b) => {
-    const ta = new Date(a.createdAt || a.sentAt || a.submittedAt || a.requestedAt || a.issueDate || a.timestamp || 0).getTime();
-    const tb = new Date(b.createdAt || b.sentAt || b.submittedAt || b.requestedAt || b.issueDate || b.timestamp || 0).getTime();
-    if (ta !== tb) return ta - tb;
-    return String(a.id || '').localeCompare(String(b.id || ''));
-  });
-  const map = new Map();
-  items.forEach((item, index) => {
-    map.set(item.id, index + 1);
-  });
-  return map;
-}
-
 

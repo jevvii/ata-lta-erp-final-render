@@ -3,7 +3,7 @@
  * Redesigned for 2026 with a premium calendar hub, KPI metric strip, Bento layout,
  * natural language command bar, timezone intelligence, and hybrid work coordination buffers.
  *
- * Migrated from localStorage (DB.*) to the Node.js backend API.
+ * KPI widgets, calendar overview, and work requests are loaded from the backend API.
  * - KPI widgets and the calendar overview use window.apiClient.reports.dashboard().
  * - Work requests with embedded tasks come from
  *   window.apiClient.workRequests.list({ includeTasks: true }).
