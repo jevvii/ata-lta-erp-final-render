@@ -134,9 +134,12 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
   let query = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) {
     query = query.eq('status', status);
@@ -164,14 +167,16 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
   let rows = data || [];
 
   const clientIds = rows.map((r) => r.id);
-  const [related, entityCode] = await Promise.all([
+  const [related, { data: entitiesData }] = await Promise.all([
     loadRelated(clientIds),
-    resolveEntityCode(entityId),
+    supabaseAdmin.from('entities').select('id, code'),
   ]);
+
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
 
   const mapped = rows.map((row) =>
     toApiClient(row, {
-      entityCode,
+      entityCode: entityCodeMap.get(row.entity_id) || row.entity_id,
       contactDetails: related.contactDetails.get(row.id) || [],
       relatedCompanies: related.relatedCompanies.get(row.id) || [],
     })

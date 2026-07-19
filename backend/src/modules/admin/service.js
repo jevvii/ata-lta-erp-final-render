@@ -42,6 +42,7 @@ const loadUserDepartments = async (userId) => {
 };
 
 const resolveEntityId = async (code) => {
+  if (code === 'ALL') return 'ALL';
   const { data, error } = await supabaseAdmin
     .from('entities')
     .select('id')
@@ -86,7 +87,7 @@ const listUsers = async ({ entityId } = {}) => {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list users' });
   }
 
-  const rows = (data || []).filter((u) => !entityId || (u.entities || []).includes(entityId));
+  const rows = (data || []).filter((u) => !entityId || entityId === 'ALL' || (u.entities || []).includes(entityId));
   const usersWithDepts = await Promise.all(
     rows.map(async (u) => {
       const departments = await loadUserDepartments(u.id);
@@ -212,8 +213,11 @@ const toApiPendingChange = (row) => ({
 const listPendingApprovals = async ({ entityId, user: _user, status, tableName, parentRecordId, submittedBy } = {}) => {
   let query = supabaseAdmin
     .from('pending_changes')
-    .select('*')
-    .eq('entity_id', entityId);
+    .select('*');
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) {
     query = query.eq('status', status);
@@ -267,12 +271,16 @@ const createPendingChange = async ({ entityId, userId, data }) => {
 };
 
 const getPendingChangeById = async ({ entityId, id }) => {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('pending_changes')
     .select('*')
-    .eq('id', id)
-    .eq('entity_id', entityId)
-    .maybeSingle();
+    .eq('id', id);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve pending change' });
