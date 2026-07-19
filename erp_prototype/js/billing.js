@@ -1633,7 +1633,7 @@ const Billing = {
           record.updatedAt = res.data.updated_at || res.data.updatedAt;
           record.status = res.data.status;
         } else {
-          result = PendingChanges.submit('invoices', record, false);
+          result = await PendingChanges.submit('invoices', record, false);
           if (result.approved) {
             const res = await window.apiClient.invoices.update(record.id, apiPayload);
             record.updatedAt = res.data.updated_at || res.data.updatedAt;

@@ -165,9 +165,12 @@ const listWorkRequests = async ({
   let query = supabaseAdmin
     .from('work_requests')
     .select('*')
-    .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) {
     query = query.eq('status', status);
@@ -198,8 +201,25 @@ const listWorkRequests = async ({
     );
   }
 
-  const entityCode = await resolveEntityCode(entityId);
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
+
+  // Resolve entity code(s) — single lookup for scoped view, per-row for consolidated
+  let entityCodeMap;
+  if (entityId && entityId !== 'ALL') {
+    const code = await resolveEntityCode(entityId);
+    entityCodeMap = null; // use single code
+    var singleEntityCode = code;
+  } else {
+    // Consolidated: build a lookup map from all entity_ids present in the result set
+    const uniqueEntityIds = [...new Set(visibleRows.map((r) => r.entity_id).filter(Boolean))];
+    entityCodeMap = new Map();
+    await Promise.all(
+      uniqueEntityIds.map(async (eid) => {
+        const code = await resolveEntityCode(eid);
+        entityCodeMap.set(eid, code);
+      })
+    );
+  }
 
   // Paginate from the pre-filtered set
   const resultRows = isPaginated
@@ -212,7 +232,8 @@ const listWorkRequests = async ({
     : new Map();
 
   const result = resultRows.map((row) => {
-    const wr = toApiWorkRequest(row, entityCode);
+    const code = entityCodeMap ? (entityCodeMap.get(row.entity_id) || row.entity_id) : singleEntityCode;
+    const wr = toApiWorkRequest(row, code);
     if (withTasks) {
       wr.tasks = (taskMap.get(row.id) || []).map((t) => toApiTask(t));
     }
@@ -691,11 +712,16 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
 // ============================================================
 
 const listGroundWorkers = async ({ entityId }) => {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('ground_workers')
     .select('*')
-    .eq('entity_id', entityId)
     .order('name', { ascending: true });
+
+  if (entityId) {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list ground workers' });

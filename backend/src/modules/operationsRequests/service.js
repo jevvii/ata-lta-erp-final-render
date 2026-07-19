@@ -29,8 +29,11 @@ const listRequests = async ({ entityId, filters = {} }) => {
   let query = supabaseAdmin
     .from('operations_requests')
     .select('*, clients(name), work_requests(title)', { count: 'exact' })
-    .eq('entity_id', entityId)
     .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
+
+  if (entityId) {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (status) query = query.eq('status', status);
   if (type) query = query.eq('type', type);
@@ -243,11 +246,16 @@ const deleteRequest = async ({ entityId, id }) => {
  * @returns {Promise<object>}
  */
 const getCounts = async ({ entityId, user }) => {
-  const baseQuery = () => supabaseAdmin
-    .from('operations_requests')
-    .select('*', { count: 'exact', head: true })
-    .eq('entity_id', entityId)
-    .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('operations_requests')
+      .select('*', { count: 'exact', head: true })
+      .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
+    if (entityId) {
+      q = q.eq('entity_id', entityId);
+    }
+    return q;
+  };
 
   const runCount = async (query) => {
     const { count, error } = await query;

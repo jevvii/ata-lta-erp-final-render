@@ -46,7 +46,7 @@ const App = {
     const promise = files.reduce((chain, file) => {
       return chain.then(() => new Promise((resolve) => {
         const s = document.createElement('script');
-        s.src = file;
+        s.src = file + '?v=' + Date.now();
         s.async = false; // preserve execution order
         s.onload = resolve;
         s.onerror = () => { console.warn('[App] Failed to load dev bundle file: ' + file); resolve(); };

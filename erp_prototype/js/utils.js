@@ -127,6 +127,21 @@ function formatDate(d) {
   return new Date(d).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+/**
+ * Compare two objects by a date field for Array.sort().
+ * Returns newest first (descending) by default.
+ * @param {object} a
+ * @param {object} b
+ * @param {string} field - property name containing a date string
+ * @param {boolean} [asc=false] - true for oldest-first
+ * @returns {number}
+ */
+function sortByDate(a, b, field, asc) {
+  const da = new Date(a[field] || 0).getTime();
+  const db = new Date(b[field] || 0).getTime();
+  return asc ? da - db : db - da;
+}
+
 function getInitials(name = '') {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map(s => s[0].toUpperCase()).join('');
 }

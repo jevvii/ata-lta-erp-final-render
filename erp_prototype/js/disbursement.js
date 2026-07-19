@@ -431,7 +431,7 @@ const Disbursement = {
     }
     else if (this.view === 'detail') container.appendChild(await this.renderDetail());
     else if (this.view === 'report') container.appendChild(await this.renderReport());
-    else if (this.view === 'templates') container.appendChild(this.renderTemplates());
+    else if (this.view === 'templates') container.appendChild(await this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
     else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true, template }));
 

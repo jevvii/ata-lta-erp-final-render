@@ -139,6 +139,26 @@ const Users = {
     } catch (err) {
       console.error('Failed to load admin counts', err);
     }
+
+    // Pre-load pending changes so getPendingCategories / renderTabNav can use them synchronously.
+    try {
+      this._cachedAllPending = await PendingChanges.getAllPending();
+    } catch (err) {
+      console.error('Failed to preload pending changes', err);
+      this._cachedAllPending = [];
+    }
+    try {
+      this._cachedMyPending = await PendingChanges.getPendingForUser(Auth.user?.id);
+    } catch (err) {
+      console.error('Failed to preload my pending', err);
+      this._cachedMyPending = [];
+    }
+    try {
+      this._cachedMyRejected = await PendingChanges.getRejectedForUser(Auth.user?.id);
+    } catch (err) {
+      console.error('Failed to preload my rejected', err);
+      this._cachedMyRejected = [];
+    }
   },
 
   async render() {
@@ -430,7 +450,7 @@ const Users = {
     } else if (this.view === 'audit' && canManageUsers) {
       container.appendChild(this.renderAuditSection());
     } else if (this.view === 'pending' && (canManageUsers || isManager)) {
-      container.appendChild(this.renderPendingSection());
+      container.appendChild(await this.renderPendingSection());
     } else if (this.view === 'myPending' && !canManageUsers) {
       container.appendChild(this.renderMyPendingSection());
     } else if (this.view === 'myRequests' && !canManageUsers) {
@@ -439,7 +459,7 @@ const Users = {
       if (this.view === 'myRequests') {
         container.appendChild(this.renderMyRequestsSection());
       } else if (this.view === 'pending' && isManager) {
-        container.appendChild(this.renderPendingSection());
+        container.appendChild(await this.renderPendingSection());
       } else {
         container.appendChild(this.renderMyPendingSection());
       }
@@ -475,7 +495,7 @@ const Users = {
       return renderModuleTabNav(tabs, this.view, changeTab);
     }
 
-    const myPendingCount = (PendingChanges.getPendingForUser(Auth.user.id) || []).length;
+    const myPendingCount = (this._cachedMyPending || []).length;
     const tabs = [
       { key: 'myPending', label: 'My Pending Submissions', icon: BoardCardIcons.checklist, count: myPendingCount }
     ];
@@ -1441,7 +1461,7 @@ const Users = {
 
   getPendingCategories() {
     const entity = Auth.activeEntity;
-    const allPendingChanges = PendingChanges.getAllPending().filter(pc => PendingChanges.canApproveChange(pc));
+    const allPendingChanges = (this._cachedAllPending || []).filter(pc => PendingChanges.canApproveChange(pc));
 
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -1584,11 +1604,11 @@ const Users = {
     };
   },
 
-  renderPendingSection() {
+  async renderPendingSection() {
     const wrapper = el('div');
 
     if (this.pendingDetailId) {
-      wrapper.appendChild(this.renderPendingDetail(this.pendingDetailId));
+      wrapper.appendChild(await this.renderPendingDetail(this.pendingDetailId));
       return wrapper;
     }
 
@@ -1833,15 +1853,15 @@ const Users = {
   },
 
   // Legacy board/table/list views kept for possible future toggles / backwards compatibility
-  renderPendingSectionLegacy() {
+  async renderPendingSectionLegacy() {
     const wrapper = el('div');
 
     if (this.pendingDetailId) {
-      wrapper.appendChild(this.renderPendingDetail(this.pendingDetailId));
+      wrapper.appendChild(await this.renderPendingDetail(this.pendingDetailId));
       return wrapper;
     }
 
-    let pendingChanges = PendingChanges.getAllPending();
+    let pendingChanges = (this._cachedAllPending || []);
     pendingChanges = pendingChanges.filter(pc => PendingChanges.canApproveChange(pc));
 
     if (pendingChanges.length === 0) {
@@ -2237,8 +2257,8 @@ const Users = {
     while (container.firstChild) container.removeChild(container.firstChild);
     const self = this;
 
-    let pending = PendingChanges.getPendingForUser(Auth.user.id);
-    let rejected = PendingChanges.getRejectedForUser(Auth.user.id);
+    let pending = (this._cachedMyPending || []);
+    let rejected = (this._cachedMyRejected || []);
 
     // Combine all items into a unified list
     let allItems = [
@@ -2536,8 +2556,8 @@ const Users = {
   },
 
 
-  renderPendingDetail(pendingId, isSidePeek = false, hideHeader = false) {
-    const pc = PendingChanges.getById(pendingId);
+  async renderPendingDetail(pendingId, isSidePeek = false, hideHeader = false) {
+    const pc = await PendingChanges.getById(pendingId);
     if (!pc) {
       if (!isSidePeek) this.pendingDetailId = null;
       return renderEmptyStateV2({
