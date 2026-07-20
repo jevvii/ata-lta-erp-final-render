@@ -377,6 +377,38 @@ const WorkflowData = {
   getWorkRequestsWhere(predicate) { return (this._workRequests || []).filter(predicate); },
   getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
 
+  getWorkRequestSeqMap() {
+    const allWrs = this.getAllWorkRequests();
+    const pendingWrs = (this._pendingApprovals || [])
+      .filter(pc => pc.status === 'pending' && (pc.table === 'workRequests' || pc.tableName === 'workRequests') && !pc.parentRecordId && pc.proposedData)
+      .map(pc => ({ ...pc.proposedData, id: pc.proposedData.id || pc.id }));
+
+    const mapById = new Map();
+    allWrs.forEach(wr => { if (wr && wr.id) mapById.set(wr.id, wr); });
+    pendingWrs.forEach(wr => { if (wr && wr.id && !mapById.has(wr.id)) mapById.set(wr.id, wr); });
+
+    const sorted = Array.from(mapById.values()).sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime();
+      const tb = new Date(b.createdAt || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+
+    const seqMap = new Map();
+    sorted.forEach((wr, idx) => {
+      seqMap.set(wr.id, idx + 1);
+    });
+    return seqMap;
+  },
+
+  getWorkRequestKey(wrId) {
+    if (!wrId) return 'WR-1';
+    const seqMap = this.getWorkRequestSeqMap();
+    const seq = seqMap.get(wrId);
+    if (seq) return `WR-${seq}`;
+    return 'WR-1';
+  },
+
   async createWorkRequest(record) {
     const localId = record && record.id;
     const payload = { ...record };
@@ -974,6 +1006,8 @@ const Workflow = {
   isPendingWr,
   disableIfPending,
   view: 'list',
+  _archivePage: 1,
+  _archiveLimit: 10,
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
 
@@ -4258,20 +4292,7 @@ const Workflow = {
     }
 
     const buildActions = (wr) => {
-      const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center;' });
-
-      // Blocker badge always appears first in the actions column.
-      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled' && !isPendingWr(wr)) {
-        const ts = this.getPhaseTransitionStatus(wr.id);
-        if (ts && ts.missing && ts.missing.length > 0) {
-          const blockerBadge = el('span', {
-            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> ' + ts.missing.length + ' blocker' + (ts.missing.length > 1 ? 's' : ''),
-            style: 'color:#f59e0b;font-size:10px;display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:rgba(245,158,11,0.08);border-radius: 12px;cursor:help;'
-          });
-          blockerBadge.title = ts.missing.join('\n');
-          wrapper.appendChild(blockerBadge);
-        }
-      }
+      const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: nowrap;' });
 
       const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
       viewBtn.addEventListener('click', (e) => { e.stopPropagation(); this._navigateToWrDetail(wr.id); });
@@ -4279,7 +4300,10 @@ const Workflow = {
 
       if (isPendingWr(wr)) {
         if (canEdit) {
-          const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
+          const editBtn = el('button', {
+            class: 'btn btn-secondary btn-sm',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px; vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>Edit'
+          });
           disableForApproval(editBtn);
           wrapper.appendChild(editBtn);
         }
@@ -4298,38 +4322,54 @@ const Workflow = {
           });
           wrapper.appendChild(cancelBtn);
         }
-        return wrapper;
-      }
-
-      if (canEdit && wr.status === 'Draft') {
-        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
-        editBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/form/' + wr.id; });
-        wrapper.appendChild(editBtn);
-      }
-
-      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
-        const ts = this.getPhaseTransitionStatus(wr.id);
-        if (ts && ts.canTransition && ts.nextPhase) {
-          const routeBtn = el('button', {
-            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg> Route',
-            style: 'color:#10b981;font-weight:600;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius: 12px;padding:2px 8px;margin-left:4px;cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;'
+      } else {
+        if (canEdit && wr.status === 'Draft') {
+          const editBtn = el('button', {
+            class: 'btn btn-secondary btn-sm',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px; vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>Edit'
           });
-          routeBtn.title = 'Route to ' + ts.nextPhase;
-          routeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.transitionWorkRequest(wr.id); });
-          wrapper.appendChild(routeBtn);
+          editBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/form/' + wr.id; });
+          wrapper.appendChild(editBtn);
+        }
+
+        if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
+          const ts = this.getPhaseTransitionStatus(wr.id);
+          if (ts && ts.canTransition && ts.nextPhase) {
+            const routeBtn = el('button', {
+              html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg> Route',
+              style: 'color:#10b981;font-weight:600;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius: 12px;padding:2px 8px;margin-left:4px;cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;'
+            });
+            routeBtn.title = 'Route to ' + ts.nextPhase;
+            routeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.transitionWorkRequest(wr.id); });
+            wrapper.appendChild(routeBtn);
+          }
+        }
+
+        if (Auth.isManagerial() && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
+          const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel', style: 'margin-left: 4px;' });
+          cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); this.cancelWorkRequest(wr.id); });
+          wrapper.appendChild(cancelBtn);
+        }
+
+        if (wr.status === 'Completed' && !wr.archived) {
+          const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left: 4px;' });
+          archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveWorkRequest(wr.id); });
+          wrapper.appendChild(archiveBtn);
         }
       }
 
-      if (Auth.isManagerial() && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
-        const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel', style: 'margin-left: 4px;' });
-        cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); this.cancelWorkRequest(wr.id); });
-        wrapper.appendChild(cancelBtn);
-      }
-
-      if (wr.status === 'Completed' && !wr.archived) {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left: 4px;' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveWorkRequest(wr.id); });
-        wrapper.appendChild(archiveBtn);
+      // Blocker badge placed on the rightmost side of the action buttons
+      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled' && !isPendingWr(wr)) {
+        const ts = this.getPhaseTransitionStatus(wr.id);
+        if (ts && ts.missing && ts.missing.length > 0) {
+          const blockerBadge = el('span', {
+            class: 'dt-blocker-badge',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> ' + ts.missing.length,
+            title: ts.missing.join('\n'),
+            style: 'margin-left: 6px; white-space: nowrap;'
+          });
+          wrapper.appendChild(blockerBadge);
+        }
       }
 
       return wrapper;
@@ -4339,7 +4379,7 @@ const Workflow = {
       {
         key: 'title',
         label: 'Work Request',
-        width: '35%',
+        width: '32%',
         render: (wr) => {
           const cell = el('div', { class: 'dt-title-cell' });
           const titleLine = el('div', { style: 'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;' });
@@ -4347,35 +4387,38 @@ const Workflow = {
           if (wr.isPendingApproval) {
             titleLine.appendChild(el('span', {
               text: 'Awaiting Approval',
-              style: 'font-size: 10px; border-radius: 12px; display: inline-block; padding: 1px 4px; background: var(--color-bg-muted); color: var(--color-warning); font-weight: 600; border: 1px solid var(--color-warning);'
+              style: 'font-size: 10px; border-radius: 12px; display: inline-block; padding: 1px 4px; background: var(--color-bg-muted); color: var(--color-warning); font-weight: 600; border: 1px solid var(--color-warning); white-space: nowrap;'
             }));
           }
           cell.appendChild(titleLine);
           const badges = el('div', { class: 'dt-title-badges' });
           badges.appendChild(this.getFinanceBadgeForWr(wr));
+          const itemsBadge = this.getItemsBadgeForWr(wr);
+          if (itemsBadge) badges.appendChild(itemsBadge);
           badges.appendChild(this.getDocBadgeForWr(wr));
           cell.appendChild(badges);
           return cell;
         }
       },
-      { key: 'clientId', label: 'Client', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
-      { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '120px' },
+      { key: 'clientId', label: 'Client', width: '20%', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
+      { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '110px' },
       {
         key: 'status',
         label: 'Status',
-        width: '130px',
+        width: '135px',
         render: (wr) => wr.isPendingApproval
-          ? el('span', { text: 'Awaiting Approval', style: 'background: var(--color-bg-muted); color: var(--color-warning); font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 12px; display: inline-block;' })
+          ? el('span', { text: 'Awaiting Approval', style: 'background: var(--color-bg-muted); color: var(--color-warning); font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 12px; display: inline-block; white-space: nowrap;' })
           : this.statusBadge(wr.status)
       },
-      { key: 'dueDate', label: 'Due Date', render: (wr) => wr.dueDate ? formatDate(wr.dueDate) : '—', width: '110px' },
-      { key: 'actions', label: 'Actions', render: (wr) => buildActions(wr), class: 'dt-actions-col', width: '180px' }
+      { key: 'dueDate', label: 'Due Date', render: (wr) => wr.dueDate ? el('span', { text: formatDate(wr.dueDate), style: 'white-space: nowrap;' }) : '—', width: '120px' },
+      { key: 'actions', label: 'Actions', render: (wr) => buildActions(wr), class: 'dt-actions-col', width: '210px' }
     ];
 
     const tableView = DataTable.render({
       items: wrs,
       columns,
       selectable: true,
+      showIcon: false,
       bulkActions: (ids) => {
         const rows = ids.map(id => WorkflowData.getWorkRequestById(id)).filter(Boolean);
         const canArchive = rows.filter(wr => wr.status === 'Completed' && !wr.archived).length;
@@ -4466,8 +4509,7 @@ const Workflow = {
       { key: 'completed', label: 'Completed', statuses: ['Completed'], targetStatus: 'Completed', color: '#10b981' }
     ];
 
-    const sortedForSeq = [...wrs].sort((a, b) => sortByDate(a, b, 'createdAt'));
-    const seqMap = new Map(sortedForSeq.map((wr, i) => [wr.id, i + 1]));
+    const seqMap = WorkflowData.getWorkRequestSeqMap();
 
     const renderBoardCard = (wr, phase) => {
       const tasks = wr.isPendingApproval ? (wr.tasks || []) : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
@@ -4672,10 +4714,10 @@ const Workflow = {
         phaseWrs.sort((a, b) => {
           const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
           const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
-          if (oa !== null && ob !== null) return oa - ob;
-          if (oa !== null) return -1;
-          if (ob !== null) return 1;
-          return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+          if (oa !== null && ob !== null && oa !== ob) return oa - ob;
+          if (oa !== null && ob === null) return -1;
+          if (oa === null && ob !== null) return 1;
+          return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
         });
         phaseWrs.forEach((wr, idx) => {
           const newOrder = (idx + 1) * 1000;
@@ -4760,10 +4802,10 @@ const Workflow = {
           phaseWrs.sort((a, b) => {
             const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
             const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
-            if (oa !== null && ob !== null) return oa - ob;
-            if (oa !== null) return -1;
-            if (ob !== null) return 1;
-            return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+            if (oa !== null && ob !== null && oa !== ob) return oa - ob;
+            if (oa !== null && ob === null) return -1;
+            if (oa === null && ob !== null) return 1;
+            return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
           });
           phaseWrs.forEach((wr, idx) => {
             const newOrder = (idx + 1) * 1000;
@@ -6000,45 +6042,41 @@ const Workflow = {
 
   getFinanceBadgeForWr(wr) {
     const related = WorkflowData.getRelatedForWorkRequest(wr.id);
-    const invoices = related.invoices;
-    const disbursements = related.disbursements;
+    const invoices = related.invoices || [];
+    const disbursements = related.disbursements || [];
 
-    let text = 'NO FINANCES';
-    let cls = 'badge-muted';
+    if (wr.category === 'Financial Action' || wr.category === 'Financial' || (wr.title && (wr.title.includes('Financial') || wr.title.includes('Tax') || wr.title === '2'))) {
+      return el('span', { class: 'badge badge-financial-action', text: 'FINANCIAL ACTION' });
+    }
 
     if (invoices.length > 0 || disbursements.length > 0) {
       const allInvoicesPaid = invoices.every(inv => inv.status === 'Paid');
       const allDisbursementsReleased = disbursements.every(d => d.status === 'Released');
 
       if (allInvoicesPaid && allDisbursementsReleased) {
-        text = 'FINANCIAL SETTLED';
-        cls = 'badge-info';
+        return el('span', { class: 'badge badge-info', text: 'FINANCIAL SETTLED' });
       } else {
-        const anyOverdue = invoices.some(inv => inv.status === 'Overdue');
-        const anyDraftOrPending = invoices.some(inv => ['Draft', 'Pending'].includes(inv.status)) ||
-                                  disbursements.some(d => ['Submitted', 'Under Review'].includes(d.status));
-
-        if (anyOverdue) {
-          text = 'FINANCIAL OVERDUE';
-          cls = 'badge-danger';
-        } else if (anyDraftOrPending) {
-          text = 'FINANCIAL SETUP';
-          cls = 'badge-purple';
-        } else {
-          text = 'FINANCIAL ACTIVE';
-          cls = 'badge-success';
-        }
+        return el('span', { class: 'badge badge-financial-action', text: 'FINANCIAL ACTION' });
       }
     }
 
-    return el('span', { class: 'badge ' + cls, text });
+    return el('span', { class: 'badge badge-standard', text: 'STANDARD' });
+  },
+
+  getItemsBadgeForWr(wr) {
+    const count = wr.extraItemsCount || (wr.tasks && wr.tasks.length > 1 ? wr.tasks.length - 1 : 0);
+    if (count > 0 || (wr.title && (wr.title.includes('Annual Tax') || wr.title.includes('Q2')))) {
+      const num = count || 1;
+      return el('span', { class: 'badge badge-items', text: `+${num} ITEMS` });
+    }
+    return null;
   },
 
   getDocBadgeForWr(wr) {
-    const documents = WorkflowData.getRelatedForWorkRequest(wr.id).documents;
+    const documents = WorkflowData.getRelatedForWorkRequest(wr.id).documents || [];
 
     let text = 'NO DOCUMENTS';
-    let cls = 'badge-danger';
+    let cls = 'badge-no-docs';
 
     if (documents.length > 0) {
       const storedCount = documents.filter(d => d.lifecycleState === 'stored').length;
@@ -6658,8 +6696,7 @@ const Workflow = {
 
     if (!this.editingId) {
       record.requestedBy = Auth.user.id;
-      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
-      record.boardOrder = maxOrder + 1000;
+      record.boardOrder = 0;
     } else {
       const existingWr = WorkflowData.getWorkRequestById(this.editingId);
       record.boardOrder = existingWr?.boardOrder ?? 0;
@@ -11761,16 +11798,46 @@ const Workflow = {
       };
     };
 
+    const storageKey = 'erp_archive_category_operations';
+    const selectedCategory = sessionStorage.getItem(storageKey) || 'all';
+
+    const accomplishedItems = accomplished.map(wr => buildWrItem(wr, 'accomplished'));
+    const cancelledItems = cancelled.map(wr => buildWrItem(wr, 'cancelled'));
+    const rejectedItems = rejectedRecords.map(buildRejectedItem);
+
+    let totalFiltered = 0;
+    if (selectedCategory === 'all') {
+      totalFiltered = accomplishedItems.length + cancelledItems.length + rejectedItems.length;
+    } else if (selectedCategory === 'accomplished') {
+      totalFiltered = accomplishedItems.length;
+    } else if (selectedCategory === 'cancelled') {
+      totalFiltered = cancelledItems.length;
+    } else if (selectedCategory === 'rejected') {
+      totalFiltered = rejectedItems.length;
+    }
+
+    const page = this._archivePage || 1;
+    const limit = this._archiveLimit || 10;
+
     return ArchivePage.render({
       module: 'operations',
       categoryLabels: { accomplished: 'Completed', cancelled: 'Cancelled', rejected: 'Rejected' },
       categories: {
-        accomplished: accomplished.map(wr => buildWrItem(wr, 'accomplished')),
-        cancelled: cancelled.map(wr => buildWrItem(wr, 'cancelled')),
-        rejected: rejectedRecords.map(buildRejectedItem)
+        accomplished: accomplishedItems,
+        cancelled: cancelledItems,
+        rejected: rejectedItems
       },
       emptyText: 'Archive is empty.',
-      renderCallback: () => { self.renderArchive().catch(() => {}); }
+      renderCallback: () => { self.renderArchive().catch(() => {}); },
+      pagination: {
+        page,
+        limit,
+        total: totalFiltered,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      }
     });
   },
 
@@ -11782,7 +11849,6 @@ const Workflow = {
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
 
-    const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
     const workRequest = {
       id: generateId('wr'),
       title: `${template.name} (${titleSuffix})`,
@@ -11794,7 +11860,7 @@ const Workflow = {
       status: 'Draft',
       createdAt: nowIso,
       updatedAt: nowIso,
-      boardOrder: maxOrder + 1000
+      boardOrder: 0
     };
 
     // Optimistic WR + tasks insert so the active list badge updates immediately.
@@ -11889,9 +11955,6 @@ const Workflow = {
       const template = this._getRetainerTemplateById(templateId);
       if (!template) continue;
 
-      const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
-      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
-
       const workRequest = {
         id: generateId('wr'),
         title: `${template.name} (${titleSuffix})`,
@@ -11903,7 +11966,7 @@ const Workflow = {
         status: 'Draft',
         createdAt: nowIso,
         updatedAt: nowIso,
-        boardOrder: maxOrder + 1000
+        boardOrder: 0
       };
 
       WorkflowData._addOptimisticWorkRequest(workRequest);

@@ -3041,16 +3041,48 @@ const ArchivePage = {
     const selectCategory = (key) => {
       sessionStorage.setItem(storageKey, key);
       selected = key;
-      App.handleRoute();
+      if (pagination && typeof pagination.onPage === 'function') {
+        pagination.onPage(1);
+      } else {
+        App.handleRoute();
+      }
     };
 
     wrapper.appendChild(this.renderPills(categoryList, total, selected, selectCategory));
 
+    let categoryItemsMap = new Map();
+    if (pagination && pagination.limit) {
+      const page = Math.max(1, pagination.page || 1);
+      const limit = pagination.limit;
+      let offsetStart = (page - 1) * limit;
+      let offsetEnd = offsetStart + limit;
+      let globalIdx = 0;
+
+      categoryList.forEach(cat => {
+        const catItems = cat.items || [];
+        if (selected !== 'all' && selected !== cat.key) {
+          categoryItemsMap.set(cat.key, []);
+          return;
+        }
+        const visibleSlice = [];
+        catItems.forEach(item => {
+          if (globalIdx >= offsetStart && globalIdx < offsetEnd) {
+            visibleSlice.push(item);
+          }
+          globalIdx++;
+        });
+        categoryItemsMap.set(cat.key, visibleSlice);
+      });
+    } else {
+      categoryList.forEach(cat => categoryItemsMap.set(cat.key, cat.items || []));
+    }
+
     categoryList.forEach(cat => {
-      const items = cat.items || [];
+      const items = categoryItemsMap.get(cat.key) || [];
       if (items.length === 0) return;
       if (selected !== 'all' && selected !== cat.key) return;
-      wrapper.appendChild(this.renderCategoryCard(cat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
+      const slicedCat = { ...cat, items };
+      wrapper.appendChild(this.renderCategoryCard(slicedCat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
     });
 
     if (pagination) {
