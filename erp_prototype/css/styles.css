@@ -347,6 +347,7 @@ a:hover {
   background: transparent;
   border-radius: var(--radius-pill);
   position: relative;
+  cursor: pointer;
 }
 
 .user-menu-toggle {
