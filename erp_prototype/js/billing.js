@@ -4355,7 +4355,17 @@ const Billing = {
       this._lastArchiveMeta = {};
     }
 
-    archivedInvoices = archivedInvoices.filter(inv => this._isArchiveInvoice(inv, entity));
+    const localArchived = (this._listCache || []).filter(inv => this._isArchiveInvoice(inv, entity));
+    const invMap = new Map();
+    archivedInvoices.forEach(inv => invMap.set(inv.id, inv));
+    localArchived.forEach(inv => {
+      if (!invMap.has(inv.id)) invMap.set(inv.id, inv);
+    });
+    archivedInvoices = Array.from(invMap.values()).filter(inv => {
+      const cached = this.getInvoiceById(inv.id);
+      return !cached || cached.archived !== false;
+    });
+
     const paid = archivedInvoices.filter(inv => inv.archived === true);
     const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled' && !inv.archived);
 

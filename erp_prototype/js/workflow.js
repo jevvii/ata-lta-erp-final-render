@@ -11705,7 +11705,16 @@ const Workflow = {
       console.error('Failed to load archived work requests', e);
     }
 
-    const accomplished = archivedWrs.filter(wr => wrFilter(wr) && wr.archived === true);
+    const localArchived = WorkflowData.getAllWorkRequests().filter(wr => wrFilter(wr) && wr.archived === true);
+    const wrMap = new Map();
+    archivedWrs.forEach(wr => wrMap.set(wr.id, wr));
+    localArchived.forEach(wr => {
+      if (!wrMap.has(wr.id)) wrMap.set(wr.id, wr);
+    });
+    const accomplished = Array.from(wrMap.values()).filter(wr => {
+      const cached = WorkflowData.getWorkRequestById(wr.id);
+      return wrFilter(wr) && (!cached || cached.archived !== false);
+    });
     const cancelledMap = new Map();
     archivedWrs.concat(WorkflowData.getAllWorkRequests()).forEach(wr => {
       if (wrFilter(wr) && wr.status === 'Cancelled' && !wr.archived) cancelledMap.set(wr.id, wr);

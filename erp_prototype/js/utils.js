@@ -3065,7 +3065,7 @@ const ArchivePage = {
     const hasPrev = page > 1;
     const hasNext = page < totalPages;
 
-    const wrap = el('div', { class: 'archive-pagination', style: 'display:flex;align-items:center;gap:var(--spacing-md);margin-top:var(--spacing-lg);' });
+    const wrap = el('div', { class: 'archive-pagination', style: 'display:flex;align-items:center;justify-content:center;gap:var(--spacing-md);margin-top:var(--spacing-lg);width:100%;' });
     const info = el('span', { class: 'archive-pagination-info', text: `Page ${page} of ${totalPages} (${total} total)`, style: 'min-width:120px;text-align:center;color:var(--color-text-muted);font-size:0.875rem;' });
 
     const prevBtn = el('button', {

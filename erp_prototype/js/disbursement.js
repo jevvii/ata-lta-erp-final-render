@@ -410,11 +410,11 @@ const Disbursement = {
   },
 
   _activeBadgeFilter(d) {
-    return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
+    return !d.archived && d.status !== 'Cancelled';
   },
 
   _archiveBadgeFilter(d) {
-    return (d.status === 'Funded' && d.archived) || d.status === 'Cancelled' || d.status === 'Rejected';
+    return !!d.archived || d.status === 'Cancelled';
   },
 
   _recalcCounts(entity = this._getActiveEntity()) {
@@ -644,6 +644,12 @@ const Disbursement = {
     try {
       const result = await apiCall();
       this._clearSkipGenerationIfCurrent(gen);
+      if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+        window.apiClient.disbursements.invalidateCounts();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
       App.handleRoute();
       return result;
     } catch (e) {
@@ -681,6 +687,12 @@ const Disbursement = {
     try {
       const result = await apiCall();
       this._clearSkipGenerationIfCurrent(gen);
+      if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+        window.apiClient.disbursements.invalidateCounts();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
       App.handleRoute();
       return result;
     } catch (e) {
@@ -3765,6 +3777,17 @@ const Disbursement = {
       this._lastArchiveMeta = {};
     }
 
+    const localArchived = (this._items || []).filter(d => this._entityMatches(d, entity) && d.archived === true);
+    const dMap = new Map();
+    archivedDisbursements.forEach(d => dMap.set(d.id, d));
+    localArchived.forEach(d => {
+      if (!dMap.has(d.id)) dMap.set(d.id, d);
+    });
+    archivedDisbursements = Array.from(dMap.values()).filter(d => {
+      const cached = this._getCachedItem(d.id);
+      return !cached || cached.archived !== false;
+    });
+
     const funded = archivedDisbursements.filter(d => d.archived === true);
     const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled' && !d.archived);
 
@@ -3774,8 +3797,8 @@ const Disbursement = {
       const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'disbursements' });
       rejectedDisbursementChanges = (pendingRes.data || []).filter(pc => {
         const data = pc.proposedData || {};
-        if (!entFilter(data.entity)) return false;
-        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        if (!this._entityMatches(data, entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user?.id) return false;
         return true;
       });
     } catch (e) {
@@ -3784,8 +3807,8 @@ const Disbursement = {
     try {
       const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'disbursement' });
       rejectedDisbursementRequests = (opReqRes.data || []).filter(r => {
-        if (!entFilter(r.entity)) return false;
-        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        if (!this._entityMatches(r, entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user?.id) return false;
         return true;
       });
     } catch (e) {

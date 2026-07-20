@@ -109,11 +109,11 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
 
-  const [total, cancelled, fundedArchived, pendingRejected, opsRejected, awaitingRelease] =
+  const [total, archivedCount, cancelledCount, pendingRejected, opsRejected, awaitingRelease] =
     await Promise.all([
       runCount(baseQuery()),
-      runCount(baseQuery().eq('status', 'Cancelled')),
-      runCount(baseQuery().eq('status', 'Funded').eq('archived', true)),
+      runCount(baseQuery().eq('archived', true)),
+      runCount(baseQuery().eq('status', 'Cancelled').eq('archived', false)),
       runCount(
         supabaseAdmin
           .from('pending_changes')
@@ -130,11 +130,11 @@ const getDisbursementCounts = async ({ entityId, user }) => {
           .eq('type', 'disbursement')
           .eq('status', 'rejected')
       ),
-      canRelease ? runCount(baseQuery().eq('status', 'Approved')) : Promise.resolve(0),
+      canRelease ? runCount(baseQuery().eq('status', 'Approved').eq('archived', false)) : Promise.resolve(0),
     ]);
 
-  const active = total - cancelled - fundedArchived;
-  const archived = cancelled + fundedArchived;
+  const active = total - archivedCount - cancelledCount;
+  const archived = archivedCount + cancelledCount;
   const rejected = pendingRejected + opsRejected;
 
   return {
