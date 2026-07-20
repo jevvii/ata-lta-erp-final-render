@@ -123,6 +123,20 @@ const acknowledgeTransmittal = async (req, res, next) => {
   }
 };
 
+/** @type {import('express').RequestHandler} */
+const deleteTransmittal = async (req, res, next) => {
+  try {
+    await service.deleteTransmittal({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   transmittalsController: {
     listTransmittals,
@@ -132,5 +146,6 @@ module.exports = {
     updateTransmittal,
     sendTransmittal,
     acknowledgeTransmittal,
+    deleteTransmittal,
   },
 };

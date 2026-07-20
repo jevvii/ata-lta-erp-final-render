@@ -378,6 +378,45 @@ const acknowledgeTransmittal = async ({ entityId, id, userId }) => {
   return updated;
 };
 
+/**
+ * Soft-delete a transmittal.
+ * @param {object} params
+ * @param {string} params.entityId
+ * @param {string} params.id
+ * @param {string} params.userId
+ */
+const deleteTransmittal = async ({ entityId, id, userId }) => {
+  const existing = await getTransmittalById({ entityId, id });
+
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from('transmittals')
+    .update({
+      deleted_at: now,
+      updated_by: userId,
+      updated_at: now,
+    })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to delete transmittal',
+    });
+  }
+
+  await auditService.log({
+    action: 'transmittal.delete',
+    table: 'transmittals',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { trackingNumber: existing.tracking_number },
+  });
+};
+
 module.exports = {
   listTransmittals,
   countTransmittals,
@@ -386,4 +425,5 @@ module.exports = {
   updateTransmittal,
   sendTransmittal,
   acknowledgeTransmittal,
+  deleteTransmittal,
 };

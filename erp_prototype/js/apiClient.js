@@ -497,6 +497,7 @@
       update: (id, data) => put(`/transmittals/${id}`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       send: (id) => post(`/transmittals/${id}/send`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       acknowledge: (id) => post(`/transmittals/${id}/acknowledge`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      remove: (id) => del(`/transmittals/${id}`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
     },
 
     reports: {

@@ -174,6 +174,15 @@ app.use('/v1/tasks', tasksRouter);
 app.use('/v1/invoices', billingRouter);
 app.use('/v1/disbursements', disbursementsRouter);
 app.use('/v1/transmittals', transmittalsRouter);
+// Reports endpoints set their own Cache-Control in the controller.
+// Re-assert Vary: X-Active-Entity so entity-scoped responses are not cached
+// across ATA / LTA / ALL switches.
+app.use('/v1/reports', (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    res.setHeader('Vary', 'X-Active-Entity');
+  }
+  next();
+});
 app.use('/v1/reports', reportsRouter);
 app.use('/v1/admin', adminRouter);
 app.use('/v1/operations-requests', operationsRequestsRouter);

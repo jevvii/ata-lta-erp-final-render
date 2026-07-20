@@ -25,7 +25,7 @@ const DEPARTMENT_PERMISSIONS = {
     'disbursement:view', 'disbursement:create', 'disbursement:edit',
     'disbursement:request', 'disbursement:mark_released',
     'dms:view', 'dms:edit', 'dms:delete', 'dms:handover',
-    'transmittal:view', 'transmittal:create', 'transmittal:edit', 'transmittal:mark',
+    'transmittal:view', 'transmittal:create', 'transmittal:edit', 'transmittal:mark', 'transmittal:delete',
     'reports:view', 'bypass_review:tasks', 'bypass_review:*',
     'approve_change:tasks', 'approve_change:*', 'users:view', 'users:manage', 'audit:view_all',
   ],

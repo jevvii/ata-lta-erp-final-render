@@ -2067,6 +2067,18 @@ async function triggerSyncReload(hash, messageConfig) {
       if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidate === 'function') {
         WorkflowData.invalidate();
       }
+      if (typeof Clients !== 'undefined' && typeof Clients.invalidateCache === 'function') {
+        Clients.invalidateCache();
+      }
+      if (typeof Billing !== 'undefined' && typeof Billing.invalidateCache === 'function') {
+        Billing.invalidateCache();
+      }
+      if (typeof Disbursement !== 'undefined' && typeof Disbursement.invalidateCache === 'function') {
+        Disbursement.invalidateCache();
+      }
+      if (typeof Transmittal !== 'undefined' && typeof Transmittal.invalidateCache === 'function') {
+        Transmittal.invalidateCache();
+      }
       if (typeof window.apiClient.abortRequests === 'function') {
         window.apiClient.abortRequests('sync-reload');
       }

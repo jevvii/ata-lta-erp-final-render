@@ -39,9 +39,130 @@ function getUserColor(userId) {
   return colors[index];
 }
 
+/**
+ * API-backed, entity-tagged data layer for the Clients module.
+ * Mirrors WorkflowData: cache is keyed to Auth.activeEntity, supports
+ * optimistic local mutations with rollback on API failure.
+ */
+const ClientsData = {
+  _clients: null,
+  _loadingPromise: null,
+  _loadingEntity: null,
+  _loadGeneration: 0,
+  _entity: null,
+
+  _getActiveEntity() {
+    return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
+
+  _isEntityFresh() {
+    return this._entity === this._getActiveEntity();
+  },
+
+  hasData() {
+    return Array.isArray(this._clients) && this._isEntityFresh();
+  },
+
+  invalidate() {
+    this._clients = null;
+    this._loadingPromise = null;
+    this._loadingEntity = null;
+    this._loadGeneration++;
+    this._entity = null;
+    if (typeof Clients !== 'undefined') Clients._skipNextListFetch = false;
+  },
+
+  async ensure() {
+    if (this.hasData()) return;
+    const activeEntity = this._getActiveEntity();
+    // If a load is already in flight for the current entity, share it.
+    if (this._loadingPromise && this._loadingEntity === activeEntity) return this._loadingPromise;
+    // Otherwise start a fresh load for the active entity and tag it with a new
+    // generation so stale loads cannot overwrite newer ones.
+    const loadGen = ++this._loadGeneration;
+    this._loadingEntity = activeEntity;
+    const promise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._loadingPromise = null;
+        this._loadingEntity = null;
+      }
+    });
+    this._loadingPromise = promise;
+    return promise;
+  },
+
+  async _load(loadGen) {
+    const entity = this._getActiveEntity();
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+    const res = await window.apiClient.clients.list({});
+    let clients = (res.data || []).map(c => Clients.normalizeClient(c));
+    clients = clients.filter(c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      return (entity === 'ALL'
+        ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt)
+        : cEnt === entity.toUpperCase());
+    });
+    // Discard stale result if generation or entity changed while loading.
+    if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
+      return { clients: this._clients || [] };
+    }
+    this._clients = clients;
+    this._entity = entity;
+    return { clients };
+  },
+
+  getAllClients() { return this._clients || []; },
+  getClientById(id) { return (this._clients || []).find(c => c.id === id) || null; },
+  getClientsWhere(predicate) { return (this._clients || []).filter(predicate); },
+
+  async updateClient(id, changes) {
+    const existing = this.getClientById(id);
+    const updated = { ...(existing || {}), ...changes, id };
+    if (existing) Object.assign(existing, changes);
+    try {
+      const payload = { ...updated };
+      const res = await window.apiClient.clients.update(id, payload);
+      const normalized = Clients.normalizeClient(res.data);
+      if (existing) Object.assign(existing, normalized);
+    } catch (e) {
+      console.error('Failed to update client', e);
+    }
+    return updated;
+  },
+
+  async deleteClient(id) {
+    const idx = (this._clients || []).findIndex(c => c.id === id);
+    let removed = null;
+    if (idx >= 0) {
+      removed = this._clients[idx];
+      this._clients.splice(idx, 1);
+    }
+    try {
+      await window.apiClient.clients.remove(id);
+    } catch (e) {
+      console.error('Failed to delete client', e);
+      if (removed && this._clients) this._clients.splice(idx, 0, removed);
+    }
+  }
+};
+
 const Clients = {
   editingId: null,
   activeTab: 'active',
+  _skipNextListFetch: false,
+
+  // Tell the app shell whether the cached client list is fresh for the given entity.
+  hasCachedData(entity) {
+    return typeof ClientsData !== 'undefined' && ClientsData.hasData() && ClientsData._entity === entity;
+  },
+
+  invalidateCache() {
+    ClientsData.invalidate();
+    this._skipNextListFetch = false;
+  },
 
   /**
    * Convert backend client shape to the local shape expected by the UI.
@@ -208,28 +329,20 @@ const Clients = {
     App.updateStickyOffsets();
   },
 
-  async getClientCounts() {
-    const entity = Auth.activeEntity;
-    try {
-      const res = await window.apiClient.clients.list({});
-      let clients = res.data || [];
-      clients = clients.filter(c => {
-        const cEnt = (c.entity || '').toUpperCase();
-        return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
-      });
-      const activeCount = clients.filter(c => c.status !== 'Archived').length;
-      const archivedCount = clients.filter(c => c.status === 'Archived').length;
-      return { activeCount, archivedCount };
-    } catch (e) {
-      return { activeCount: 0, archivedCount: 0 };
-    }
+  getClientCounts() {
+    const clients = ClientsData.getAllClients();
+    const activeCount = clients.filter(c => c.status !== 'Archived').length;
+    const archivedCount = clients.filter(c => c.status === 'Archived').length;
+    return { activeCount, archivedCount };
   },
 
   async renderTabNav() {
     const entity = Auth.activeEntity;
     const isAdmin = Auth.user?.role === 'Admin';
     const isManagerial = Auth.isManagerial();
-    const { activeCount, archivedCount } = await this.getClientCounts();
+    let activeCount = 0;
+    let archivedCount = 0;
+    let rejectedCount = 0;
 
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -237,8 +350,12 @@ const Clients = {
       return uEnt === entity.toUpperCase();
     };
 
-    let rejectedCount = 0;
     try {
+      await ClientsData.ensure();
+      const counts = this.getClientCounts();
+      activeCount = counts.activeCount;
+      archivedCount = counts.archivedCount;
+
       const [pendingRes, opRes] = await Promise.all([
         window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'clients' }),
         window.apiClient.operationsRequests.list({ type: 'client', status: 'rejected' })
@@ -256,7 +373,7 @@ const Clients = {
       });
       rejectedCount = rejectedClientChanges.length + rejectedClientRequests.length;
     } catch (e) {
-      console.error('Failed to load rejected client records', e);
+      console.error('Failed to load client tab counts', e);
     }
     const archiveCount = archivedCount + rejectedCount;
 
@@ -291,25 +408,39 @@ const Clients = {
     }
   },
 
-  async getFilteredClients(query) {
-    const res = await window.apiClient.clients.list(query ? { search: query, status: 'Active' } : { status: 'Active' });
-    let clients = (res.data || []).map(c => this.normalizeClient(c));
-    const entity = Auth.activeEntity;
-    clients = clients.filter(c => {
-      const cEnt = (c.entity || '').toUpperCase();
-      return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
-    });
+  getFilteredClients(query) {
+    let clients = ClientsData.getAllClients().filter(c => c.status !== 'Archived');
+    if (query) {
+      const q = query.toLowerCase();
+      clients = clients.filter(c => {
+        const haystack = [
+          c.name,
+          c.tin,
+          c.tradeName,
+          c.address,
+          c.contactPerson,
+          c.entity
+        ].map(s => (s || '').toLowerCase()).join(' ');
+        return haystack.includes(q);
+      });
+    }
     return clients;
   },
 
   async renderList(container, query) {
     this.clearNode(container);
-    await Promise.all([
+    const ensurePromises = [
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),
       window.apiClient.workRequestCache.ensure()
-    ]);
-    const clients = await this.getFilteredClients(query);
+    ];
+    if (this._skipNextListFetch) {
+      this._skipNextListFetch = false;
+    } else {
+      ensurePromises.push(ClientsData.ensure());
+    }
+    await Promise.all(ensurePromises);
+    const clients = this.getFilteredClients(query);
 
     if (clients.length === 0) {
       container.appendChild(renderEmptyState('No clients found', null, { variant: 'zero-state' }));
@@ -1152,6 +1283,7 @@ const Clients = {
         await window.apiClient.clients.update(this.editingId, record);
       }
       window.apiClient.clientCache.invalidate();
+      this.invalidateCache();
     } catch (e) {
       Workflow.showMessage('Save Client', e.message || 'Unable to save client.', 'error');
       return;
@@ -1171,24 +1303,36 @@ const Clients = {
 
   async archiveClientDirectly(clientId) {
     if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can archive clients.');
+      Workflow.showMessage('Permission Denied', 'Only Admins can archive clients.', 'danger');
       return;
     }
-    if (!confirm('Are you sure you want to archive this client? This will cancel all related work requests and archive all associated documents.')) return;
-
-    try {
-      await window.apiClient.clients.remove(clientId);
-      window.apiClient.clientCache.invalidate();
-      alert('Client archived successfully.');
-      App.handleRoute();
-    } catch (e) {
-      Workflow.showMessage('Archive Client', e.message || 'Unable to archive client.', 'error');
-    }
+    await ClientsData.ensure();
+    const client = ClientsData.getClientById(clientId);
+    Workflow.showConfirm('Archive Client',
+      'Are you sure you want to archive this client? This will cancel all related work requests and archive all associated documents.',
+      async () => {
+        const originalStatus = client ? client.status : null;
+        if (client) client.status = 'Archived';
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        try {
+          await window.apiClient.clients.remove(clientId);
+          window.apiClient.clientCache.invalidate();
+          Workflow.showMessage('Archived', 'Client has been archived.', 'success');
+        } catch (e) {
+          if (client && originalStatus !== null) client.status = originalStatus;
+          this._skipNextListFetch = true;
+          App.handleRoute();
+          Workflow.showMessage('Error', e.message || 'Unable to archive client.', 'error');
+        }
+      },
+      'warning'
+    );
   },
 
   async archiveClientRequest(clientId) {
     if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can archive clients.');
+      Workflow.showMessage('Permission Denied', 'Only Admins can archive clients.', 'danger');
       return;
     }
     // Check if there is already a pending change to archive this client
@@ -1196,48 +1340,52 @@ const Clients = {
       const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'pending', tableName: 'clients', parentRecordId: clientId });
       const pending = (pendingRes.data || []).filter(pc => pc.proposedData && pc.proposedData.status === 'Archived');
       if (pending.length > 0) {
-        alert('An archive request for this client is already pending approval.');
+        Workflow.showMessage('Request Pending', 'An archive request for this client is already pending approval.', 'info');
         return;
       }
     } catch (e) {
       console.error('Failed to check pending client archive requests', e);
     }
 
-    if (!confirm('Are you sure you want to request archiving this client? This requires Admin approval.')) return;
+    Workflow.showConfirm('Request Archive',
+      'Are you sure you want to request archiving this client? This requires Admin approval.',
+      async () => {
+        let client;
+        try {
+          const res = await window.apiClient.clients.get(clientId);
+          client = res.data;
+        } catch (e) {
+          console.error('Failed to load client for archive request', e);
+          return;
+        }
+        if (!client) return;
 
-    let client;
-    try {
-      const res = await window.apiClient.clients.get(clientId);
-      client = res.data;
-    } catch (e) {
-      console.error('Failed to load client for archive request', e);
-      return;
-    }
-    if (!client) return;
+        const proposed = deepClone(client);
+        proposed.status = 'Archived';
+        proposed.updatedAt = new Date().toISOString();
 
-    const proposed = deepClone(client);
-    proposed.status = 'Archived';
-    proposed.updatedAt = new Date().toISOString();
+        const pc = {
+          tableName: 'clients',
+          parentRecordId: clientId,
+          proposedData: proposed
+        };
+        try {
+          await window.apiClient.pendingApprovals.create(pc);
+        } catch (e) {
+          Workflow.showMessage('Archive Request Failed', e.message || 'Unable to submit archive request.', 'error');
+          return;
+        }
 
-    const pc = {
-      tableName: 'clients',
-      parentRecordId: clientId,
-      proposedData: proposed
-    };
-    try {
-      await window.apiClient.pendingApprovals.create(pc);
-    } catch (e) {
-      Workflow.showMessage('Archive Request Failed', e.message || 'Unable to submit archive request.', 'error');
-      return;
-    }
-
-    alert('Archive request submitted for Admin approval.');
-    App.handleRoute();
+        Workflow.showMessage('Archive Requested', 'Archive request submitted for Admin approval.', 'success');
+        App.handleRoute();
+      },
+      'warning'
+    );
   },
 
   async bulkArchiveClients(clientIds) {
     if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can archive clients.');
+      Workflow.showMessage('Permission Denied', 'Only Admins can archive clients.', 'danger');
       return;
     }
     if (!clientIds || clientIds.length === 0) return;
@@ -1247,114 +1395,165 @@ const Clients = {
 
   async archiveClientsDirectly(clientIds) {
     if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can archive clients.');
+      Workflow.showMessage('Permission Denied', 'Only Admins can archive clients.', 'danger');
       return;
     }
     if (!clientIds || clientIds.length === 0) return;
     const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
-    if (!confirm(`Are you sure you want to archive ${label}? This will cancel all related work requests and archive all associated documents.`)) return;
+    Workflow.showConfirm('Archive Clients',
+      `Are you sure you want to archive ${label}? This will cancel all related work requests and archive all associated documents.`,
+      async () => {
+        await ClientsData.ensure();
+        const originals = [];
+        clientIds.forEach(id => {
+          const client = ClientsData.getClientById(id);
+          if (client) {
+            originals.push({ id, status: client.status });
+            client.status = 'Archived';
+          }
+        });
+        this._skipNextListFetch = true;
+        App.handleRoute();
 
-    let archivedCount = 0;
-    let lastError = null;
-    for (const clientId of clientIds) {
-      try {
-        await window.apiClient.clients.remove(clientId);
-        archivedCount++;
-      } catch (e) {
-        lastError = e;
-      }
-    }
+        let failedCount = 0;
+        let lastError = null;
+        for (const clientId of clientIds) {
+          try {
+            await window.apiClient.clients.remove(clientId);
+          } catch (e) {
+            failedCount++;
+            lastError = e;
+            const client = ClientsData.getClientById(clientId);
+            const original = originals.find(o => o.id === clientId);
+            if (client && original) client.status = original.status;
+          }
+        }
 
-    window.apiClient.clientCache.invalidate();
-    if (archivedCount === 0 && lastError) {
-      Workflow.showMessage('Archive Clients', lastError.message || 'Unable to archive clients.', 'error');
-    } else {
-      alert(archivedCount === 1 ? 'Client archived successfully.' : `${archivedCount} clients archived successfully.`);
-    }
-    App.handleRoute();
+        window.apiClient.clientCache.invalidate();
+        if (failedCount > 0) {
+          this._skipNextListFetch = true;
+          App.handleRoute();
+          Workflow.showMessage('Error', lastError?.message || `Unable to archive ${failedCount} client(s).`, 'error');
+        } else {
+          Workflow.showMessage('Archived', `${clientIds.length} client(s) archived.`, 'success');
+        }
+      },
+      'warning'
+    );
   },
 
   async archiveClientsRequest(clientIds) {
     if (Auth.user?.role !== 'Admin') {
-      alert('Permission denied. Only Admins can archive clients.');
+      Workflow.showMessage('Permission Denied', 'Only Admins can archive clients.', 'danger');
       return;
     }
     if (!clientIds || clientIds.length === 0) return;
     const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
-    if (!confirm(`Are you sure you want to request archiving ${label}? This requires Admin approval.`)) return;
+    Workflow.showConfirm('Request Bulk Archive',
+      `Are you sure you want to request archiving ${label}? This requires Admin approval.`,
+      async () => {
+        let requestedCount = 0;
+        let lastError = null;
+        for (const clientId of clientIds) {
+          try {
+            const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'pending', tableName: 'clients', parentRecordId: clientId });
+            const pending = (pendingRes.data || []).filter(pc => pc.proposedData && pc.proposedData.status === 'Archived');
+            if (pending.length > 0) continue;
 
-    let requestedCount = 0;
-    let lastError = null;
-    for (const clientId of clientIds) {
-      try {
-        const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'pending', tableName: 'clients', parentRecordId: clientId });
-        const pending = (pendingRes.data || []).filter(pc => pc.proposedData && pc.proposedData.status === 'Archived');
-        if (pending.length > 0) continue;
+            const clientRes = await window.apiClient.clients.get(clientId);
+            const client = clientRes.data;
+            if (!client) continue;
 
-        const clientRes = await window.apiClient.clients.get(clientId);
-        const client = clientRes.data;
-        if (!client) continue;
+            const proposed = deepClone(client);
+            proposed.status = 'Archived';
+            proposed.updatedAt = new Date().toISOString();
 
-        const proposed = deepClone(client);
-        proposed.status = 'Archived';
-        proposed.updatedAt = new Date().toISOString();
+            await window.apiClient.pendingApprovals.create({
+              tableName: 'clients',
+              parentRecordId: clientId,
+              proposedData: proposed
+            });
+            requestedCount++;
+          } catch (e) {
+            lastError = e;
+            console.error('Failed to submit client archive request', clientId, e);
+          }
+        }
 
-        await window.apiClient.pendingApprovals.create({
-          tableName: 'clients',
-          parentRecordId: clientId,
-          proposedData: proposed
-        });
-        requestedCount++;
-      } catch (e) {
-        lastError = e;
-        console.error('Failed to submit client archive request', clientId, e);
-      }
-    }
-
-    if (requestedCount === 0 && lastError) {
-      Workflow.showMessage('Archive Request Failed', lastError.message || 'Unable to submit archive requests.', 'error');
-    } else if (requestedCount === 0) {
-      alert('Archive requests for the selected clients are already pending approval.');
-    } else {
-      alert(requestedCount === 1 ? 'Archive request submitted for Admin approval.' : `${requestedCount} archive requests submitted for Admin approval.`);
-    }
-    App.handleRoute();
+        if (requestedCount === 0 && lastError) {
+          Workflow.showMessage('Archive Request Failed', lastError.message || 'Unable to submit archive requests.', 'error');
+        } else if (requestedCount === 0) {
+          Workflow.showMessage('No new requests', 'Archive requests for the selected clients are already pending approval.', 'info');
+        } else {
+          Workflow.showMessage('Archive Requested', requestedCount === 1 ? 'Archive request submitted for Admin approval.' : `${requestedCount} archive requests submitted for Admin approval.`, 'success');
+        }
+        App.handleRoute();
+      },
+      'warning'
+    );
   },
 
   async unarchiveClient(id) {
+    await ClientsData.ensure();
+    const client = ClientsData.getClientById(id);
+    const originalStatus = client ? client.status : null;
+    if (client) client.status = 'Active';
+    this._skipNextListFetch = true;
+    App.handleRoute();
     try {
       await window.apiClient.clients.update(id, { status: 'Active' });
       window.apiClient.clientCache.invalidate();
     } catch (e) {
-      Workflow.showMessage('Restore Client', e.message || 'Unable to restore client.', 'error');
-      return;
+      if (client && originalStatus !== null) client.status = originalStatus;
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || 'Unable to restore client.', 'error');
     }
-    App.handleRoute();
   },
 
   async bulkUnarchiveClients(clientIds) {
     if (!clientIds || clientIds.length === 0) return;
     const label = clientIds.length === 1 ? 'this client' : `these ${clientIds.length} clients`;
-    if (!confirm(`Are you sure you want to restore ${label} to Active Clients?`)) return;
+    Workflow.showConfirm('Restore Clients',
+      `Are you sure you want to restore ${label} to Active Clients?`,
+      async () => {
+        await ClientsData.ensure();
+        const originals = [];
+        clientIds.forEach(id => {
+          const client = ClientsData.getClientById(id);
+          if (client) {
+            originals.push({ id, status: client.status });
+            client.status = 'Active';
+          }
+        });
+        this._skipNextListFetch = true;
+        App.handleRoute();
 
-    let restoredCount = 0;
-    let lastError = null;
-    for (const id of clientIds) {
-      try {
-        await window.apiClient.clients.update(id, { status: 'Active' });
-        restoredCount++;
-      } catch (e) {
-        lastError = e;
-      }
-    }
+        let failedCount = 0;
+        let lastError = null;
+        for (const id of clientIds) {
+          try {
+            await window.apiClient.clients.update(id, { status: 'Active' });
+          } catch (e) {
+            failedCount++;
+            lastError = e;
+            const client = ClientsData.getClientById(id);
+            const original = originals.find(o => o.id === id);
+            if (client && original) client.status = original.status;
+          }
+        }
 
-    window.apiClient.clientCache.invalidate();
-    if (restoredCount === 0 && lastError) {
-      Workflow.showMessage('Restore Clients', lastError.message || 'Unable to restore clients.', 'error');
-    } else {
-      alert(restoredCount === 1 ? 'Client restored successfully.' : `${restoredCount} clients restored successfully.`);
-    }
-    App.handleRoute();
+        window.apiClient.clientCache.invalidate();
+        if (failedCount > 0) {
+          this._skipNextListFetch = true;
+          App.handleRoute();
+          Workflow.showMessage('Error', lastError?.message || `Unable to restore ${failedCount} client(s).`, 'error');
+        } else {
+          Workflow.showMessage('Restored', `${clientIds.length} client(s) restored to Active Clients.`, 'success');
+        }
+      },
+      'success'
+    );
   },
 
   async getArchivedClients(query) {

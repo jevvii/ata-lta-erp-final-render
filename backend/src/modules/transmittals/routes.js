@@ -56,4 +56,10 @@ router.post('/:id/acknowledge',
   transmittalsController.acknowledgeTransmittal,
 );
 
+router.delete('/:id',
+  requirePermission('transmittal:delete'),
+  audit('transmittal.delete', { table: 'transmittals' }),
+  transmittalsController.deleteTransmittal,
+);
+
 module.exports = router;

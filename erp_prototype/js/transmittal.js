@@ -16,6 +16,85 @@ const Transmittal = {
   prefilledClientId: null,
 
   // ============================================================
+  // Entity-tagged lightweight cache (mirrors WorkflowData patterns)
+  // ============================================================
+  _items: null,
+  _entity: null,
+  _loadingPromise: null,
+  _loadingEntity: null,
+  _loadGeneration: 0,
+  _skipNextListFetch: false,
+
+  _getActiveEntity() {
+    return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
+
+  _isEntityFresh() {
+    return this._entity === this._getActiveEntity();
+  },
+
+  hasData() {
+    return Array.isArray(this._items) && this._isEntityFresh();
+  },
+
+  hasCachedData(entity) {
+    return Array.isArray(this._items) && this._isEntityFresh() && (!entity || this._entity === entity);
+  },
+
+  invalidateCache() {
+    this._items = null;
+    this._entity = null;
+    this._loadingPromise = null;
+    this._loadingEntity = null;
+    this._loadGeneration++;
+    this._skipNextListFetch = false;
+  },
+
+  async ensure() {
+    if (this.hasCachedData()) return;
+    const activeEntity = this._getActiveEntity();
+    // Share an in-flight load for the same entity.
+    if (this._loadingPromise && this._loadingEntity === activeEntity) return this._loadingPromise;
+    // Start a new load tagged with a generation so stale loads cannot clobber it.
+    const loadGen = ++this._loadGeneration;
+    this._loadingEntity = activeEntity;
+    const promise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._loadingPromise = null;
+        this._loadingEntity = null;
+      }
+    });
+    this._loadingPromise = promise;
+    return promise;
+  },
+
+  async _load(loadGen) {
+    const entity = this._getActiveEntity();
+    const res = await window.apiClient.transmittals.list();
+    const items = (res.data || []).map(t => this.normalizeTransmittal(t));
+    // Discard stale results from a prior entity or invalidated generation.
+    if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
+      return this._items || [];
+    }
+    this._items = items;
+    this._entity = entity;
+    return items;
+  },
+
+  /**
+   * Apply a partial update to a cached transmittal and return the original
+   * snapshot so callers can roll back on API failure.
+   */
+  _updateCachedItem(id, updates) {
+    if (!this._items) return null;
+    const idx = this._items.findIndex(t => t.id === id);
+    if (idx === -1) return null;
+    const original = { ...this._items[idx] };
+    this._items = this._items.map((t, i) => i === idx ? { ...t, ...updates } : t);
+    return original;
+  },
+
+  // ============================================================
   // Normalization helpers (backend snake_case -> UI camelCase)
   // ============================================================
 
@@ -93,12 +172,14 @@ const Transmittal = {
   },
 
   /**
-   * List transmittals for the active entity. The backend handles consolidated 'ALL'
-   * by returning rows for all accessible entities; each row carries its entity_code.
+   * List transmittals for the active entity. Uses the entity-tagged cache after
+   * the first load; falls back to a fresh API load when the cache is missing or
+   * stale. The backend handles consolidated 'ALL' by returning rows for all
+   * accessible entities; each row carries its entity_code.
    */
   async _listForActiveEntity() {
-    const res = await window.apiClient.transmittals.list();
-    return (res.data || []).map(t => this.normalizeTransmittal(t));
+    await this.ensure();
+    return this._items || [];
   },
 
   /**
@@ -119,16 +200,6 @@ const Transmittal = {
       }
     }
     return null;
-  },
-
-  async _getCounts() {
-    const res = await window.apiClient.transmittals.counts();
-    const data = res?.data || {};
-    return {
-      activeCount: data.active || 0,
-      archivedCount: data.archived || 0,
-      all: null
-    };
   },
 
   async render() {
@@ -158,10 +229,22 @@ const Transmittal = {
             const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
             sendBtn.addEventListener('click', () => {
               Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
+                const now = new Date().toISOString();
+                const original = this._updateCachedItem(t.id, {
+                  status: 'Sent',
+                  sentAt: now,
+                  sentBy: Auth.user?.id,
+                  updatedAt: now,
+                  updatedBy: Auth.user?.id
+                });
+                this._skipNextListFetch = true;
+                App.handleRoute();
                 try {
                   await window.apiClient.transmittals.send(t.id);
-                  App.handleRoute();
                 } catch (e) {
+                  if (original) this._updateCachedItem(t.id, original);
+                  this._skipNextListFetch = true;
+                  App.handleRoute();
                   Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
                 }
               }, 'success');
@@ -229,7 +312,7 @@ const Transmittal = {
           ]
         }));
       }
-    } else if (['list', 'archive'].includes(this.view)) {
+    } else if (this.view === 'list') {
       container.classList.add('transmittal-tab-page');
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Transmittal' }));
@@ -240,7 +323,12 @@ const Transmittal = {
     if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') container.appendChild(await this.renderForm({ hideHeader: true }));
     else if (this.view === 'detail') container.appendChild(await this.renderDetail());
-    else if (this.view === 'archive') container.appendChild(await this.renderArchive());
+    else if (this.view === 'archive') {
+      // Archive UI is hidden because the backend has no archive/unarchive endpoints.
+      this.view = 'list';
+      App.handleRoute();
+      return container;
+    }
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -264,12 +352,16 @@ const Transmittal = {
 
     let count = 0;
     let archiveCount = 0;
+    // Derive counts from the cached items instead of calling the counts API on
+    // every render. The rejected operations-request count is still fetched live
+    // because it is not part of the transmittal cache.
     try {
-      const { activeCount, archivedCount } = await this._getCounts();
-      count = activeCount;
-      archiveCount = archivedCount;
+      await this.ensure();
+      const items = this._items || [];
+      count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
+      archiveCount = items.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived).length;
     } catch (e) {
-      console.error('Failed to load transmittal counts', e);
+      console.error('Failed to load transmittal counts from cache', e);
     }
 
     try {
@@ -284,9 +376,9 @@ const Transmittal = {
       console.error('Failed to load rejected transmittal requests', e);
     }
 
+    // Archive tab is hidden: the backend has no archive/unarchive endpoints.
     const tabs = [
-      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count },
-      { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
+      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count }
     ];
 
     const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
@@ -616,7 +708,13 @@ const Transmittal = {
 
     const updateFilters = async () => {
       try {
-        const items = await this._listForActiveEntity();
+        let items;
+        if (this._skipNextListFetch) {
+          this._skipNextListFetch = false;
+          items = (this._items || []).slice();
+        } else {
+          items = await this._listForActiveEntity();
+        }
         this.refreshList(listContainer, items, activeFilters, this.listViewMode || 'table', groupBy, groupOptions, stickyContainer);
       } catch (e) {
         console.error('Failed to refresh transmittal list', e);
@@ -873,10 +971,22 @@ const Transmittal = {
             'Confirm Sent',
             'Are you sure you want to mark this transmittal as sent?',
             async () => {
+              const now = new Date().toISOString();
+              const original = self._updateCachedItem(t.id, {
+                status: 'Sent',
+                sentAt: now,
+                sentBy: Auth.user?.id,
+                updatedAt: now,
+                updatedBy: Auth.user?.id
+              });
+              self._skipNextListFetch = true;
+              App.handleRoute();
               try {
                 await window.apiClient.transmittals.send(t.id);
-                App.handleRoute();
               } catch (e) {
+                if (original) self._updateCachedItem(t.id, original);
+                self._skipNextListFetch = true;
+                App.handleRoute();
                 Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
               }
             },
@@ -1206,11 +1316,30 @@ const Transmittal = {
       notes: data.notes || null
     };
 
+    let savedTransmittal = null;
     try {
+      let res;
       if (isNew) {
-        await window.apiClient.transmittals.create(payload);
+        res = await window.apiClient.transmittals.create(payload);
       } else {
-        await window.apiClient.transmittals.update(this.detailId, payload);
+        res = await window.apiClient.transmittals.update(this.detailId, payload);
+      }
+      savedTransmittal = this.normalizeTransmittal(res?.data);
+      // Update the local cache directly so the next list render is stable.
+      if (savedTransmittal) {
+        if (this._items) {
+          if (isNew) {
+            this._items = [savedTransmittal, ...this._items];
+          } else {
+            this._items = this._items.map(t => t.id === savedTransmittal.id ? savedTransmittal : t);
+          }
+        } else {
+          this._items = [savedTransmittal];
+          this._entity = this._getActiveEntity();
+        }
+      }
+      if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+        Dashboard.invalidateCache();
       }
     } catch (e) {
       Workflow.showMessage(isNew ? 'Create Transmittal' : 'Update Transmittal', e.message || 'Unable to save transmittal.', 'error');
@@ -1242,6 +1371,7 @@ const Transmittal = {
       type: 'success'
     };
     const targetRoute = isResubmitting ? '#admin' : '#transmittal';
+    this._skipNextListFetch = true;
     closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
@@ -1373,13 +1503,27 @@ const Transmittal = {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
+      const receivedByName = form.querySelector('[name="receivedBy"]')?.value.trim();
+      const now = new Date().toISOString();
+      const original = this._updateCachedItem(id, {
+        status: 'Acknowledged',
+        acknowledgedAt: now,
+        acknowledgedBy: Auth.user?.id,
+        receivedByName,
+        updatedAt: now,
+        updatedBy: Auth.user?.id
+      });
+      overlay.remove();
+      this._skipNextListFetch = true;
+      App.handleRoute();
       try {
         // Backend acknowledge endpoint does not persist receivedByName or a custom
         // receivedDate; it records the current server timestamp and current user.
         await window.apiClient.transmittals.acknowledge(id);
-        overlay.remove();
-        App.handleRoute();
       } catch (err) {
+        if (original) this._updateCachedItem(id, original);
+        this._skipNextListFetch = true;
+        App.handleRoute();
         Workflow.showMessage('Acknowledge Failed', err.message || 'Unable to acknowledge transmittal.', 'error');
       }
     });
@@ -2021,17 +2165,11 @@ const Transmittal = {
     setTimeout(() => win.print(), 300);
   },
 
-  archiveTransmittal(id) {
-    Workflow.showMessage('Not Supported', 'Archiving transmittals is not supported by the backend API yet.', 'warning');
-  },
-
-  bulkArchiveTransmittals(ids) {
-    Workflow.showMessage('Not Supported', 'Bulk archive is not supported by the backend API yet.', 'warning');
-  },
-
-  unarchiveTransmittal(id) {
-    Workflow.showMessage('Not Supported', 'Restoring archived transmittals is not supported by the backend API yet.', 'warning');
-  },
+  // Archive actions are hidden because the backend has no archive/unarchive
+  // endpoints. These stubs remain as no-ops so any stale callers do nothing.
+  archiveTransmittal(id) {},
+  bulkArchiveTransmittals(ids) {},
+  unarchiveTransmittal(id) {},
 
   permanentDeleteTransmittal(id) {
     if (Auth.user?.role !== 'Admin' && !Auth.isManagerial() && !Auth.can('transmittal:delete')) {
@@ -2041,11 +2179,32 @@ const Transmittal = {
     Workflow.showConfirm('Permanently Delete Transmittal',
       'Are you sure you want to permanently delete this transmittal? This action cannot be undone.',
       async () => {
+        await this.ensure();
+        const items = this._items || [];
+        const index = items.findIndex(t => t.id === id);
+        let removedItem = null;
+        if (index !== -1) {
+          removedItem = items[index];
+          this._items = [...items.slice(0, index), ...items.slice(index + 1)];
+        }
+        this._skipNextListFetch = true;
+        App.handleRoute();
         try {
           await window.apiClient.transmittals.remove(id);
-          App.handleRoute();
+          this.invalidateCache();
+          if (typeof Dashboard !== 'undefined') {
+            if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+            if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+          }
           Workflow.showMessage('Deleted', 'Transmittal has been permanently deleted.', 'success');
         } catch (e) {
+          if (removedItem) {
+            const rollback = [...(this._items || [])];
+            rollback.splice(index, 0, removedItem);
+            this._items = rollback;
+          }
+          this._skipNextListFetch = true;
+          App.handleRoute();
           Workflow.showMessage('Delete Failed', e.message || 'Unable to delete transmittal.', 'error');
         }
       },

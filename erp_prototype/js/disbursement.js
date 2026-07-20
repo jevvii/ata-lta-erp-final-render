@@ -17,9 +17,14 @@ const Disbursement = {
   _promise: null,
   _detailCache: {},
   _counts: null, // cached tab-badge counts from the backend
+  _entity: null,
+  _loadingEntity: null,
+  _loadGeneration: 0,
   _archivePage: 1,
   _archiveLimit: 20,
   _lastArchiveMeta: {},
+  _rejectedArchiveCounts: null,
+  _skipNextListFetch: false,
 
   // API-backed disbursement template cache
   _templates: [],
@@ -181,21 +186,71 @@ const Disbursement = {
     };
   },
 
-  async loadDisbursements(force = false) {
-    if (!force && this._items) return this._items;
-    if (!force && this._promise) return this._promise;
-    this._promise = window.apiClient.disbursements.list().then(res => {
-      const items = (res.data || []).map(d => this.normalizeDisbursement(d));
-      this._items = items;
-      return items;
-    }).catch(err => {
-      console.error('Failed to load disbursements', err);
-      this._items = this._items || [];
-      return this._items;
-    }).finally(() => {
-      this._promise = null;
+  _getActiveEntity() {
+    return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
+
+  _isEntityFresh() {
+    return this._entity === this._getActiveEntity();
+  },
+
+  hasData() {
+    return Array.isArray(this._items) && this._isEntityFresh();
+  },
+
+  hasCachedData(entity) {
+    return this.hasData() && this._entity === entity;
+  },
+
+  async ensure() {
+    if (this.hasData()) return;
+    const activeEntity = this._getActiveEntity();
+    if (this._promise && this._loadingEntity === activeEntity) return this._promise;
+    const loadGen = ++this._loadGeneration;
+    this._loadingEntity = activeEntity;
+    const promise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._promise = null;
+        this._loadingEntity = null;
+      }
     });
-    return this._promise;
+    this._promise = promise;
+    return promise;
+  },
+
+  async _load(loadGen, options = {}) {
+    const entity = this._getActiveEntity();
+    try {
+      const res = await window.apiClient.disbursements.list(options);
+      const items = (res.data || []).map(d => this.normalizeDisbursement(d));
+      if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
+        return this._items || [];
+      }
+      this._items = items;
+      this._entity = entity;
+      this._refreshCounts();
+      return items;
+    } catch (err) {
+      if (isAbortError(err)) {
+        if (!this._items) this._items = [];
+        this._refreshCounts();
+        return this._items;
+      }
+      console.error('Failed to load disbursements', err);
+      if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
+        return this._items || [];
+      }
+      if (!this._items) this._items = [];
+      this._entity = entity;
+      this._refreshCounts();
+      return this._items;
+    }
+  },
+
+  async loadDisbursements(force = false) {
+    if (force) this.invalidateCache();
+    await this.ensure();
+    return this._items || [];
   },
 
   async fetchDisbursements(query = {}) {
@@ -214,6 +269,13 @@ const Disbursement = {
   invalidateCache() {
     this._items = null;
     this._detailCache = {};
+    this._counts = null;
+    this._promise = null;
+    this._loadingEntity = null;
+    this._loadGeneration++;
+    this._entity = null;
+    this._rejectedArchiveCounts = null;
+    this._skipNextListFetch = false;
   },
 
   async loadDisbursement(id) {
@@ -228,6 +290,167 @@ const Disbursement = {
       console.error('Failed to load disbursement', id, err);
       return null;
     }
+  },
+
+  _entityMatches(item, entity = this._getActiveEntity()) {
+    const itemEnt = (item.entity || '').toUpperCase();
+    if (entity === 'ALL') {
+      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(itemEnt);
+    }
+    return itemEnt === (entity || '').toUpperCase();
+  },
+
+  _activeBadgeFilter(d) {
+    return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
+  },
+
+  _archiveBadgeFilter(d) {
+    return (d.status === 'Funded' && d.archived) || d.status === 'Cancelled' || d.status === 'Rejected';
+  },
+
+  _recalcCounts(entity = this._getActiveEntity()) {
+    const items = (this._items || []).filter(d => this._entityMatches(d, entity));
+    return {
+      active: items.filter(d => this._activeBadgeFilter(d)).length,
+      archived: items.filter(d => this._archiveBadgeFilter(d)).length,
+      rejected: items.filter(d => d.status === 'Rejected').length
+    };
+  },
+
+  _refreshCounts() {
+    if (!this.hasData()) {
+      this._counts = null;
+      return;
+    }
+    this._counts = this._recalcCounts();
+  },
+
+  _invalidateDashboardCache() {
+    if (typeof Dashboard !== 'undefined' && Dashboard._dataCache) {
+      Dashboard._dataCache = null;
+    }
+  },
+
+  _copyItem(item) {
+    if (!item) return item;
+    return JSON.parse(JSON.stringify(item));
+  },
+
+  _getCachedItem(id) {
+    if (!this._items) return null;
+    const idx = this._items.findIndex(d => d.id === id);
+    return idx >= 0 ? this._copyItem(this._items[idx]) : null;
+  },
+
+  _updateCachedDisbursement(id, patch) {
+    if (!id || !patch) return;
+    if (this._items) {
+      const idx = this._items.findIndex(d => d.id === id);
+      if (idx >= 0) {
+        this._items[idx] = { ...this._items[idx], ...patch };
+      }
+    }
+    if (this._detailCache[id]) {
+      this._detailCache[id] = { ...this._detailCache[id], ...patch };
+    }
+  },
+
+  _removeCachedDisbursement(id) {
+    if (!this._items) return null;
+    const idx = this._items.findIndex(d => d.id === id);
+    if (idx >= 0) {
+      const removed = this._items.splice(idx, 1)[0];
+      return removed;
+    }
+    return null;
+  },
+
+  async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
+    const originalItem = this._getCachedItem(id);
+    const originalDetail = this._copyItem(this._detailCache[id] || null);
+    this._updateCachedDisbursement(id, patch);
+    this._refreshCounts();
+    this._invalidateDashboardCache();
+    this._skipNextListFetch = true;
+    App.handleRoute();
+    try {
+      return await apiCall();
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      if (originalItem) {
+        if (this._items) {
+          const idx = this._items.findIndex(d => d.id === id);
+          if (idx >= 0) this._items[idx] = originalItem;
+        }
+      } else {
+        this.invalidateCache();
+      }
+      if (originalDetail) this._detailCache[id] = originalDetail;
+      this._refreshCounts();
+      this._invalidateDashboardCache();
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  async _optimisticDelete(id, apiCall, errorTitle = 'Error') {
+    const originalItem = this._removeCachedDisbursement(id);
+    const originalDetail = this._copyItem(this._detailCache[id] || null);
+    if (this._detailCache[id]) delete this._detailCache[id];
+    this._refreshCounts();
+    this._invalidateDashboardCache();
+    this._skipNextListFetch = true;
+    App.handleRoute();
+    try {
+      return await apiCall();
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      if (originalItem) {
+        this._items = this._items || [];
+        this._items.push(originalItem);
+      } else {
+        this.invalidateCache();
+      }
+      if (originalDetail) this._detailCache[id] = originalDetail;
+      this._refreshCounts();
+      this._invalidateDashboardCache();
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  async _loadRejectedArchiveCounts() {
+    const entity = this._getActiveEntity();
+    const isManagerial = Auth.isManagerial ? Auth.isManagerial() : false;
+    let changes = 0;
+    let requests = 0;
+    try {
+      const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'disbursements' });
+      changes = ((pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!this._entityMatches(data, entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user?.id) return false;
+        return true;
+      })).length;
+    } catch (e) {
+      console.error('Failed to load rejected disbursement changes', e);
+    }
+    try {
+      const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'disbursement' });
+      requests = ((opReqRes.data || []).filter(r => {
+        if (!this._entityMatches(r, entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user?.id) return false;
+        return true;
+      })).length;
+    } catch (e) {
+      console.error('Failed to load rejected disbursement requests', e);
+    }
+    this._rejectedArchiveCounts = { changes, requests, total: changes + requests };
+    return this._rejectedArchiveCounts;
   },
 
   /**
@@ -301,13 +524,12 @@ const Disbursement = {
           const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
           deleteBtn.addEventListener('click', () => {
             Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
+              location.hash = '#disbursement';
               try {
-                await window.apiClient.disbursements.remove(d.id);
-                location.hash = '#disbursement';
+                await this._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
                 Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
               } catch (e) {
-                console.error('Failed to delete disbursement', e);
-                Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
+                // Error surfaced by _optimisticDelete.
               }
             }, 'danger');
           });
@@ -318,11 +540,9 @@ const Disbursement = {
           submitBtn.addEventListener('click', () => {
             Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', async () => {
               try {
-                await window.apiClient.disbursements.submit(d.id);
-                App.handleRoute();
+                await this._optimisticUpdate(d.id, { status: 'Pending' }, () => window.apiClient.disbursements.submit(d.id), 'Submit Failed');
               } catch (e) {
-                console.error('Failed to submit disbursement', e);
-                Workflow.showMessage('Submit Failed', e.message || 'Unable to submit disbursement.', 'error');
+                // Error surfaced by _optimisticUpdate.
               }
             }, 'success');
           });
@@ -418,8 +638,10 @@ const Disbursement = {
       titleBar.appendChild(el('h1', { text: 'Disbursement' }));
       container.appendChild(titleBar);
 
-      // Pre-fetch badge counts so renderTabNav can read them synchronously.
-      await this.loadCounts();
+      // Pre-load cached disbursements and rejected archive counts so
+      // renderTabNav can derive badges from local data instead of the API.
+      await this.ensure();
+      await this._loadRejectedArchiveCounts();
 
       container.appendChild(this.renderTabNav());
     }
@@ -455,9 +677,12 @@ const Disbursement = {
       return uEnt === entity.toUpperCase();
     };
 
-    const counts = this._counts || { active: 0, archived: 0, rejected: 0 };
-
-    const dbCount = counts.active;
+    // Derive active/archive badges from the cached _items for the current entity.
+    const cachedItems = (this._items || []).filter(d => this._entityMatches(d, entity));
+    const dbCount = cachedItems.filter(d => this._activeBadgeFilter(d)).length;
+    const archiveDbCount = cachedItems.filter(d => this._archiveBadgeFilter(d)).length;
+    const rejectedOpsCount = this._rejectedArchiveCounts?.total || 0;
+    const archiveCount = archiveDbCount + rejectedOpsCount;
 
     const templateCount = (this._templates || []).filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
@@ -466,8 +691,6 @@ const Disbursement = {
       }
       return tEnt === entity.toUpperCase();
     }).length;
-
-    const archiveCount = counts.archived + counts.rejected;
 
     const tabs = [
       { key: 'list', label: 'Disbursements', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: dbCount },
@@ -802,7 +1025,13 @@ const Disbursement = {
   async refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
     container.replaceChildren();
     const entity = Auth.activeEntity;
-    const allItems = await this.loadDisbursements();
+    let allItems;
+    if (this._skipNextListFetch) {
+      this._skipNextListFetch = false;
+      allItems = this._items || [];
+    } else {
+      allItems = await this.loadDisbursements();
+    }
     let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
 
     items = items.filter(d => Auth.canViewDisbursement(d));
@@ -1179,12 +1408,10 @@ const Disbursement = {
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
           onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
             try {
-              await window.apiClient.disbursements.remove(d.id);
-              App.handleRoute();
+              await self._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
               Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
             } catch (e) {
-              console.error('Failed to delete disbursement', e);
-              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
+              // Error surfaced by _optimisticDelete.
             }
           }, 'danger')
         });
@@ -1196,11 +1423,9 @@ const Disbursement = {
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
           onClick: () => Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', async () => {
             try {
-              await window.apiClient.disbursements.submit(d.id);
-              App.handleRoute();
+              await self._optimisticUpdate(d.id, { status: 'Pending' }, () => window.apiClient.disbursements.submit(d.id), 'Submit Failed');
             } catch (e) {
-              console.error('Failed to submit disbursement', e);
-              Workflow.showMessage('Submit Failed', e.message || 'Unable to submit disbursement.', 'error');
+              // Error surfaced by _optimisticUpdate.
             }
           }, 'success')
         });
@@ -1269,23 +1494,28 @@ const Disbursement = {
 
         const label = item.category + ' — ' + formatPHP(item.amount);
         const applyMove = async () => {
+          if (targetStatus === 'Released') {
+            self.showReleaseDialog(item.id);
+            return;
+          }
+          const patch = targetStatus === 'Pending' ? { status: 'Pending' }
+            : targetStatus === 'Approved' ? { status: 'Approved' }
+            : targetStatus === 'Funded' ? { status: 'Funded' }
+            : { status: targetStatus, boardOrder: newOrder };
           try {
-            if (targetStatus === 'Pending') {
-              await window.apiClient.disbursements.submit(item.id);
-            } else if (targetStatus === 'Approved') {
-              await window.apiClient.disbursements.approve(item.id);
-            } else if (targetStatus === 'Released') {
-              self.showReleaseDialog(item.id);
-              return;
-            } else if (targetStatus === 'Funded') {
-              await window.apiClient.disbursements.fund(item.id);
-            } else {
-              await window.apiClient.disbursements.update(item.id, { boardOrder: newOrder, status: targetStatus });
-            }
-            App.handleRoute();
+            await self._optimisticUpdate(item.id, patch, () => {
+              if (targetStatus === 'Pending') {
+                return window.apiClient.disbursements.submit(item.id);
+              } else if (targetStatus === 'Approved') {
+                return window.apiClient.disbursements.approve(item.id);
+              } else if (targetStatus === 'Funded') {
+                return window.apiClient.disbursements.fund(item.id);
+              } else {
+                return window.apiClient.disbursements.update(item.id, { boardOrder: newOrder, status: targetStatus });
+              }
+            }, 'Update Failed');
           } catch (e) {
-            console.error('Failed to move disbursement', e);
-            Workflow.showMessage('Update Failed', e.message || 'Unable to move disbursement.', 'error');
+            // Error surfaced by _optimisticUpdate.
           }
         };
 
@@ -1677,11 +1907,20 @@ const Disbursement = {
         const res = await window.apiClient.disbursements.create(payload);
         record = this.normalizeDisbursement(res.data);
         this._detailCache[record.id] = record;
+        if (!this._items) {
+          this._items = [];
+          this._entity = this._getActiveEntity();
+        }
+        this._items.unshift(record);
       } else {
         const res = await window.apiClient.disbursements.update(this.detailId, payload);
         record = this.normalizeDisbursement(res.data);
         this._detailCache[this.detailId] = record;
+        this._updateCachedDisbursement(record.id, record);
       }
+      this._refreshCounts();
+      this._invalidateDashboardCache();
+      this._skipNextListFetch = true;
     } catch (e) {
       console.error('Failed to save disbursement', e);
       Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
@@ -1996,12 +2235,10 @@ const Disbursement = {
       fundBtn.addEventListener('click', () => {
         Workflow.showConfirm('Mark as Funded', `Confirm that funds for "${d.category}" have been credited?`, async () => {
           try {
-            await window.apiClient.disbursements.fund(d.id);
+            await this._optimisticUpdate(d.id, { status: 'Funded' }, () => window.apiClient.disbursements.fund(d.id), 'Fund Failed');
             Workflow.showMessage('Funded', 'Disbursement marked as funded.', 'success');
-            App.handleRoute();
           } catch (e) {
-            console.error('Failed to fund disbursement', e);
-            Workflow.showMessage('Fund Failed', e.message || 'Unable to mark disbursement as funded.', 'error');
+            // Error surfaced by _optimisticUpdate.
           }
         }, 'success');
       });
@@ -2032,11 +2269,9 @@ const Disbursement = {
 
     Workflow.showConfirm('Approve Expense', `Approve disbursement "${d.category}" (${formatPHP(d.amount)})?`, async () => {
       try {
-        await window.apiClient.disbursements.approve(id);
-        App.handleRoute();
+        await this._optimisticUpdate(id, { status: 'Approved' }, () => window.apiClient.disbursements.approve(id), 'Approval Failed');
       } catch (e) {
-        console.error('Failed to approve disbursement', e);
-        Workflow.showMessage('Approval Failed', e.message || 'Unable to approve disbursement.', 'error');
+        // Error surfaced by _optimisticUpdate.
       }
     }, 'success');
   },
@@ -2103,7 +2338,7 @@ const Disbursement = {
           filename: file?.name || 'Authorized_Release.pdf'
         });
         overlay.remove();
-        App.handleRoute();
+        Workflow.showMessage('Released', 'Disbursement has been released.', 'success');
       } catch (e) {
         // error surfaced by release()
       }
@@ -2111,28 +2346,36 @@ const Disbursement = {
   },
 
   async release(id, pd) {
-    try {
-      await window.apiClient.disbursements.release(id, {
+    const patch = {
+      status: 'Released',
+      releasedBy: Auth.user?.id || null,
+      releasedAt: pd.date || new Date().toISOString(),
+      paymentHandledBy: Auth.user?.id || null,
+      paymentDetails: {
         method: pd.method,
         reference: pd.reference,
-        bank: pd.bank,
-        date: pd.date
-      });
-    } catch (e) {
-      console.error('Failed to release disbursement', e);
-      Workflow.showMessage('Release Failed', e.message || 'Unable to release disbursement.', 'error');
-      throw e;
-    }
+        bank: pd.bank || '',
+        date: pd.date,
+        processedBy: Auth.user?.id || null
+      },
+      releaseFilename: pd.filename || null
+    };
+    return this._optimisticUpdate(id, patch, () => window.apiClient.disbursements.release(id, {
+      method: pd.method,
+      reference: pd.reference,
+      bank: pd.bank,
+      date: pd.date
+    }), 'Release Failed');
   },
 
   async reject(id, reason) {
-    try {
-      await window.apiClient.disbursements.reject(id, { reason });
-    } catch (e) {
-      console.error('Failed to reject disbursement', e);
-      Workflow.showMessage('Reject Failed', e.message || 'Unable to reject disbursement.', 'error');
-      throw e;
-    }
+    const patch = {
+      status: 'Rejected',
+      rejectionReason: reason,
+      rejectedBy: Auth.user?.id || null,
+      rejectedAt: new Date().toISOString()
+    };
+    return this._optimisticUpdate(id, patch, () => window.apiClient.disbursements.reject(id, { reason }), 'Reject Failed');
   },
 
   // ============================================================
@@ -2759,6 +3002,8 @@ const Disbursement = {
                 }
               }
               Workflow.showMessage('Success', `Generated ${count} disbursement${count === 1 ? '' : 's'} successfully.`, 'success');
+              this.invalidateCache();
+              this._invalidateDashboardCache();
               this.view = 'list';
               App.handleRoute();
             });
@@ -2998,12 +3243,10 @@ const Disbursement = {
     const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || d.archived) return;
     try {
-      await window.apiClient.disbursements.update(id, { archived: true });
+      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.update(id, { archived: true }), 'Archive Failed');
       Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
-      App.handleRoute();
     } catch (e) {
-      console.error('Failed to archive disbursement', e);
-      Workflow.showMessage('Archive Failed', e.message || 'Unable to archive disbursement.', 'error');
+      // Error surfaced by _optimisticUpdate.
     }
   },
 
@@ -3024,14 +3267,17 @@ const Disbursement = {
         let count = 0;
         for (const d of eligible) {
           try {
-            await window.apiClient.disbursements.update(d.id, { archived: true });
+            await this._optimisticUpdate(d.id, { archived: true }, () =>
+              window.apiClient.disbursements.update(d.id, { archived: true }), 'Archive Failed');
             count++;
           } catch (e) {
-            console.error('Failed to archive disbursement', d.id, e);
+            // Error surfaced by _optimisticUpdate; stop remaining bulk operations.
+            break;
           }
         }
-        Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
-        App.handleRoute();
+        if (count > 0) {
+          Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
+        }
       },
       'warning'
     );
@@ -3041,12 +3287,10 @@ const Disbursement = {
     const d = await this.loadDisbursement(id);
     if (!d || d.status !== 'Funded' || !d.archived) return;
     try {
-      await window.apiClient.disbursements.update(id, { archived: false });
+      await this._optimisticUpdate(id, { archived: false }, () => window.apiClient.disbursements.update(id, { archived: false }), 'Unarchive Failed');
       Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
-      App.handleRoute();
     } catch (e) {
-      console.error('Failed to unarchive disbursement', e);
-      Workflow.showMessage('Unarchive Failed', e.message || 'Unable to unarchive disbursement.', 'error');
+      // Error surfaced by _optimisticUpdate.
     }
   },
 
@@ -3061,12 +3305,10 @@ const Disbursement = {
       `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
       async () => {
         try {
-          await window.apiClient.disbursements.remove(id);
-          App.handleRoute();
+          await this._optimisticDelete(id, () => window.apiClient.disbursements.remove(id), 'Delete Failed');
           Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
         } catch (e) {
-          console.error('Failed to delete disbursement', e);
-          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete disbursement.', 'error');
+          // Error surfaced by _optimisticDelete.
         }
       },
       'danger'

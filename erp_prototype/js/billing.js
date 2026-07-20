@@ -11,16 +11,105 @@ const Billing = {
   currentListPage: 1,
   pendingPrefill: null, // { clientId, workRequestId } — set when generating billing from a WR
   _counts: null, // cached tab-badge counts from the backend
+  _countsEntity: null, // entity the cached counts belong to
   _archivePage: 1,
   _archiveLimit: 20,
   _lastArchiveMeta: {},
   _detailCache: {}, // cached individual invoices for hot detail/form paths
+  _detailCacheEntity: null, // entity the detail cache belongs to
+  _listCache: [], // entity-tagged cache of all invoices (active + archived + cancelled)
+  _listCacheEntity: null,
+  _listCacheGeneration: 0, // incremented on invalidate to drop stale in-flight fetches
+  _skipNextListFetch: false, // skip background fetch once after a local mutation
   _templates: [], // cached billing templates for the active entity
   _templatesPromise: null, // in-flight loadTemplates() promise
 
+  _entityMatches(invEntity, entity) {
+    const u = (invEntity || '').toUpperCase();
+    if (entity === 'ALL') {
+      return Auth.user?.entities?.map(e => e.toUpperCase()).includes(u) || false;
+    }
+    return u === (entity || '').toUpperCase();
+  },
+
+  _isActiveInvoice(inv, entity) {
+    return this._entityMatches(inv?.entity, entity) &&
+      inv?.status !== 'Cancelled' &&
+      !inv?.archived;
+  },
+
+  _isArchiveInvoice(inv, entity) {
+    return this._entityMatches(inv?.entity, entity) &&
+      (inv?.status === 'Cancelled' || inv?.archived);
+  },
+
+  invalidateCache() {
+    this._detailCache = {};
+    this._detailCacheEntity = null;
+    this._listCache = [];
+    this._listCacheEntity = null;
+    this._listCacheGeneration++;
+    this._skipNextListFetch = false;
+    this._counts = null;
+    this._countsEntity = null;
+    this._templates = [];
+    this._templatesPromise = null;
+  },
+
+  hasCachedData(entity) {
+    const activeEntity = entity || Auth.activeEntity;
+    return !!activeEntity &&
+      this._detailCacheEntity === activeEntity &&
+      this._listCacheEntity === activeEntity &&
+      this._countsEntity === activeEntity &&
+      Array.isArray(this._listCache) &&
+      this._counts !== null;
+  },
+
   getInvoiceById(id) {
     if (!id) return null;
+    if (this._detailCacheEntity !== Auth.activeEntity) return null;
     return this._detailCache[id] ? deepClone(this._detailCache[id]) : null;
+  },
+
+  _snapshotInvoice(id) {
+    const inv = this._detailCache[id];
+    return inv ? deepClone(inv) : null;
+  },
+
+  _rollbackInvoice(id, snapshot) {
+    if (snapshot) {
+      this._detailCache[id] = snapshot;
+    } else {
+      delete this._detailCache[id];
+    }
+  },
+
+  _removeFromListCache(id) {
+    if (!Array.isArray(this._listCache)) return;
+    this._listCache = this._listCache.filter(inv => inv.id !== id);
+  },
+
+  _addToListCache(inv) {
+    if (!inv || !Array.isArray(this._listCache)) return;
+    const entity = Auth.activeEntity;
+    if (!this._entityMatches(inv?.entity, entity)) return;
+    const idx = this._listCache.findIndex(i => i.id === inv.id);
+    if (idx >= 0) this._listCache[idx] = inv;
+    else this._listCache.push(inv);
+  },
+
+  _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (!this._counts || this._countsEntity !== Auth.activeEntity) return;
+    this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
+    this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+  },
+
+  _isEntityFresh() {
+    const entity = Auth.activeEntity;
+    return this._detailCacheEntity === entity ||
+      this._listCacheEntity === entity ||
+      this._countsEntity === entity;
   },
 
   async _fetchInvoiceAndRerender(id) {
@@ -29,6 +118,7 @@ const Billing = {
       const res = await window.apiClient.invoices.get(id);
       if (res?.data) {
         this._detailCache[id] = this.normalizeInvoice(res.data);
+        this._detailCacheEntity = Auth.activeEntity;
         App.handleRoute();
       }
     } catch (err) {
@@ -53,20 +143,74 @@ const Billing = {
   /**
    * Fetch badge counts from the API and cache them on the module.
    * The backend sums across entities when Auth.activeEntity is 'ALL'.
+   * Counts are entity-tagged and only re-fetched when stale or forced.
    */
-  async loadCounts() {
+  async loadCounts(force = false) {
+    const entity = Auth.activeEntity;
+    if (!force && this._counts && this._countsEntity === entity) {
+      return this._counts;
+    }
     try {
       const res = await window.apiClient.invoices.counts();
       this._counts = { ...(res?.data || {}), templates: (res?.data?.templates || 0) };
+      this._countsEntity = entity;
     } catch (err) {
       console.error('Failed to load invoice counts', err);
       this._counts = { active: 0, archived: 0, rejected: 0, templates: 0 };
+      this._countsEntity = entity;
     }
     return this._counts;
   },
 
+  /**
+   * Load the number of rejected invoice changes and rejected billing requests
+   * for the archive badge. Caches the result per entity; does NOT call /counts.
+   */
+  async loadRejectedCount(force = false) {
+    const entity = Auth.activeEntity;
+    if (!force && this._counts && this._countsEntity === entity && typeof this._counts.rejected === 'number') {
+      return this._counts.rejected;
+    }
+
+    let rejected = 0;
+    try {
+      const [pendingRes, opReqRes] = await Promise.all([
+        window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'invoices' }),
+        window.apiClient.operationsRequests.list({ status: 'rejected', type: 'billing' })
+      ]);
+      const isManagerial = Auth.isManagerial();
+      const entFilter = e => entity === 'ALL'
+        ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((e || '').toUpperCase())
+        : (e || '').toUpperCase() === entity.toUpperCase();
+
+      const rejectedInvoiceChanges = (pendingRes.data || []).filter(pc => {
+        const data = pc.proposedData || {};
+        if (!entFilter(data.entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user?.id) return false;
+        return true;
+      }).length;
+
+      const rejectedBillingRequests = (opReqRes.data || []).filter(r => {
+        if (!entFilter(r.entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user?.id) return false;
+        return true;
+      }).length;
+
+      rejected = rejectedInvoiceChanges + rejectedBillingRequests;
+    } catch (err) {
+      console.error('Failed to load rejected invoice counts', err);
+    }
+
+    const changed = !this._counts || this._countsEntity !== entity || this._counts.rejected !== rejected;
+    this._counts = { ...(this._counts || {}), rejected, active: 0, archived: 0, templates: (this._counts?.templates || 0) };
+    this._countsEntity = entity;
+    if (changed) App.handleRoute();
+    return rejected;
+  },
+
   async render() {
     const container = el('div', { class: 'page' });
+    if (!this._isEntityFresh()) this.invalidateCache();
 
     const needsInvoice = (this.view === 'detail' || this.view === 'form') && this.detailId;
     if (needsInvoice && !this.getInvoiceById(this.detailId)) {
@@ -178,10 +322,7 @@ const Billing = {
       titleBar.appendChild(el('h1', { text: 'Billing' }));
       container.appendChild(titleBar);
 
-      // Pre-fetch badge counts so renderTabNav can read them synchronously.
-      await this.loadCounts();
-
-      // Tab navigation
+      // Tab navigation (counts are derived from the local cache; no /counts API call).
       container.appendChild(this.renderTabNav());
     }
 
@@ -213,10 +354,15 @@ const Billing = {
   },
 
   renderTabNav() {
-    const counts = this._counts || { active: 0, archived: 0, rejected: 0, templates: 0 };
-    const invoiceCount = counts.active;
-    const templateCount = counts.templates;
-    const archiveCount = counts.archived + counts.rejected;
+    const entity = Auth.activeEntity;
+    // Kick off a one-time load of rejected records for the archive badge;
+    // active/archived invoice counts are computed entirely from the local cache.
+    this.loadRejectedCount();
+
+    const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
+    const invoiceCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
+    const archiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length + (this._counts?.rejected || 0);
+    const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
     const tabs = [
       { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount },
@@ -435,11 +581,27 @@ const Billing = {
   },
 
   async fetchInvoices(query = {}) {
+    const entity = Auth.activeEntity;
+    const loadGen = this._listCacheGeneration;
     try {
       const res = await window.apiClient.invoices.list(query);
+      // If the cache was invalidated or the entity changed while this request
+      // was in flight, discard the stale result so it cannot clobber newer data.
+      if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) {
+        this._lastInvoiceMeta = {};
+        return [];
+      }
       this._lastInvoiceMeta = res.meta || {};
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
       invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
+      this._detailCacheEntity = entity;
+      // Merge fetched entity invoices into the all-invoice cache so active and
+      // archive counts can be derived locally. Small-limit fetches are ignored.
+      const isListFetch = (query.limit || 50) >= 10;
+      if (isListFetch) {
+        this._listCacheEntity = entity;
+        invoices.forEach(inv => this._addToListCache(inv));
+      }
       return invoices;
     } catch (e) {
       if (isAbortError(e)) { this._lastInvoiceMeta = {}; return []; }
@@ -625,7 +787,7 @@ const Billing = {
     const pageLimit = 50;
     let currentPage = this.currentListPage || 1;
 
-    const refresh = async () => {
+    const refresh = async (warmInvoices = null) => {
       contentContainer.replaceChildren();
       const serverQuery = {
         page: currentPage,
@@ -637,11 +799,14 @@ const Billing = {
       if (activeFilters.client.size === 1) serverQuery.clientId = Array.from(activeFilters.client)[0];
       if (searchQuery) serverQuery.search = searchQuery;
 
-      const apiInvoices = await this.fetchInvoices(serverQuery);
-      const baseInvoices = apiInvoices.filter(inv => {
-        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes((inv.entity || '').toUpperCase()) : (inv.entity || '').toUpperCase() === entity.toUpperCase());
-        return matchesEntity && inv.status !== 'Cancelled' && !inv.archived;
-      });
+      let baseInvoices;
+      if (warmInvoices) {
+        // Render from the entity-tagged active list cache while fresh data loads.
+        baseInvoices = warmInvoices.filter(inv => this._isActiveInvoice(inv, entity));
+      } else {
+        const apiInvoices = await this.fetchInvoices(serverQuery);
+        baseInvoices = apiInvoices.filter(inv => this._isActiveInvoice(inv, entity));
+      }
 
       let pendingInvs = [];
       try {
@@ -799,7 +964,16 @@ const Billing = {
       });
       stickyContainer.appendChild(toolbarContainer);
       wrapper.insertBefore(stickyContainer, contentContainer);
-      await refresh();
+      // Render from cache. After a local mutation, skip the background fetch so
+      // optimistic updates are not overwritten by stale server state.
+      const cacheWarm = this._listCacheEntity === entity && Array.isArray(this._listCache) && this._listCache.length > 0;
+      if (this._skipNextListFetch) {
+        await refresh(this._listCache || []);
+        this._skipNextListFetch = false;
+      } else {
+        if (cacheWarm) await refresh(this._listCache);
+        await refresh();
+      }
     })();
 
     return wrapper;
@@ -1681,6 +1855,12 @@ const Billing = {
       type: 'success'
     };
     const targetRoute = isResubmitting ? '#admin' : '#billing';
+    if (result && result.approved) {
+      const wasCached = Array.isArray(this._listCache) && this._listCache.some(i => i.id === record.id);
+      this._addToListCache(record);
+      if (!wasCached) this._updateCounts(1, 0);
+    }
+    this._skipNextListFetch = true;
     closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
@@ -3438,8 +3618,11 @@ const Billing = {
     try {
       const res = await window.apiClient.invoices.create(payload);
       const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity });
+      this._addToListCache(inv);
+      this._updateCounts(1, 0);
       Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
       this.view = 'list';
+      this._skipNextListFetch = true;
       App.handleRoute();
     } catch (e) {
       console.error('Failed to generate invoice from template', e);
@@ -3453,14 +3636,33 @@ const Billing = {
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to move invoice "${inv.invoiceNumber}" to trash? Only Draft invoices can be trashed.`,
       async () => {
+        const snapshot = this._snapshotInvoice(id);
+        // Optimistic local update: mark cancelled/archived and upsert into the all-invoice cache.
+        if (this._detailCache[id]) {
+          this._detailCache[id].status = 'Cancelled';
+          this._detailCache[id].archived = true;
+          this._detailCache[id].updatedAt = new Date().toISOString();
+          this._addToListCache(this._detailCache[id]);
+        }
+        this._updateCounts(-1, 1);
+        this._skipNextListFetch = true;
+        // If deleted from detail, route away before the success feedback so the
+        // stale invoice is never visible.
+        if (this.view === 'detail' && this.detailId === id) {
+          location.hash = '#billing';
+        }
+        App.handleRoute();
         try {
           await window.apiClient.invoices.remove(id);
         } catch (e) {
           console.error('Failed to trash invoice', e);
-          Workflow.showMessage('Trash Failed', e.message || 'Unable to trash invoice.', 'error');
-          return;
+          this._rollbackInvoice(id, snapshot);
+          this._addToListCache(snapshot);
+          this._updateCounts(1, -1);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', e.message || 'Unable to trash invoice.', 'error');
+          App.handleRoute();
         }
-        App.handleRoute();
       },
       'danger'
     );
@@ -3472,15 +3674,25 @@ const Billing = {
     Workflow.showConfirm('Restore Invoice',
       `Are you sure you want to restore invoice "${inv.invoiceNumber}"?`,
       async () => {
+        const snapshot = this._snapshotInvoice(id);
+        const restored = { ...inv, status: 'Draft', archived: false, updatedAt: new Date().toISOString() };
+        this._detailCache[id] = restored;
+        this._addToListCache(restored);
+        this._updateCounts(1, -1);
+        this._skipNextListFetch = true;
+        App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+          Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
         } catch (e) {
           console.error('Failed to restore invoice', e);
-          Workflow.showMessage('Restore Failed', e.message || 'Unable to restore invoice.', 'error');
-          return;
+          this._rollbackInvoice(id, snapshot);
+          this._addToListCache(snapshot);
+          this._updateCounts(-1, 1);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', e.message || 'Unable to restore invoice.', 'error');
+          App.handleRoute();
         }
-        Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
-        App.handleRoute();
       },
       'warning'
     );
@@ -3492,15 +3704,25 @@ const Billing = {
     Workflow.showConfirm('Archive Invoice',
       `Are you sure you want to archive invoice "${inv.invoiceNumber}"?`,
       async () => {
+        const snapshot = this._snapshotInvoice(id);
+        const archived = { ...inv, archived: true, updatedAt: new Date().toISOString() };
+        this._detailCache[id] = archived;
+        this._addToListCache(archived);
+        this._updateCounts(-1, 1);
+        this._skipNextListFetch = true;
+        App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { archived: true });
+          Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
         } catch (e) {
           console.error('Failed to archive invoice', e);
-          Workflow.showMessage('Archive Failed', e.message || 'Unable to archive invoice.', 'error');
-          return;
+          this._rollbackInvoice(id, snapshot);
+          this._addToListCache(snapshot);
+          this._updateCounts(1, -1);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', e.message || 'Unable to archive invoice.', 'error');
+          App.handleRoute();
         }
-        Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
-        App.handleRoute();
       },
       'warning'
     );
@@ -3519,17 +3741,40 @@ const Billing = {
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} paid invoice(s)?`,
       async () => {
-        let count = 0;
+        const snapshots = new Map(eligible.map(inv => [inv.id, this._snapshotInvoice(inv.id)]));
+        // Optimistic local update: mark archived and upsert into the all-invoice cache.
+        eligible.forEach(inv => {
+          if (this._detailCache[inv.id]) {
+            this._detailCache[inv.id].archived = true;
+            this._detailCache[inv.id].updatedAt = new Date().toISOString();
+            this._addToListCache(this._detailCache[inv.id]);
+          }
+        });
+        this._updateCounts(-eligible.length, eligible.length);
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        const failed = [];
         for (const inv of eligible) {
           try {
             await window.apiClient.invoices.update(inv.id, { archived: true });
-            count++;
           } catch (e) {
             console.error('Failed to archive invoice', inv.id, e);
+            failed.push(inv.id);
           }
         }
-        Workflow.showMessage('Archived', `${count} invoice(s) archived.`, 'success');
-        App.handleRoute();
+        if (failed.length > 0) {
+          failed.forEach(id => {
+            const snapshot = snapshots.get(id);
+            this._rollbackInvoice(id, snapshot);
+            this._addToListCache(snapshot);
+          });
+          this._updateCounts(failed.length, -failed.length);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be archived.`, 'error');
+          App.handleRoute();
+        } else {
+          Workflow.showMessage('Archived', `${eligible.length} invoice(s) archived.`, 'success');
+        }
       },
       'warning'
     );
@@ -3553,17 +3798,41 @@ const Billing = {
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to move ${eligible.length} draft invoice(s) to trash?`,
       async () => {
-        let count = 0;
+        const snapshots = new Map(eligible.map(inv => [inv.id, this._snapshotInvoice(inv.id)]));
+        // Optimistic local update: mark cancelled/archived and upsert into the all-invoice cache.
+        eligible.forEach(inv => {
+          if (this._detailCache[inv.id]) {
+            this._detailCache[inv.id].status = 'Cancelled';
+            this._detailCache[inv.id].archived = true;
+            this._detailCache[inv.id].updatedAt = new Date().toISOString();
+            this._addToListCache(this._detailCache[inv.id]);
+          }
+        });
+        this._updateCounts(-eligible.length, eligible.length);
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        const failed = [];
         for (const inv of eligible) {
           try {
             await window.apiClient.invoices.remove(inv.id);
-            count++;
           } catch (e) {
             console.error('Failed to trash invoice', inv.id, e);
+            failed.push(inv.id);
           }
         }
-        Workflow.showMessage('Moved to Trash', `${count} invoice(s) moved to trash.`, 'warning');
-        App.handleRoute();
+        if (failed.length > 0) {
+          failed.forEach(id => {
+            const snapshot = snapshots.get(id);
+            this._rollbackInvoice(id, snapshot);
+            this._addToListCache(snapshot);
+          });
+          this._updateCounts(failed.length, -failed.length);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be moved to trash.`, 'error');
+          App.handleRoute();
+        } else {
+          Workflow.showMessage('Moved to Trash', `${eligible.length} invoice(s) moved to trash.`, 'warning');
+        }
       },
       'danger'
     );
@@ -3575,15 +3844,25 @@ const Billing = {
     Workflow.showConfirm('Unarchive Invoice',
       `Are you sure you want to unarchive invoice "${inv.invoiceNumber}"?`,
       async () => {
+        const snapshot = this._snapshotInvoice(id);
+        const restored = { ...inv, archived: false, updatedAt: new Date().toISOString() };
+        this._detailCache[id] = restored;
+        this._addToListCache(restored);
+        this._updateCounts(1, -1);
+        this._skipNextListFetch = true;
+        App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { archived: false });
+          Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
         } catch (e) {
           console.error('Failed to unarchive invoice', e);
-          Workflow.showMessage('Unarchive Failed', e.message || 'Unable to unarchive invoice.', 'error');
-          return;
+          this._rollbackInvoice(id, snapshot);
+          this._addToListCache(snapshot);
+          this._updateCounts(-1, 1);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', e.message || 'Unable to unarchive invoice.', 'error');
+          App.handleRoute();
         }
-        Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
-        App.handleRoute();
       },
       'warning'
     );
@@ -3599,15 +3878,31 @@ const Billing = {
     Workflow.showConfirm('Permanently Delete Invoice',
       `Are you sure you want to permanently delete invoice "${inv.invoiceNumber}"? This action cannot be undone.`,
       async () => {
+        const entity = Auth.activeEntity;
+        const snapshot = this._snapshotInvoice(id);
+        const wasActive = snapshot && this._isActiveInvoice(snapshot, entity);
+        const wasArchived = snapshot && this._isArchiveInvoice(snapshot, entity);
+        delete this._detailCache[id];
+        this._removeFromListCache(id);
+        this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
+        this._skipNextListFetch = true;
+        // Route away from the stale detail view before showing the success toast.
+        if (this.view === 'detail' && this.detailId === id) {
+          location.hash = '#billing';
+        }
+        App.handleRoute();
         try {
           await window.apiClient.invoices.remove(id);
+          Workflow.showMessage('Deleted', 'Invoice has been permanently deleted.', 'success');
         } catch (e) {
           console.error('Failed to delete invoice', e);
-          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete invoice.', 'error');
-          return;
+          this._rollbackInvoice(id, snapshot);
+          this._addToListCache(snapshot);
+          this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
+          this._skipNextListFetch = true;
+          Workflow.showMessage('Error', e.message || 'Unable to delete invoice.', 'error');
+          App.handleRoute();
         }
-        Workflow.showMessage('Deleted', 'Invoice has been permanently deleted.', 'success');
-        App.handleRoute();
       },
       'danger'
     );
@@ -3635,6 +3930,7 @@ const Billing = {
       this._lastArchiveMeta = {};
     }
 
+    archivedInvoices = archivedInvoices.filter(inv => this._isArchiveInvoice(inv, entity));
     const paid = archivedInvoices.filter(inv => inv.status === 'Paid' && inv.archived === true);
     const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled');
 
@@ -3808,3 +4104,5 @@ const Billing = {
     return card;
   }
 };
+
+window.Billing = Billing;

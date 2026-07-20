@@ -334,6 +334,8 @@ const WorkflowData = {
     // `entity` overwrite the existing value or be sent to the backend.
     const { entity: _ignoredEntity, ...safeChanges } = changes || {};
     const updated = { ...(existing || {}), ...safeChanges, id };
+    // Snapshot the pre-mutation record so we can roll back on failure.
+    const previous = existing ? { ...existing, tasks: (existing.tasks || []).map(t => ({ ...t })) } : null;
     if (existing) Object.assign(existing, safeChanges);
     try {
       const payload = { ...updated };
@@ -355,6 +357,14 @@ const WorkflowData = {
       if (existing) Object.assign(existing, normalized);
     } catch (e) {
       console.error('Failed to update work request', e);
+      // Roll back to the cached state so the next render reflects reality.
+      if (previous && existing) {
+        Object.assign(existing, previous);
+        existing.tasks = previous.tasks;
+      }
+      // Skip the server round-trip on the next list render so we redraw from
+      // the restored cache instead of a possibly stale paginated fetch.
+      if (typeof Workflow !== 'undefined') Workflow._skipNextListFetch = true;
     }
     this.invalidateRelatedForWorkRequest(id);
     return updated;
@@ -688,6 +698,7 @@ const Workflow = {
   isPendingWr,
   disableIfPending,
   view: 'list',
+  _skipNextListFetch: false,
 
   // Tell the app shell whether the cached WorkflowData is fresh for the given
   // entity, so it can skip the route skeleton overlay when data is already usable.
@@ -1347,6 +1358,7 @@ const Workflow = {
           `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
           'warning'
         );
+        Workflow._skipNextListFetch = true;
         App.handleRoute();
       },
       'danger'
@@ -1358,6 +1370,7 @@ const Workflow = {
     if (!wr || wr.status !== 'Completed') return;
     WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
     this.showMessage('Archived', 'Work Request has been archived.', 'success');
+    Workflow._skipNextListFetch = true;
     App.handleRoute();
   },
 
@@ -1366,6 +1379,7 @@ const Workflow = {
     if (!wr) return;
     WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
     this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
+    Workflow._skipNextListFetch = true;
     App.handleRoute();
   },
 
@@ -1385,6 +1399,7 @@ const Workflow = {
         const now = new Date().toISOString();
         eligible.forEach(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now }));
         this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
+        Workflow._skipNextListFetch = true;
         App.handleRoute();
       },
       'warning'
@@ -1427,6 +1442,7 @@ const Workflow = {
           `${eligible.length} Work Request(s) cancelled. ${cancelledTasks} task(s) also cancelled.`,
           'warning'
         );
+        Workflow._skipNextListFetch = true;
         App.handleRoute();
       },
       'danger'
@@ -3696,6 +3712,56 @@ const Workflow = {
     const refresh = async () => {
       const gen = ++refreshGeneration;
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
+
+      if (Workflow._skipNextListFetch) {
+        await WorkflowData.loadPendingApprovals();
+        const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
+        const pendingWrs = pendingChanges.map(pc => {
+          const wr = { ...pc.proposedData };
+          wr.isPendingApproval = true;
+          wr.pendingChangeId = pc.id;
+          wr.submittedBy = pc.submittedBy;
+          wr.status = 'Draft';
+          return wr;
+        });
+
+        let wrs = WorkflowData.getWorkRequestsWhere(r => {
+          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
+          return matchesEntity && !r.archived && r.status !== 'Cancelled';
+        }).map(wr => ({ ...wr, entity: wr.entity || entity }));
+
+        wrs = wrs.concat(pendingWrs.filter(r => {
+          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
+          return matchesEntity;
+        }));
+
+        const listTaskMap = buildPageTaskMap(wrs);
+        wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
+        wrs = applyFilters(wrs, listTaskMap);
+
+        if (gen !== refreshGeneration) return;
+
+        const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
+        if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
+        else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
+        else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
+
+        // Simple cached-results indicator while we skip the server round-trip.
+        contentContainer.appendChild(el('div', {
+          class: 'workflow-cached-indicator',
+          style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
+          text: 'Showing cached results'
+        }));
+
+        page = 1;
+        totalPages = 1;
+        renderPagination();
+
+        Workflow._skipNextListFetch = false;
+        requestAnimationFrame(() => this.updateStickyOffsets());
+        return;
+      }
+
       await WorkflowData.loadPendingApprovals();
       const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
       const pendingWrs = pendingChanges.map(pc => {
@@ -4133,6 +4199,7 @@ const Workflow = {
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
           onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, () => {
+            Workflow._skipNextListFetch = true;
             WorkflowData.getTasksWhere(t => t.workRequestId === wr.id).forEach(t => WorkflowData.deleteTask(t.id));
             WorkflowData.deleteWorkRequest(wr.id);
             App.handleRoute();
@@ -8018,6 +8085,7 @@ const Workflow = {
           menuList.classList.remove('open');
           menuList.classList.add('hidden');
           this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', () => {
+            Workflow._skipNextListFetch = true;
             WorkflowData.deleteTask(t.id);
             App.handleRoute();
           }, 'danger');
@@ -11122,6 +11190,7 @@ const Workflow = {
               self.showConfirm('Restore Work Request',
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
                 () => {
+                  Workflow._skipNextListFetch = true;
                   WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
                   App.handleRoute();
                 }, 'warning');
