@@ -1317,8 +1317,7 @@ const Disbursement = {
     let allItems = this._items || [];
     let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
 
-    items = items.filter(d => Auth.canViewDisbursement(d));
-    items = items.filter(d => d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived));
+    items = items.filter(d => this._activeBadgeFilter(d));
     const hasItems = items.length > 0;
 
     if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {

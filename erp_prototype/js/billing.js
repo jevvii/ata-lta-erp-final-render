@@ -4055,7 +4055,7 @@ const Billing = {
           this._detailCache[id].archived = true;
           this._detailCache[id].updatedAt = inv.updatedAt;
         }
-        this._removeFromListCache(id);
+        this._addToListCache({ ...inv });
         this._updateCounts(-1, 1);
         const skipGeneration = this._beginSkipGeneration();
         if (this.view === 'detail' && this.detailId === id) {
