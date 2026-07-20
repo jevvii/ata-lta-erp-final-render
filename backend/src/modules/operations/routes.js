@@ -59,6 +59,13 @@ router.post(
 );
 
 router.get(
+  '/counts',
+  resolveEntity({ allowAll: true }),
+  requirePermission('workflow:view'),
+  operationsController.counts
+);
+
+router.get(
   '/',
   resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
@@ -89,6 +96,20 @@ router.put(
   requirePermission('workflow:edit'),
   audit('work_request.updated', { table: 'work_requests' }),
   operationsController.update
+);
+router.post(
+  '/:id/archive',
+  resolveEntity(),
+  requirePermission('workflow:edit'),
+  audit('work_request.archived', { table: 'work_requests' }),
+  operationsController.archive
+);
+router.post(
+  '/:id/unarchive',
+  resolveEntity(),
+  requirePermission('workflow:edit'),
+  audit('work_request.unarchived', { table: 'work_requests' }),
+  operationsController.unarchive
 );
 router.delete(
   '/:id',

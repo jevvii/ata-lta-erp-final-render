@@ -42,9 +42,11 @@ const createDisbursementSchema = z.object({
 });
 
 /**
- * Schema for updating a disbursement (only in Draft status).
+ * Schema for updating a disbursement.
  */
-const updateDisbursementSchema = createDisbursementSchema.partial();
+const updateDisbursementSchema = createDisbursementSchema.partial().extend({
+  archived: z.boolean().optional(),
+});
 
 /**
  * Schema for rejecting a disbursement.

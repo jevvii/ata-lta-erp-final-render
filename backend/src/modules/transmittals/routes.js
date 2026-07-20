@@ -55,6 +55,20 @@ router.post(
   transmittalsController.acknowledgeTransmittal
 );
 
+router.post(
+  '/:id/archive',
+  requirePermission('transmittal:mark'),
+  audit('transmittal.archive', { table: 'transmittals' }),
+  transmittalsController.archiveTransmittal
+);
+
+router.post(
+  '/:id/unarchive',
+  requirePermission('transmittal:mark'),
+  audit('transmittal.unarchive', { table: 'transmittals' }),
+  transmittalsController.unarchiveTransmittal
+);
+
 router.delete(
   '/:id',
   requirePermission('transmittal:delete'),

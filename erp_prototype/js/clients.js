@@ -1603,7 +1603,7 @@ const Clients = {
     if (client) client.status = 'Active';
     App.handleRoute();
     try {
-      await window.apiClient.clients.update(id, { status: 'Active' });
+      await window.apiClient.clients.unarchive(id);
       window.apiClient.clientCache.invalidate();
       this._clearOptimisticSkipIfCurrent(restoreGeneration);
       await App.handleRoute();
@@ -1637,7 +1637,7 @@ const Clients = {
         let lastError = null;
         for (const id of clientIds) {
           try {
-            await window.apiClient.clients.update(id, { status: 'Active' });
+            await window.apiClient.clients.unarchive(id);
           } catch (e) {
             failedCount++;
             lastError = e;

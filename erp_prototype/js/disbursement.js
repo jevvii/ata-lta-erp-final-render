@@ -3663,9 +3663,9 @@ const Disbursement = {
 
   async archiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
-    if (!d || d.status !== 'Funded' || d.archived) return;
+    if (!d || d.archived) return;
     try {
-      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.update(id, { archived: true }), 'Archive Failed');
+      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Archive Failed');
       Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
     } catch (e) {
       // Error surfaced by _optimisticUpdate.
@@ -3676,21 +3676,21 @@ const Disbursement = {
     await this.loadDisbursements();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(d => d.id === id))
-      .filter(d => d && d.status === 'Funded' && !d.archived);
+      .filter(d => d && !d.archived);
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'Only Funded disbursements can be archived.', 'info');
+      Workflow.showMessage('No eligible records', 'No active disbursements to archive.', 'info');
       return;
     }
 
     Workflow.showConfirm('Bulk Archive',
-      `Are you sure you want to archive ${eligible.length} funded disbursement(s)?`,
+      `Are you sure you want to archive ${eligible.length} disbursement(s)?`,
       async () => {
         let count = 0;
         for (const d of eligible) {
           try {
             await this._optimisticUpdate(d.id, { archived: true }, () =>
-              window.apiClient.disbursements.update(d.id, { archived: true }), 'Archive Failed');
+              window.apiClient.disbursements.archive(d.id), 'Archive Failed');
             count++;
           } catch (e) {
             // Error surfaced by _optimisticUpdate; stop remaining bulk operations.
@@ -3707,9 +3707,9 @@ const Disbursement = {
 
   async unarchiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
-    if (!d || d.status !== 'Funded' || !d.archived) return;
+    if (!d || !d.archived) return;
     try {
-      await this._optimisticUpdate(id, { archived: false }, () => window.apiClient.disbursements.update(id, { archived: false }), 'Unarchive Failed');
+      await this._optimisticUpdate(id, { archived: false }, () => window.apiClient.disbursements.unarchive(id), 'Unarchive Failed');
       Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
     } catch (e) {
       // Error surfaced by _optimisticUpdate.
@@ -3720,11 +3720,11 @@ const Disbursement = {
     const d = await this.loadDisbursement(id);
     if (!d) return;
     if (Auth.user?.role !== 'Admin' && !Auth.can('disbursement:delete') && !Auth.isManagerial()) {
-      Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete disbursements.', 'danger');
+      Workflow.showMessage('Permission Denied', 'Only authorized users can delete disbursements.', 'danger');
       return;
     }
-    Workflow.showConfirm('Permanently Delete Disbursement',
-      `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
+    Workflow.showConfirm('Delete Disbursement',
+      `Are you sure you want to delete disbursement "${d.description || d.category}"?`,
       async () => {
         try {
           await this._optimisticDelete(id, () => window.apiClient.disbursements.remove(id), 'Delete Failed');

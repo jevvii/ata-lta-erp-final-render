@@ -4127,7 +4127,7 @@ const Billing = {
         const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
-          await window.apiClient.invoices.update(id, { archived: true });
+          await window.apiClient.invoices.archive(id);
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');

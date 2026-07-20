@@ -913,11 +913,65 @@ const deleteTemplate = async ({ entityId, id }) => {
   }
 };
 
+const archiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.archive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
+const unarchiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.unarchive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
 module.exports = {
   listInvoices,
   createInvoice,
   getInvoiceById,
   updateInvoice,
+  archiveInvoice,
+  unarchiveInvoice,
   deleteInvoice,
   recordPayment,
   generateInvoicePdf,

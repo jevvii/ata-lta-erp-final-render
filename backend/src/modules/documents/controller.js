@@ -204,12 +204,50 @@ const updateLifecycle = async (req, res, next) => {
   }
 };
 
+const getDocumentCounts = async (req, res, next) => {
+  try {
+    const data = await service.countDocuments({ entityId: req.activeEntity });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const archiveDocument = async (req, res, next) => {
+  try {
+    const data = await service.archiveDocument({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const unarchiveDocument = async (req, res, next) => {
+  try {
+    const data = await service.unarchiveDocument({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   documentsController: {
     listDocuments,
+    getDocumentCounts,
     createDocument,
     getDocument,
     updateDocument,
+    archiveDocument,
+    unarchiveDocument,
     deleteDocument,
     confirmUpload,
     getDownloadUrl,

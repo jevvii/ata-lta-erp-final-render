@@ -67,6 +67,20 @@ router.put(
 );
 
 router.post(
+  '/:id/archive',
+  requirePermission('disbursement:edit'),
+  audit('disbursement.archive', { table: 'disbursements' }),
+  disbursementsController.archiveDisbursement
+);
+
+router.post(
+  '/:id/unarchive',
+  requirePermission('disbursement:edit'),
+  audit('disbursement.unarchive', { table: 'disbursements' }),
+  disbursementsController.unarchiveDisbursement
+);
+
+router.post(
   '/:id/submit',
   requirePermission('disbursement:create'),
   audit('disbursement.submit', { table: 'disbursements' }),

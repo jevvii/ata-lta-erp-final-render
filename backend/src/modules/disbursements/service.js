@@ -314,7 +314,22 @@ const getDisbursementById = async ({ entityId, id }) => {
 const updateDisbursement = async ({ entityId, id, userId, data }) => {
   const existing = await getDisbursementById({ entityId, id });
 
-  if (existing.status !== 'Draft') {
+  const contentFields = [
+    'category',
+    'description',
+    'amount',
+    'fundSource',
+    'clientId',
+    'employeeId',
+    'linkedInvoiceId',
+    'linkedWorkRequestId',
+    'linkedTaskId',
+    'dueDate',
+    'notes',
+  ];
+  const isUpdatingContent = contentFields.some((field) => data[field] !== undefined);
+
+  if (isUpdatingContent && existing.status !== 'Draft') {
     throw new AppError({
       statusCode: 409,
       title: 'Conflict',
@@ -339,6 +354,7 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
+  if (data.archived !== undefined) updates.archived = data.archived;
 
   const { data: updated, error } = await supabaseAdmin
     .from('disbursements')
@@ -357,6 +373,74 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   }
 
   return updated;
+};
+
+/**
+ * Archive a disbursement.
+ */
+const archiveDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to archive disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.archive',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
+};
+
+/**
+ * Unarchive a disbursement.
+ */
+const unarchiveDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to unarchive disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.unarchive',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
 };
 
 /**
@@ -639,6 +723,8 @@ module.exports = {
   createDisbursement,
   getDisbursementById,
   updateDisbursement,
+  archiveDisbursement,
+  unarchiveDisbursement,
   submitDisbursement,
   approveDisbursement,
   releaseDisbursement,

@@ -1776,27 +1776,41 @@ const Workflow = {
 
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr || wr.status !== 'Completed') return;
+    if (!wr || wr.archived) return;
     const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     (async () => {
-      await WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
-      Workflow._clearSkipGenerationIfLatest(myGen);
-      App.handleRoute();
-      this.showMessage('Archived', 'Work Request has been archived.', 'success');
+      try {
+        await window.apiClient.workRequests.archive(wrId);
+        wr.archived = true;
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        this.showMessage('Archived', 'Work Request has been archived.', 'success');
+      } catch (e) {
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        this.showMessage('Archive Failed', e.message || 'Unable to archive Work Request.', 'error');
+      }
     })();
   },
 
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr) return;
+    if (!wr || !wr.archived) return;
     const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     (async () => {
-      await WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
-      Workflow._clearSkipGenerationIfLatest(myGen);
-      App.handleRoute();
-      this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
+      try {
+        await window.apiClient.workRequests.unarchive(wrId);
+        wr.archived = false;
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
+      } catch (e) {
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        this.showMessage('Restore Failed', e.message || 'Unable to restore Work Request.', 'error');
+      }
     })();
   },
 

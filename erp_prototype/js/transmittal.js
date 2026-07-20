@@ -384,12 +384,7 @@ const Transmittal = {
     if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') container.appendChild(await this.renderForm({ hideHeader: true }));
     else if (this.view === 'detail') container.appendChild(await this.renderDetail());
-    else if (this.view === 'archive') {
-      // Archive UI is hidden because the backend has no archive/unarchive endpoints.
-      this.view = 'list';
-      App.handleRoute();
-      return container;
-    }
+    else if (this.view === 'archive') container.appendChild(await this.renderArchive());
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -413,16 +408,18 @@ const Transmittal = {
 
     let count = 0;
     let archiveCount = 0;
-    // Derive counts from the cached items instead of calling the counts API on
-    // every render. The rejected operations-request count is still fetched live
-    // because it is not part of the transmittal cache.
     try {
+      const countsRes = await window.apiClient.transmittals.counts();
+      const countsData = countsRes.data || countsRes;
+      if (countsData) {
+        count = countsData.active || 0;
+        archiveCount = countsData.archived || 0;
+      }
+    } catch (e) {
       await this.ensure();
       const items = this._items || [];
       count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
       archiveCount = items.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived).length;
-    } catch (e) {
-      console.error('Failed to load transmittal counts from cache', e);
     }
 
     try {
@@ -437,9 +434,9 @@ const Transmittal = {
       console.error('Failed to load rejected transmittal requests', e);
     }
 
-    // Archive tab is hidden: the backend has no archive/unarchive endpoints.
     const tabs = [
-      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count }
+      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count },
+      { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
     ];
 
     const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
@@ -2299,19 +2296,84 @@ const Transmittal = {
     setTimeout(() => win.print(), 300);
   },
 
-  // Archive actions are hidden because the backend has no archive/unarchive
-  // endpoints. These stubs remain as no-ops so any stale callers do nothing.
-  archiveTransmittal(id) {},
-  bulkArchiveTransmittals(ids) {},
-  unarchiveTransmittal(id) {},
+  async archiveTransmittal(id) {
+    await this.ensure();
+    const items = this._items || [];
+    const item = items.find(t => t.id === id);
+    if (!item || item.status !== 'Acknowledged' || item.archived) return;
+
+    item.archived = true;
+    const skipGen = this._startSkipFetchGeneration();
+    App.handleRoute();
+    try {
+      await window.apiClient.transmittals.archive(id);
+      this.invalidateCache();
+      Workflow.showMessage('Archived', 'Transmittal has been archived.', 'success');
+    } catch (e) {
+      item.archived = false;
+      this._clearActiveSkipGeneration(skipGen);
+      App.handleRoute();
+      Workflow.showMessage('Archive Failed', e.message || 'Unable to archive transmittal.', 'error');
+    }
+  },
+
+  async bulkArchiveTransmittals(ids) {
+    await this.ensure();
+    const eligible = (ids || [])
+      .map(id => (this._items || []).find(t => t.id === id))
+      .filter(t => t && t.status === 'Acknowledged' && !t.archived);
+
+    if (eligible.length === 0) {
+      Workflow.showMessage('No eligible records', 'Only Acknowledged transmittals can be archived.', 'info');
+      return;
+    }
+
+    Workflow.showConfirm('Bulk Archive',
+      `Are you sure you want to archive ${eligible.length} transmittal(s)?`,
+      async () => {
+        for (const t of eligible) {
+          try {
+            await window.apiClient.transmittals.archive(t.id);
+            t.archived = true;
+          } catch (e) {
+            break;
+          }
+        }
+        this.invalidateCache();
+        App.handleRoute();
+      },
+      'warning'
+    );
+  },
+
+  async unarchiveTransmittal(id) {
+    await this.ensure();
+    const items = this._items || [];
+    const item = items.find(t => t.id === id);
+    if (!item || !item.archived) return;
+
+    item.archived = false;
+    const skipGen = this._startSkipFetchGeneration();
+    App.handleRoute();
+    try {
+      await window.apiClient.transmittals.unarchive(id);
+      this.invalidateCache();
+      Workflow.showMessage('Restored', 'Transmittal has been restored to active list.', 'success');
+    } catch (e) {
+      item.archived = true;
+      this._clearActiveSkipGeneration(skipGen);
+      App.handleRoute();
+      Workflow.showMessage('Restore Failed', e.message || 'Unable to restore transmittal.', 'error');
+    }
+  },
 
   permanentDeleteTransmittal(id) {
     if (Auth.user?.role !== 'Admin' && !Auth.isManagerial() && !Auth.can('transmittal:delete')) {
-      Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete transmittals.', 'danger');
+      Workflow.showMessage('Permission Denied', 'Only authorized users can delete transmittals.', 'danger');
       return;
     }
-    Workflow.showConfirm('Permanently Delete Transmittal',
-      'Are you sure you want to permanently delete this transmittal? This action cannot be undone.',
+    Workflow.showConfirm('Delete Transmittal',
+      'Are you sure you want to delete this transmittal?',
       async () => {
         await this.ensure();
         const items = this._items || [];
@@ -2330,7 +2392,7 @@ const Transmittal = {
             if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
             if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
           }
-          Workflow.showMessage('Deleted', 'Transmittal has been permanently deleted.', 'success');
+          Workflow.showMessage('Deleted', 'Transmittal has been deleted.', 'success');
         } catch (e) {
           if (removedItem) {
             const rollback = [...(this._items || [])];
@@ -2359,7 +2421,8 @@ const Transmittal = {
 
     let all = [];
     try {
-      all = await this._listForActiveEntity();
+      const res = await window.apiClient.transmittals.list({ archived: true });
+      all = (res.data || []).map(t => this.normalizeTransmittal(t));
     } catch (e) {
       console.error('Failed to load archive transmittals', e);
     }
@@ -2395,6 +2458,11 @@ const Transmittal = {
             label: 'View',
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
+          },
+          {
+            label: 'Restore',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>',
+            onClick: () => self.unarchiveTransmittal(t.id)
           }
         ]
       };
