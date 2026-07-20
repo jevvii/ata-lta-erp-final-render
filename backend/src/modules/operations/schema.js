@@ -31,6 +31,7 @@ const createWorkRequestSchema = z.object({
   requestedBy: z.string().uuid().optional(),
   assignedTo: z.string().uuid().optional(),
   dueDate: z.string().optional(),
+  priority: z.string().max(50).optional(),
 });
 
 const updateWorkRequestSchema = createWorkRequestSchema.partial();

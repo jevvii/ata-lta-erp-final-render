@@ -65,8 +65,8 @@ const PendingChanges = {
     if (!api) return { approved: false, pendingId: null };
 
     if (Auth.canBypassReview(table)) {
-      await this._adminBypass(table, record, isNew);
-      return { approved: true };
+      const bypassRecord = await this._adminBypass(table, record, isNew);
+      return { approved: true, record: bypassRecord || null };
     }
 
     if (this.editingPendingId) {
@@ -104,29 +104,38 @@ const PendingChanges = {
 
     if (table === 'workRequests') {
       const tasks = record.tasks || [];
+      let wr = null;
       if (isNew) {
-        await api.workRequests.create(cleanRecord);
+        const res = await api.workRequests.create(cleanRecord);
+        wr = res?.data || null;
       } else {
-        await api.workRequests.update(record.id, cleanRecord);
+        const res = await api.workRequests.update(record.id, cleanRecord);
+        wr = res?.data || null;
         const existing = await api.workRequests.listTasks(record.id);
         for (const t of existing || []) {
           await api.workRequests.removeTask(record.id, t.id);
         }
-        for (const t of tasks) {
-          await api.workRequests.createTask(record.id, t);
-        }
       }
-      return;
+      const createdTasks = [];
+      const targetWrId = wr?.id || record.id;
+      for (const t of tasks) {
+        const taskRes = await api.workRequests.createTask(targetWrId, t);
+        createdTasks.push(taskRes?.data || t);
+      }
+      return { wr, tasks: createdTasks };
     }
 
     if (table === 'tasks') {
       const wrId = record.workRequestId;
+      let task = null;
       if (isNew) {
-        await api.workRequests.createTask(wrId, cleanRecord);
+        const res = await api.workRequests.createTask(wrId, cleanRecord);
+        task = res?.data || null;
       } else {
-        await api.workRequests.updateTask(wrId, record.id, cleanRecord);
+        const res = await api.workRequests.updateTask(wrId, record.id, cleanRecord);
+        task = res?.data || null;
       }
-      return;
+      return task;
     }
 
     if (table === 'clients') {

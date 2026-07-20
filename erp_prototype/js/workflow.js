@@ -331,6 +331,9 @@ const WorkflowData = {
           })
         : null;
       created.tasks = serverTasks || existingTasks;
+      if (existing.priority && (!created.priority || created.priority === 'Normal')) {
+        created.priority = existing.priority;
+      }
       Object.assign(existing, created);
       if (created.id !== oldId) {
         (this._tasks || []).forEach(t => {
@@ -349,6 +352,60 @@ const WorkflowData = {
       }
     }
     return created;
+  },
+
+  _adoptServerWorkRequest(localId, serverWr, serverTasks) {
+    if (!Array.isArray(this._workRequests)) this._workRequests = [];
+    const existing = localId ? this.getWorkRequestById(localId) : null;
+    const normalizedWr = this.normalizeWorkRequest(serverWr);
+    if (!Array.isArray(normalizedWr.tasks)) normalizedWr.tasks = [];
+
+    // Preserve the optimistic priority when the server response lacks it.
+    if (existing && existing.priority && (!normalizedWr.priority || normalizedWr.priority === 'Normal')) {
+      normalizedWr.priority = existing.priority;
+    }
+
+    if (existing) {
+      const oldId = existing.id;
+      Object.assign(existing, normalizedWr);
+      if (normalizedWr.id !== oldId) {
+        (this._tasks || []).forEach(t => {
+          if (t.workRequestId === oldId) t.workRequestId = normalizedWr.id;
+        });
+        this.invalidateRelatedForWorkRequest(oldId);
+      }
+    } else {
+      const dupIdx = this._workRequests.findIndex(r => r.id === normalizedWr.id);
+      if (dupIdx >= 0) Object.assign(this._workRequests[dupIdx], normalizedWr);
+      else this._workRequests.push(normalizedWr);
+    }
+
+    const finalWrId = normalizedWr.id;
+    const parentWr = this.getWorkRequestById(finalWrId);
+    if (parentWr) {
+      parentWr.tasks = [];
+      if (!Array.isArray(this._tasks)) this._tasks = [];
+
+      serverTasks.forEach(t => {
+        const normalizedTask = this.normalizeTask(t);
+        normalizedTask.workRequestId = finalWrId;
+        const existingTask = normalizedTask.id ? this.getTaskById(normalizedTask.id) : null;
+        const tempTask = localId
+          ? (this._tasks.find(tk => tk.workRequestId === localId && tk.title === normalizedTask.title) || null)
+          : null;
+
+        if (existingTask) {
+          Object.assign(existingTask, normalizedTask);
+        } else if (tempTask) {
+          Object.assign(tempTask, normalizedTask);
+        } else {
+          this._tasks.push(normalizedTask);
+        }
+        parentWr.tasks.push(normalizedTask);
+      });
+    }
+
+    return normalizedWr;
   },
 
   async createTask(record) {
@@ -6578,30 +6635,51 @@ const Workflow = {
         closeFormPanelAndRoute(targetRoute);
 
         let createdWr = null;
-        try {
-          createdWr = await WorkflowData.createWorkRequest(record);
-        } catch (e) {
-          console.error('Failed to create work request', e);
-          WorkflowData._removeWorkRequest(record.id);
-          for (const t of taskRecords) WorkflowData._removeTask(t.id);
-          Workflow._clearSkipGenerationIfLatest(myGen);
-          App.handleRoute();
-          this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
-          return;
-        }
+        let createdTasks = [];
+        let failedTaskTitles = [];
 
-        apiWrId = createdWr ? createdWr.id : record.id;
-        const failedTaskTitles = [];
-        for (const t of taskRecords) {
-          t.workRequestId = apiWrId;
+        if (result.record && result.record.wr) {
+          // Admin bypass already created the WR and tasks on the server.
+          // Just adopt the server record into the optimistic in-memory state.
+          createdWr = result.record.wr;
+          createdTasks = result.record.tasks || [];
           try {
-            await WorkflowData.createTask(t);
+            await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
           } catch (e) {
-            console.error('Failed to create task', t.title, e);
-            WorkflowData._removeTask(t.id);
-            failedTaskTitles.push(t.title);
+            console.error('Failed to adopt server work request', e);
+            WorkflowData._removeWorkRequest(record.id);
+            for (const t of taskRecords) WorkflowData._removeTask(t.id);
+            Workflow._clearSkipGenerationIfLatest(myGen);
+            App.handleRoute();
+            this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
+            return;
+          }
+        } else {
+          try {
+            createdWr = await WorkflowData.createWorkRequest(record);
+          } catch (e) {
+            console.error('Failed to create work request', e);
+            WorkflowData._removeWorkRequest(record.id);
+            for (const t of taskRecords) WorkflowData._removeTask(t.id);
+            Workflow._clearSkipGenerationIfLatest(myGen);
+            App.handleRoute();
+            this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
+            return;
+          }
+
+          apiWrId = createdWr ? createdWr.id : record.id;
+          for (const t of taskRecords) {
+            t.workRequestId = apiWrId;
+            try {
+              createdTasks.push(await WorkflowData.createTask(t));
+            } catch (e) {
+              console.error('Failed to create task', t.title, e);
+              WorkflowData._removeTask(t.id);
+              failedTaskTitles.push(t.title);
+            }
           }
         }
+
         if (failedTaskTitles.length > 0) {
           this.showMessage('Warning', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
         } else {
@@ -10375,7 +10453,21 @@ const Workflow = {
         const myGen = Workflow._startSkipGeneration();
         App.handleRoute();
         try {
-          await WorkflowData.createTask(newTask);
+          if (result.record) {
+            // Admin/manager bypass already created the task on the server.
+            const serverTask = WorkflowData.normalizeTask(result.record);
+            serverTask.workRequestId = newTask.workRequestId;
+            const existing = WorkflowData.getTaskById(newTask.id);
+            if (existing) Object.assign(existing, serverTask);
+            const parentWr = WorkflowData.getWorkRequestById(newTask.workRequestId);
+            if (parentWr) {
+              const idx = parentWr.tasks.findIndex(t => t.id === newTask.id);
+              if (idx >= 0) parentWr.tasks[idx] = serverTask;
+              else parentWr.tasks.push(serverTask);
+            }
+          } else {
+            await WorkflowData.createTask(newTask);
+          }
           if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
           if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
           this.showMessage('Task Added', 'Task has been added to the work request.', 'success');
