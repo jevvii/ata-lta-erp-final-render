@@ -205,10 +205,11 @@ const listWorkRequests = async ({
 
   // Resolve entity code(s) — single lookup for scoped view, per-row for consolidated
   let entityCodeMap;
+  let singleEntityCode;
   if (entityId && entityId !== 'ALL') {
     const code = await resolveEntityCode(entityId);
     entityCodeMap = null; // use single code
-    var singleEntityCode = code;
+    singleEntityCode = code;
   } else {
     // Consolidated: build a lookup map from all entity_ids present in the result set
     const uniqueEntityIds = [...new Set(visibleRows.map((r) => r.entity_id).filter(Boolean))];

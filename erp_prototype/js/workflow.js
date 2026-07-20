@@ -174,6 +174,10 @@ const WorkflowData = {
         return this._pendingApprovals;
       })
       .catch(err => {
+        if (this._isAbortError(err)) {
+          if (!this._pendingApprovals) this._pendingApprovals = [];
+          return this._pendingApprovals;
+        }
         console.error('[WorkflowData] failed to load pending approvals', err);
         if (!this._pendingApprovals) this._pendingApprovals = [];
         return this._pendingApprovals;
@@ -442,6 +446,10 @@ const WorkflowData = {
     return { invoices: [], disbursements: [] };
   },
 
+  _isAbortError(e) {
+    return isAbortError(e);
+  },
+
   _normalizeRelatedInvoice(inv) {
     if (!inv) return inv;
     return {
@@ -546,6 +554,9 @@ const WorkflowData = {
         return normalized;
       })
       .catch(async err => {
+        if (this._isAbortError(err)) {
+          return this._relatedByWr.get(id) || this._emptyWrRelated();
+        }
         console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
         if (!this._relatedByWr.has(id)) {
           this._relatedByWr.set(id, await this._buildRelatedFromApi(id));
@@ -586,6 +597,9 @@ const WorkflowData = {
       return normalized;
     })()
       .catch(async err => {
+        if (this._isAbortError(err)) {
+          return this._relatedByTask.get(id) || this._emptyTaskRelated();
+        }
         console.error(`[WorkflowData] failed to load related for task ${id}`, err);
         if (!this._relatedByTask.has(id)) {
           this._relatedByTask.set(id, await this._buildTaskRelatedFromApi(id));
@@ -2688,6 +2702,7 @@ const Workflow = {
     await Promise.all([
       WorkflowData.ensure(),
       this._loadRetainerTemplates(),
+      this._loadGroundWorkers(),
     ]);
     await WorkflowData.loadPendingApprovals();
     const container = el('div', { class: 'page' });
@@ -5640,7 +5655,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client' }));
     const clientSel = el('select', { name: 'clientId', class: 'notion-prop-select', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (wr && wr.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
@@ -5677,7 +5692,9 @@ const Workflow = {
     assigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Assignee' }));
     const assigneeSel = el('select', { name: 'assignedTo', class: 'notion-prop-select', required: true });
     assigneeSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    (window.apiClient.userCache._users || []).filter(u => u.entities.includes(entity) || u.entities.includes(entity.toLowerCase())).forEach(u => {
+    (window.apiClient.userCache._users || []).filter(u => {
+      return (u.entities || []).some(e => matchesEntity(e, entity));
+    }).forEach(u => {
       const opt = el('option', { value: u.id, text: u.name });
       if (wr && wr.assignedTo === u.id) opt.selected = true;
       assigneeSel.appendChild(opt);
@@ -6774,7 +6791,7 @@ const Workflow = {
     ((window.apiClient.userCache._users || []) || []).forEach(u => {
       if (u.name) uniqueEmpNames.add(u.name.trim());
     });
-    this._groundWorkers.forEach(gw => {
+    (this._groundWorkers || []).forEach(gw => {
       if (gw.name) uniqueEmpNames.add(gw.name.trim());
     });
     sortedTasks.forEach(t => {
@@ -10911,7 +10928,7 @@ const Workflow = {
     clientGroup.appendChild(el('label', { text: 'Client *' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    (window.apiClient.clientCache._clients || []).filter(c => c.entity === entity).forEach(c => {
+    (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (template && template.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);

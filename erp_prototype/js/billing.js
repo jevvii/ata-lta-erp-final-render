@@ -442,6 +442,7 @@ const Billing = {
       invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
       return invoices;
     } catch (e) {
+      if (isAbortError(e)) { this._lastInvoiceMeta = {}; return []; }
       console.error('Failed to fetch invoices', e);
       Workflow.showMessage('Invoices', e.message || 'Unable to load invoices.', 'error');
       this._lastInvoiceMeta = {};
@@ -1328,7 +1329,7 @@ const Billing = {
     const clientSel = el('select', clientSelAttrs);
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
     const allClients = window.apiClient.clientCache._clients || [];
-    allClients.filter(c => (c.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(c => {
+    allClients.filter(c => matchesEntity(c.entity, entity)).forEach(c => {
       const opt = el('option', { value: c.id, text: c.name });
       if (inv && inv.clientId === c.id) opt.selected = true;
       else if (!inv && prefill && prefill.clientId === c.id) opt.selected = true;
@@ -1346,7 +1347,7 @@ const Billing = {
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
     const wrs = window.apiClient.workRequestCache._wrs || [];
-    wrs.filter(wr => (wr.entity || '').toUpperCase() === (entity || '').toUpperCase()).forEach(wr => {
+    wrs.filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
       const opt = el('option', { value: wr.id, text: wr.title });
       if (inv && inv.workRequestId === wr.id) opt.selected = true;
       else if (!inv && prefill && prefill.workRequestId === wr.id) opt.selected = true;

@@ -164,7 +164,7 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
     });
   }
 
-  let rows = data || [];
+  const rows = data || [];
 
   const clientIds = rows.map((r) => r.id);
   const [related, { data: entitiesData }] = await Promise.all([
@@ -322,17 +322,28 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * Get a single client by ID.
  * @param {Object} params
  * @param {string} params.id
- * @param {string} params.entityId
+ * @param {string} [params.entityId] - Entity scope. Required unless allowCrossEntity is true.
+ * @param {boolean} [params.allowCrossEntity=false] - When true, skip entity filtering (for consolidated ALL view).
  * @returns {Promise<object|null>}
  */
-const getClientById = async ({ id, entityId }) => {
-  const { data, error } = await supabaseAdmin
+const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
+  let query = supabaseAdmin
     .from('clients')
     .select('*')
     .eq('id', id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (entityId) {
+    query = query.eq('entity_id', entityId);
+  } else if (!allowCrossEntity) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'entityId is required when cross-entity access is not enabled',
+    });
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new AppError({

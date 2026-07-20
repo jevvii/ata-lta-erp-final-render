@@ -88,7 +88,7 @@ describe('/v1/disbursements', () => {
       entities: ['ATA', 'LTA'],
     });
 
-    const created = await request(app)
+    const _created = await request(app)
       .post('/v1/disbursements')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')

@@ -85,6 +85,10 @@ const Clients = {
           client = res.data;
         } catch (e) {
           console.error('Failed to load client for form', e);
+          if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+          this.editingId = null;
+          location.hash = '#clients';
+          return container;
         }
       }
       const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
@@ -744,6 +748,10 @@ const Clients = {
         client = this.normalizeClient(res.data);
       } catch (e) {
         console.error('Failed to load client form', e);
+        if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+        this.editingId = null;
+        this.showList();
+        return;
       }
     }
     const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;
@@ -1005,8 +1013,7 @@ const Clients = {
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
     const allClients = window.apiClient.clientCache._clients || [];
     allClients.filter(c => {
-      const cEnt = (c.entity || '').toUpperCase();
-      return cEnt === entity.toUpperCase();
+      return matchesEntity(c.entity, entity);
     }).forEach(c => {
       if (this.editingId && c.id === this.editingId) return;
       clientSel.appendChild(el('option', { value: c.id, text: c.name }));
@@ -1113,7 +1120,7 @@ const Clients = {
     }
 
     const pocInputValue = (data.pointOfContactInput || '').trim();
-    let contactUserId = '';
+    let contactUserId = null;
 
     if (pocInputValue) {
       const matchedUser = window.apiClient.userCache._users?.find(u => (u.name + ' (' + u.role + ')') === pocInputValue);
@@ -1128,12 +1135,12 @@ const Clients = {
       rdoCode: data.rdoCode ? data.rdoCode.trim().toUpperCase() : '',
       address: data.address ? data.address.trim() : '',
       tradeName: data.tradeName ? data.tradeName.trim() : '',
-      contactUserId,
       entity: data.entity || (Auth.activeEntity !== 'ALL' ? Auth.activeEntity : 'ATA'),
       retainer: !!form.querySelector('input[name="retainer"]:checked'),
       contactDetails,
       relatedCompanies: this.toApiRelatedCompanies(relatedCompanies)
     };
+    if (contactUserId) record.contactUserId = contactUserId;
 
     const isNew = !this.editingId || this.editingId === 'new';
     const canEditDirectly = Auth.can('clients:edit');
