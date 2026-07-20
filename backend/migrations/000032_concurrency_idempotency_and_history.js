@@ -1,41 +1,57 @@
 /** @type {import('node-pg-migrate').Migration} */
 exports.up = (pgm) => {
-  // 0.6 — Idempotency keys table with 24-hour TTL
-  pgm.createTable('idempotency_keys', {
-    id: { type: 'uuid', primaryKey: true, default: pgm.func('gen_random_uuid()') },
-    actor_scope: { type: 'varchar(255)', notNull: true },
-    idempotency_key: { type: 'varchar(255)', notNull: true },
-    request_hash: { type: 'varchar(64)' },
-    response_json: { type: 'jsonb', notNull: true, default: '{}' },
-    created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
-  });
+  // 0.6 — Idempotency keys table with 24-hour TTL (idempotent)
+  pgm.sql(`
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      actor_scope VARCHAR(255) NOT NULL,
+      idempotency_key VARCHAR(255) NOT NULL,
+      request_hash VARCHAR(64),
+      response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-  pgm.createIndex('idempotency_keys', ['actor_scope', 'idempotency_key'], {
-    unique: true,
-    name: 'idx_idempotency_keys_scope_key',
-  });
-  pgm.createIndex('idempotency_keys', 'created_at', { name: 'idx_idempotency_keys_created_at' });
+    DROP INDEX IF EXISTS idx_idempotency_keys_scope_key;
+    CREATE UNIQUE INDEX idx_idempotency_keys_scope_key
+      ON idempotency_keys (actor_scope, idempotency_key);
 
-  // 0.7 — Status history / entity events table for audit-inside-transition
-  pgm.createTable('status_history', {
-    id: { type: 'uuid', primaryKey: true, default: pgm.func('gen_random_uuid()') },
-    table_name: { type: 'varchar(100)', notNull: true },
-    record_id: { type: 'uuid', notNull: true },
-    old_status: { type: 'varchar(100)' },
-    new_status: { type: 'varchar(100)', notNull: true },
-    actor_id: { type: 'uuid', references: 'users', onDelete: 'set null' },
-    entity_id: { type: 'uuid', notNull: true, references: 'entities', onDelete: 'cascade' },
-    details: { type: 'jsonb', notNull: true, default: '{}' },
-    created_at: { type: 'timestamptz', notNull: true, default: pgm.func('now()') },
-  });
+    DROP INDEX IF EXISTS idx_idempotency_keys_created_at;
+    CREATE INDEX idx_idempotency_keys_created_at
+      ON idempotency_keys (created_at);
+  `);
 
-  pgm.createIndex('status_history', ['table_name', 'record_id'], { name: 'idx_status_history_record' });
-  pgm.createIndex('status_history', 'entity_id', { name: 'idx_status_history_entity' });
-  pgm.createIndex('status_history', 'created_at', { name: 'idx_status_history_created_at' });
+  // 0.7 — Status history / entity events table for audit-inside-transition (idempotent)
+  pgm.sql(`
+    CREATE TABLE IF NOT EXISTS status_history (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      table_name VARCHAR(100) NOT NULL,
+      record_id UUID NOT NULL,
+      old_status VARCHAR(100),
+      new_status VARCHAR(100) NOT NULL,
+      actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      details JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    DROP INDEX IF EXISTS idx_status_history_record;
+    CREATE INDEX idx_status_history_record
+      ON status_history (table_name, record_id);
+
+    DROP INDEX IF EXISTS idx_status_history_entity;
+    CREATE INDEX idx_status_history_entity
+      ON status_history (entity_id);
+
+    DROP INDEX IF EXISTS idx_status_history_created_at;
+    CREATE INDEX idx_status_history_created_at
+      ON status_history (created_at);
+  `);
 };
 
 /** @type {import('node-pg-migrate').Migration} */
 exports.down = (pgm) => {
-  pgm.dropTable('status_history');
-  pgm.dropTable('idempotency_keys');
+  pgm.sql(`
+    DROP TABLE IF EXISTS status_history;
+    DROP TABLE IF EXISTS idempotency_keys;
+  `);
 };
