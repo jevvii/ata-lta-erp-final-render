@@ -645,20 +645,15 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
  */
 const getWorkRequestRelated = async ({ id, entityId }) => {
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', id)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .maybeSingle();
 
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
-
-  if (wrErr || !wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  if (!wr) {
+    return { invoices: [], disbursements: [], transmittals: [], documents: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
@@ -714,31 +709,26 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[] }>}
  */
 const getTaskRelated = async ({ id, entityId }) => {
-  const { data: task, error: taskErr } = await supabaseAdmin
+  const { data: task } = await supabaseAdmin
     .from('tasks')
     .select('id, work_request_id')
     .eq('id', id)
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (taskErr || !task) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  if (!task || !task.work_request_id) {
+    return { invoices: [], disbursements: [] };
   }
 
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', task.work_request_id)
-    .is('deleted_at', null);
-
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr } = await wrQuery.maybeSingle();
+    .is('deleted_at', null)
+    .maybeSingle();
 
   if (!wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+    return { invoices: [], disbursements: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;

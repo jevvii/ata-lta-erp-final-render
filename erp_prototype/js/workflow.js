@@ -826,6 +826,7 @@ const WorkflowData = {
 
   async loadRelatedForWorkRequest(id) {
     if (!id || this._isTempId(id)) return this._emptyWrRelated();
+    if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
     if (this._relatedLoading.has(id)) return this._relatedLoading.get(id);
     const promise = window.apiClient.workRequests.getRelated(id)
       .then(res => {
@@ -839,15 +840,13 @@ const WorkflowData = {
         this._relatedByWr.set(id, normalized);
         return normalized;
       })
-      .catch(async err => {
+      .catch(err => {
         if (this._isAbortError(err)) {
           return this._relatedByWr.get(id) || this._emptyWrRelated();
         }
-        console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
-        if (!this._relatedByWr.has(id)) {
-          this._relatedByWr.set(id, await this._buildRelatedFromApi(id));
-        }
-        return this._relatedByWr.get(id);
+        const fallback = this._emptyWrRelated();
+        this._relatedByWr.set(id, fallback);
+        return fallback;
       })
       .finally(() => {
         this._relatedLoading.delete(id);
@@ -882,15 +881,13 @@ const WorkflowData = {
       this._relatedByTask.set(id, normalized);
       return normalized;
     })()
-      .catch(async err => {
+      .catch(err => {
         if (this._isAbortError(err)) {
           return this._relatedByTask.get(id) || this._emptyTaskRelated();
         }
-        console.error(`[WorkflowData] failed to load related for task ${id}`, err);
-        if (!this._relatedByTask.has(id)) {
-          this._relatedByTask.set(id, await this._buildTaskRelatedFromApi(id));
-        }
-        return this._relatedByTask.get(id);
+        const fallback = this._emptyTaskRelated();
+        this._relatedByTask.set(id, fallback);
+        return fallback;
       })
       .finally(() => {
         this._relatedTaskLoading.delete(id);
