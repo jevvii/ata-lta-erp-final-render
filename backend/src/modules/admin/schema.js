@@ -14,6 +14,7 @@ const createUserSchema = z.object({
   departments: z.array(z.enum(ALLOWED_DEPARTMENTS)).optional(),
   entities: z.array(z.enum(['ATA', 'LTA'])).min(1),
   isActive: z.boolean().default(true),
+  password: z.string().min(1).optional(),
 });
 
 const updateUserSchema = createUserSchema.partial();

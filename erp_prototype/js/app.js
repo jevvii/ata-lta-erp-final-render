@@ -525,9 +525,17 @@ const App = {
     const chip = document.getElementById('user-chip');
     const toggle = document.getElementById('user-menu-toggle');
     const dropdown = document.getElementById('user-menu-dropdown');
-    if (!toggle || !dropdown) return;
+    if (!chip || !dropdown) return;
 
-    toggle.addEventListener('click', (e) => {
+    // Ensure dropdown is hidden on initialization/login
+    dropdown.classList.add('hidden');
+
+    if (this._userMenuWired) return;
+    this._userMenuWired = true;
+
+    // Toggle dropdown when clicking anywhere on user-chip (avatar, name, or arrow icon)
+    chip.addEventListener('click', (e) => {
+      if (dropdown.contains(e.target)) return;
       e.stopPropagation();
       dropdown.classList.toggle('hidden');
     });
@@ -552,17 +560,22 @@ const App = {
 
   setupLogout() {
     const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => {
-        Auth.logout();
-        document.getElementById('app-shell').classList.add('hidden');
-        document.getElementById('login-screen').classList.remove('hidden');
-        const form = document.getElementById('login-form');
-        if (form) form.reset();
-        const errorEl = document.getElementById('login-error');
-        if (errorEl) errorEl.classList.add('hidden');
-      });
-    }
+    if (!logoutBtn) return;
+
+    if (this._logoutWired) return;
+    this._logoutWired = true;
+
+    logoutBtn.addEventListener('click', () => {
+      const dropdown = document.getElementById('user-menu-dropdown');
+      if (dropdown) dropdown.classList.add('hidden');
+      Auth.logout();
+      document.getElementById('app-shell').classList.add('hidden');
+      document.getElementById('login-screen').classList.remove('hidden');
+      const form = document.getElementById('login-form');
+      if (form) form.reset();
+      const errorEl = document.getElementById('login-error');
+      if (errorEl) errorEl.classList.add('hidden');
+    });
   },
 
   /**
