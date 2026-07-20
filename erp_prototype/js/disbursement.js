@@ -1592,7 +1592,7 @@ const Disbursement = {
     // Normalize boardOrder within each visible column (skip pending-change proxies).
     const sortedItems = [];
     boardPhases.forEach(phase => {
-      const colItems = items.filter(d => phase.statuses.includes(d.status) && !d.pendingChangeId);
+      const colItems = items.filter(d => phase.statuses.includes(d.status) && !d.pendingChangeId && !d.archived && d.status !== 'Cancelled');
       colItems.sort((a, b) => {
         const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
         const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
@@ -1602,11 +1602,14 @@ const Disbursement = {
         return new Date(a.createdAt || a.submittedAt || 0) - new Date(b.createdAt || b.submittedAt || 0);
       });
       colItems.forEach((d, idx) => {
+        if (this._isTempId(d.id) || d.status === 'Cancelled' || d.archived) return;
         const newOrder = (idx + 1) * 1000;
         if (d.boardOrder !== newOrder) {
           d.boardOrder = newOrder;
-          if (this._isTempId(d.id)) return;
           window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
+            if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
+              return;
+            }
             console.error('Failed to update disbursement board order', d.id, e);
           });
         }

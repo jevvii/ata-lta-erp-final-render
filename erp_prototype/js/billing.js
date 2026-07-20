@@ -1319,7 +1319,7 @@ const Billing = {
     // Normalize boardOrder within each visible column.
     const sortedInvs = [];
     boardPhases.forEach(phase => {
-      const colInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && !inv.pendingChangeId);
+      const colInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && !inv.pendingChangeId && !inv.archived && inv.status !== 'Cancelled');
       colInvs.sort((a, b) => {
         const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
         const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
@@ -1329,15 +1329,15 @@ const Billing = {
         return new Date(a.createdAt || a.issueDate || 0) - new Date(b.createdAt || b.issueDate || 0);
       });
       colInvs.forEach((inv, idx) => {
+        if (this._isTempId(inv.id) || inv.status === 'Cancelled' || inv.archived) return;
         const newOrder = (idx + 1) * 1000;
         if (inv.boardOrder === newOrder) return;
         inv.boardOrder = newOrder;
-        // Never send optimistic temp ids or trashed/cancelled invoices to the backend.
-        if (this._isTempId(inv.id) || inv.status === 'Cancelled' || inv.archived) return;
         window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => {
-          if (e.message !== 'route-change' && !e.message?.includes('aborted')) {
-            console.error('Failed to update board order', e);
+          if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
+            return;
           }
+          console.error('Failed to update board order', e);
         });
       });
       const colPendingInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && inv.pendingChangeId);
