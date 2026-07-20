@@ -27,6 +27,7 @@ const Billing = {
   _templatesEntity: null,
   _templatesGeneration: 0,
   _templatesBackgroundPromise: null, // in-flight template background refresh
+  _postMutationTimer: null, // debounced refresh timer after mutations
 
   _entityMatches(invEntity, entity) {
     const u = (invEntity || '').toUpperCase();
@@ -68,7 +69,13 @@ const Billing = {
       if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) return;
       if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) return;
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
-      invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
+      invoices.forEach(inv => {
+        const existing = this._detailCache[inv.id];
+        if (existing && existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt)) {
+          return;
+        }
+        this._detailCache[inv.id] = inv;
+      });
       this._detailCacheEntity = entity;
       this._lastInvoiceMeta = res.meta || {};
       if (merge && Array.isArray(this._listCache) && this._listCacheEntity === entity) {
@@ -77,28 +84,25 @@ const Billing = {
           const existing = existingMap.get(inv.id);
           if (existing) {
             const localNewer = existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt);
-            if (localNewer || existing.archived || existing.status === 'Cancelled') {
-              const localArchived = existing.archived;
-              const localStatus = existing.status;
-              Object.assign(existing, inv);
-              if (localArchived !== undefined) existing.archived = localArchived;
-              if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
-            } else {
-              Object.assign(existing, inv);
+            if (localNewer) {
+              return;
             }
+            Object.assign(existing, inv);
           } else if (!this._isTempId(inv.id)) {
             this._listCache.push(inv);
           }
         });
       } else {
-        const localArchivedItems = Array.isArray(this._listCache) ? this._listCache.filter(inv => inv.archived === true || inv.status === 'Cancelled') : [];
+        const localItems = Array.isArray(this._listCache) ? this._listCache : [];
         this._listCache = invoices;
-        localArchivedItems.forEach(localInv => {
+        localItems.forEach(localInv => {
           const existingInNew = this._listCache.find(inv => inv.id === localInv.id);
           if (existingInNew) {
-            existingInNew.archived = localInv.archived;
-            existingInNew.status = localInv.status;
-          } else {
+            const localNewer = localInv.updatedAt && existingInNew.updatedAt && new Date(localInv.updatedAt) > new Date(existingInNew.updatedAt);
+            if (localNewer) {
+              Object.assign(existingInNew, localInv);
+            }
+          } else if (!this._isTempId(localInv.id)) {
             this._listCache.push(localInv);
           }
         });
@@ -120,6 +124,8 @@ const Billing = {
   },
 
   invalidateCache() {
+    clearTimeout(this._postMutationTimer);
+    this._postMutationTimer = null;
     this._detailCache = {};
     this._detailCacheEntity = null;
     this._listCache = [];
@@ -149,6 +155,16 @@ const Billing = {
     }
   },
 
+  _schedulePostMutationRefresh() {
+    clearTimeout(this._postMutationTimer);
+    this._postMutationTimer = setTimeout(() => {
+      this._listCacheGeneration++;
+      this.loadCounts(true).finally(() => {
+        this.backgroundRefresh().then(() => App.handleRoute());
+      });
+    }, 600);
+  },
+
   hasCachedData(entity) {
     const activeEntity = entity || Auth.activeEntity;
     return !!activeEntity &&
@@ -161,8 +177,12 @@ const Billing = {
 
   getInvoiceById(id) {
     if (!id) return null;
-    if (this._detailCacheEntity !== Auth.activeEntity) return null;
-    return this._detailCache[id] ? deepClone(this._detailCache[id]) : null;
+    if (this._detailCache[id]) return deepClone(this._detailCache[id]);
+    if (Array.isArray(this._listCache)) {
+      const inv = this._listCache.find(i => i.id === id);
+      if (inv) return deepClone(inv);
+    }
+    return null;
   },
 
   _snapshotInvoice(id) {
@@ -511,13 +531,16 @@ const Billing = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    // Kick off a one-time load of rejected records for the archive badge;
-    // active/archived invoice counts are computed entirely from the local cache.
+    // Load server counts when stale; rejected count is still loaded separately
+    // because the backend derives rejected from pending_changes + operations_requests.
+    this.loadCounts();
     this.loadRejectedCount();
 
     const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
     const invoiceCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
-    const archiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length + (this._counts?.rejected || 0);
+    const cacheArchiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length;
+    // Prefer the server counts if they exist, otherwise derive from the local cache.
+    const archiveCount = (this._counts?.archived >= 0 ? this._counts.archived : cacheArchiveCount) + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
     const tabs = [
@@ -764,14 +787,26 @@ const Billing = {
       }
       this._lastInvoiceMeta = res.meta || {};
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
-      invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
+      invoices.forEach(inv => {
+        const existing = this._detailCache[inv.id];
+        if (existing && existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt)) {
+          return;
+        }
+        this._detailCache[inv.id] = inv;
+      });
       this._detailCacheEntity = entity;
       // Merge fetched entity invoices into the all-invoice cache so active and
       // archive counts can be derived locally. Small-limit fetches are ignored.
       const isListFetch = (query.limit || 50) >= 10;
       if (isListFetch) {
         this._listCacheEntity = entity;
-        invoices.forEach(inv => this._addToListCache(inv));
+        invoices.forEach(inv => {
+          const existing = (this._listCache || []).find(i => i.id === inv.id);
+          if (existing && existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt)) {
+            return;
+          }
+          this._addToListCache(inv);
+        });
       }
       return invoices;
     } catch (e) {
@@ -4086,10 +4121,16 @@ const Billing = {
         }
         App.handleRoute();
         try {
-          await window.apiClient.invoices.update(id, { status: 'Cancelled', archived: true });
+          const res = await window.apiClient.invoices.update(id, { status: 'Cancelled', archived: true });
+          if (res?.data) {
+            const normalized = this.normalizeInvoice(res.data);
+            this._detailCache[id] = normalized;
+            this._addToListCache(normalized);
+          }
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Trashed', 'Invoice has been moved to Archive.', 'success');
+          this._schedulePostMutationRefresh();
         } catch (e) {
           console.error('Failed to trash invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4118,10 +4159,16 @@ const Billing = {
         const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
-          await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+          const res = await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+          if (res?.data) {
+            const normalized = this.normalizeInvoice(res.data);
+            this._detailCache[id] = normalized;
+            this._addToListCache(normalized);
+          }
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
+          this._schedulePostMutationRefresh();
         } catch (e) {
           console.error('Failed to restore invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4150,10 +4197,16 @@ const Billing = {
         const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
-          await window.apiClient.invoices.archive(id);
+          const res = await window.apiClient.invoices.archive(id);
+          if (res?.data) {
+            const normalized = this.normalizeInvoice(res.data);
+            this._detailCache[id] = normalized;
+            this._addToListCache(normalized);
+          }
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
+          this._schedulePostMutationRefresh();
         } catch (e) {
           console.error('Failed to archive invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4196,7 +4249,12 @@ const Billing = {
         const failed = [];
         for (const inv of eligible) {
           try {
-            await window.apiClient.invoices.archive(inv.id);
+            const res = await window.apiClient.invoices.archive(inv.id);
+            if (res?.data) {
+              const norm = this.normalizeInvoice(res.data);
+              this._detailCache[inv.id] = norm;
+              this._addToListCache(norm);
+            }
           } catch (e) {
             console.error('Failed to archive invoice', inv.id, e);
             failed.push(inv.id);
@@ -4216,6 +4274,7 @@ const Billing = {
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Archived', `${eligible.length} invoice(s) archived.`, 'success');
+          this._schedulePostMutationRefresh();
         }
       },
       'warning'
@@ -4256,7 +4315,12 @@ const Billing = {
         const failed = [];
         for (const inv of eligible) {
           try {
-            await window.apiClient.invoices.update(inv.id, { status: 'Cancelled', archived: true });
+            const res = await window.apiClient.invoices.update(inv.id, { status: 'Cancelled', archived: true });
+            if (res?.data) {
+              const norm = this.normalizeInvoice(res.data);
+              this._detailCache[inv.id] = norm;
+              this._addToListCache(norm);
+            }
           } catch (e) {
             console.error('Failed to trash invoice', inv.id, e);
             failed.push(inv.id);
@@ -4276,6 +4340,7 @@ const Billing = {
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Moved to Trash', `${eligible.length} invoice(s) moved to trash.`, 'warning');
+          this._schedulePostMutationRefresh();
         }
       },
       'danger'
@@ -4284,22 +4349,32 @@ const Billing = {
 
   unarchiveInvoice(id) {
     const inv = this.getInvoiceById(id);
-    if (!inv || inv.status !== 'Paid' || !inv.archived) return;
+    if (!inv || !inv.archived) return;
     Workflow.showConfirm('Unarchive Invoice',
       `Are you sure you want to unarchive invoice "${inv.invoiceNumber}"?`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
-        const restored = { ...inv, archived: false, updatedAt: new Date().toISOString() };
+        const targetStatus = inv.status === 'Cancelled' ? 'Draft' : inv.status;
+        const restored = { ...inv, status: targetStatus, archived: false, updatedAt: new Date().toISOString() };
         this._detailCache[id] = restored;
         this._addToListCache(restored);
         this._updateCounts(1, -1);
         const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
-          await window.apiClient.invoices.unarchive(id);
+          const res = await window.apiClient.invoices.unarchive(id);
+          const updated = res?.data ? this.normalizeInvoice(res.data) : restored;
+          if (inv.status === 'Cancelled' && updated.status === 'Cancelled') {
+            const updRes = await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+            if (updRes?.data) Object.assign(updated, this.normalizeInvoice(updRes.data));
+            else updated.status = 'Draft';
+          }
+          this._detailCache[id] = updated;
+          this._addToListCache(updated);
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Unarchived', 'Invoice has been unarchived.', 'success');
+          this._schedulePostMutationRefresh();
         } catch (e) {
           console.error('Failed to unarchive invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4342,6 +4417,7 @@ const Billing = {
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Deleted', 'Invoice has been permanently deleted.', 'success');
+          this._schedulePostMutationRefresh();
         } catch (e) {
           console.error('Failed to delete invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4386,11 +4462,12 @@ const Billing = {
     });
     archivedInvoices = Array.from(invMap.values()).filter(inv => {
       const cached = this.getInvoiceById(inv.id);
-      return !cached || cached.archived !== false;
+      // Exclude only if the cached record is definitely active (not archived and not cancelled).
+      return !cached || cached.archived !== false || cached.status === 'Cancelled';
     });
 
-    const paid = archivedInvoices.filter(inv => inv.archived === true);
-    const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled' && !inv.archived);
+    const paid = archivedInvoices.filter(inv => inv.archived === true && inv.status !== 'Cancelled');
+    const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled');
 
     let rejectedInvoiceChanges = [];
     let rejectedBillingRequests = [];

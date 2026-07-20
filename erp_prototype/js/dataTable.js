@@ -33,6 +33,7 @@
         items = [],
         columns = [],
         selectable = true,
+        showIcon = false,
         bulkActions,
         rowId = (item) => item.id,
         onRowClick,
@@ -71,9 +72,11 @@
         headerRow.appendChild(thChk);
       }
 
-      // Icon column header
-      const thIcon = el('th', { class: 'dt-icon-col', style: 'width: 24px; min-width: 24px; padding: 0;' });
-      headerRow.appendChild(thIcon);
+      // Icon column header (only if showIcon is enabled)
+      if (showIcon) {
+        const thIcon = el('th', { class: 'dt-icon-col', style: 'width: 24px; min-width: 24px; padding: 0;' });
+        headerRow.appendChild(thIcon);
+      }
 
       columns.forEach((col, colIdx) => {
         const alignClass = col.align ? ' dt-cell--' + col.align : '';
@@ -190,22 +193,24 @@
           });
         }
 
-        // Icon column cell
-        const strId = String(id);
-        let iconHtml = '';
-        if (strId.startsWith('WR')) {
-          iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>';
-        } else if (strId.startsWith('INV')) {
-          iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
-        } else if (strId.startsWith('DV') || strId.startsWith('DISB')) {
-          iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>';
-        } else if (strId.startsWith('TR')) {
-          iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
-        } else {
-          iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+        // Icon column cell (Middle design between checkbox and title - rendered only if showIcon is true)
+        if (showIcon) {
+          const strId = String(id);
+          let iconHtml = '';
+          if (strId.startsWith('WR') || item.title || item.workRequestId) {
+            iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="dt-row-branch-icon"><path d="M7 4v7a2 2 0 0 0 2 2h7"/><polyline points="13 10 16 13 13 16"/></svg>';
+          } else if (strId.startsWith('INV')) {
+            iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>';
+          } else if (strId.startsWith('DV') || strId.startsWith('DISB')) {
+            iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>';
+          } else if (strId.startsWith('TR')) {
+            iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+          } else {
+            iconHtml = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="dt-row-branch-icon"><path d="M7 4v7a2 2 0 0 0 2 2h7"/><polyline points="13 10 16 13 13 16"/></svg>';
+          }
+          const tdIcon = el('td', { class: 'dt-icon-cell', html: iconHtml });
+          tr.appendChild(tdIcon);
         }
-        const tdIcon = el('td', { class: 'dt-icon-cell', html: iconHtml });
-        tr.appendChild(tdIcon);
 
         columns.forEach((col, colIdx) => {
           const alignClass = col.align ? ' dt-cell--' + col.align : '';
@@ -313,15 +318,17 @@
      */
     priorityCell(priority) {
       const value = (priority || '').trim();
-      if (!value || value === 'Normal') return el('span', { class: 'dt-priority-muted', text: '—' });
+      if (!value) return el('span', { class: 'dt-priority-muted', text: '—' });
 
       const map = {
         'Urgent': { cls: 'dt-priority-urgent', dot: '#ef4444' },
         'Priority': { cls: 'dt-priority-medium', dot: '#f59e0b' },
+        'Normal': { cls: 'dt-priority-normal', dot: '#eab308' },
         'Low Priority': { cls: 'dt-priority-low', dot: '#22c55e' },
         'Low': { cls: 'dt-priority-low', dot: '#94a3b8' }
       };
-      const config = map[value] || { cls: 'dt-priority-muted', dot: '#94a3b8' };
+      const config = map[value];
+      if (!config) return el('span', { class: 'dt-priority-muted', text: '—' });
 
       const wrap = el('span', { class: 'dt-priority-pill ' + config.cls });
       const dot = el('span', { class: 'dt-priority-dot' });

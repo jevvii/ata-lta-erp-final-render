@@ -8,11 +8,13 @@ const AppError = require('../../lib/AppError');
 const { randomUUID } = require('crypto');
 
 const VALID_TRANSITIONS = {
-  Draft: ['In Progress', 'Cancelled'],
-  'In Progress': ['For Review', 'Completed', 'Cancelled'],
-  'For Review': ['Completed', 'In Progress'],
-  Completed: [],
-  Cancelled: [],
+  Draft: ['Pre-processing', 'In Progress', 'Processing', 'Cancelled'],
+  'Pre-processing': ['Processing', 'In Progress', 'For Review', 'Cancelled'],
+  'In Progress': ['For Review', 'Completed', 'Processing', 'Cancelled'],
+  Processing: ['Completed', 'Billing', 'Disbursement', 'For Review', 'Cancelled'],
+  'For Review': ['Completed', 'In Progress', 'Processing', 'Cancelled'],
+  Completed: ['Draft', 'Processing'],
+  Cancelled: ['Draft', 'In Progress'],
 };
 
 /* ── Cached entity resolution ─────────────────────────────────────── */
