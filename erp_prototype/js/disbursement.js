@@ -26,6 +26,7 @@ const Disbursement = {
   _rejectedArchiveCounts: null,
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
+  _backgroundPromise: null,
 
   // API-backed disbursement template cache
   _templates: [],
@@ -247,10 +248,15 @@ const Disbursement = {
       if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
         return this._items || [];
       }
-      this._items = items;
+      const cacheWarm = Array.isArray(this._items) && this._entity === entity;
+      if (cacheWarm) {
+        this._mergeItems(items);
+      } else {
+        this._items = items;
+      }
       this._entity = entity;
       this._refreshCounts();
-      return items;
+      return this._items;
     } catch (err) {
       if (isAbortError(err)) {
         if (!this._items) this._items = [];
@@ -266,6 +272,28 @@ const Disbursement = {
       this._refreshCounts();
       return this._items;
     }
+  },
+
+  _mergeItems(serverItems) {
+    if (!Array.isArray(this._items)) this._items = [];
+    const existingMap = new Map(this._items.map(d => [d.id, d]));
+    serverItems.forEach(serverItem => {
+      const existing = existingMap.get(serverItem.id);
+      if (existing) {
+        Object.assign(existing, serverItem);
+      } else if (!this._isTempId(serverItem.id)) {
+        this._items.push(serverItem);
+      }
+    });
+  },
+
+  async backgroundRefresh() {
+    if (this._backgroundPromise) return this._backgroundPromise;
+    const loadGen = ++this._loadGeneration;
+    this._backgroundPromise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) this._backgroundPromise = null;
+    });
+    return this._backgroundPromise;
   },
 
   async loadDisbursements(force = false) {
@@ -510,12 +538,23 @@ const Disbursement = {
   _invalidateRelatedCaches(record) {
     this._invalidateDashboardCache();
     if (record && record.linkedWorkRequestId) {
-      // Patch the linked work request in the operations cache instead of wiping it,
-      // so the board/list and any open dropdowns stay usable.
+      // Patch the linked work request in the operations cache so the board/list
+      // and any open dropdowns stay usable.
       const wr = typeof WorkflowData !== 'undefined' ? WorkflowData.getWorkRequestById(record.linkedWorkRequestId) : null;
       if (wr) {
         if (!Array.isArray(wr.linkedDisbursementIds)) wr.linkedDisbursementIds = [];
         if (!wr.linkedDisbursementIds.includes(record.id)) wr.linkedDisbursementIds.push(record.id);
+      }
+      // Also patch the shared work-request cache used by billing/disbursement forms.
+      if (window.apiClient?.workRequestCache?.getById) {
+        const sharedWr = window.apiClient.workRequestCache.getById(record.linkedWorkRequestId);
+        if (sharedWr) {
+          if (!Array.isArray(sharedWr.linkedDisbursementIds)) sharedWr.linkedDisbursementIds = [];
+          if (!sharedWr.linkedDisbursementIds.includes(record.id)) sharedWr.linkedDisbursementIds.push(record.id);
+        }
+        if (typeof window.apiClient.workRequestCache.ensure === 'function') {
+          window.apiClient.workRequestCache.ensure().catch(() => {});
+        }
       }
       if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.ensure === 'function') {
         WorkflowData.ensure().catch(() => {});
@@ -1202,12 +1241,12 @@ const Disbursement = {
     const entity = Auth.activeEntity;
     const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
     const isCached = shouldSkip;
-    let allItems;
-    if (shouldSkip) {
-      allItems = this._items || [];
-    } else {
-      allItems = await this.loadDisbursements();
-    }
+
+    // Ensure the in-memory cache is loaded for the active entity. If it is
+    // already warm (including during an optimistic skip), this returns immediately.
+    await this.ensure();
+
+    let allItems = this._items || [];
     let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
 
     items = items.filter(d => Auth.canViewDisbursement(d));
@@ -1313,6 +1352,14 @@ const Disbursement = {
       this.renderBoardView(container, items, groupBy, groupOptions, toolbarContainer);
     } else {
       this.renderCompactListView(container, items);
+    }
+
+    // Background refresh: silently merge any new/updated server records into
+    // the in-memory cache without replacing optimistic records.
+    if (!isCached) {
+      this.backgroundRefresh().catch(err => {
+        if (!isAbortError(err)) console.warn('Disbursement background refresh failed', err);
+      });
     }
   },
 

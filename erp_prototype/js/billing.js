@@ -24,6 +24,7 @@ const Billing = {
   _activeSkipGeneration: 0, // generation currently honored by the list renderer
   _templates: [], // cached billing templates for the active entity
   _templatesPromise: null, // in-flight loadTemplates() promise
+  _backgroundPromise: null, // in-flight background refresh
 
   _entityMatches(invEntity, entity) {
     const u = (invEntity || '').toUpperCase();
@@ -42,6 +43,50 @@ const Billing = {
   _isArchiveInvoice(inv, entity) {
     return this._entityMatches(inv?.entity, entity) &&
       (inv?.status === 'Cancelled' || inv?.archived);
+  },
+
+  _isListCacheFresh() {
+    return this._listCacheEntity === Auth.activeEntity;
+  },
+
+  async ensure() {
+    if (this._isListCacheFresh()) return;
+    const loadGen = ++this._listCacheGeneration;
+    await this._loadInvoices(loadGen, { merge: false });
+  },
+
+  async _loadInvoices(loadGen, { merge = false } = {}) {
+    const entity = Auth.activeEntity;
+    try {
+      const res = await window.apiClient.invoices.list({ limit: 10000 });
+      if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) return;
+      const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
+      invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
+      this._detailCacheEntity = entity;
+      this._lastInvoiceMeta = res.meta || {};
+      if (merge && Array.isArray(this._listCache) && this._listCacheEntity === entity) {
+        const existingMap = new Map(this._listCache.map(inv => [inv.id, inv]));
+        invoices.forEach(inv => {
+          const existing = existingMap.get(inv.id);
+          if (existing) Object.assign(existing, inv);
+          else if (!this._isTempId(inv.id)) this._listCache.push(inv);
+        });
+      } else {
+        this._listCache = invoices;
+      }
+      this._listCacheEntity = entity;
+    } catch (e) {
+      if (!isAbortError(e)) console.error('Failed to load invoices', e);
+    }
+  },
+
+  async backgroundRefresh() {
+    if (this._backgroundPromise) return this._backgroundPromise;
+    const loadGen = ++this._listCacheGeneration;
+    this._backgroundPromise = this._loadInvoices(loadGen, { merge: true }).finally(() => {
+      if (this._listCacheGeneration === loadGen) this._backgroundPromise = null;
+    });
+    return this._backgroundPromise;
   },
 
   invalidateCache() {
@@ -147,18 +192,31 @@ const Billing = {
   _invalidateRelatedCaches(record) {
     // Update the linked work request in the shared cache instead of invalidating it,
     // so that work-request dropdowns in other forms do not become empty.
-    if (record?.workRequestId && window.apiClient?.workRequestCache?.getById) {
-      const wr = window.apiClient.workRequestCache.getById(record.workRequestId);
-      if (wr) {
-        if (!Array.isArray(wr.linkedInvoiceIds)) wr.linkedInvoiceIds = [];
-        if (!wr.linkedInvoiceIds.includes(record.id)) wr.linkedInvoiceIds.push(record.id);
+    if (record?.workRequestId) {
+      if (window.apiClient?.workRequestCache?.getById) {
+        const wr = window.apiClient.workRequestCache.getById(record.workRequestId);
+        if (wr) {
+          if (!Array.isArray(wr.linkedInvoiceIds)) wr.linkedInvoiceIds = [];
+          if (!wr.linkedInvoiceIds.includes(record.id)) wr.linkedInvoiceIds.push(record.id);
+        }
+        if (typeof window.apiClient.workRequestCache.ensure === 'function') {
+          window.apiClient.workRequestCache.ensure().catch(() => {});
+        }
       }
-      // Background refresh keeps the cache warm without nulling dropdown reads.
-      if (typeof window.apiClient.workRequestCache.ensure === 'function') {
-        window.apiClient.workRequestCache.ensure().catch(() => {});
+      // Also patch the operations module cache so the work-request detail/board
+      // reflects the new invoice link without a full reload.
+      if (typeof WorkflowData !== 'undefined' && WorkflowData.getWorkRequestById) {
+        const wfWr = WorkflowData.getWorkRequestById(record.workRequestId);
+        if (wfWr) {
+          if (!Array.isArray(wfWr.linkedInvoiceIds)) wfWr.linkedInvoiceIds = [];
+          if (!wfWr.linkedInvoiceIds.includes(record.id)) wfWr.linkedInvoiceIds.push(record.id);
+        }
       }
     }
-    if (window.Dashboard?._dataCache) window.Dashboard._dataCache = null;
+    if (typeof Dashboard !== 'undefined') {
+      if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+      else if (Dashboard._dataCache) Dashboard._dataCache = null;
+    }
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -849,26 +907,14 @@ const Billing = {
     const pageLimit = 50;
     let currentPage = this.currentListPage || 1;
 
-    const refresh = async (warmInvoices = null) => {
+    const refresh = async () => {
       contentContainer.replaceChildren();
-      const serverQuery = {
-        page: currentPage,
-        limit: pageLimit,
-        sortBy: 'createdAt',
-        sortOrder: 'desc'
-      };
-      if (activeFilters.status.size === 1) serverQuery.status = Array.from(activeFilters.status)[0];
-      if (activeFilters.client.size === 1) serverQuery.clientId = Array.from(activeFilters.client)[0];
-      if (searchQuery) serverQuery.search = searchQuery;
 
-      let baseInvoices;
-      if (warmInvoices) {
-        // Render from the entity-tagged active list cache while fresh data loads.
-        baseInvoices = warmInvoices.filter(inv => this._isActiveInvoice(inv, entity));
-      } else {
-        const apiInvoices = await this.fetchInvoices(serverQuery);
-        baseInvoices = apiInvoices.filter(inv => this._isActiveInvoice(inv, entity));
-      }
+      // Ensure the in-memory cache is loaded for the active entity. If it is
+      // already warm (including during an optimistic skip), this returns immediately.
+      await this.ensure();
+
+      let baseInvoices = (this._listCache || []).filter(inv => this._isActiveInvoice(inv, entity));
 
       let pendingInvs = [];
       try {
@@ -951,24 +997,29 @@ const Billing = {
 
       const hasActiveFilters = searchQuery || Object.values(activeFilters).some(s => s && s.size > 0);
 
-      if (invoices.length === 0 && hasActiveFilters && hasInvoices) {
+      // Client-side pagination over the filtered cached set.
+      const totalItems = invoices.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / pageLimit));
+      currentPage = Math.min(Math.max(1, currentPage), totalPages);
+      this.currentListPage = currentPage;
+      const start = (currentPage - 1) * pageLimit;
+      const paginatedInvoices = invoices.slice(start, start + pageLimit);
+
+      if (paginatedInvoices.length === 0 && hasActiveFilters && hasInvoices) {
         contentContainer.appendChild(renderFilterEmptyState(
           'No invoices match your filters',
           null,
           [{ text: 'Clear filters', className: 'btn btn-primary btn-sm', onClick: () => { App.clearSavedFilters('billing'); App.handleRoute(); } }]
         ));
       } else if (viewMode === 'table') {
-        this.refreshTable(contentContainer, invoices);
+        this.refreshTable(contentContainer, paginatedInvoices);
       } else if (viewMode === 'board') {
-        this.refreshBoard(contentContainer, invoices, groupBy, groupOptions, stickyContainer);
+        this.refreshBoard(contentContainer, paginatedInvoices, groupBy, groupOptions, stickyContainer);
       } else {
-        this.refreshListCompact(contentContainer, invoices);
+        this.refreshListCompact(contentContainer, paginatedInvoices);
       }
 
-      // Pagination controls (server-side)
-      const meta = this._lastInvoiceMeta || {};
-      const totalServerItems = meta.total || 0;
-      const totalPages = Math.max(1, Math.ceil(totalServerItems / pageLimit));
+      // Pagination controls (client-side)
       const paginationBar = el('div', { class: 'pagination-bar', style: 'display:flex; justify-content:center; align-items:center; gap:12px; margin-top:16px;' });
       const prevBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Previous', disabled: currentPage <= 1 });
       const pageInfo = el('span', { text: `Page ${currentPage} of ${totalPages}` });
@@ -1026,19 +1077,12 @@ const Billing = {
       });
       stickyContainer.appendChild(toolbarContainer);
       wrapper.insertBefore(stickyContainer, contentContainer);
-      // Render from cache. After a local mutation, honor the active skip generation
-      // so the optimistic warm render survives any number of App.handleRoute() calls
-      // until the API response arrives or the user explicitly refreshes / switches entity.
-      const cacheWarm = this._listCacheEntity === entity && Array.isArray(this._listCache) && this._listCache.length > 0;
-      const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
-      if (shouldSkip) {
-        await refresh(this._listCache || []);
-        // Do NOT clear the generation here; it is cleared only after the API
-        // response arrives or on explicit refresh / entity switch.
-      } else {
-        if (cacheWarm) await refresh(this._listCache);
-        await refresh();
-      }
+      await refresh();
+      // Background refresh: silently merge any new/updated server records into
+      // the in-memory cache without replacing optimistic records.
+      this.backgroundRefresh().catch(err => {
+        if (!isAbortError(err)) console.warn('Billing background refresh failed', err);
+      });
     })();
 
     return wrapper;

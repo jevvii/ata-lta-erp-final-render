@@ -85,6 +85,7 @@ const WorkflowData = {
   _workRequests: null,
   _tasks: null,
   _loadingPromise: null,
+  _backgroundPromise: null,
   // Track which entity the in-flight load belongs to so a rapid entity switch
   // cannot return a stale load for the previous entity.
   _loadingEntity: null,
@@ -284,11 +285,62 @@ const WorkflowData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { workRequests: this._workRequests || [], tasks: this._tasks || [], meta: res.meta || {} };
     }
-    this._workRequests = wrs;
-    this._tasks = tasks;
+    const cacheWarm = Array.isArray(this._workRequests) && this._entity === entity;
+    if (cacheWarm) {
+      this._mergeWorkRequests(wrs);
+      this._mergeTasks(tasks);
+    } else {
+      this._workRequests = wrs;
+      this._tasks = tasks;
+    }
     this._entity = entity;
     if (freshFetch) this._needsFreshFetch = false;
-    return { workRequests: wrs, tasks, meta: res.meta || {} };
+    return { workRequests: this._workRequests, tasks: this._tasks, meta: res.meta || {} };
+  },
+
+  _mergeWorkRequests(serverWrs) {
+    if (!Array.isArray(this._workRequests)) this._workRequests = [];
+    const existingMap = new Map(this._workRequests.map(wr => [wr.id, wr]));
+    serverWrs.forEach(serverWr => {
+      const existing = existingMap.get(serverWr.id);
+      if (existing) {
+        if (existing.priority && (!serverWr.priority || serverWr.priority === 'Normal')) {
+          serverWr.priority = existing.priority;
+        }
+        Object.assign(existing, serverWr);
+      } else if (!this._isTempId(serverWr.id)) {
+        this._workRequests.push(serverWr);
+      }
+    });
+  },
+
+  _mergeTasks(serverTasks) {
+    if (!Array.isArray(this._tasks)) this._tasks = [];
+    const existingMap = new Map(this._tasks.map(t => [t.id, t]));
+    serverTasks.forEach(serverTask => {
+      const existing = existingMap.get(serverTask.id);
+      if (existing) {
+        Object.assign(existing, serverTask);
+      } else if (!this._isTempId(serverTask.id)) {
+        this._tasks.push(serverTask);
+      }
+    });
+    // Rebuild task arrays on non-temp work requests so list/board views stay consistent.
+    this._workRequests.forEach(wr => {
+      if (this._isTempId(wr.id)) return;
+      wr.tasks = this._tasks.filter(t => t.workRequestId === wr.id);
+    });
+  },
+
+  async backgroundRefresh() {
+    if (this._backgroundPromise) return this._backgroundPromise;
+    const loadGen = ++this._loadGeneration;
+    this._backgroundPromise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._backgroundPromise = null;
+      }
+    });
+    return this._backgroundPromise;
   },
 
   async loadPage(options = {}) {
@@ -3996,53 +4048,11 @@ const Workflow = {
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
 
       const shouldSkipServerFetch = Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
-      if (shouldSkipServerFetch) {
-        await WorkflowData.loadPendingApprovals();
-        const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
-        const pendingWrs = pendingChanges.map(pc => {
-          const wr = { ...pc.proposedData };
-          wr.isPendingApproval = true;
-          wr.pendingChangeId = pc.id;
-          wr.submittedBy = pc.submittedBy;
-          wr.status = 'Draft';
-          return wr;
-        });
 
-        let wrs = WorkflowData.getWorkRequestsWhere(r => {
-          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
-          return matchesEntity && !r.archived && r.status !== 'Cancelled';
-        }).map(wr => ({ ...wr, entity: wr.entity || entity }));
-
-        wrs = wrs.concat(pendingWrs.filter(r => {
-          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
-          return matchesEntity;
-        }));
-
-        const listTaskMap = buildPageTaskMap(wrs);
-        wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
-        wrs = applyFilters(wrs, listTaskMap);
-
-        if (gen !== refreshGeneration) return;
-
-        const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
-        if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
-        else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
-        else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
-
-        // Simple cached-results indicator while we skip the server round-trip.
-        contentContainer.appendChild(el('div', {
-          class: 'workflow-cached-indicator',
-          style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
-          text: 'Showing cached results'
-        }));
-
-        page = 1;
-        totalPages = 1;
-        renderPagination();
-
-        requestAnimationFrame(() => this.updateStickyOffsets());
-        return;
-      }
+      // Always ensure the in-memory cache is loaded for the active entity. If it
+      // is already warm (including during an optimistic skip), this returns
+      // immediately without overwriting optimistic records.
+      await WorkflowData.ensure();
 
       await WorkflowData.loadPendingApprovals();
       const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
@@ -4055,48 +4065,57 @@ const Workflow = {
         return wr;
       });
 
-      const serverParams = { page, limit: PAGE_SIZE };
-      if (searchQuery) serverParams.search = searchQuery;
-      const clientIds = Array.from(activeFilters.client);
-      if (clientIds.length === 1) serverParams.clientId = clientIds[0];
-      serverParams.sortBy = 'dueDate';
-      serverParams.sortOrder = 'asc';
+      let wrs = WorkflowData.getWorkRequestsWhere(r => {
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
+        return matchesEntity && !r.archived && r.status !== 'Cancelled';
+      }).map(wr => ({ ...wr, entity: wr.entity || entity }));
 
-      const pageResult = await WorkflowData.loadPage(serverParams).catch(err => {
-        if (!isAbortError(err)) console.warn('Failed to load paginated work requests:', err);
-        return { workRequests: [], tasks: [], meta: {} };
-      });
-      pageMeta = pageResult.meta || {};
-      totalPages = pageMeta.totalPages || (pageResult.workRequests.length < PAGE_SIZE ? page : page + 1);
-
-      let wrs = (pageResult.workRequests || []).map(wr => ({ ...wr, entity: wr.entity || entity }));
       wrs = wrs.concat(pendingWrs.filter(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity;
       }));
 
-      // Active work-request views exclude archived and cancelled records so the
-      // nav badge, table, list, and board all operate on the same visible set.
-      wrs = wrs.filter(r => !r.archived && r.status !== 'Cancelled');
-
       const listTaskMap = buildPageTaskMap(wrs);
       wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
       wrs = applyFilters(wrs, listTaskMap);
 
-      // If a newer refresh was started while this one was awaiting data, do not
-      // overwrite the already-rendered newer result with stale data.
       if (gen !== refreshGeneration) return;
 
+      // Client-side pagination over the filtered cached set.
+      const totalItems = wrs.length;
+      totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+      page = Math.min(Math.max(1, page), totalPages);
+      const start = (page - 1) * PAGE_SIZE;
+      const paginatedWrs = wrs.slice(start, start + PAGE_SIZE);
+      pageMeta = { total: totalItems, totalPages, page };
+
       const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
-      if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
-      else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
-      else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
+      if (viewMode === 'table') this.refreshTable(contentContainer, paginatedWrs, hasActiveFilters);
+      else if (viewMode === 'board') this.refreshBoard(contentContainer, paginatedWrs, groupBy, hasActiveFilters, stickyContainer);
+      else this.refreshListCompact(contentContainer, paginatedWrs, hasActiveFilters);
+
+      if (shouldSkipServerFetch) {
+        // Simple cached-results indicator while we skip the server round-trip.
+        contentContainer.appendChild(el('div', {
+          class: 'workflow-cached-indicator',
+          style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
+          text: 'Showing cached results'
+        }));
+      }
 
       renderPagination();
 
       // Re-measure sticky offsets after the next paint so toolbar height changes
       // (grouped-board-active toggle, wrapping filters) are reflected.
       requestAnimationFrame(() => this.updateStickyOffsets());
+
+      // Background refresh: silently merge any new/updated server records into
+      // the in-memory cache without replacing optimistic records.
+      if (!shouldSkipServerFetch) {
+        WorkflowData.backgroundRefresh().catch(err => {
+          if (!isAbortError(err)) console.warn('Workflow background refresh failed', err);
+        });
+      }
     };
 
     refresh();
@@ -6718,6 +6737,24 @@ const Workflow = {
           this.showMessage('Warning', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
         } else {
           this.showMessage('Work Request Created', 'Work Request has been successfully created.', 'success');
+        }
+
+        // Sync the new work request to the shared cache so billing/disbursement
+        // forms can select it without a manual refresh.
+        if (createdWr && window.apiClient?.workRequestCache) {
+          const cache = window.apiClient.workRequestCache;
+          if (!Array.isArray(cache._wrs)) cache._wrs = [];
+          const idx = cache._wrs.findIndex(wr => wr.id === createdWr.id);
+          const normalizedForCache = { ...createdWr, tasks: createdWr.tasks || [] };
+          if (idx >= 0) cache._wrs[idx] = normalizedForCache;
+          else cache._wrs.push(normalizedForCache);
+          cache._loadedAt = Date.now();
+        }
+
+        // Invalidate dashboard counts/cards so they reflect the new work request.
+        if (typeof Dashboard !== 'undefined') {
+          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+          else if (Dashboard._dataCache) Dashboard._dataCache = null;
         }
 
         // Re-render while the skip generation is still active so the list shows
