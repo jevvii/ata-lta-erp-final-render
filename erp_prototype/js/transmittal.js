@@ -465,8 +465,8 @@ const Transmittal = {
       } catch (e) {
         await this.ensure();
         const items = this._items || [];
-        count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
-        archiveCount = items.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived).length;
+        count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !t.archived).length;
+        archiveCount = items.filter(t => entFilter(t.entity) && (t.archived || t.status === 'Cancelled')).length;
       }
     }
 
@@ -1111,7 +1111,7 @@ const Transmittal = {
           onClick: () => self.showAcknowledgeDialog(t.id)
         });
       }
-      if (!t.archived) {
+      if (!t.archived && t.status === 'Acknowledged') {
         menu.push({
           label: 'Archive',
           icon: ArchivePage.icons.archive || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>',
@@ -2357,6 +2357,11 @@ const Transmittal = {
     const item = items.find(t => t.id === id);
     if (!item || item.archived) return;
 
+    if (item.status !== 'Acknowledged') {
+      Workflow.showMessage('Not Acknowledged', 'Only Acknowledged transmittals can be archived.', 'info');
+      return;
+    }
+
     Workflow.showConfirm('Archive Transmittal',
       `Are you sure you want to move transmittal "${item.trackingNumber || '(untitled)'}" to archive?`,
       async () => {
@@ -2389,10 +2394,10 @@ const Transmittal = {
     await this.ensure();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(t => t.id === id))
-      .filter(t => t && !t.archived);
+      .filter(t => t && t.status === 'Acknowledged' && !t.archived);
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'No active transmittals to archive.', 'info');
+      Workflow.showMessage('No eligible records', 'Only Acknowledged transmittals can be archived.', 'info');
       return;
     }
 
@@ -2515,27 +2520,41 @@ const Transmittal = {
     const self = this;
     const isManagerial = Auth.isManagerial();
 
-    let all = [];
+    const tFilter = t => {
+      const tEnt = (t.entity || '').toUpperCase();
+      const matchesEntity = (entity === 'ALL'
+        ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt)
+        : tEnt === entity.toUpperCase());
+      return matchesEntity;
+    };
+
+    let archivedTransmittals = [];
     try {
       const res = await window.apiClient.transmittals.list({ archived: true });
-      all = (res.data || []).map(t => this.normalizeTransmittal(t));
+      archivedTransmittals = (res.data || []).map(t => this.normalizeTransmittal(t));
     } catch (e) {
-      console.error('Failed to load archive transmittals', e);
+      console.error('Failed to load archived transmittals', e);
     }
 
-    const localArchived = (this._items || []).filter(t => this._entityMatches(t, entity) && (t.archived === true || t.status === 'Cancelled'));
+    const localArchived = (this._items || []).filter(t => tFilter(t) && (t.archived === true || t.status === 'Cancelled'));
     const tMap = new Map();
-    all.forEach(t => tMap.set(t.id, t));
+    archivedTransmittals.forEach(t => tMap.set(t.id, t));
     localArchived.forEach(t => {
       if (!tMap.has(t.id)) tMap.set(t.id, t);
     });
-    all = Array.from(tMap.values()).filter(t => {
+
+    const acknowledged = Array.from(tMap.values()).filter(t => {
       const cached = (this._items || []).find(i => i.id === t.id);
-      return !cached || cached.archived !== false;
+      const isArchived = t.archived === true || (cached && cached.archived === true);
+      const status = t.status || cached?.status;
+      return tFilter(t) && isArchived && status === 'Acknowledged';
     });
 
-    const accomplished = all.filter(t => this._entityMatches(t, entity) && t.archived === true);
-    const cancelled = all.filter(t => this._entityMatches(t, entity) && t.status === 'Cancelled' && !t.archived);
+    const cancelledMap = new Map();
+    archivedTransmittals.concat(this._items || []).forEach(t => {
+      if (tFilter(t) && t.status === 'Cancelled') cancelledMap.set(t.id, t);
+    });
+    const cancelled = Array.from(cancelledMap.values());
 
     let rejectedTransmittalRequests = [];
     try {
@@ -2559,7 +2578,7 @@ const Transmittal = {
         title: t.trackingNumber || '(no tracking)',
         meta: [
           { icon: ArchivePage.icons.client, text: this.getClientName(t.clientId) },
-          { icon: ArchivePage.icons.status, text: wrTitle },
+          { icon: ArchivePage.icons.status, text: t.status || '—' },
           { icon: ArchivePage.icons.date, text: formatDate(t.updatedAt) }
         ],
         actions: [
@@ -2568,15 +2587,39 @@ const Transmittal = {
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
           },
-          {
-            label: 'Restore',
-            icon: ArchivePage.icons.unarchive || ArchivePage.icons.restore,
+          ...(category === 'acknowledged' ? [{
+            label: 'Unarchive',
+            icon: ArchivePage.icons.unarchive,
+            className: 'primary',
             onClick: () => self.unarchiveTransmittal(t.id)
-          },
-          ...(canDelete ? [{
-            label: 'Delete',
-            icon: ArchivePage.icons.delete || ArchivePage.icons.trash,
-            onClick: () => self.permanentDeleteTransmittal(t.id)
+          }] : []),
+          ...(category === 'cancelled' && isManagerial ? [{
+            label: 'Restore to Draft',
+            icon: ArchivePage.icons.restore,
+            className: 'primary',
+            onClick: () => {
+              Workflow.showConfirm('Restore Transmittal',
+                `Restore "${t.trackingNumber || '(no tracking)'}" to Draft?`,
+                async () => {
+                  const skipGen = self._startSkipFetchGeneration();
+                  const snapshot = self._updateCachedItem(t.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                  if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                    window.apiClient.transmittals.invalidateCounts();
+                  }
+                  App.handleRoute();
+                  try {
+                    await window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false });
+                    self._clearActiveSkipGeneration(skipGen);
+                    App.handleRoute();
+                    Workflow.showMessage('Restored', 'Transmittal restored to Draft.', 'success');
+                  } catch (e) {
+                    if (snapshot) self._updateCachedItem(t.id, { status: snapshot.status, archived: snapshot.archived, updatedAt: snapshot.updatedAt });
+                    self._clearActiveSkipGeneration(skipGen);
+                    App.handleRoute();
+                    Workflow.showMessage('Restore Failed', e.message || 'Unable to restore transmittal.', 'error');
+                  }
+                }, 'warning');
+            }
           }] : [])
         ]
       };
@@ -2603,17 +2646,16 @@ const Transmittal = {
       };
     };
 
-    const totalCount = accomplished.length + cancelled.length + rejectedTransmittalRequests.length;
-
     return ArchivePage.render({
       module: 'transmittal',
-      categoryLabels: { accomplished: 'Accomplished', cancelled: 'Cancelled', rejected: 'Rejected' },
+      categoryLabels: { acknowledged: 'Acknowledged', cancelled: 'Cancelled', rejected: 'Rejected' },
       categories: {
-        accomplished: accomplished.map(t => buildItem(t, 'accomplished')),
+        acknowledged: acknowledged.map(t => buildItem(t, 'acknowledged')),
         cancelled: cancelled.map(t => buildItem(t, 'cancelled')),
         rejected: rejectedTransmittalRequests.map(buildRejectedItem)
       },
       emptyText: 'Archive is empty.',
+      renderCallback: () => { self.renderArchive().catch(() => {}); },
       bulkActions: ids => [
         {
           text: 'Restore Selected',
@@ -2621,17 +2663,15 @@ const Transmittal = {
           onClick: selectedIds => {
             selectedIds.forEach(id => self.unarchiveTransmittal(id));
           }
-        }
-      ],
-      pagination: {
-        page: this._archivePage || 1,
-        limit: this._archiveLimit || 20,
-        total: totalCount,
-        onPage: p => {
-          this._archivePage = p;
-          App.handleRoute();
-        }
-      }
+        },
+        ...(canDelete ? [{
+          text: 'Delete Selected',
+          className: 'btn btn-danger btn-sm',
+          onClick: selectedIds => {
+            selectedIds.forEach(id => self.permanentDeleteTransmittal(id));
+          }
+        }] : [])
+      ]
     });
   }
 };
