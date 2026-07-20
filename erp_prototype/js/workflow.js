@@ -351,6 +351,8 @@ const WorkflowData = {
         this._workRequests.push(created);
       }
     }
+    // Keep the cache marked fresh for the active entity after a successful create.
+    this._entity = this._getActiveEntity();
     return created;
   },
 
@@ -379,6 +381,9 @@ const WorkflowData = {
       if (dupIdx >= 0) Object.assign(this._workRequests[dupIdx], normalizedWr);
       else this._workRequests.push(normalizedWr);
     }
+
+    // Keep the in-memory cache fresh for the active entity after adoption.
+    this._entity = this._getActiveEntity();
 
     const finalWrId = normalizedWr.id;
     const parentWr = this.getWorkRequestById(finalWrId);
@@ -460,6 +465,10 @@ const WorkflowData = {
     if (!normalized.tasks) normalized.tasks = [];
     if (!Array.isArray(this._workRequests)) this._workRequests = [];
     this._workRequests.push(normalized);
+    // Mark the cache as fresh for the active entity so WorkflowData.ensure()
+    // does not fire a server fetch and overwrite the optimistic record before
+    // the list has a chance to render it.
+    this._entity = this._getActiveEntity();
     return normalized;
   },
 
@@ -477,6 +486,8 @@ const WorkflowData = {
     if (wr) {
       if (!Array.isArray(wr.tasks)) wr.tasks = [];
       wr.tasks.push(normalized);
+      // Keep the parent WR cache fresh so a subsequent ensure() does not wipe it.
+      this._entity = this._getActiveEntity();
     }
     return normalized;
   },
@@ -6686,6 +6697,10 @@ const Workflow = {
           this.showMessage('Work Request Created', 'Work Request has been successfully created.', 'success');
         }
 
+        // Re-render while the skip generation is still active so the list shows
+        // the server UUID and preserved priority immediately, without waiting for
+        // a background server fetch that could miss the new record.
+        await App.handleRoute();
         Workflow._clearSkipGenerationIfLatest(myGen);
       } else {
         await WorkflowData.updateWorkRequest(this.editingId, record);
