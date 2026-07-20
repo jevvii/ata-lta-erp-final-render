@@ -32,10 +32,11 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
   }
 
   if (isArchived) {
-    query = query.eq('status', 'Acknowledged').eq('archived', true);
-  } else if (status) {
-    query = query.eq('status', status);
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
   }
+  if (status) query = query.eq('status', status);
 
   if (clientId) query = query.eq('client_id', clientId);
   if (search) {

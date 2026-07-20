@@ -2427,7 +2427,7 @@ const Transmittal = {
       console.error('Failed to load archive transmittals', e);
     }
 
-    const acknowledged = all.filter(t => entFilter(t.entity) && t.status === 'Acknowledged' && t.archived === true);
+    const acknowledged = all.filter(t => entFilter(t.entity) && (t.archived === true || t.status === 'Acknowledged'));
     const cancelled = [];
 
     let rejectedTransmittalRequests = [];

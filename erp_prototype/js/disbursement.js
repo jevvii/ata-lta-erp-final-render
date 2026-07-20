@@ -3763,8 +3763,8 @@ const Disbursement = {
       this._lastArchiveMeta = {};
     }
 
-    const funded = archivedDisbursements.filter(d => d.status === 'Funded' && d.archived === true);
-    const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled');
+    const funded = archivedDisbursements.filter(d => d.archived === true);
+    const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled' && !d.archived);
 
     let rejectedDisbursementChanges = [];
     let rejectedDisbursementRequests = [];

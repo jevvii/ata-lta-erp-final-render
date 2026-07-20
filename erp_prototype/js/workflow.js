@@ -1777,16 +1777,18 @@ const Workflow = {
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || wr.archived) return;
+    wr.archived = true;
+    WorkflowData.invalidateCounts();
     const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     (async () => {
       try {
         await window.apiClient.workRequests.archive(wrId);
-        wr.archived = true;
         Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
         this.showMessage('Archived', 'Work Request has been archived.', 'success');
       } catch (e) {
+        wr.archived = false;
         Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
         this.showMessage('Archive Failed', e.message || 'Unable to archive Work Request.', 'error');
@@ -4591,7 +4593,7 @@ const Workflow = {
         });
       }
 
-      if (wr.status === 'Completed' && !wr.archived) {
+      if (!wr.archived) {
         items.push({
           label: 'Archive',
           className: 'primary',
@@ -11695,8 +11697,20 @@ const Workflow = {
       return matchesEntity && Auth.canViewWr(wr);
     };
 
-    const accomplished = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Completed' && wr.archived === true);
-    const cancelled = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Cancelled');
+    let archivedWrs = [];
+    try {
+      const res = await window.apiClient.workRequests.list({ archived: true, includeTasks: true });
+      archivedWrs = (res.data || []).map(wr => WorkflowData.normalizeWorkRequest(wr));
+    } catch (e) {
+      console.error('Failed to load archived work requests', e);
+    }
+
+    const accomplished = archivedWrs.filter(wr => wrFilter(wr) && wr.archived === true);
+    const cancelledMap = new Map();
+    archivedWrs.concat(WorkflowData.getAllWorkRequests()).forEach(wr => {
+      if (wrFilter(wr) && wr.status === 'Cancelled' && !wr.archived) cancelledMap.set(wr.id, wr);
+    });
+    const cancelled = Array.from(cancelledMap.values());
 
     const rejectedRecords = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;
@@ -11911,7 +11925,7 @@ const Workflow = {
         title: `${template.name} (${titleSuffix})`,
         description: template.description || '',
         clientId: template.clientId,
-        priority: 'Priority',
+        priority: 'Normal',
         dueDate: dueDate.toISOString().slice(0, 10),
         entity: template.entity,
         status: 'Draft',

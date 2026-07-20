@@ -172,16 +172,11 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
     .is('deleted_at', null);
 
   if (isArchived) {
-    if (status === 'Funded') {
-      query = query.eq('status', 'Funded').eq('archived', true);
-    } else if (status === 'Cancelled') {
-      query = query.eq('status', 'Cancelled');
-    } else {
-      query = query.or('and(status.eq.Funded,archived.eq.true),status.eq.Cancelled');
-    }
-  } else {
-    if (status) query = query.eq('status', status);
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
   }
+  if (status) query = query.eq('status', status);
   if (category) query = query.eq('category', category);
   if (fundSource) query = query.eq('fund_source', fundSource);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);

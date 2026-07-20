@@ -35,16 +35,11 @@ const listInvoices = async ({ entityId, filters = {} }) => {
     .is('deleted_at', null);
 
   if (isArchived) {
-    if (status === 'Paid') {
-      query = query.eq('status', 'Paid').eq('archived', true);
-    } else if (status === 'Cancelled') {
-      query = query.eq('status', 'Cancelled');
-    } else {
-      query = query.or('and(status.eq.Paid,archived.eq.true),status.eq.Cancelled');
-    }
-  } else {
-    if (status) query = query.eq('status', status);
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
   }
+  if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {

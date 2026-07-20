@@ -86,7 +86,7 @@ const listDocuments = async ({ entityId, filters = {} }) => {
 
   if (isArchived) {
     query = query.eq('archived', true);
-  } else if (archived === false || archived === 'false') {
+  } else {
     query = query.eq('archived', false);
   }
 

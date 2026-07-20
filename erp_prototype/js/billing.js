@@ -4356,8 +4356,8 @@ const Billing = {
     }
 
     archivedInvoices = archivedInvoices.filter(inv => this._isArchiveInvoice(inv, entity));
-    const paid = archivedInvoices.filter(inv => inv.status === 'Paid' && inv.archived === true);
-    const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled');
+    const paid = archivedInvoices.filter(inv => inv.archived === true);
+    const cancelled = archivedInvoices.filter(inv => inv.status === 'Cancelled' && !inv.archived);
 
     let rejectedInvoiceChanges = [];
     let rejectedBillingRequests = [];

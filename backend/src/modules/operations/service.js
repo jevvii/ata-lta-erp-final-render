@@ -9,7 +9,7 @@ const { randomUUID } = require('crypto');
 
 const VALID_TRANSITIONS = {
   Draft: ['In Progress', 'Cancelled'],
-  'In Progress': ['For Review', 'Cancelled'],
+  'In Progress': ['For Review', 'Completed', 'Cancelled'],
   'For Review': ['Completed', 'In Progress'],
   Completed: [],
   Cancelled: [],
@@ -193,17 +193,10 @@ const listWorkRequests = async ({
 
   if (isArchived) {
     query = query.eq('archived', true);
-  } else {
+  } else if (archived === false || archived === 'false') {
     query = query.or('archived.is.null,archived.eq.false');
   }
-
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
-
-  if (status) {
-    query = query.eq('status', status);
-  }
+  if (status) query = query.eq('status', status);
   if (clientId) {
     query = query.eq('client_id', clientId);
   }
