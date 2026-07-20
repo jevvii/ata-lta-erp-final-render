@@ -498,6 +498,9 @@ const Billing = {
       titleBar.appendChild(el('h1', { text: 'Billing' }));
       container.appendChild(titleBar);
 
+      // Ensure invoice cache is fresh before rendering tab badges so archive/active counts match the actual data.
+      await this.ensure();
+
       // Tab navigation (counts are derived from the local cache; no /counts API call).
       container.appendChild(this.renderTabNav());
     }
@@ -531,16 +534,12 @@ const Billing = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    // Load server counts when stale; rejected count is still loaded separately
-    // because the backend derives rejected from pending_changes + operations_requests.
-    this.loadCounts();
+    // Load rejected count from server (it is not derivable from the local cache).
     this.loadRejectedCount();
 
     const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
     const invoiceCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
-    const cacheArchiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length;
-    // Prefer the server counts if they exist, otherwise derive from the local cache.
-    const archiveCount = (this._counts?.archived >= 0 ? this._counts.archived : cacheArchiveCount) + (this._counts?.rejected || 0);
+    const archiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
     const tabs = [
