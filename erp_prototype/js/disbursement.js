@@ -24,8 +24,8 @@ const Disbursement = {
   _archiveLimit: 20,
   _lastArchiveMeta: {},
   _rejectedArchiveCounts: null,
-  _skipNextListFetch: false,
-  _skipNextTemplatesFetch: false,
+  _skipFetchGeneration: 0,
+  _activeSkipGeneration: 0,
 
   // API-backed disbursement template cache
   _templates: [],
@@ -75,8 +75,8 @@ const Disbursement = {
 
   async loadTemplates() {
     if (this._templatesPromise) return this._templatesPromise;
-    if (this._skipNextTemplatesFetch) {
-      this._skipNextTemplatesFetch = false;
+    const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (shouldSkip) {
       return this._templates || [];
     }
     this._templatesPromise = (async () => {
@@ -195,6 +195,22 @@ const Disbursement = {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
   },
 
+  _isTempId(id) {
+    return typeof id === 'string' && /^(tmp-|temp-|opt-|usr-opt-|tx-temp-|tpl-)/.test(id);
+  },
+
+  _setActiveSkipGeneration() {
+    this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
+    this._activeSkipGeneration = this._skipFetchGeneration;
+    return this._activeSkipGeneration;
+  },
+
+  _clearSkipGenerationIfCurrent(gen) {
+    if (this._activeSkipGeneration === gen) {
+      this._activeSkipGeneration = 0;
+    }
+  },
+
   _isEntityFresh() {
     return this._entity === this._getActiveEntity();
   },
@@ -253,7 +269,7 @@ const Disbursement = {
   },
 
   async loadDisbursements(force = false) {
-    if (force) this.invalidateCache();
+    if (force) this.invalidateCache(true);
     await this.ensure();
     return this._items || [];
   },
@@ -271,7 +287,9 @@ const Disbursement = {
     }
   },
 
-  invalidateCache() {
+  invalidateCache(force = false) {
+    const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (!force && shouldSkip) return;
     this._items = null;
     this._detailCache = {};
     this._counts = null;
@@ -280,12 +298,12 @@ const Disbursement = {
     this._loadGeneration++;
     this._entity = null;
     this._rejectedArchiveCounts = null;
-    this._skipNextListFetch = false;
-    this._skipNextTemplatesFetch = false;
+    this._skipFetchGeneration = 0;
+    this._activeSkipGeneration = 0;
   },
 
   async loadDisbursement(id) {
-    if (!id) return null;
+    if (!id || this._isTempId(id)) return null;
     if (this._detailCache[id]) return this._detailCache[id];
     try {
       const res = await window.apiClient.disbursements.get(id);
@@ -459,7 +477,7 @@ const Disbursement = {
     this._items.unshift(record);
     this._refreshCounts();
     this._invalidateDashboardCache();
-    this._skipNextListFetch = true;
+    this._setActiveSkipGeneration();
     return record;
   },
 
@@ -478,10 +496,11 @@ const Disbursement = {
   },
 
   _rollbackOptimisticCreate(localId, error, title = 'Error') {
+    const gen = this._activeSkipGeneration;
     this._removeFromItems(localId);
     this._refreshCounts();
     this._invalidateDashboardCache();
-    this._skipNextListFetch = true;
+    this._clearSkipGenerationIfCurrent(gen);
     if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
       App.handleRoute();
     }
@@ -508,15 +527,22 @@ const Disbursement = {
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
+    if (this._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
     const originalItem = this._getCachedItem(id);
     const originalDetail = this._copyItem(this._detailCache[id] || null);
     this._updateCachedDisbursement(id, patch);
     this._refreshCounts();
     this._invalidateDashboardCache();
-    this._skipNextListFetch = true;
+    const gen = this._setActiveSkipGeneration();
     App.handleRoute();
     try {
-      return await apiCall();
+      const result = await apiCall();
+      this._clearSkipGenerationIfCurrent(gen);
+      App.handleRoute();
+      return result;
     } catch (e) {
       console.error(errorTitle, id, e);
       if (originalItem) {
@@ -530,7 +556,7 @@ const Disbursement = {
       if (originalDetail) this._detailCache[id] = originalDetail;
       this._refreshCounts();
       this._invalidateDashboardCache();
-      this._skipNextListFetch = true;
+      this._clearSkipGenerationIfCurrent(gen);
       App.handleRoute();
       Workflow.showMessage('Error', e.message || errorTitle, 'error');
       throw e;
@@ -538,15 +564,22 @@ const Disbursement = {
   },
 
   async _optimisticDelete(id, apiCall, errorTitle = 'Error') {
+    if (this._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
     const originalItem = this._removeCachedDisbursement(id);
     const originalDetail = this._copyItem(this._detailCache[id] || null);
     if (this._detailCache[id]) delete this._detailCache[id];
     this._refreshCounts();
     this._invalidateDashboardCache();
-    this._skipNextListFetch = true;
+    const gen = this._setActiveSkipGeneration();
     App.handleRoute();
     try {
-      return await apiCall();
+      const result = await apiCall();
+      this._clearSkipGenerationIfCurrent(gen);
+      App.handleRoute();
+      return result;
     } catch (e) {
       console.error(errorTitle, id, e);
       if (originalItem) {
@@ -558,7 +591,7 @@ const Disbursement = {
       if (originalDetail) this._detailCache[id] = originalDetail;
       this._refreshCounts();
       this._invalidateDashboardCache();
-      this._skipNextListFetch = true;
+      this._clearSkipGenerationIfCurrent(gen);
       App.handleRoute();
       Workflow.showMessage('Error', e.message || errorTitle, 'error');
       throw e;
@@ -797,7 +830,7 @@ const Disbursement = {
     else if (this.view === 'report') container.appendChild(await this.renderReport());
     else if (this.view === 'templates') container.appendChild(await this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
-    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true, template }));
+    else if (this.view === 'templateForm') container.appendChild(await this.renderTemplateForm({ hideHeader: true, template }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -1167,9 +1200,10 @@ const Disbursement = {
   async refreshList(container, activeFilters, viewMode, groupBy = 'none', groupOptions = [], toolbarContainer = null) {
     container.replaceChildren();
     const entity = Auth.activeEntity;
+    const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    const isCached = shouldSkip;
     let allItems;
-    if (this._skipNextListFetch) {
-      this._skipNextListFetch = false;
+    if (shouldSkip) {
       allItems = this._items || [];
     } else {
       allItems = await this.loadDisbursements();
@@ -1265,6 +1299,14 @@ const Disbursement = {
       return;
     }
 
+    if (isCached) {
+      container.appendChild(el('div', {
+        class: 'disbursement-cached-indicator',
+        style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
+        text: 'Showing cached results — refresh or switch entity to fetch latest'
+      }));
+    }
+
     if (viewMode === 'table') {
       this.renderTableView(container, items);
     } else if (viewMode === 'board') {
@@ -1277,6 +1319,7 @@ const Disbursement = {
   renderTableView(container, items) {
     const buildActions = (d) => {
       const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center;' });
+      if (this._isTempId(d.id)) return wrapper;
 
       if (this.canEditDisbursement(d)) {
         const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
@@ -1337,7 +1380,10 @@ const Disbursement = {
       selectable: true,
       bulkActions: () => [],
       rowId: (d) => d.id,
-      onRowClick: (d) => { location.hash = '#disbursement/detail/' + d.id; }
+      onRowClick: (d) => {
+        if (this._isTempId(d.id)) return;
+        location.hash = '#disbursement/detail/' + d.id;
+      }
     });
 
     container.appendChild(tableView);
@@ -1419,6 +1465,8 @@ const Disbursement = {
     const canDelete = Auth.can('disbursement:delete');
     const self = this;
 
+    items.forEach(d => { d.isOptimistic = self._isTempId(d.id); });
+
     const boardPhases = this.getBoardColumns();
     const statusColors = {
       'Draft': '#94a3b8',
@@ -1447,6 +1495,7 @@ const Disbursement = {
         const newOrder = (idx + 1) * 1000;
         if (d.boardOrder !== newOrder) {
           d.boardOrder = newOrder;
+          if (this._isTempId(d.id)) return;
           window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
             console.error('Failed to update disbursement board order', d.id, e);
           });
@@ -1522,11 +1571,19 @@ const Disbursement = {
         date: d.submittedAt ? formatDate(d.submittedAt) : '',
         priority: self.getDisbursementDisplayStatus(d.status),
         priorityClass: statusPriorityClass,
-        onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+        onClick: () => {
+          if (self._isTempId(d.id)) return;
+          location.hash = '#disbursement/detail/' + d.id;
+        }
       });
 
       const footerRight = card.querySelector('.card-v2-footer-right');
       footerRight.appendChild(el('div', { class: 'card-v2-footer-item', text: formatPHP(d.amount), style: 'font-weight:700;color:var(--color-text);' }));
+      if (d.isOptimistic) {
+        card.classList.add('board-card-optimistic');
+        card.style.opacity = '0.8';
+        card.style.cursor = 'not-allowed';
+      }
       return card;
     };
 
@@ -1536,14 +1593,14 @@ const Disbursement = {
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
         onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
       }];
-      if (canEdit && d.status === 'Draft' && !d.pendingChangeId) {
+      if (canEdit && d.status === 'Draft' && !d.pendingChangeId && !self._isTempId(d.id)) {
         menu.push({
           label: 'Edit',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
           onClick: () => self.showForm(d.id)
         });
       }
-      if (canDelete && !d.pendingChangeId) {
+      if (canDelete && !d.pendingChangeId && !self._isTempId(d.id)) {
         menu.push({
           label: 'Delete',
           className: 'danger',
@@ -1558,7 +1615,7 @@ const Disbursement = {
           }, 'danger')
         });
       }
-      if (canCreate && d.status === 'Draft' && !d.pendingChangeId) {
+      if (canCreate && d.status === 'Draft' && !d.pendingChangeId && !self._isTempId(d.id)) {
         menu.push({
           label: 'Submit Expense',
           className: 'primary',
@@ -1572,7 +1629,7 @@ const Disbursement = {
           }, 'success')
         });
       }
-      if (d.status === 'Funded' && !d.archived) {
+      if (d.status === 'Funded' && !d.archived && !self._isTempId(d.id)) {
         menu.push({
           label: 'Archive',
           className: 'primary',
@@ -1586,10 +1643,13 @@ const Disbursement = {
     const boardDrag = {
       enabled: true,
       canDrag: d => {
+        if (self._isTempId(d.id)) return false;
         const canManage = canEdit || Auth.can('disbursement:approve') || Auth.can('disbursement:mark_released') || Auth.isManagerial();
         return canManage && !d.pendingChangeId;
       },
-      canDrop: ({ item, targetStatus }) => {
+      canDrop: ({ item, targetStatus, beforeItem, afterItem }) => {
+        if (beforeItem && self._isTempId(beforeItem.id)) return false;
+        if (afterItem && self._isTempId(afterItem.id)) return false;
         if (item.status === targetStatus) return true;
         // Map pre-approval statuses to the canonical Pending step.
         const preApproval = ['Submitted', 'Under Review', 'Pending'];
@@ -1602,6 +1662,10 @@ const Disbursement = {
       },
       orderField: 'boardOrder',
       onDrop({ item, targetStatus, newOrder, fromStatus }) {
+        if (self._isTempId(item.id)) {
+          Workflow.showMessage('Saving...', 'Please wait for the disbursement to finish saving before moving it.', 'info');
+          return;
+        }
         if (fromStatus === targetStatus) {
           window.apiClient.disbursements.update(item.id, { boardOrder: newOrder }).then(() => App.handleRoute()).catch(e => {
             console.error('Failed to update board order', e);
@@ -1710,6 +1774,7 @@ const Disbursement = {
       const item = el('div', { class: 'list-item', style: 'cursor: pointer;' });
       item.addEventListener('click', (e) => {
         if (e.target.closest('button, a, input, select')) return;
+        if (this._isTempId(d.id)) return;
         location.hash = '#disbursement/detail/' + d.id;
       });
       const left = el('div');
@@ -1736,7 +1801,7 @@ const Disbursement = {
       left.appendChild(el('div', { class: 'list-item-meta', text: (emp?.name || '—') + ' • ' + this.getFundSource(d) + ' • ' + formatDate(d.submittedAt) + wrMeta }));
       item.appendChild(left);
       const actionWrap = el('div', { style: 'display:flex;gap:4px;align-items:center;flex-shrink:0;' });
-      if (this.canEditDisbursement(d)) {
+      if (!this._isTempId(d.id) && this.canEditDisbursement(d)) {
         const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(d.id); });
         actionWrap.appendChild(editBtn);
@@ -2058,11 +2123,12 @@ const Disbursement = {
     if (isNew) {
       const optimisticRecord = this._buildOptimisticDisbursement(payload);
       this._addOptimisticDisbursement(optimisticRecord);
+      const completedGen = this._activeSkipGeneration;
       try {
         const res = await window.apiClient.disbursements.create(payload);
         record = this.normalizeDisbursement(res.data);
         this._replaceOptimisticCreate(optimisticRecord.id, record);
-        this._skipNextListFetch = true;
+        this._clearSkipGenerationIfCurrent(completedGen);
       } catch (e) {
         this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Save Failed');
         return;
@@ -2075,7 +2141,6 @@ const Disbursement = {
         this._updateCachedDisbursement(record.id, record);
         this._refreshCounts();
         this._invalidateDashboardCache();
-        this._skipNextListFetch = true;
       } catch (e) {
         console.error('Failed to save disbursement', e);
         Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
@@ -2111,6 +2176,10 @@ const Disbursement = {
   },
 
   async showRequestDisbursementModal() {
+    await Promise.all([
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
     const entity = Auth.activeEntity;
     let wrs = window.apiClient.workRequestCache._wrs || [];
     wrs = wrs.filter(wr => {
@@ -3156,9 +3225,7 @@ const Disbursement = {
                 this._insertOptimisticDisbursement(record);
                 optimistic.push({ localId: record.id, payload, template: t });
               });
-              this._skipNextListFetch = true;
-              App.handleRoute();
-
+              const completedGen = this._activeSkipGeneration;
               let successCount = 0;
               const failures = [];
               for (const { localId, payload, template } of optimistic) {
@@ -3176,7 +3243,7 @@ const Disbursement = {
                 }
               }
 
-              this._skipNextListFetch = true;
+              this._clearSkipGenerationIfCurrent(completedGen);
               App.handleRoute();
 
               if (failures.length === 0) {
@@ -3214,7 +3281,12 @@ const Disbursement = {
     return wrapper;
   },
 
-  renderTemplateForm(opts = {}) {
+  async renderTemplateForm(opts = {}) {
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
     const { hideHeader = false, template = null } = opts;
     const entity = Auth.activeEntity;
     const container = el('div', { class: 'page' });
@@ -3353,6 +3425,7 @@ const Disbursement = {
     };
 
     let optimisticTemplate = null;
+    let templateGen = 0;
     try {
       if (template) {
         const res = await window.apiClient.disbursements.updateTemplate(template.id, payload);
@@ -3370,7 +3443,7 @@ const Disbursement = {
           updatedAt: new Date().toISOString()
         });
         this._templates.push(optimisticTemplate);
-        this._skipNextTemplatesFetch = true;
+        templateGen = this._setActiveSkipGeneration();
         if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
           App.handleRoute();
         }
@@ -3380,13 +3453,16 @@ const Disbursement = {
         const idx = this._templates.findIndex(t => t.id === optimisticTemplate.id);
         if (idx >= 0) this._templates[idx] = created;
         else this._templates.push(created);
-        this._skipNextTemplatesFetch = true;
+        this._clearSkipGenerationIfCurrent(templateGen);
+        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+          App.handleRoute();
+        }
       }
     } catch (e) {
       console.error('Failed to save disbursement template', e);
       if (!template && optimisticTemplate) {
         this._templates = this._templates.filter(t => t.id !== optimisticTemplate.id);
-        this._skipNextTemplatesFetch = true;
+        this._clearSkipGenerationIfCurrent(templateGen);
         if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
           App.handleRoute();
         }
@@ -3407,7 +3483,7 @@ const Disbursement = {
     openFormPanel({
       icon: '📋',
       title: ' ',
-      formContent: this.renderTemplateForm({ template }),
+      formContent: await this.renderTemplateForm({ template }),
       formId: 'disb-tpl-form',
       mode,
       viewContext: 'disbursement-template-form',
@@ -3436,19 +3512,19 @@ const Disbursement = {
     this.view = 'list';
     const optimisticRecord = this._buildOptimisticDisbursement({ ...payload, fromTemplate: true });
     this._addOptimisticDisbursement(optimisticRecord);
+    const completedGen = this._activeSkipGeneration;
 
     try {
       const res = await window.apiClient.disbursements.create(payload);
       const serverRecord = this.normalizeDisbursement(res.data);
       this._replaceOptimisticCreate(optimisticRecord.id, serverRecord);
+      this._clearSkipGenerationIfCurrent(completedGen);
+      App.handleRoute();
       Workflow.showMessage('Template Success', 'Disbursement generated from template: ' + template.name, 'success');
     } catch (e) {
       this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Generation Failed');
       return;
     }
-
-    this._skipNextListFetch = true;
-    App.handleRoute();
   },
 
   async archiveDisbursement(id) {

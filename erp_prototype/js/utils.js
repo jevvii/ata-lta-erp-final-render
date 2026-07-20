@@ -209,6 +209,10 @@ function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }
 
+function isTempId(id) {
+  return typeof id === 'string' && /^(tmp-|temp-|opt-|usr-opt-|tx-temp-)/.test(id);
+}
+
 
 /**
  * Generate the next sequential invoice number for an entity.
@@ -463,7 +467,9 @@ function buildProgressRingSVG(progress, color) {
 }
 
 function buildCompactBoardCard(opts) {
-  const card = el('div', { class: 'board-card-v2 compact' });
+  const cardClasses = ['board-card-v2', 'compact'];
+  if (opts.isOptimistic) cardClasses.push('kanban-card-optimistic');
+  const card = el('div', { class: cardClasses.join(' ') });
 
   // 1. Header Row
   const header = el('div', { class: 'card-v2-header' });
@@ -2082,6 +2088,26 @@ async function triggerSyncReload(hash, messageConfig) {
       if (typeof Users !== 'undefined' && typeof Users.invalidateCache === 'function') {
         Users.invalidateCache();
       }
+
+      // Reset generation-based skip flags so entity switches / explicit syncs fetch fresh data.
+      [
+        { ref: typeof Workflow !== 'undefined' ? Workflow : null },
+        { ref: typeof Billing !== 'undefined' ? Billing : null },
+        { ref: typeof Disbursement !== 'undefined' ? Disbursement : null },
+        { ref: typeof Clients !== 'undefined' ? Clients : null },
+        { ref: typeof Transmittal !== 'undefined' ? Transmittal : null },
+        { ref: typeof Users !== 'undefined' ? Users : null }
+      ].forEach(mod => {
+        if (!mod.ref) return;
+        if (mod.ref._skipFetchGeneration !== undefined) {
+          mod.ref._skipFetchGeneration = 0;
+          mod.ref._activeSkipGeneration = 0;
+        }
+        if (mod.ref._skipNextListFetch !== undefined) {
+          mod.ref._skipNextListFetch = false;
+        }
+      });
+
       if (typeof window.apiClient.abortRequests === 'function') {
         window.apiClient.abortRequests('sync-reload');
       }

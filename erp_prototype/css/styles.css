@@ -3875,6 +3875,12 @@ tbody tr:hover {
   transform: translateY(-1px);
 }
 
+/* Optimistic board cards are not draggable and cannot be dropped on. */
+.kanban-card-optimistic {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
 /* 1. Header Row */
 .card-v2-header {
   display: flex;

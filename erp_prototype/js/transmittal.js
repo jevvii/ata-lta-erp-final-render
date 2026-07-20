@@ -23,7 +23,8 @@ const Transmittal = {
   _loadingPromise: null,
   _loadingEntity: null,
   _loadGeneration: 0,
-  _skipNextListFetch: false,
+  _skipFetchGeneration: 0,
+  _activeSkipGeneration: 0,
 
   _getActiveEntity() {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
@@ -47,7 +48,35 @@ const Transmittal = {
     this._loadingPromise = null;
     this._loadingEntity = null;
     this._loadGeneration++;
-    this._skipNextListFetch = false;
+    this._skipFetchGeneration = 0;
+    this._activeSkipGeneration = 0;
+  },
+
+  /**
+   * Begin an optimistic mutation: increment the skip generation and return the
+   * generation currently honored by the renderer. Callers must clear it after
+   * the API response arrives (success or failure) using _clearActiveSkipGeneration.
+   */
+  _startSkipFetchGeneration() {
+    this._skipFetchGeneration++;
+    this._activeSkipGeneration = this._skipFetchGeneration;
+    return this._activeSkipGeneration;
+  },
+
+  /**
+   * Clear the active skip generation, but only if no newer mutation has started.
+   */
+  _clearActiveSkipGeneration(completedGeneration) {
+    if (this._activeSkipGeneration === completedGeneration) {
+      this._activeSkipGeneration = 0;
+    }
+  },
+
+  /**
+   * Detect optimistic / temporary records created by this module.
+   */
+  _isTempId(id) {
+    return typeof id === 'string' && /^(tmp-|temp-|opt-|usr-opt-|tx-temp-)/.test(id);
   },
 
   async ensure() {
@@ -266,16 +295,19 @@ const Transmittal = {
                   updatedAt: now,
                   updatedBy: Auth.user?.id
                 });
-                this._skipNextListFetch = true;
+                const skipGen = this._startSkipFetchGeneration();
                 App.handleRoute();
                 try {
                   await window.apiClient.transmittals.send(t.id);
                 } catch (e) {
                   if (original) this._updateCachedItem(t.id, original);
-                  this._skipNextListFetch = true;
+                  this._clearActiveSkipGeneration(skipGen);
                   App.handleRoute();
                   Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
+                  return;
                 }
+                this._clearActiveSkipGeneration(skipGen);
+                App.handleRoute();
               }, 'success');
             });
             actions.appendChild(sendBtn);
@@ -738,8 +770,8 @@ const Transmittal = {
     const updateFilters = async () => {
       try {
         let items;
-        if (this._skipNextListFetch) {
-          this._skipNextListFetch = false;
+        const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+        if (shouldSkip) {
           items = (this._items || []).slice();
         } else {
           items = await this._listForActiveEntity();
@@ -1008,16 +1040,19 @@ const Transmittal = {
                 updatedAt: now,
                 updatedBy: Auth.user?.id
               });
-              self._skipNextListFetch = true;
+              const skipGen = self._startSkipFetchGeneration();
               App.handleRoute();
               try {
                 await window.apiClient.transmittals.send(t.id);
               } catch (e) {
                 if (original) self._updateCachedItem(t.id, original);
-                self._skipNextListFetch = true;
+                self._clearActiveSkipGeneration(skipGen);
                 App.handleRoute();
                 Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
+                return;
               }
+              self._clearActiveSkipGeneration(skipGen);
+              App.handleRoute();
             },
             'success'
           )
@@ -1387,7 +1422,7 @@ const Transmittal = {
         this._items = [optimisticT];
         this._entity = this._getActiveEntity();
       }
-      this._skipNextListFetch = true;
+      const skipGen = this._startSkipFetchGeneration();
 
       const targetRoute = isResubmitting ? '#admin' : '#transmittal';
       closeFormPanelAndRoute(targetRoute, {
@@ -1411,11 +1446,13 @@ const Transmittal = {
       } catch (e) {
         console.error('Failed to create transmittal', e);
         this._removeFromCache(localId);
-        this._skipNextListFetch = true;
+        this._clearActiveSkipGeneration(skipGen);
         App.handleRoute();
         Workflow.showMessage('Error', e.message || 'Unable to create transmittal.', 'error');
         return;
       }
+      this._clearActiveSkipGeneration(skipGen);
+      App.handleRoute();
     } else {
       try {
         const res = await window.apiClient.transmittals.update(this.detailId, payload);
@@ -1463,8 +1500,9 @@ const Transmittal = {
         type: 'success'
       };
       const targetRoute = isResubmitting ? '#admin' : '#transmittal';
-      this._skipNextListFetch = true;
-      closeFormPanelAndRoute(targetRoute, msgConfig);
+      const skipGen = this._startSkipFetchGeneration();
+      await closeFormPanelAndRoute(targetRoute, msgConfig);
+      this._clearActiveSkipGeneration(skipGen);
     }
   },
 
@@ -1607,7 +1645,7 @@ const Transmittal = {
         updatedBy: Auth.user?.id
       });
       overlay.remove();
-      this._skipNextListFetch = true;
+      const skipGen = this._startSkipFetchGeneration();
       App.handleRoute();
       try {
         // Backend acknowledge endpoint does not persist receivedByName or a custom
@@ -1615,10 +1653,13 @@ const Transmittal = {
         await window.apiClient.transmittals.acknowledge(id);
       } catch (err) {
         if (original) this._updateCachedItem(id, original);
-        this._skipNextListFetch = true;
+        this._clearActiveSkipGeneration(skipGen);
         App.handleRoute();
         Workflow.showMessage('Acknowledge Failed', err.message || 'Unable to acknowledge transmittal.', 'error');
+        return;
       }
+      this._clearActiveSkipGeneration(skipGen);
+      App.handleRoute();
     });
   },
 
@@ -2280,7 +2321,7 @@ const Transmittal = {
           removedItem = items[index];
           this._items = [...items.slice(0, index), ...items.slice(index + 1)];
         }
-        this._skipNextListFetch = true;
+        const skipGen = this._startSkipFetchGeneration();
         App.handleRoute();
         try {
           await window.apiClient.transmittals.remove(id);
@@ -2296,7 +2337,7 @@ const Transmittal = {
             rollback.splice(index, 0, removedItem);
             this._items = rollback;
           }
-          this._skipNextListFetch = true;
+          this._clearActiveSkipGeneration(skipGen);
           App.handleRoute();
           Workflow.showMessage('Delete Failed', e.message || 'Unable to delete transmittal.', 'error');
         }

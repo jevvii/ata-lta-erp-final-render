@@ -20,7 +20,8 @@ const Billing = {
   _listCache: [], // entity-tagged cache of all invoices (active + archived + cancelled)
   _listCacheEntity: null,
   _listCacheGeneration: 0, // incremented on invalidate to drop stale in-flight fetches
-  _skipNextListFetch: false, // skip background fetch once after a local mutation
+  _skipFetchGeneration: 0, // incremented on every optimistic mutation
+  _activeSkipGeneration: 0, // generation currently honored by the list renderer
   _templates: [], // cached billing templates for the active entity
   _templatesPromise: null, // in-flight loadTemplates() promise
 
@@ -49,11 +50,24 @@ const Billing = {
     this._listCache = [];
     this._listCacheEntity = null;
     this._listCacheGeneration++;
-    this._skipNextListFetch = false;
+    this._skipFetchGeneration = 0;
+    this._activeSkipGeneration = 0;
     this._counts = null;
     this._countsEntity = null;
     this._templates = [];
     this._templatesPromise = null;
+  },
+
+  _beginSkipGeneration() {
+    this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
+    this._activeSkipGeneration = this._skipFetchGeneration;
+    return this._skipFetchGeneration;
+  },
+
+  _endSkipGeneration(generation) {
+    if (this._activeSkipGeneration === generation) {
+      this._activeSkipGeneration = 0;
+    }
   },
 
   hasCachedData(entity) {
@@ -114,15 +128,20 @@ const Billing = {
   _replaceInListCache(tempId, record) {
     if (!tempId || !record) return;
     if (!Array.isArray(this._listCache)) {
-      this._addToListCache(record, { prepend: true });
+      this._listCache = [record];
+      this._listCacheEntity = Auth.activeEntity;
       return;
     }
     const idx = this._listCache.findIndex(i => i.id === tempId);
     if (idx >= 0) {
       this._listCache[idx] = record;
     } else {
-      this._addToListCache(record, { prepend: true });
+      this._listCache.unshift(record);
     }
+  },
+
+  _isTempId(id) {
+    return typeof id === 'string' && id.startsWith('temp-');
   },
 
   _invalidateRelatedCaches(record) {
@@ -1007,12 +1026,15 @@ const Billing = {
       });
       stickyContainer.appendChild(toolbarContainer);
       wrapper.insertBefore(stickyContainer, contentContainer);
-      // Render from cache. After a local mutation, skip the background fetch so
-      // optimistic updates are not overwritten by stale server state.
+      // Render from cache. After a local mutation, honor the active skip generation
+      // so the optimistic warm render survives any number of App.handleRoute() calls
+      // until the API response arrives or the user explicitly refreshes / switches entity.
       const cacheWarm = this._listCacheEntity === entity && Array.isArray(this._listCache) && this._listCache.length > 0;
-      if (this._skipNextListFetch) {
+      const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+      if (shouldSkip) {
         await refresh(this._listCache || []);
-        this._skipNextListFetch = false;
+        // Do NOT clear the generation here; it is cleared only after the API
+        // response arrives or on explicit refresh / entity switch.
       } else {
         if (cacheWarm) await refresh(this._listCache);
         await refresh();
@@ -1201,10 +1223,11 @@ const Billing = {
       });
       colInvs.forEach((inv, idx) => {
         const newOrder = (idx + 1) * 1000;
-        if (inv.boardOrder !== newOrder) {
-          inv.boardOrder = newOrder;
-          window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => console.error('Failed to update board order', e));
-        }
+        if (inv.boardOrder === newOrder) return;
+        inv.boardOrder = newOrder;
+        // Never send optimistic temp ids to the backend.
+        if (this._isTempId(inv.id)) return;
+        window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => console.error('Failed to update board order', e));
       });
       const colPendingInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && inv.pendingChangeId);
       sortedInvs.push(...colInvs, ...colPendingInvs);
@@ -1257,6 +1280,7 @@ const Billing = {
         date: inv.issueDate ? formatDate(inv.issueDate) : '',
         priority: self.getInvoiceDisplayStatus(inv.status),
         priorityClass: statusPriorityClass,
+        isOptimistic: this._isTempId(inv.id),
         onClick: () => { location.hash = '#billing/detail/' + inv.id; }
       });
 
@@ -1302,6 +1326,7 @@ const Billing = {
     const boardDrag = {
       enabled: true,
       canDrag: inv => {
+        if (this._isTempId(inv.id)) return false;
         const canManage = canEdit || Auth.can('billing:approve') || Auth.can('billing:mark_paid') || Auth.can('billing:release') || Auth.isManagerial();
         return canManage && !inv.pendingChangeId;
       },
@@ -1859,6 +1884,7 @@ const Billing = {
 
     // Optimistic local cache update for new invoices BEFORE the API call.
     const optimisticId = isNew ? ('temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2)) : null;
+    let skipGeneration = 0;
     if (isNew) {
       const client = window.apiClient.clientCache.getById(data.clientId);
       const optimisticRecord = {
@@ -1878,7 +1904,7 @@ const Billing = {
       this._detailCacheEntity = activeEntity;
       this._addToListCache(optimisticRecord, { prepend: true });
       this._updateCounts(1, 0);
-      this._skipNextListFetch = true;
+      skipGeneration = this._beginSkipGeneration();
       const targetRoute = isResubmitting ? '#admin' : '#billing';
       closeFormPanelAndRoute(targetRoute);
     }
@@ -1908,7 +1934,7 @@ const Billing = {
         delete this._detailCache[optimisticId];
         this._removeFromListCache(optimisticId);
         this._updateCounts(-1, 0);
-        this._skipNextListFetch = true;
+        this._endSkipGeneration(skipGeneration);
         App.handleRoute();
         Workflow.showMessage('Error', e.message || 'Unable to create invoice.', 'error');
       } else {
@@ -1964,18 +1990,18 @@ const Billing = {
     const targetRoute = isResubmitting ? '#admin' : '#billing';
 
     if (isNew) {
-      // Already routed to the list before the API; refresh from warm cache and toast.
-      this._skipNextListFetch = true;
-      App.handleRoute();
+      // The optimistic list render is already visible; toast and invalidate related caches,
+      // then clear the skip generation so the next route handles fresh server state.
       if (isApproved) Workflow.showMessage('Invoice Created', msgConfig.message, 'success');
       this._invalidateRelatedCaches(serverRecord);
+      this._endSkipGeneration(skipGeneration);
+      App.handleRoute();
     } else {
       if (result && result.approved) {
         const wasCached = Array.isArray(this._listCache) && this._listCache.some(i => i.id === record.id);
         this._addToListCache(serverRecord || record);
         if (!wasCached) this._updateCounts(1, 0);
       }
-      this._skipNextListFetch = true;
       closeFormPanelAndRoute(targetRoute, msgConfig);
     }
   },
@@ -2006,6 +2032,10 @@ const Billing = {
   },
 
   async showRequestInvoiceModal() {
+    await Promise.all([
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
     const entity = Auth.activeEntity;
     const allWrs = window.apiClient.workRequestCache._wrs || [];
     const wrs = allWrs.filter(wr => {
@@ -3558,7 +3588,7 @@ const Billing = {
               this._detailCacheEntity = activeEntity;
               this._updateCounts(templatesToGenerate.length, 0);
               this.view = 'list';
-              this._skipNextListFetch = true;
+              const skipGeneration = this._beginSkipGeneration();
               App.handleRoute();
 
               const failed = [];
@@ -3585,9 +3615,12 @@ const Billing = {
                 this._updateCounts(-failed.length, 0);
               }
 
-              // Refresh from warm cache and report results.
-              this._skipNextListFetch = true;
+              // Clear the skip generation and refresh from the server so temp records
+              // are replaced by their server counterparts (or removed if they failed).
+              this._endSkipGeneration(skipGeneration);
               App.handleRoute();
+
+              // Report results; the list was already rendered optimistically.
               if (failed.length === 0) {
                 Workflow.showMessage('Success', `Generated ${succeededCount} invoice${succeededCount === 1 ? '' : 's'} successfully.`, 'success');
               } else {
@@ -3755,7 +3788,7 @@ const Billing = {
     }
     this.view = 'templates';
     this.templateEditingId = null;
-    this._skipNextListFetch = true;
+    const skipGeneration = this._beginSkipGeneration();
     closeFormPanelAndRoute('#billing');
 
     let serverTemplate = null;
@@ -3775,7 +3808,7 @@ const Billing = {
         const idx = this._templates.findIndex(t => t.id === priorTemplate.id);
         if (idx >= 0) this._templates[idx] = priorTemplate;
       }
-      this._skipNextListFetch = true;
+      this._endSkipGeneration(skipGeneration);
       App.handleRoute();
       Workflow.showMessage('Error', e.message || 'Unable to save template.', 'error');
       return;
@@ -3788,8 +3821,8 @@ const Billing = {
     }
     this._counts = null; // invalidate counts
 
-    // Refresh from warm cache with the server-approved template and toast.
-    this._skipNextListFetch = true;
+    // Refresh from the server with the server-approved template and toast.
+    this._endSkipGeneration(skipGeneration);
     App.handleRoute();
     Workflow.showMessage('Template Saved', `Template "${serverTemplate?.name || payload.name}" saved successfully.`, 'success');
   },
@@ -3857,7 +3890,7 @@ const Billing = {
     this._addToListCache(optimisticRecord, { prepend: true });
     this._updateCounts(1, 0);
     this.view = 'list';
-    this._skipNextListFetch = true;
+    const skipGeneration = this._beginSkipGeneration();
     App.handleRoute();
 
     try {
@@ -3867,7 +3900,7 @@ const Billing = {
       this._detailCache[inv.id] = inv;
       this._replaceInListCache(optimisticId, inv);
       this._invalidateRelatedCaches(inv);
-      this._skipNextListFetch = true;
+      this._endSkipGeneration(skipGeneration);
       App.handleRoute();
       Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
     } catch (e) {
@@ -3875,7 +3908,7 @@ const Billing = {
       delete this._detailCache[optimisticId];
       this._removeFromListCache(optimisticId);
       this._updateCounts(-1, 0);
-      this._skipNextListFetch = true;
+      this._endSkipGeneration(skipGeneration);
       App.handleRoute();
       Workflow.showMessage('Error', e.message || 'Unable to generate invoice.', 'error');
     }
@@ -3896,7 +3929,7 @@ const Billing = {
           this._addToListCache(this._detailCache[id]);
         }
         this._updateCounts(-1, 1);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         // If deleted from detail, route away before the success feedback so the
         // stale invoice is never visible.
         if (this.view === 'detail' && this.detailId === id) {
@@ -3905,12 +3938,14 @@ const Billing = {
         App.handleRoute();
         try {
           await window.apiClient.invoices.remove(id);
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
         } catch (e) {
           console.error('Failed to trash invoice', e);
           this._rollbackInvoice(id, snapshot);
           this._addToListCache(snapshot);
           this._updateCounts(1, -1);
-          this._skipNextListFetch = true;
+          this._endSkipGeneration(skipGeneration);
           Workflow.showMessage('Error', e.message || 'Unable to trash invoice.', 'error');
           App.handleRoute();
         }
@@ -3930,17 +3965,19 @@ const Billing = {
         this._detailCache[id] = restored;
         this._addToListCache(restored);
         this._updateCounts(1, -1);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
         } catch (e) {
           console.error('Failed to restore invoice', e);
           this._rollbackInvoice(id, snapshot);
           this._addToListCache(snapshot);
           this._updateCounts(-1, 1);
-          this._skipNextListFetch = true;
+          this._endSkipGeneration(skipGeneration);
           Workflow.showMessage('Error', e.message || 'Unable to restore invoice.', 'error');
           App.handleRoute();
         }
@@ -3960,17 +3997,19 @@ const Billing = {
         this._detailCache[id] = archived;
         this._addToListCache(archived);
         this._updateCounts(-1, 1);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { archived: true });
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
         } catch (e) {
           console.error('Failed to archive invoice', e);
           this._rollbackInvoice(id, snapshot);
           this._addToListCache(snapshot);
           this._updateCounts(1, -1);
-          this._skipNextListFetch = true;
+          this._endSkipGeneration(skipGeneration);
           Workflow.showMessage('Error', e.message || 'Unable to archive invoice.', 'error');
           App.handleRoute();
         }
@@ -4002,7 +4041,7 @@ const Billing = {
           }
         });
         this._updateCounts(-eligible.length, eligible.length);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         const failed = [];
         for (const inv of eligible) {
@@ -4020,10 +4059,12 @@ const Billing = {
             this._addToListCache(snapshot);
           });
           this._updateCounts(failed.length, -failed.length);
-          this._skipNextListFetch = true;
-          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be archived.`, 'error');
+          this._endSkipGeneration(skipGeneration);
           App.handleRoute();
+          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be archived.`, 'error');
         } else {
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Archived', `${eligible.length} invoice(s) archived.`, 'success');
         }
       },
@@ -4060,7 +4101,7 @@ const Billing = {
           }
         });
         this._updateCounts(-eligible.length, eligible.length);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         const failed = [];
         for (const inv of eligible) {
@@ -4078,10 +4119,12 @@ const Billing = {
             this._addToListCache(snapshot);
           });
           this._updateCounts(failed.length, -failed.length);
-          this._skipNextListFetch = true;
-          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be moved to trash.`, 'error');
+          this._endSkipGeneration(skipGeneration);
           App.handleRoute();
+          Workflow.showMessage('Error', `${failed.length} invoice(s) could not be moved to trash.`, 'error');
         } else {
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Moved to Trash', `${eligible.length} invoice(s) moved to trash.`, 'warning');
         }
       },
@@ -4100,17 +4143,19 @@ const Billing = {
         this._detailCache[id] = restored;
         this._addToListCache(restored);
         this._updateCounts(1, -1);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
           await window.apiClient.invoices.update(id, { archived: false });
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
         } catch (e) {
           console.error('Failed to unarchive invoice', e);
           this._rollbackInvoice(id, snapshot);
           this._addToListCache(snapshot);
           this._updateCounts(-1, 1);
-          this._skipNextListFetch = true;
+          this._endSkipGeneration(skipGeneration);
           Workflow.showMessage('Error', e.message || 'Unable to unarchive invoice.', 'error');
           App.handleRoute();
         }
@@ -4136,7 +4181,7 @@ const Billing = {
         delete this._detailCache[id];
         this._removeFromListCache(id);
         this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
-        this._skipNextListFetch = true;
+        const skipGeneration = this._beginSkipGeneration();
         // Route away from the stale detail view before showing the success toast.
         if (this.view === 'detail' && this.detailId === id) {
           location.hash = '#billing';
@@ -4144,13 +4189,15 @@ const Billing = {
         App.handleRoute();
         try {
           await window.apiClient.invoices.remove(id);
+          this._endSkipGeneration(skipGeneration);
+          App.handleRoute();
           Workflow.showMessage('Deleted', 'Invoice has been permanently deleted.', 'success');
         } catch (e) {
           console.error('Failed to delete invoice', e);
           this._rollbackInvoice(id, snapshot);
           this._addToListCache(snapshot);
           this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
-          this._skipNextListFetch = true;
+          this._endSkipGeneration(skipGeneration);
           Workflow.showMessage('Error', e.message || 'Unable to delete invoice.', 'error');
           App.handleRoute();
         }

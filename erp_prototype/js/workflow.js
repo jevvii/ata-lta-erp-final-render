@@ -142,6 +142,10 @@ const WorkflowData = {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
   },
 
+  _isTempId(id) {
+    return typeof id === 'string' && /^(tmp-|wr-|t-|rt-|rtt-)/.test(id);
+  },
+
   _isEntityFresh() {
     return this._entity === this._getActiveEntity();
   },
@@ -307,23 +311,34 @@ const WorkflowData = {
 
   async createWorkRequest(record) {
     const localId = record && record.id;
-    const res = await window.apiClient.workRequests.create(record);
+    const payload = { ...record };
+    delete payload.id;
+    delete payload.tasks;
+    const res = await window.apiClient.workRequests.create(payload);
     const created = this.normalizeWorkRequest(res.data);
-    created.tasks = [];
     const existing = localId ? this.getWorkRequestById(localId) : null;
     if (existing) {
+      // Preserve the optimistic task list when the server omits it.
+      const existingTasks = existing.tasks || [];
+      const serverTasks = Array.isArray(created.tasks) && created.tasks.length > 0
+        ? created.tasks.map(t => {
+            const normalized = this.normalizeTask(t);
+            normalized.workRequestId = created.id;
+            return normalized;
+          })
+        : null;
+      created.tasks = serverTasks || existingTasks;
       // Replace the optimistic record in place so references/order are preserved.
-      if (created.id === localId) {
-        Object.assign(existing, created);
-      } else {
-        const idx = (this._workRequests || []).findIndex(r => r.id === localId);
-        if (idx >= 0) {
-          (this._workRequests || []).splice(idx, 1, created);
-        } else {
-          (this._workRequests || []).push(created);
-        }
+      Object.assign(existing, created);
+      // If the server assigned a different id, retarget any optimistic tasks.
+      if (created.id !== localId) {
+        (this._tasks || []).forEach(t => {
+          if (t.workRequestId === localId) t.workRequestId = created.id;
+        });
+        this.invalidateRelatedForWorkRequest(localId);
       }
     } else {
+      if (!Array.isArray(created.tasks)) created.tasks = [];
       (this._workRequests || []).push(created);
     }
     return created;
@@ -363,14 +378,14 @@ const WorkflowData = {
     } else {
       this._tasks.push(created);
     }
-    const wr = this.getWorkRequestById(wrId);
-    if (wr) {
-      if (!Array.isArray(wr.tasks)) wr.tasks = [];
-      const wrTaskIdx = wr.tasks.findIndex(t => (localId && t.id === localId) || t.id === created.id);
+    const parentWr = this.getWorkRequestById(created.workRequestId || wrId);
+    if (parentWr) {
+      if (!Array.isArray(parentWr.tasks)) parentWr.tasks = [];
+      const wrTaskIdx = parentWr.tasks.findIndex(t => (localId && t.id === localId) || t.id === created.id);
       if (wrTaskIdx >= 0) {
-        wr.tasks[wrTaskIdx] = created;
+        parentWr.tasks[wrTaskIdx] = created;
       } else {
-        wr.tasks.push(created);
+        parentWr.tasks.push(created);
       }
     }
     return created;
@@ -419,6 +434,15 @@ const WorkflowData = {
 
   async updateWorkRequest(id, changes) {
     const existing = this.getWorkRequestById(id);
+    const activeGenAtStart = (typeof Workflow !== 'undefined') ? Workflow._activeSkipGeneration : 0;
+    if (this._isTempId(id)) {
+      // Local-only update for optimistic records; do not call the backend.
+      if (existing) {
+        const { entity: _ignoredEntity, ...safeChanges } = changes || {};
+        Object.assign(existing, safeChanges);
+      }
+      return existing;
+    }
     // The entity of a work request is immutable; do not let caller-supplied
     // `entity` overwrite the existing value or be sent to the backend.
     const { entity: _ignoredEntity, ...safeChanges } = changes || {};
@@ -451,10 +475,10 @@ const WorkflowData = {
         Object.assign(existing, previous);
         existing.tasks = previous.tasks;
       }
-      // Skip the server round-trip on the next list render so we redraw from
-      // the restored cache instead of a possibly stale paginated fetch.
-      if (typeof Workflow !== 'undefined') Workflow._skipNextListFetch = true;
     }
+    // Clear the active skip generation after the API response so the next render
+    // fetches fresh server state, unless a newer mutation has already started.
+    if (typeof Workflow !== 'undefined') Workflow._clearSkipGenerationIfLatest(activeGenAtStart);
     this.invalidateRelatedForWorkRequest(id);
     return updated;
   },
@@ -462,6 +486,11 @@ const WorkflowData = {
   async updateTask(id, changes) {
     const existing = this.getTaskById(id);
     const wrId = existing ? existing.workRequestId : (changes && changes.workRequestId);
+    if (this._isTempId(id)) {
+      // Local-only update for optimistic records; do not call the backend.
+      if (existing) Object.assign(existing, changes);
+      return existing;
+    }
     if (!wrId) {
       console.error('Cannot update task without work request id', id, changes);
       return existing;
@@ -500,6 +529,10 @@ const WorkflowData = {
   async deleteWorkRequest(id) {
     const idx = (this._workRequests || []).findIndex(r => r.id === id);
     if (idx >= 0) (this._workRequests || []).splice(idx, 1);
+    if (this._isTempId(id)) {
+      this.invalidateRelatedForWorkRequest(id);
+      return;
+    }
     try {
       await window.apiClient.workRequests.remove(id);
     } catch (e) {
@@ -519,6 +552,10 @@ const WorkflowData = {
         const tidx = wr.tasks.findIndex(t => t.id === id);
         if (tidx >= 0) wr.tasks.splice(tidx, 1);
       }
+    }
+    if (this._isTempId(id)) {
+      if (wrId) this.invalidateRelatedForWorkRequest(wrId);
+      return;
     }
     if (!wrId) return;
     try {
@@ -638,7 +675,7 @@ const WorkflowData = {
   },
 
   async loadRelatedForWorkRequest(id) {
-    if (!id) return this._emptyWrRelated();
+    if (!id || this._isTempId(id)) return this._emptyWrRelated();
     if (this._relatedLoading.has(id)) return this._relatedLoading.get(id);
     const promise = window.apiClient.workRequests.getRelated(id)
       .then(res => {
@@ -670,7 +707,7 @@ const WorkflowData = {
   },
 
   async loadRelatedForTask(id) {
-    if (!id) return this._emptyTaskRelated();
+    if (!id || this._isTempId(id)) return this._emptyTaskRelated();
     if (this._relatedTaskLoading.has(id)) return this._relatedTaskLoading.get(id);
     const task = this.getTaskById(id);
     const wrId = task ? task.workRequestId || task.work_request_id : null;
@@ -713,7 +750,7 @@ const WorkflowData = {
   },
 
   getRelatedForWorkRequest(id) {
-    if (!id) return this._emptyWrRelated();
+    if (!id || this._isTempId(id)) return this._emptyWrRelated();
     if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
     // Cold fallback: empty cache, then refresh from the backend asynchronously.
     const fallback = this._emptyWrRelated();
@@ -723,7 +760,7 @@ const WorkflowData = {
   },
 
   getRelatedForTask(id) {
-    if (!id) return this._emptyTaskRelated();
+    if (!id || this._isTempId(id)) return this._emptyTaskRelated();
     if (this._relatedByTask.has(id)) return this._relatedByTask.get(id);
     const task = this.getTaskById(id);
     if (task) {
@@ -787,7 +824,23 @@ const Workflow = {
   isPendingWr,
   disableIfPending,
   view: 'list',
-  _skipNextListFetch: false,
+  _skipFetchGeneration: 0,
+  _activeSkipGeneration: 0,
+
+  _startSkipGeneration() {
+    this._skipFetchGeneration++;
+    this._activeSkipGeneration = this._skipFetchGeneration;
+    return this._activeSkipGeneration;
+  },
+  _clearSkipGenerationIfLatest(gen) {
+    if (this._activeSkipGeneration === gen) {
+      this._activeSkipGeneration = 0;
+    }
+  },
+  _resetSkipGenerations() {
+    this._skipFetchGeneration = 0;
+    this._activeSkipGeneration = 0;
+  },
 
   // Tell the app shell whether the cached WorkflowData is fresh for the given
   // entity, so it can skip the route skeleton overlay when data is already usable.
@@ -879,7 +932,7 @@ const Workflow = {
     if (!record || !record.name) return null;
     if (!this._retainerTemplates) this._retainerTemplates = [];
     this._retainerTemplates.push(record);
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     try {
       const res = await window.apiClient.operations.createTemplate(record);
@@ -887,12 +940,14 @@ const Workflow = {
       const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
       if (idx >= 0) this._retainerTemplates[idx] = created;
       else this._retainerTemplates.push(created);
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
       return created;
     } catch (e) {
       console.error('[Workflow] failed to create retainer template', e);
       const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
       if (idx >= 0) this._retainerTemplates.splice(idx, 1);
-      Workflow._skipNextListFetch = true;
+      Workflow._clearSkipGenerationIfLatest(myGen);
       App.handleRoute();
       this.showMessage('Error', e.message || 'Unable to create retainer template.', 'error');
       return null;
@@ -1145,6 +1200,9 @@ const Workflow = {
   // Phase Transition Logic (Robust Business Accounting Logic)
   // ============================================================
   getPhaseTransitionStatus(wrId) {
+    if (WorkflowData._isTempId(wrId)) {
+      return { canTransition: false, reason: 'Saving...' };
+    }
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
       const pc = WorkflowData.getPendingApprovalByRecordId(wrId, 'workRequests');
@@ -1153,7 +1211,7 @@ const Workflow = {
       }
       return null;
     }
-    
+
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
     const related = WorkflowData.getRelatedForWorkRequest(wrId);
     const invoices = related.invoices;
@@ -1435,30 +1493,34 @@ const Workflow = {
 
     this.showConfirm('Cancel Work Request',
       `Are you sure you want to cancel "${wr.title}"? All non-completed tasks will also be cancelled.`,
-      () => {
+      async () => {
         const now = new Date().toISOString();
         const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
         let cancelledCount = 0;
 
-        tasks.forEach(t => {
+        const myGen = Workflow._startSkipGeneration();
+        App.handleRoute();
+
+        for (const t of tasks) {
           if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-            WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+            await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
             cancelledCount++;
           }
-        });
+        }
 
-        WorkflowData.updateWorkRequest(wrId, {
+        await WorkflowData.updateWorkRequest(wrId, {
           status: 'Cancelled',
           archived: true,
           updatedAt: now
         });
 
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+
         this.showMessage('Work Request Cancelled',
           `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
           'warning'
         );
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
       },
       'danger'
     );
@@ -1467,19 +1529,27 @@ const Workflow = {
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || wr.status !== 'Completed') return;
-    WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
-    this.showMessage('Archived', 'Work Request has been archived.', 'success');
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
+    (async () => {
+      await WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
+      this.showMessage('Archived', 'Work Request has been archived.', 'success');
+    })();
   },
 
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
-    WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
-    this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
+    (async () => {
+      await WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
+      this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
+    })();
   },
 
   bulkArchiveWorkRequests(ids) {
@@ -1494,12 +1564,14 @@ const Workflow = {
 
     this.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} completed Work Request(s)?`,
-      () => {
+      async () => {
         const now = new Date().toISOString();
-        eligible.forEach(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now }));
-        this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
-        Workflow._skipNextListFetch = true;
+        const myGen = Workflow._startSkipGeneration();
         App.handleRoute();
+        await Promise.all(eligible.map(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now })));
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
       },
       'warning'
     );
@@ -1522,27 +1594,31 @@ const Workflow = {
 
     this.showConfirm('Bulk Cancel',
       `Are you sure you want to cancel ${eligible.length} Work Request(s) and their non-completed tasks?`,
-      () => {
+      async () => {
         const now = new Date().toISOString();
         let cancelledTasks = 0;
 
-        eligible.forEach(wr => {
+        const myGen = Workflow._startSkipGeneration();
+        App.handleRoute();
+
+        await Promise.all(eligible.map(async wr => {
           const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
-          tasks.forEach(t => {
+          await Promise.all(tasks.map(async t => {
             if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-              WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+              await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
               cancelledTasks++;
             }
-          });
-          WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
-        });
+          }));
+          await WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
+        }));
+
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
 
         this.showMessage('Cancelled',
           `${eligible.length} Work Request(s) cancelled. ${cancelledTasks} task(s) also cancelled.`,
           'warning'
         );
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
       },
       'danger'
     );
@@ -3812,7 +3888,8 @@ const Workflow = {
       const gen = ++refreshGeneration;
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
 
-      if (Workflow._skipNextListFetch) {
+      const shouldSkipServerFetch = Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
+      if (shouldSkipServerFetch) {
         await WorkflowData.loadPendingApprovals();
         const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
         const pendingWrs = pendingChanges.map(pc => {
@@ -3856,7 +3933,6 @@ const Workflow = {
         totalPages = 1;
         renderPagination();
 
-        Workflow._skipNextListFetch = false;
         requestAnimationFrame(() => this.updateStickyOffsets());
         return;
       }
@@ -3880,7 +3956,7 @@ const Workflow = {
       serverParams.sortOrder = 'asc';
 
       const pageResult = await WorkflowData.loadPage(serverParams).catch(err => {
-        console.warn('Failed to load paginated work requests:', err);
+        if (!isAbortError(err)) console.warn('Failed to load paginated work requests:', err);
         return { workRequests: [], tasks: [], meta: {} };
       });
       pageMeta = pageResult.meta || {};
@@ -4157,6 +4233,7 @@ const Workflow = {
     }
     // Exclude cancelled from board
     wrs = wrs.filter(wr => wr.status !== 'Cancelled');
+    wrs.forEach(wr => { wr.isOptimistic = WorkflowData._isTempId(wr.id); });
     const canEdit = Auth.can('workflow:edit');
     const canApprove = Auth.can('workflow:approve');
     const self = this;
@@ -4241,6 +4318,7 @@ const Workflow = {
         priorityClass: priorityConfig.cls,
         avatars: assignees.slice(0, 3).map(u => ({ name: u.name, avatarUrl: u.avatarUrl })),
         counts,
+        isOptimistic: wr.isOptimistic,
         onClick: () => { location.hash = '#operations/detail/' + wr.id; }
       });
     };
@@ -4297,10 +4375,13 @@ const Workflow = {
           label: 'Delete',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, () => {
-            Workflow._skipNextListFetch = true;
-            WorkflowData.getTasksWhere(t => t.workRequestId === wr.id).forEach(t => WorkflowData.deleteTask(t.id));
-            WorkflowData.deleteWorkRequest(wr.id);
+          onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, async () => {
+            const myGen = Workflow._startSkipGeneration();
+            App.handleRoute();
+            const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+            await Promise.all(tasks.map(t => WorkflowData.deleteTask(t.id)));
+            await WorkflowData.deleteWorkRequest(wr.id);
+            Workflow._clearSkipGenerationIfLatest(myGen);
             App.handleRoute();
           }, 'danger')
         });
@@ -4317,13 +4398,16 @@ const Workflow = {
         return;
       }
 
-      const applyMove = () => {
+      const applyMove = async () => {
         const changes = { boardOrder: newOrder };
         if (isPhaseChange) {
           changes.status = targetStatus;
           changes.updatedAt = new Date().toISOString();
         }
-        WorkflowData.updateWorkRequest(wr.id, changes);
+        const myGen = Workflow._startSkipGeneration();
+        App.handleRoute();
+        await WorkflowData.updateWorkRequest(wr.id, changes);
+        Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
       };
 
@@ -4348,8 +4432,9 @@ const Workflow = {
 
     const dragConfig = {
       enabled: true,
-      canDrag: () => canApprove,
-      canDrop: ({ item, targetStatus }) => {
+      canDrag: (item) => canApprove && !item.isOptimistic,
+      canDrop: ({ item, targetStatus, beforeItem, afterItem }) => {
+        if (item.isOptimistic || beforeItem?.isOptimistic || afterItem?.isOptimistic) return false;
         if (item.status === targetStatus) return true;
         const currentPhaseIdx = boardPhases.findIndex(p => p.statuses.includes(item.status));
         const targetPhaseIdx = boardPhases.findIndex(p => p.targetStatus === targetStatus);
@@ -6462,35 +6547,36 @@ const Workflow = {
     const result = await PendingChanges.submit('workRequests', record, isNew);
 
     // Sync to the backend when the request is approved (admin/managerial save).
+    const targetRoute = isResubmitting ? '#admin' : '#operations';
     let apiWrId = this.editingId;
+
     if (result.approved) {
       if (isNew) {
-        // Optimistic WR insert so the list and nav badge update immediately.
+        // Optimistic WR + tasks insert so the list and nav badge update immediately.
         WorkflowData._addOptimisticWorkRequest(record);
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
+        for (const t of taskRecords) {
+          t.workRequestId = record.id;
+          WorkflowData._addOptimisticTask(t);
+        }
+        const myGen = Workflow._startSkipGeneration();
+        this.editingId = null;
+        closeFormPanelAndRoute(targetRoute);
+
         let createdWr = null;
         try {
           createdWr = await WorkflowData.createWorkRequest(record);
-          apiWrId = createdWr ? createdWr.id : record.id;
         } catch (e) {
           console.error('Failed to create work request', e);
           WorkflowData._removeWorkRequest(record.id);
-          Workflow._skipNextListFetch = true;
+          for (const t of taskRecords) WorkflowData._removeTask(t.id);
+          Workflow._clearSkipGenerationIfLatest(myGen);
           App.handleRoute();
           this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
           return;
         }
 
-        // Optimistically insert each task, then confirm with the API. Roll back
-        // only the tasks that fail without stopping the whole batch.
+        apiWrId = createdWr ? createdWr.id : record.id;
         const failedTaskTitles = [];
-        for (const t of taskRecords) {
-          t.workRequestId = apiWrId;
-          WorkflowData._addOptimisticTask(t);
-        }
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
         for (const t of taskRecords) {
           t.workRequestId = apiWrId;
           try {
@@ -6502,10 +6588,13 @@ const Workflow = {
           }
         }
         if (failedTaskTitles.length > 0) {
-          Workflow._skipNextListFetch = true;
-          App.handleRoute();
-          this.showMessage('Error', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
+          this.showMessage('Warning', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
+        } else {
+          this.showMessage('Work Request Created', 'Work Request has been successfully created.', 'success');
         }
+
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
       } else {
         await WorkflowData.updateWorkRequest(this.editingId, record);
         const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
@@ -6514,9 +6603,15 @@ const Workflow = {
           t.workRequestId = this.editingId;
           await WorkflowData.createTask(t);
         }
+        apiWrId = this.editingId;
+        this.editingId = null;
+        closeFormPanelAndRoute(targetRoute, {
+          title: 'Work Request Saved',
+          message: 'Work Request has been successfully updated.',
+          type: 'success'
+        });
+        return;
       }
-    } else {
-      // Staged tasks are stored inside record.tasks in the pending changes proposedData.
     }
 
     if (data.isRetainer && result.approved) {
@@ -6547,20 +6642,25 @@ const Workflow = {
       });
     }
 
-    const isApproved = result.approved;
-    if (isApproved) {
+    if (result.approved) {
       if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
       if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
     }
 
+    if (isNew && result.approved) {
+      // Create branch already closed the panel and showed its message.
+      return;
+    }
+
+    // Non-approved create or approved update: close with the standard message.
+    this.editingId = null;
     const msgConfig = {
       title: isNew ? 'Work Request Created' : 'Work Request Saved',
-      message: isApproved
+      message: result.approved
         ? (isNew ? 'Work Request has been successfully created.' : 'Work Request has been successfully updated.')
         : `Work Request ${isNew ? 'creation' : 'update'} request has been submitted for Admin approval.`,
       type: 'success'
     };
-    const targetRoute = isResubmitting ? '#admin' : '#operations';
     closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
@@ -8219,9 +8319,11 @@ const Workflow = {
           e.stopPropagation();
           menuList.classList.remove('open');
           menuList.classList.add('hidden');
-          this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', () => {
-            Workflow._skipNextListFetch = true;
-            WorkflowData.deleteTask(t.id);
+          this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', async () => {
+            const myGen = Workflow._startSkipGeneration();
+            App.handleRoute();
+            await WorkflowData.deleteTask(t.id);
+            Workflow._clearSkipGenerationIfLatest(myGen);
             App.handleRoute();
           }, 'danger');
         });
@@ -10255,29 +10357,26 @@ const Workflow = {
       if (result.approved) {
         // Optimistic task insert so the WR detail/board task count updates immediately.
         WorkflowData._addOptimisticTask(newTask);
-        Workflow._skipNextListFetch = true;
+        const myGen = Workflow._startSkipGeneration();
         App.handleRoute();
         try {
           await WorkflowData.createTask(newTask);
           if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
           if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+          this.showMessage('Task Added', 'Task has been added to the work request.', 'success');
         } catch (e) {
           console.error('Failed to add task', e);
           WorkflowData._removeTask(newTask.id);
-          Workflow._skipNextListFetch = true;
+          Workflow._clearSkipGenerationIfLatest(myGen);
           App.handleRoute();
           this.showMessage('Error', e.message || 'Unable to add task.', 'error');
           return;
         }
+        Workflow._clearSkipGenerationIfLatest(myGen);
+      } else {
+        this.showMessage('Task Added', 'Task addition has been submitted for Manager approval.', 'success');
       }
-      const msgConfig = {
-        title: 'Task Added',
-        message: result.approved
-          ? 'Task has been added to the work request.'
-          : 'Task addition has been submitted for Manager approval.',
-        type: 'success'
-      };
-      closeFormPanelAndRoute('#operations/detail/' + wrId, msgConfig);
+      closeFormPanelAndRoute('#operations/detail/' + wrId);
     });
 
     return form;
@@ -11282,7 +11381,6 @@ const Workflow = {
       this._updateRetainerTemplate(this.templateEditingId, record);
     } else {
       record.createdAt = now;
-      this._skipNextListFetch = true;
       await this._addRetainerTemplate(record);
     }
 
@@ -11343,9 +11441,11 @@ const Workflow = {
             onClick: () => {
               self.showConfirm('Restore Work Request',
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
-                () => {
-                  Workflow._skipNextListFetch = true;
-                  WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                async () => {
+                  const myGen = Workflow._startSkipGeneration();
+                  App.handleRoute();
+                  await WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                  Workflow._clearSkipGenerationIfLatest(myGen);
                   App.handleRoute();
                 }, 'warning');
             }
@@ -11417,35 +11517,17 @@ const Workflow = {
       boardOrder: maxOrder + 1000
     };
 
-    // Optimistic WR insert so the active list badge updates immediately.
+    // Optimistic WR + tasks insert so the active list badge updates immediately.
     WorkflowData._addOptimisticWorkRequest(workRequest);
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
-    let createdWr;
-    try {
-      createdWr = await WorkflowData.createWorkRequest(workRequest);
-    } catch (e) {
-      console.error('Failed to generate work request from template', e);
-      WorkflowData._removeWorkRequest(workRequest.id);
-      Workflow._skipNextListFetch = true;
-      App.handleRoute();
-      this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
-      return;
-    }
-    const wrId = createdWr ? createdWr.id : workRequest.id;
-
     const idMap = new Map();
     (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
-
-    // Insert tasks optimistically, then confirm with API. Roll back only failures.
-    const failedTaskTitles = [];
     const taskRecords = [];
-    for (const t of (template.tasks || [])) {
-      const idx = (template.tasks || []).indexOf(t);
+    for (let idx = 0; idx < (template.tasks || []).length; idx++) {
+      const t = template.tasks[idx];
       const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
       const taskRecord = {
         id: idMap.get(t.id),
-        workRequestId: wrId,
+        workRequestId: workRequest.id,
         title: t.title,
         assigneeId: t.assigneeId || null,
         assigneeName: t.assigneeName || null,
@@ -11459,9 +11541,26 @@ const Workflow = {
       taskRecords.push(taskRecord);
       WorkflowData._addOptimisticTask(taskRecord);
     }
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
+
+    let createdWr;
+    try {
+      createdWr = await WorkflowData.createWorkRequest(workRequest);
+    } catch (e) {
+      console.error('Failed to generate work request from template', e);
+      WorkflowData._removeWorkRequest(workRequest.id);
+      for (const t of taskRecords) WorkflowData._removeTask(t.id);
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
+      this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
+      return;
+    }
+    const wrId = createdWr ? createdWr.id : workRequest.id;
+
+    const failedTaskTitles = [];
     for (const taskRecord of taskRecords) {
+      taskRecord.workRequestId = wrId;
       try {
         await WorkflowData.createTask(taskRecord);
       } catch (e) {
@@ -11477,6 +11576,8 @@ const Workflow = {
 
     if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
     if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+    Workflow._clearSkipGenerationIfLatest(myGen);
+    App.handleRoute();
     location.hash = '#operations/detail/' + wrId;
   },
 
@@ -11489,7 +11590,7 @@ const Workflow = {
     let generatedCount = 0;
     const failedTemplates = [];
 
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
 
     for (const templateId of templateIds) {
@@ -11567,9 +11668,6 @@ const Workflow = {
       }
     }
 
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
-
     if (failedTemplates.length > 0) {
       this.showMessage('Error', `Some generations failed: ${failedTemplates.join('; ')}`, 'error');
     } else {
@@ -11583,6 +11681,7 @@ const Workflow = {
     if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
     if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
 
+    Workflow._clearSkipGenerationIfLatest(myGen);
     this.view = 'list';
     App.handleRoute();
   }
