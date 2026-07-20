@@ -12,6 +12,7 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
+const { resolveEntityCode } = require('../../lib/entityResolver');
 
 /** Valid status transitions */
 const VALID_TRANSITIONS = {
@@ -201,7 +202,18 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
     });
   }
 
-  return { data: data || [], count: count || 0 };
+  const rows = data || [];
+  const { data: entitiesData } = rows.length
+    ? await supabaseAdmin.from('entities').select('id, code')
+    : { data: [] };
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+
+  const mapped = rows.map((row) => ({
+    ...row,
+    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+  }));
+
+  return { data: mapped, count: count || 0 };
 };
 
 /**
@@ -258,7 +270,8 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
     details: { disbursementNumber, amount: data.amount, category: data.category },
   });
 
-  return disbursement;
+  const code = entityCode || (await resolveEntityCode(entityId));
+  return { ...disbursement, entity_code: code };
 };
 
 /**
@@ -285,7 +298,8 @@ const getDisbursementById = async ({ entityId, id }) => {
     });
   }
 
-  return data;
+  const entityCode = await resolveEntityCode(data.entity_id);
+  return { ...data, entity_code: entityCode };
 };
 
 /**
@@ -401,7 +415,8 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
     details: { from: existing.status, to: transition.to },
   });
 
-  return updated;
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
 };
 
 /**

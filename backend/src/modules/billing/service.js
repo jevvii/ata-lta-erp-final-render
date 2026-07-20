@@ -11,6 +11,7 @@ const { uploadBuffer } = require('../../services/storageService');
 const { generatePdf } = require('../../services/pdfService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const { resolveEntityCode } = require('../../lib/entityResolver');
 
 // ============================================================
 // Invoice CRUD
@@ -63,7 +64,18 @@ const listInvoices = async ({ entityId, filters = {} }) => {
     });
   }
 
-  return { data: data || [], count: count || 0 };
+  const rows = data || [];
+  const { data: entitiesData } = rows.length
+    ? await supabaseAdmin.from('entities').select('id, code')
+    : { data: [] };
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+
+  const mapped = rows.map((row) => ({
+    ...row,
+    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+  }));
+
+  return { data: mapped, count: count || 0 };
 };
 
 /**
@@ -151,7 +163,8 @@ const createInvoice = async ({ entityId, userId, data }) => {
     details: { invoiceNumber: data.invoiceNumber, total },
   });
 
-  return { ...invoice, line_items: lineItems };
+  const entityCode = await resolveEntityCode(invoice.entity_id);
+  return { ...invoice, entity_code: entityCode, line_items: lineItems };
 };
 
 /**
@@ -192,7 +205,8 @@ const getInvoiceById = async ({ entityId, id }) => {
     .eq('invoice_id', id)
     .order('payment_date', { ascending: false });
 
-  return { ...invoice, line_items: lineItems || [], payments: payments || [] };
+  const entityCode = await resolveEntityCode(invoice.entity_id);
+  return { ...invoice, entity_code: entityCode, line_items: lineItems || [], payments: payments || [] };
 };
 
 /**
@@ -268,7 +282,8 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
     });
   }
 
-  return updated;
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
 };
 
 /**

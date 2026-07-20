@@ -154,12 +154,23 @@ const Disbursement = {
     }
   },
 
+  _entityCodeFromId(entityId) {
+    if (!entityId) return null;
+    return Auth.activeEntity !== 'ALL' ? Auth.activeEntity : null;
+  },
+
   /**
    * Convert a backend disbursement row (snake_case, joined clients.name)
    * into the camelCase shape expected by the UI.
    */
-  normalizeDisbursement(d) {
+  normalizeDisbursement(d, entityCodeHint) {
     if (!d) return d;
+    const entity = entityCodeHint
+      || d.entityCode
+      || d.entity_code
+      || (typeof d.entity === 'string' && ['ATA', 'LTA'].includes(d.entity.toUpperCase()) ? d.entity : null)
+      || this._entityCodeFromId(d.entity_id || d.entityId)
+      || Auth.activeEntity;
     const status = d.status || 'Draft';
     const approvedBy = d.approved_by || null;
     const paymentDetails = d.payment_method ? {
@@ -173,7 +184,7 @@ const Disbursement = {
       id: d.id,
       disbursementNumber: d.disbursement_number || d.disbursementNumber || null,
       entityId: d.entity_id || d.entityId || null,
-      entity: d.entity_code || d.entity || null,
+      entity,
       category: d.category || '',
       description: d.description || '',
       amount: typeof d.amount === 'number' ? d.amount : parseFloat(d.amount) || 0,

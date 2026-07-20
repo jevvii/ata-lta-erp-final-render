@@ -594,8 +594,19 @@ const Billing = {
     return map;
   },
 
-  normalizeInvoice(doc) {
+  _entityCodeFromId(entityId) {
+    if (!entityId) return null;
+    return Auth.activeEntity !== 'ALL' ? Auth.activeEntity : null;
+  },
+
+  normalizeInvoice(doc, entityCodeHint) {
     if (!doc) return doc;
+    const entity = entityCodeHint
+      || doc.entityCode
+      || doc.entity_code
+      || (typeof doc.entity === 'string' && ['ATA', 'LTA'].includes(doc.entity.toUpperCase()) ? doc.entity : null)
+      || this._entityCodeFromId(doc.entity_id || doc.entityId)
+      || Auth.activeEntity;
     const normLineItem = item => ({
       id: item.id,
       invoiceId: item.invoice_id || item.invoiceId,
@@ -629,7 +640,8 @@ const Billing = {
       clientId: doc.client_id || doc.clientId,
       workRequestId: doc.work_request_id || doc.workRequestId,
       linkedTaskId: doc.linked_task_id || doc.linkedTaskId || null,
-      entity: doc.entity_id || doc.entity,
+      entityId: doc.entity_id || doc.entityId,
+      entity,
       issueDate: doc.issue_date || doc.issueDate,
       dueDate: doc.due_date || doc.dueDate,
       status: doc.status || 'Draft',
