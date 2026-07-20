@@ -442,8 +442,7 @@ const Billing = {
       invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
       return invoices;
     } catch (e) {
-      const isAbort = e && (e.name === 'AbortError' || (typeof e === 'string' && e === 'route-change') || e.message === 'route-change' || e.message === 'Request aborted');
-      if (isAbort) { this._lastInvoiceMeta = {}; return []; }
+      if (isAbortError(e)) { this._lastInvoiceMeta = {}; return []; }
       console.error('Failed to fetch invoices', e);
       Workflow.showMessage('Invoices', e.message || 'Unable to load invoices.', 'error');
       this._lastInvoiceMeta = {};

@@ -28,7 +28,7 @@ const updateRequestSchema = z.object({
   rejectionReason: z.string().max(2000).optional().nullable(),
   fulfilledBy: z.string().uuid().optional().nullable(),
 }).refine((data) => {
-  if (data.status === 'rejected' && data.rejectionReason == null) {
+  if (data.status === 'rejected' && (data.rejectionReason === null || data.rejectionReason === undefined)) {
     return false;
   }
   return true;

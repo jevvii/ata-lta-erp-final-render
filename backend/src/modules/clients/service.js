@@ -164,7 +164,7 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
     });
   }
 
-  let rows = data || [];
+  const rows = data || [];
 
   const clientIds = rows.map((r) => r.id);
   const [related, { data: entitiesData }] = await Promise.all([

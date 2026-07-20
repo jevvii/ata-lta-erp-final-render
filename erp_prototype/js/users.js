@@ -129,7 +129,6 @@ const Users = {
    */
   async loadCounts() {
     const canManageUsers = Auth.can('users:view');
-    const _isAbort = e => e && (e.name === 'AbortError' || (typeof e === 'string' && e === 'route-change') || e.message === 'route-change' || e.message === 'Request aborted');
 
     try {
       const [auditRes, myRequests] = await Promise.all([
@@ -139,26 +138,26 @@ const Users = {
       this._counts.audit = auditRes?.data?.total || 0;
       this._counts.myRequests = myRequests || 0;
     } catch (err) {
-      if (!_isAbort(err)) console.error('Failed to load admin counts', err);
+      if (!isAbortError(err)) console.error('Failed to load admin counts', err);
     }
 
     // Pre-load pending changes so getPendingCategories / renderTabNav can use them synchronously.
     try {
       this._cachedAllPending = await PendingChanges.getAllPending();
     } catch (err) {
-      if (!_isAbort(err)) console.error('Failed to preload pending changes', err);
+      if (!isAbortError(err)) console.error('Failed to preload pending changes', err);
       this._cachedAllPending = [];
     }
     try {
       this._cachedMyPending = await PendingChanges.getPendingForUser(Auth.user?.id);
     } catch (err) {
-      if (!_isAbort(err)) console.error('Failed to preload my pending', err);
+      if (!isAbortError(err)) console.error('Failed to preload my pending', err);
       this._cachedMyPending = [];
     }
     try {
       this._cachedMyRejected = await PendingChanges.getRejectedForUser(Auth.user?.id);
     } catch (err) {
-      if (!_isAbort(err)) console.error('Failed to preload my rejected', err);
+      if (!isAbortError(err)) console.error('Failed to preload my rejected', err);
       this._cachedMyRejected = [];
     }
   },

@@ -30,9 +30,9 @@ const Reports = {
     }
 
     if (!this.viewMode) this.viewMode = App.getPreferredViewMode('reports');
-    if (!this.dailyDate) this.dailyDate = new Date().toISOString().slice(0, 10);
-    if (!this.weeklyDate) this.weeklyDate = new Date().toISOString().slice(0, 10);
-    if (!this.monthlyMonth) this.monthlyMonth = new Date().toISOString().slice(0, 7);
+    if (!this.dailyDate) this.dailyDate = manilaToday();
+    if (!this.weeklyDate) this.weeklyDate = manilaToday();
+    if (!this.monthlyMonth) this.monthlyMonth = manilaToday().slice(0, 7);
 
     const container = el('div', { class: 'page' });
 
@@ -99,7 +99,7 @@ const Reports = {
   },
 
   today() {
-    return new Date().toISOString().slice(0, 10);
+    return manilaToday();
   },
 
   clearNode(node) {
@@ -112,14 +112,7 @@ const Reports = {
    * aborts, and browser-specific message variants.
    */
   isAbortError(e) {
-    if (!e) return false;
-    if (e.name === 'AbortError') return true;
-    if (typeof e === 'string' && (e === 'route-change' || e.includes('AbortError'))) return true;
-    if (e.message === 'route-change') return true;
-    if (e.message === 'Request aborted') return true;
-    if (typeof e.message === 'string' && e.message.includes('AbortError')) return true;
-    if (typeof e.reason === 'string' && (e.reason === 'route-change' || e.reason.includes('AbortError'))) return true;
-    return false;
+    return isAbortError(e);
   },
 
   renderMiniStat(label, value, color) {
@@ -381,7 +374,7 @@ const Reports = {
     };
 
     dateInput.addEventListener('change', () => {
-      this.dailyDate = dateInput.value || new Date().toISOString().slice(0, 10);
+      this.dailyDate = dateInput.value || manilaToday();
       if (!dateInput.value) dateInput.value = this.dailyDate;
       refresh();
     });
@@ -502,7 +495,7 @@ const Reports = {
     };
 
     weekInput.addEventListener('change', () => {
-      this.weeklyDate = weekInput.value || new Date().toISOString().slice(0, 10);
+      this.weeklyDate = weekInput.value || manilaToday();
       if (!weekInput.value) weekInput.value = this.weeklyDate;
       refresh();
     });

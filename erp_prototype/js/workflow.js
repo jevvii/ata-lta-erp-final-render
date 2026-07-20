@@ -447,12 +447,7 @@ const WorkflowData = {
   },
 
   _isAbortError(e) {
-    if (!e) return false;
-    if (e.name === 'AbortError') return true;
-    if (typeof e === 'string' && (e === 'route-change' || e.includes('AbortError'))) return true;
-    if (typeof e.message === 'string' && (e.message === 'route-change' || e.message === 'Request aborted' || e.message.includes('AbortError'))) return true;
-    if (typeof e.reason === 'string' && (e.reason === 'route-change' || e.reason.includes('AbortError'))) return true;
-    return false;
+    return isAbortError(e);
   },
 
   _normalizeRelatedInvoice(inv) {

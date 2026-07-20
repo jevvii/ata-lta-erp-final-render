@@ -190,6 +190,21 @@ function matchesEntity(recordEntity, activeEntity) {
   return rec === active;
 }
 
+/**
+ * Detect whether an error is an abort/cancellation (e.g. from route-change navigation).
+ * Handles AbortError DOMExceptions, plain string reasons, and Error objects.
+ * @param {*} e - The caught error value.
+ * @returns {boolean}
+ */
+function isAbortError(e) {
+  if (!e) return false;
+  if (e.name === 'AbortError') return true;
+  if (typeof e === 'string' && (e === 'route-change' || e.includes('AbortError'))) return true;
+  if (typeof e.message === 'string' && (e.message === 'route-change' || e.message === 'Request aborted' || e.message.includes('AbortError'))) return true;
+  if (typeof e.reason === 'string' && (e.reason === 'route-change' || e.reason.includes('AbortError'))) return true;
+  return false;
+}
+
 function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }
