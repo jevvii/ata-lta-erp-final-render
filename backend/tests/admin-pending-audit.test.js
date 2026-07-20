@@ -74,7 +74,7 @@ describe('/v1/admin pending approvals and audit', () => {
       id: 'user-staff',
       email: 'staff@ata-lta.ph',
       name: 'Staff User',
-      role: 'HR',
+      role: 'Documentation',
       entities: ['ATA'],
     });
 

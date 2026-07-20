@@ -9,6 +9,8 @@ const { randomUUID } = require('crypto');
 const clientsService = require('../clients/service');
 const operationsService = require('../operations/service');
 
+const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
+
 const toApiUser = (row, departments = []) => ({
   id: row.id,
   email: row.email,
@@ -58,6 +60,11 @@ const setDepartments = async (userId, departmentNames) => {
   await supabaseAdmin.from('user_departments').delete().eq('user_id', userId);
 
   if (!departmentNames?.length) return;
+
+  const invalid = departmentNames.filter((n) => !ALLOWED_DEPARTMENTS.includes(n));
+  if (invalid.length) {
+    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Invalid departments: ${invalid.join(', ')}. Allowed: ${ALLOWED_DEPARTMENTS.join(', ')}` });
+  }
 
   const { data: deptRows } = await supabaseAdmin
     .from('departments')

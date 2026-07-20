@@ -10,9 +10,18 @@
  * a bundler), those URLs are added to the app-shell cache. Otherwise a static
  * fallback list is used.
  */
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const SHELL_CACHE = `erp-shell-${CACHE_VERSION}`;
 const API_CACHE = `erp-api-${CACHE_VERSION}`;
+
+// In local development the service worker should not cache unhashed source files,
+// otherwise edits to dashboard.js, workflow.js, etc. are invisible until a hard
+// refresh or manual cache clear. Bump CACHE_VERSION above to force existing
+// production SWs to update; in dev the fetch handler returns early so requests
+// pass through to the network.
+const IS_DEV_HOST = location.hostname === 'localhost' ||
+                    location.hostname === '127.0.0.1' ||
+                    location.hostname.endsWith('.local');
 
 const SHELL_URLS = [
   '/',
@@ -86,6 +95,11 @@ function isWriteOrAuthOrPdf(request) {
 
 self.addEventListener('install', event => {
   self.skipWaiting();
+  if (IS_DEV_HOST) {
+    // Don't populate the shell cache in dev; source files are unhashed and
+    // change frequently, so caching defeats live reload.
+    return;
+  }
   event.waitUntil(
     caches.open(SHELL_CACHE).then(async cache => {
       for (const url of APP_SHELL_URLS) {
@@ -182,6 +196,11 @@ async function networkFirst(request) {
 }
 
 self.addEventListener('fetch', event => {
+  // In dev, let the browser handle all requests directly so source edits are
+  // visible immediately. The production cache strategies below are only for
+  // hashed, immutable bundles served from dist/.
+  if (IS_DEV_HOST) return;
+
   const request = event.request;
   const url = new URL(request.url);
 

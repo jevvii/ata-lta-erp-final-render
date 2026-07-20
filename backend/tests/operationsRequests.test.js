@@ -76,9 +76,9 @@ describe('/v1/operations-requests', () => {
 
   it('forbids creation without workflow:edit', async () => {
     const token = registerUser({
-      email: 'hr@ata-lta.ph',
-      name: 'HR Staff',
-      role: 'HR',
+      email: 'accounting@ata-lta.ph',
+      name: 'Accounting Staff',
+      role: 'Accounting',
       entities: ['ATA'],
     });
 
@@ -343,16 +343,16 @@ describe('/v1/operations-requests', () => {
       .send(validRequest)
       .expect(201);
 
-    const hr = registerUser({
-      email: 'hr@ata-lta.ph',
-      name: 'HR Staff',
-      role: 'HR',
+    const accounting = registerUser({
+      email: 'accounting@ata-lta.ph',
+      name: 'Accounting Staff',
+      role: 'Accounting',
       entities: ['ATA'],
     });
 
     const counts = await request(app)
       .get('/v1/operations-requests/counts')
-      .set('Authorization', `Bearer ${hr}`)
+      .set('Authorization', `Bearer ${accounting}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 

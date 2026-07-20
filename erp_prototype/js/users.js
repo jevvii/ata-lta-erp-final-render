@@ -975,8 +975,7 @@ const Users = {
       'Manager': 'badge-warning',
       'Accounting': 'badge-info',
       'Operations': 'badge-success',
-      'Documentation': 'badge-primary',
-      'HR': 'badge-secondary'
+      'Documentation': 'badge-primary'
     };
     return el('span', { class: 'badge ' + (map[role] || ''), text: role });
   },
@@ -1106,16 +1105,19 @@ const Users = {
     const data = Object.fromEntries(new FormData(form).entries());
     const entityCheckboxes = form.querySelectorAll('input[name="entities"]:checked');
     const entities = Array.from(entityCheckboxes).map(cb => cb.value);
+    const allowedDepartments = Auth.DEPARTMENTS;
     const departmentCheckboxes = form.querySelectorAll('input[name="departments"]:checked');
     let departments = Array.from(departmentCheckboxes).map(cb => cb.value);
     const hasDeptField = form.querySelector('input[name="departments"]') !== null;
 
     // Preserve existing department assignments when the department field is not
     // rendered (e.g. Admin users) or when no checkboxes are checked on edit.
+    // Filter against the allowed department list so legacy/disallowed assignments
+    // are stripped on save.
     if (this.editingId && departments.length === 0) {
       const existing = this.users.find(u => u.id === this.editingId);
       if (existing && Array.isArray(existing.departments) && existing.departments.length > 0) {
-        departments = existing.departments;
+        departments = existing.departments.filter(d => allowedDepartments.includes(d));
       }
     }
 
@@ -1129,8 +1131,11 @@ const Users = {
     } else if (departments.length > 0) {
       role = departments[0];
     } else {
-      role = existing?.role || 'HR';
+      role = existing?.role || null;
     }
+
+    // Final sanitization: only permitted departments may be saved.
+    departments = departments.filter(d => allowedDepartments.includes(d));
 
     // Clear previous errors
     form.querySelectorAll('.field-error').forEach(e => { e.classList.add('hidden'); e.textContent = ''; });

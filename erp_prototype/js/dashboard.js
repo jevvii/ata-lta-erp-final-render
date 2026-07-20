@@ -34,14 +34,12 @@ const Dashboard = {
   },
 
   init() {
-    this.selectedDay = null;
-    this.expandedItemId = null;
-    this.calView = 'week';
-    this.calTimezone = 'local';
+    // Do NOT reset selectedDay, calView, or the data cache here. App.handleRoute()
+    // calls init() after every render, so clearing state/cache would wipe the
+    // user's calendar selection/view and leave refreshCalendarCard() with no data
+    // to paint, causing the schedule to appear empty after the first render.
     this.isLoading = false;
     this.commandFeedback = null;
-    this._dataCache = null;
-    this._dataPromise = null;
   },
 
   /**
@@ -66,6 +64,27 @@ const Dashboard = {
         App.updateEntityBadge();
       }
     }
+  },
+
+  async _routeToItem(type, item) {
+    this._switchToItemEntity(item);
+
+    // Drop the dashboard cache so a return visit loads data for the new entity.
+    this.invalidateCache();
+
+    // Invalidate the target module cache when routing to a disbursement so the
+    // detail view always fetches against the switched entity.
+    if (type === 'db' && typeof Disbursement !== 'undefined' && typeof Disbursement.invalidateCache === 'function') {
+      Disbursement.invalidateCache();
+    }
+
+    const hash = type === 'wr' ? '#operations/detail/' + item.id : '#disbursement/detail/' + item.id;
+
+    // Use normal hash navigation. This lets the router handle the route exactly
+    // once through the hashchange listener, avoiding the hash-suppression bug
+    // where an internal detail-view redirect was swallowed and left the content
+    // area blank.
+    location.hash = hash;
   },
 
   async render(routeId) {
@@ -488,12 +507,12 @@ const Dashboard = {
       btn.onclick = (e) => {
         e.stopPropagation();
         this.calView = mode;
-        this.isLoading = true;
+        // Re-render immediately without entering a skeleton-loading state.
+        // The previous isLoading/setTimeout dance replaced the card children
+        // with a skeleton grid and then re-rendered, which produced a visible
+        // flash and could leave the schedule area empty if an error occurred
+        // during the second render pass.
         this.refreshCalendarCard();
-        setTimeout(() => {
-          this.isLoading = false;
-          this.refreshCalendarCard();
-        }, 200);
       };
       viewToggle.appendChild(btn);
     });
@@ -731,11 +750,9 @@ const Dashboard = {
         right.appendChild(el('span', { class: `badge ${isCompleted ? 'badge-success' : 'badge-info'}`, text: ev.data.status }));
         card.appendChild(right);
 
-        card.onclick = (e) => {
+        card.onclick = async (e) => {
           e.stopPropagation();
-          this.selectedDay = dateStr;
-          this.expandedItemId = ev.data.id;
-          this.refreshCalendarCard();
+          await this._routeToItem(ev.type, ev.data);
         };
 
         itemsContainer.appendChild(card);
@@ -1048,10 +1065,9 @@ const Dashboard = {
               badge.appendChild(el('span', { class: 'week-event-title', text: entityPrefix + titleText }));
               badge.appendChild(el('span', { class: 'week-event-arrow', text: '›' }));
 
-              badge.onclick = (e) => {
+              badge.onclick = async (e) => {
                 e.stopPropagation();
-                this.expandedItemId = ev.data.id;
-                this.refreshCalendarCard();
+                await this._routeToItem(ev.type, ev.data);
               };
 
               cell.appendChild(badge);
@@ -1250,11 +1266,9 @@ const Dashboard = {
 
         badge.appendChild(pill);
 
-        badge.onclick = (e) => {
+        badge.onclick = async (e) => {
           e.stopPropagation();
-          this.selectedDay = dateStr;
-          this.expandedItemId = ev.data.id;
-          this.refreshCalendarCard();
+          await this._routeToItem(ev.type, ev.data);
         };
         return badge;
       };
@@ -1447,11 +1461,9 @@ const Dashboard = {
     overlay.appendChild(el('span', { class: 'week-event-title', text: entityPrefix + titleText }));
     overlay.appendChild(el('span', { class: 'week-event-arrow', text: '›' }));
 
-    overlay.onclick = (e) => {
+    overlay.onclick = async (e) => {
       e.stopPropagation();
-      this.selectedDay = dateStr;
-      this.expandedItemId = ev.data.id;
-      this.refreshCalendarCard();
+      await this._routeToItem(ev.type, ev.data);
     };
 
     return overlay;
@@ -1503,11 +1515,9 @@ const Dashboard = {
     const entityPrefix = ev.data.entity ? `[${ev.data.entity.toUpperCase()}] ` : '';
     overlay.appendChild(el('span', { class: 'week-event-title', text: entityPrefix + titleText }));
 
-    overlay.onclick = (e) => {
+    overlay.onclick = async (e) => {
       e.stopPropagation();
-      this.selectedDay = dateStr;
-      this.expandedItemId = ev.data.id;
-      this.refreshCalendarCard();
+      await this._routeToItem(ev.type, ev.data);
     };
 
     return overlay;
@@ -1563,8 +1573,16 @@ const Dashboard = {
   },
 
   refreshCalendarCard() {
-    if (this.calendarCardRef) {
+    if (!this.calendarCardRef) return;
+    try {
       this.renderCalendarCard(this.calendarCardRef);
+    } catch (err) {
+      console.error('[Dashboard] refreshCalendarCard failed:', err);
+      // Avoid leaving the calendar card empty: render a minimal error state so
+      // the rest of the dashboard remains usable.
+      this.calendarCardRef.replaceChildren(
+        el('div', { class: 'alert alert-warning', style: 'margin: 16px;', text: 'Unable to refresh calendar view. Please reload the page.' })
+      );
     }
   },
 
@@ -1701,14 +1719,9 @@ const Dashboard = {
 
       const btnText = type === 'wr' ? 'View Tasks' : 'View Disbursement';
       const viewBtn = el('button', { class: 'btn btn-primary btn-xs btn-block', style: 'margin-top:12px;', text: btnText });
-      viewBtn.onclick = (e) => {
+      viewBtn.onclick = async (e) => {
         e.stopPropagation();
-        this._switchToItemEntity(item);
-        if (type === 'wr') {
-          location.hash = '#operations/detail/' + item.id;
-        } else {
-          location.hash = '#disbursement/detail/' + item.id;
-        }
+        await this._routeToItem(type, item);
       };
       details.appendChild(viewBtn);
 

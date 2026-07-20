@@ -1,7 +1,7 @@
 /**
  * Admin Review Gate — Pending Changes
  * Structural mutations are staged for Admin approval.
- * All non-Admin roles (Manager, Accounting, Operations, Documentation, HR)
+ * All non-Admin roles (Manager, Accounting, Operations, Documentation)
  * stage changes through the pending-approvals API for Admin review.
  *
  * Refactor notes:

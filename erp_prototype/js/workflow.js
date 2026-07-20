@@ -6506,6 +6506,7 @@ const Workflow = {
 
   async renderDetail() {
     await WorkflowData.loadPendingApprovals();
+    await this._loadGroundWorkers();
     let wr = WorkflowData.getWorkRequestById(this.detailWrId);
     let wrDocs = [];
     if (this.detailWrId) {

@@ -87,7 +87,8 @@ function useDist() {
   }
 }
 
-const ROOT = useDist() ? DIST_DIR : PROJECT_ROOT;
+const SERVE_FROM_DIST = useDist();
+const ROOT = SERVE_FROM_DIST ? DIST_DIR : PROJECT_ROOT;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -117,10 +118,13 @@ function cacheHeaders(relativePath, ext) {
   if (relativePath === 'env.js' || ext === '.html') {
     return { 'Cache-Control': 'no-cache, no-store, must-revalidate' };
   }
-  if (ext === '.js' || ext === '.css') {
+  // In dev mode (serving unbundled source) JS/CSS files are not hashed, so
+  // immutable long-term caching prevents edits from being picked up. Only
+  // apply immutable headers when serving the hashed production bundle from dist/.
+  if ((ext === '.js' || ext === '.css') && SERVE_FROM_DIST) {
     return { 'Cache-Control': 'public, max-age=31536000, immutable' };
   }
-  return { 'Cache-Control': 'no-cache' };
+  return { 'Cache-Control': 'no-cache, no-store, must-revalidate' };
 }
 
 function send(res, status, body, contentType = 'text/plain') {

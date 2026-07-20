@@ -46,6 +46,26 @@ describe('/v1/admin', () => {
     expect(list.body.data.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('rejects invalid department assignments', async () => {
+    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+
+    const res = await request(app)
+      .post('/v1/admin/users')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        email: 'baddept@ata-lta.ph',
+        name: 'Bad Dept',
+        role: 'Accounting',
+        entities: ['ATA'],
+        departments: ['HR'],
+        password: 'password123',
+      })
+      .expect(400);
+
+    expect(res.body.title).toMatch(/validation error/i);
+  });
+
   it('forbids user management without users:manage', async () => {
     const token = registerUser({ email: 'accounting@ata-lta.ph', name: 'Accounting', role: 'Accounting', entities: ['ATA'] });
 

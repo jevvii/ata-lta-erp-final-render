@@ -64,9 +64,9 @@ describe('/v1/disbursements', () => {
 
   it('forbids disbursement creation without disbursement:create', async () => {
     const token = registerUser({
-      email: 'hr@ata-lta.ph',
-      name: 'HR Staff',
-      role: 'HR',
+      email: 'doc@ata-lta.ph',
+      name: 'Doc Staff',
+      role: 'Documentation',
       entities: ['ATA'],
     });
 

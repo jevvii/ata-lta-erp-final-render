@@ -9,15 +9,10 @@ exports.up = async (pgm) => {
 
   await pgm.sql(`
     INSERT INTO departments (name) VALUES
+      ('Management'),
       ('Accounting'),
       ('Operations'),
-      ('Documentation'),
-      ('HR'),
-      ('Management'),
-      ('Legal'),
-      ('Tax'),
-      ('Audit'),
-      ('Business Development')
+      ('Documentation')
     ON CONFLICT (name) DO NOTHING;
   `);
 };
@@ -25,7 +20,7 @@ exports.up = async (pgm) => {
 /** @type {import('node-pg-migrate').Migration} */
 exports.down = async (pgm) => {
   await pgm.sql(`DELETE FROM departments WHERE name IN (
-    'Accounting','Operations','Documentation','HR','Management','Legal','Tax','Audit','Business Development'
+    'Management','Accounting','Operations','Documentation'
   );`);
   await pgm.sql(`DELETE FROM entities WHERE code IN ('ATA','LTA');`);
 };

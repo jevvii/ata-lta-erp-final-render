@@ -318,11 +318,11 @@ The table below maps each resolved issue and each remaining task to the forecast
 |------|----------------|
 | `backend/src/app.js` | Disabled Helmet CORP header; added `Vary: X-Active-Entity` to entity-scoped `GET`/`HEAD` `/v1/*` responses |
 | `backend/src/modules/disbursements/service.js` | Fixed invalid `clients(name)` join; replaced with `entities(code)` |
-| `erp_prototype/js/workflow.js` | Strips `entity` from PUT; sends per-record `X-Active-Entity`; made `WorkflowData` entity-aware; strips literal `null` description from PUT payload; maps `In Progress`/`For Review` to board phases; local-only `boardOrder` normalization prevents board-render network storm |
+| `erp_prototype/js/workflow.js` | Strips `entity` from PUT; sends per-record `X-Active-Entity`; made `WorkflowData` entity-aware; strips literal `null` description from PUT payload; maps `In Progress`/`For Review` to board phases; local-only `boardOrder` normalization prevents board-render network storm; awaits `_loadGroundWorkers()` in `renderDetail()` so the employee filter no longer crashes on `this._groundWorkers === null` |
 | `erp_prototype/js/app.js` | Suppresses duplicate `hashchange` during entity/form-close routing; makes `updateSidebarNotifications()` run in background so entity switches are not blocked |
 | `erp_prototype/js/utils.js` | Makes `triggerSyncReload` and `closeFormPanelAndRoute` async with single hash reset and awaited route handling |
 | `erp_prototype/js/apiClient.js` | Allows per-request header overrides; abort errors named `AbortError` |
-| `erp_prototype/js/disbursement.js` | `normalizeTemplate` derives `entity` from entity code |
+| `erp_prototype/js/disbursement.js` | `normalizeTemplate` derives `entity` from entity code; `renderDetail()` pre-warms `workRequestCache`, `userCache`, and `clientCache` before `Auth.canViewDisbursement()` so permission checks no longer redirect on empty cache |
 | `erp_prototype/js/users.js` | Audit log pagination loop (`limit: 100`) |
 | `erp_prototype/js/reports.js` | Robust `isAbortError()` helper across all report catch blocks |
 | `backend/src/modules/operationsRequests/service.js` | Skip `entity_id` filter when `entityId === 'ALL'` in counts/list |
@@ -334,7 +334,23 @@ The table below maps each resolved issue and each remaining task to the forecast
 | `backend/src/modules/transmittals/controller.js` | Added `countTransmittals` / `GET /v1/transmittals/counts` |
 | `backend/src/modules/transmittals/routes.js` | Use `resolveEntity({ allowAll: true })` |
 | `erp_prototype/js/transmittal.js` | Use counts endpoint for tab badges; `normalizeTransmittal` uses backend `entity_code` |
-| `erp_prototype/js/dashboard.js` | Switch `Auth.activeEntity` to record entity before routing from schedule |
+| `erp_prototype/js/dashboard.js` | Switch `Auth.activeEntity` to record entity before routing from schedule; route all calendar/schedule clicks via `_routeToItem`; remove `isLoading` flash from calendar view toggle; harden `refreshCalendarCard` against render errors; persist selected day, view, and data cache across `App.handleRoute()` re-renders; route directly via `location.hash` instead of `triggerSyncReload()` to avoid swallowed hashchange events |
+| `erp_prototype/dev-server.js` | Serve JS/CSS source with `no-cache` in dev mode; apply immutable `Cache-Control` only to hashed `dist/` bundles |
+| `erp_prototype/sw.js` | Bump `CACHE_VERSION` to `v4`; bypass shell caching on localhost/`.local` dev hosts so source changes are not masked by stale SW cache |
+| `backend/src/modules/admin/schema.js` | Restricted user `departments` to allowed enum and removed `HR` from role enum |
+| `backend/src/modules/admin/service.js` | Added explicit allowlist check in `setDepartments` before database lookup |
+| `backend/src/lib/permissions.js` | Trimmed `DEPARTMENTS` and `DEPARTMENT_PERMISSIONS` to four allowed departments; hardened `buildPermissionSet` to filter user departments and only map allowed legacy roles |
+| `backend/migrations/000006_seed_entities_departments.js` | Seed only the four allowed departments |
+| `backend/migrations/028-restrict-departments.sql` | Delete invalid `user_departments` rows and remove the five disallowed departments |
+| `erp_prototype/js/auth.js` | Restricted `Auth.DEPARTMENTS` and `Auth.DEPARTMENT_PERMISSIONS`; hardened `Auth.can()` to filter departments and only map allowed legacy roles |
+| `erp_prototype/js/users.js` | Render only four allowed department checkboxes; sanitize preserved and final department arrays in `submitUserForm()`; replaced `HR` fallback role |
+| `erp_prototype/js/pendingChanges.js` | Removed `HR` role reference from comments |
+| `backend/tests/fixtures/supabaseMock.js` | Updated fixtures that used `HR` role to use `Documentation` |
+| `backend/tests/admin-pending-audit.test.js` | Updated fixtures to use allowed departments/roles |
+| `backend/tests/integration/admin.test.js` | Added tests for invalid department rejection |
+| `backend/tests/operationsRequests.test.js` | Updated fixtures to use allowed departments/roles |
+| `backend/tests/unit/lib/permissions.test.js` | Added test for multi-department permission union |
+| `backend/tests/integration/disbursements.test.js` | Updated fixtures to use allowed departments/roles |
 
 ---
 
@@ -712,3 +728,315 @@ When the user switched entities, `App.renderEntitySwitcher` called `triggerSyncR
 ---
 
 *End of review. No commits made. No Playwright used.*
+
+---
+---
+
+## 11. Dashboard Routing & Calendar View Fixes
+
+Two additional dashboard defects were fixed: calendar/schedule item clicks that only cleared the dashboard, and calendar view switches that emptied the schedule.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 11.1 | Dashboard calendar/schedule item clicks clear the dashboard instead of routing to detail views | **High** | Click handlers mutated local state instead of navigating; sidebar View buttons bypassed `triggerSyncReload` cache invalidation | `erp_prototype/js/dashboard.js` |
+| 11.2 | Switching dashboard calendar from week to month/day/timeline clears the schedule | **Medium** | View toggle entered a skeleton-loading state and re-rendered twice, which flashed the card and could leave it empty if the second render errored | `erp_prototype/js/dashboard.js` |
+
+### 11.1 Dashboard item clicks do not route to detail views
+
+**Symptom**
+Clicking a work-request or disbursement event in the dashboard calendar, or clicking the expanded sidebar item's "View Tasks" / "View Disbursement" button, did not navigate to the corresponding detail page. The dashboard either appeared unchanged or seemed to clear itself.
+
+**Root cause**
+All calendar event click handlers only mutated local state (`selectedDay`, `expandedItemId`) and then called `refreshCalendarCard()`, so they never changed the URL hash or routed. The sidebar "View" buttons did set `location.hash`, but they did not use the centralized `triggerSyncReload` path that invalidates module caches and ensures the entity switch is committed before the target module renders. As a result, `Workflow`/`Disbursement` could still hold stale data or fall back to the list view because `Auth.activeEntity` was not coordinated with cache invalidation and routing.
+
+**Fix applied**
+- Added `Dashboard._routeToItem(type, item)` helper that:
+  - switches `Auth.activeEntity` to the record's own entity (or the user's first real entity as a fallback),
+  - calls `triggerSyncReload(hash)` with the correct detail hash (`#operations/detail/<id>` or `#disbursement/detail/<id>`).
+- Replaced all calendar-event `onclick` handlers (timeline card, day-grid pill, day-cell badge, week overlay, month overlay) to `await this._routeToItem(ev.type, ev.data)` instead of setting local state and refreshing the card.
+- Replaced the sidebar "View" button `onclick` to `await this._routeToItem(type, item)`.
+- Preserved the global-variable SPA architecture (`window.App`, `window.Auth`, `triggerSyncReload`).
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/dashboard.js`
+
+**Verification steps**
+1. Open the dashboard in consolidated (`ALL`) view.
+2. Click any work-request or disbursement event in the calendar (month/week/day/timeline views) or the expanded sidebar "View" button.
+3. Confirm the URL hash changes to `#operations/detail/<id>` or `#disbursement/detail/<id>`.
+4. Confirm the active entity in the header switcher updates to the record's entity (`ATA` or `LTA`).
+5. Confirm the operations or disbursement detail view renders with the selected record instead of falling back to an empty list/dashboard.
+6. Run `node --check erp_prototype/js/dashboard.js`.
+
+### 11.2 Calendar view switch clears the schedule
+
+**Symptom**
+Switching the dashboard calendar from the default week view to month, day, or timeline caused the calendar card / schedule sidebar to clear or flash empty.
+
+**Root cause**
+The view toggle handler set `this.isLoading = true`, called `refreshCalendarCard()` to show a skeleton grid, then used a 200 ms `setTimeout` to set `this.isLoading = false` and render again. The intermediate skeleton pass replaced the calendar card's children, including the schedule sidebar, producing a visible flash. If any JavaScript error occurred during the second render pass, the card could be left empty because `replaceChildren()` had already run before the error.
+
+**Fix applied**
+- Removed the `isLoading` / `setTimeout` dance from the view toggle buttons. The view now switches instantly by updating `this.calView` and calling `refreshCalendarCard()` once.
+- Hardened `refreshCalendarCard()` with a `try/catch` so that if `renderCalendarCard()` ever throws, the calendar card renders a minimal warning instead of being left empty.
+- Preserved the existing `window.*` SPA architecture.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/dashboard.js`
+
+**Verification steps**
+1. Open the dashboard and select a day so the schedule sidebar is visible.
+2. Click each calendar view toggle: Day, Week, Month, Timeline.
+3. Confirm the calendar re-renders in the chosen view without flashing empty or losing the schedule sidebar.
+4. Confirm selected-day / expanded-item state is preserved across view switches where appropriate.
+5. Run `node --check erp_prototype/js/dashboard.js`.
+
+### 11.3 Remaining Work
+
+1. **Verify routing from all dashboard surfaces** — KPI cards, comparison table rows, time-log prompt banner, and any other actionable dashboard elements should use `_routeToItem` or `triggerSyncReload` consistently.
+2. **Confirm `triggerSyncReload` background behavior** does not race with rapid dashboard clicks; the helper now awaits `App.handleRoute()`, but double-clicks should be harmless.
+3. **Run a frontend smoke test** after any further dashboard edits: open every calendar view, click an event, navigate back, and switch entities.
+
+---
+
+## 12. Persistent Dashboard Routing & Calendar View Fixes
+
+Two persistent dashboard defects were fixed after the first routing/calendar pass in §11: item clicks that still blanked the page because the target module's permission gate ran before its cache was ready, and calendar view/navigation switches that continued to empty the card because `Dashboard.init()` reset state on every route render and because dev-server/service-worker caching masked source edits.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 12.1 | Dashboard item clicks still clear dashboard instead of routing to work request / billing / disbursement views | **High** | Permission check ran before linked work-request cache loaded; suppressed `hashchange` swallowed internal redirect | `erp_prototype/js/dashboard.js`, `erp_prototype/js/disbursement.js` |
+| 12.2 | Switching dashboard calendar nav/calendar view still clears the calendar and schedule | **High** | `Dashboard.init()` wiped selected day/view/cache on every render; dev SW cached source and `dev-server.js` sent immutable headers for unhashed source | `erp_prototype/js/dashboard.js`, `erp_prototype/dev-server.js`, `erp_prototype/sw.js` |
+
+### 12.1 Dashboard item clicks still clear dashboard instead of routing to detail views
+
+**Symptom**
+Clicking a work-request, billing, or disbursement item from the dashboard calendar or schedule sidebar navigated to the correct hash but left the content area blank. The browser back button sometimes returned a blank dashboard as well.
+
+**Root cause**
+- `Disbursement.renderDetail()` ran `Auth.canViewDisbursement(d)` before ensuring the linked work-request cache was loaded for the newly switched entity. For non-Admin/Accounting users that check returned false because `workRequestCache.getById()` was null, so it set `location.hash = '#disbursement'` and returned an empty fragment.
+- The dashboard navigation went through `triggerSyncReload()`, which sets `App._suppressHashChange = true`. The permission redirect above therefore fired a `hashchange` event that was swallowed, so `App.handleRoute()` never re-rendered the list and the content area stayed blank.
+- The entity switch itself was correct (`Auth.switchEntity` is synchronous and persists to `localStorage`), but the target module did not warm the cache its permission gate needed.
+- The previous source-level change was not visible in the running dev server because the repo already had uncommitted `dev-server.js`/`sw.js` changes to disable source caching in dev, but they require a dev-server restart to take effect. If `ERP_SERVE_DIST=1` was used, the built `dist/` bundles are also stale until rebuilt.
+
+**Fix applied**
+- `erp_prototype/js/dashboard.js`: `_routeToItem()` now switches the entity, invalidates the dashboard cache (and the `Disbursement` cache when routing to a disbursement), then assigns `location.hash = hash` directly instead of using `triggerSyncReload()`. This routes through the normal `hashchange` listener and prevents internal redirects from being swallowed by hash suppression.
+- `erp_prototype/js/disbursement.js`: `renderDetail()` now awaits `userCache.ensure()`, `clientCache.ensure()`, and `workRequestCache.ensure()` before `Auth.canViewDisbursement(d)` so the linked work request is available for the active entity and permission checks no longer redirect on an empty cache.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/dashboard.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/disbursement.js`
+
+**Verification steps**
+1. If the dev server is serving `dist/` (check `/health`), rebuild with `node build.js` (or `ERP_API_BASE_URL=... node build.js`), then restart the dev server so the updated `dev-server.js`/`sw.js` dev-caching changes apply.
+2. Hard refresh the browser and, if an old service worker is installed, unregister it via DevTools > Application > Service Workers.
+3. Log in and switch to Consolidated View.
+4. Click a work-request item on the dashboard -> expect navigation to `#operations/detail/:id` with the detail view rendered.
+5. Click a disbursement item -> expect navigation to `#disbursement/detail/:id`; for staff/managerial users the detail should now render instead of going blank.
+6. Click the browser back button -> the dashboard should return and reload for the selected entity.
+
+### 12.2 Calendar nav and view toggle still clear the calendar and schedule
+
+**Symptom**
+Switching the dashboard calendar view (Day, Week, Month, Timeline) or navigating to a different date/month continued to clear the calendar grid and the right-hand schedule. The card sometimes stayed empty until the page was refreshed.
+
+**Root cause**
+- `Dashboard.init()` was invoked by `App.handleRoute()` after every render and unconditionally reset `selectedDay`, `calView`, and `_dataCache`. After the first dashboard paint the data cache was wiped, so `refreshCalendarCard()` (used by every view toggle and calendar nav button) called `getCalendarEvents()` against an empty cache and rendered a blank calendar/schedule.
+- The previous source-level change was not visible in the running dev server because JS/CSS were served with immutable `Cache-Control` headers and the registered service worker cached `dashboard.js` cache-first, preventing the browser from fetching the updated source.
+
+**Fix applied**
+- `erp_prototype/js/dashboard.js`: `Dashboard.init()` no longer clears `selectedDay`, `expandedItemId`, `calView`, `calTimezone`, `_dataCache`, or `_dataPromise`; it only resets transient flags (`isLoading`, `commandFeedback`), preserving the user's calendar state and the data cache across re-renders.
+- `erp_prototype/dev-server.js`: applies immutable long-term `Cache-Control` headers to JS/CSS only when serving hashed bundles from `dist/`; in dev mode (source) it sends `no-cache, no-store, must-revalidate` so unhashed source edits are picked up immediately.
+- `erp_prototype/sw.js`: bumped `CACHE_VERSION` to `v4` and detects `localhost`/`127.0.0.1`/`*.local` dev hosts, skipping shell-cache population and letting fetch requests pass through so source changes are not masked by stale SW caching.
+- The running dev server was restarted with the existing `ERP_API_BASE_URL=http://localhost:3001/v1` so the new dev-server and SW behavior are active.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/dashboard.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/dev-server.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/sw.js`
+
+**Verification steps**
+1. Hard-reload the dashboard in the browser (Ctrl+Shift+R or Cmd+Shift+R) so the old v3 service worker is bypassed and the new v4 worker installs.
+2. Open DevTools > Application > Service Workers and confirm the active worker scope uses caches `erp-shell-v4` / `erp-api-v4`.
+3. Load the Dashboard, wait for the calendar to populate, then click Day, Week, Month, and Timeline. The grid and right-hand schedule should refresh without emptying.
+4. Pick a non-today date or navigate to a different month, switch views, and confirm the selected date and current view persist.
+5. For production/Render verification, rebuild `dist/` with `node build.js` (`ERP_API_BASE_URL` set); the `dist` bundle currently predates the fix.
+
+### 12.3 Remaining Work
+
+1. **Re-verify routing from every dashboard surface** (KPI cards, comparison table rows, time-log prompt banner) now that `_routeToItem` uses direct `location.hash` assignment; confirm the target module warms any cache its permission gate requires.
+2. **Audit other detail modules** (billing, invoices, transmittals) for the same permission-before-cache pattern that caused the disbursement blank state.
+3. **Confirm service-worker dev bypass does not affect production caching strategy** on Render; the `*.local`/localhost guard keeps production shell caching intact, but verify the v4 worker installs and serves offline after a production build.
+4. **Rebuild and redeploy `dist/`** for Render/UAT before end-to-end QA, because the current `dist` bundle predates both the dashboard state fix and the dev-caching fix.
+5. **Run frontend syntax checks** after any further edits: `node --check erp_prototype/js/dashboard.js erp_prototype/js/disbursement.js`.
+
+---
+
+*End of review. No commits made. No Playwright used.*
+
+## 13. Ground Workers Null in Workflow Detail Fix
+
+One additional defect was found while exercising the Operations detail view: opening a work request before ground workers were cached caused a `TypeError` when building the employee filter options.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 13.1 | `Uncaught (in promise) TypeError: can't access property 'forEach', this._groundWorkers is null` in `workflow.js:6778` | **High** | `renderDetail()` used `this._groundWorkers.forEach` before `this._loadGroundWorkers()` resolved | `erp_prototype/js/workflow.js` |
+
+### 13.1 Workflow detail employee filter crashes with `this._groundWorkers is null`
+
+**DevTools anchor**
+- Console: `Uncaught (in promise) TypeError: can't access property 'forEach', this._groundWorkers is null`
+- Call stack: `workflow.js:6778` inside `async renderDetail()`
+
+**Symptom**
+Navigating directly to an Operations detail route (e.g., `#operations/detail/<wrId>`) before the Workflow page had ever loaded ground workers caused the detail render to throw. The error surfaced as an unhandled promise rejection and the employee filter section of the detail toolbar did not populate.
+
+**Root cause**
+`Workflow.renderDetail()` asynchronously called `window.apiClient` operations and `WorkflowData.loadPendingApprovals()` but never awaited `Workflow._loadGroundWorkers()`. It then directly accessed `this._groundWorkers.forEach` at line 6778 to build the employee filter options. Because `_groundWorkers` defaults to `null`, the `forEach` call threw before the cached promise could resolve.
+
+**Fix applied**
+Added `await this._loadGroundWorkers();` immediately after `await WorkflowData.loadPendingApprovals();` inside `async renderDetail()`. This guarantees `this._groundWorkers` is populated (or set to `[]` on failure) before the employee filter section iterates it.
+
+No other files were modified; the global-variable SPA architecture (`window.apiClient`, `window.Workflow`) is preserved.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/workflow.js`
+
+**Verification steps**
+1. Serve the ERP prototype and navigate to any Operations detail view (e.g., `#operations/detail/<wrId>`).
+2. Confirm no `Uncaught (in promise) TypeError: can't access property 'forEach', this._groundWorkers is null` error appears in the browser console.
+3. Verify the employee filter dropdown in the detail toolbar still lists all system users and ground workers as before.
+4. Optionally throttle the network and reload the detail route to ensure `renderDetail()` waits for the `groundWorkers` API call before rendering the filter.
+
+### 13.2 Remaining Work
+
+1. **Re-verify other `_loadGroundWorkers()` consumers** in `workflow.js` to ensure none access `this._groundWorkers` without first awaiting the loader.
+2. **Confirm `_loadGroundWorkers()` failure mode** returns a safe empty array (`[]`) so that future consumers do not need null guards.
+3. **Run frontend syntax checks** after any further edits: `node --check erp_prototype/js/workflow.js`.
+
+---
+
+*End of review. No commits made. No Playwright used.*
+
+---
+
+## 14. Department Restriction & RBAC Update
+
+Three related RBAC defects were fixed: the user form listed disallowed departments, the backend accepted and seeded invalid departments, and multi-department users could still inherit permissions from disallowed legacy departments.
+
+| # | Symptom | Severity | Root cause class | Fixed in |
+|---|---------|----------|------------------|----------|
+| 14.1 | User creation/edit form shows non-operational departments (`HR`, `Legal`, `Tax`, `Audit`, `Business Development`) | **High** | Frontend constants enumerated nine departments instead of the allowed four | `erp_prototype/js/auth.js`, `erp_prototype/js/users.js` |
+| 14.2 | Backend user create/update accepts invalid departments and seed migration inserts disallowed departments | **High** | No allowlist validation or DB constraint | `backend/src/modules/admin/schema.js`, `backend/src/modules/admin/service.js`, `backend/src/lib/permissions.js`, `backend/migrations/000006_seed_entities_departments.js`, `backend/migrations/028-restrict-departments.sql` |
+| 14.3 | Multi-department users keep permissions from disallowed legacy departments; `HR` role still referenced | **High** | RBAC union did not filter departments against the allowlist and still mapped the removed `HR` role | `erp_prototype/js/auth.js`, `erp_prototype/js/users.js`, `erp_prototype/js/pendingChanges.js`, `backend/src/lib/permissions.js`, `backend/src/modules/admin/schema.js` |
+
+### 14.1 Frontend department allowlist
+
+**Symptom / current state**
+`Auth.DEPARTMENTS` in `erp_prototype/js/auth.js` listed nine departments (`Accounting`, `Operations`, `Documentation`, `HR`, `Management`, `Legal`, `Tax`, `Audit`, `Business Development`). `Users.renderUserFormContent()` rendered the full list from `Auth.DEPARTMENTS`, so admins could assign non-operational departments. `Auth.DEPARTMENT_PERMISSIONS` also defined permission sets for all nine departments. The business requirement is to allow user assignment only to `Management`, `Accounting`, `Operations`, and `Documentation`.
+
+**Root cause**
+The SPA constants and form renderer were not aligned with the business-approved department allowlist.
+
+**Fix applied**
+- Restricted `Auth.DEPARTMENTS` to exactly `['Management', 'Accounting', 'Operations', 'Documentation']`; the user creation/edit form now renders only these four checkboxes.
+- Removed permission sets for `HR`, `Legal`, `Tax`, `Audit`, and `Business Development` from `Auth.DEPARTMENT_PERMISSIONS`, keeping only the four allowed departments with their existing permission arrays intact.
+- Preserved the existing `Auth.can()` Set-based union logic; users assigned to multiple allowed departments still receive the graceful union of their department permissions.
+- Added client-side sanitization in `Users.submitUserForm()`:
+  - Preserved existing departments are filtered against `Auth.DEPARTMENTS` before being saved.
+  - A final `departments.filter(...)` pass ensures only allowed departments reach the API.
+- Replaced the legacy `'HR'` fallback role with `existing?.role || null` so the form no longer references a disallowed department.
+- Left the `window.*` global SPA architecture unchanged.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/auth.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/users.js`
+
+**Verification steps**
+1. Ran `node --check` on both modified files; no syntax errors.
+2. Verified via regex that `Auth.DEPARTMENTS` contains exactly the four required values.
+3. Verified that `Auth.DEPARTMENT_PERMISSIONS` contains permission sets only for those same four departments.
+4. Verified that `Users.submitUserForm()` references `allowedDepartments = Auth.DEPARTMENTS` and filters both preserved and final department arrays against it.
+5. Did not commit. Did not use Playwright.
+6. Note: the dev server serves the source files directly, so changes are active in `npm run dev`. A production bundle (`dist/`) would require `npm run build` (or `npm run build:prod`) to reflect the same changes.
+
+### 14.2 Backend department allowlist and validation
+
+**Symptom / current state**
+The backend user module accepted any string in the `departments` array and the RBAC/permission maps still seeded/recognized nine departments. This allowed invalid department assignments such as `HR`, `Legal`, `Tax`, `Audit`, and `Business Development`.
+
+**Root cause**
+No allowlist validation existed in the admin user schema, service, permission library, or seed migration.
+
+**Fix applied**
+- Added `ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation']` and restricted `createUserSchema.departments`/`updateUserSchema.departments` to that enum.
+- Added an explicit allowlist check in `admin/service.js#setDepartments` before database lookup.
+- Trimmed `DEPARTMENTS` and `DEPARTMENT_PERMISSIONS` in `backend/src/lib/permissions.js` to the four allowed departments; `buildPermissionSet` already unions multiple department permission sets.
+- Updated the seed migration to insert only the four allowed departments.
+- Added migration `028-restrict-departments.sql` that deletes invalid `user_departments` rows and removes the five invalid departments.
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/modules/admin/schema.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/modules/admin/service.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/lib/permissions.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/migrations/000006_seed_entities_departments.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/migrations/028-restrict-departments.sql`
+
+**Verification steps**
+1. `cd /home/javvii/FreelanceProject/Project4_Final-Render/backend && npm test` — all 119 tests pass.
+2. `cd /home/javvii/FreelanceProject/Project4_Final-Render/backend && npm run lint` — no new lint errors in changed files (pre-existing errors remain in unrelated files).
+3. The new integration test `rejects invalid department assignments` confirms the API returns 400 for departments outside the allowlist.
+
+### 14.3 RBAC union for multiple allowed departments
+
+**Symptom / current state**
+The prototype previously allowed nine departments and an `HR` role. The core `DEPARTMENTS` and `DEPARTMENT_PERMISSIONS` maps had already been narrowed to the four allowed departments, but the role lists, schema enum, UI badge, and RBAC union logic still accepted/used `HR` and did not filter disallowed departments. This meant a user with legacy or multi-department data could still receive permissions from non-allowed departments.
+
+**Root cause**
+RBAC union logic did not filter user departments against the allowlist, and the removed `HR` role was still referenced in role lists, schema enum, UI badge, and pending-changes comments.
+
+**Fix applied**
+- Restricted `DEPARTMENTS` to exactly `['Management', 'Accounting', 'Operations', 'Documentation']` in backend and frontend constants.
+- Removed `HR` from `ALL_ROLES`, `STAFF_ROLES`, backend role enum, frontend user badge, and pending-changes comment.
+- Trimmed `DEPARTMENT_PERMISSIONS` to only the four allowed departments.
+- Hardened `buildPermissionSet` (backend) and `Auth.can()` (frontend) to:
+  - filter user departments against the allowed set before unioning permissions,
+  - only apply legacy role-to-department mapping when the mapped department is allowed,
+  - so users with multiple allowed departments receive the union gracefully while disallowed legacy/DB departments are ignored.
+- Left `Auth.isManagerial()` unchanged; it still returns true for `Management` department, `Manager` role, or `Admin`.
+- Updated backend user create/update schema to validate `departments` against the allowed enum and removed `HR` from the role enum.
+- Updated test fixtures and tests that used `role: 'HR'` to use `Documentation` (a staff role lacking the permission under test).
+
+**Files changed**
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/lib/permissions.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/src/modules/admin/schema.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/auth.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/users.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/erp_prototype/js/pendingChanges.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/fixtures/supabaseMock.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/admin-pending-audit.test.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/integration/admin.test.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/operationsRequests.test.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/unit/lib/permissions.test.js`
+- `/home/javvii/FreelanceProject/Project4_Final-Render/backend/tests/integration/disbursements.test.js`
+
+**Verification steps**
+1. Ran `PORT=0 npm test` in `/home/javvii/FreelanceProject/Project4_Final-Render/backend`: 16 test suites, 119 tests passed.
+2. Confirmed no remaining `HR` role references in department/role context except the intentional `rejects invalid department assignments` test, which still expects a 400 for `departments: ['HR']`.
+3. The new unit test `returns the union of permissions for multiple allowed departments` confirms RBAC unions permissions gracefully.
+
+### 14.4 Remaining Work
+
+1. **Run migration `028-restrict-departments.sql` against remote/UAT databases** to delete invalid `user_departments` rows and remove the five disallowed department records.
+2. **Verify the user create/edit form** in the browser renders only the four allowed department checkboxes (`Management`, `Accounting`, `Operations`, `Documentation`).
+3. **Confirm existing users with disallowed departments** lose those department assignments after the migration runs.
+4. **Re-run backend tests** before committing: `PORT=0 npm test` in `/home/javvii/FreelanceProject/Project4_Final-Render/backend`.
+5. **Audit other detail modules** for the same permission-before-cache pattern that caused the disbursement blank state (billing, invoices, transmittals).
+6. **Do not commit yet**; coordinate with the team on migration timing.
+7. **No Playwright verification was performed**; manual browser checks remain.
+
+*End of review. No commits made. No Playwright used.*
+
+---
+
+

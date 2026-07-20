@@ -1793,6 +1793,16 @@ const Disbursement = {
     const d = await this.loadDisbursement(this.detailId);
     if (!d) { location.hash = '#disbursement'; return el('div'); }
 
+    // Warm the caches that Auth.canViewDisbursement needs to resolve linked
+    // work-request ownership for the active entity. Without this, a navigation
+    // from the consolidated dashboard after an entity switch could evaluate
+    // permissions against an empty cache and incorrectly redirect to the list.
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure(),
+    ]);
+
     if (!Auth.canViewDisbursement(d)) {
       location.hash = '#disbursement';
       return el('div');

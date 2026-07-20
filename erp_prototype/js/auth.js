@@ -33,9 +33,6 @@
  *                   Disbursement: view-only.
  *                   Transmittal: can create and edit transmittals freely; can view;
  *                   can mark as sent/received (pending Admin approval).
- *   HR            – (placeholder) view-only, always ['ATA','LTA']
- *                   ⚠️ HR permissions are UNCONFIRMED — minimal/view-only pending
- *                   business confirmation of actual permission set.
  */
 
 const Auth = {
@@ -43,32 +40,29 @@ const Auth = {
   activeEntity: null,
 
   /** All non-Admin, non-Manager roles (i.e. staff-level roles). */
-  STAFF_ROLES: ['Accounting', 'Operations', 'Documentation', 'HR'],
+  STAFF_ROLES: ['Accounting', 'Operations', 'Documentation'],
 
   /** Convenience: every valid role in the system. */
-  ALL_ROLES: ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation', 'HR'],
+  ALL_ROLES: ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation'],
 
   /**
    * Departments a user may be assigned to. Department assignment is the source
    * of RBAC: a user's effective permissions are the union of the permission
    * sets for every department they belong to.
+   *
+   * Restricted to the four operational departments that receive permissions.
    */
-  DEPARTMENTS: ['Accounting', 'Operations', 'Documentation', 'HR', 'Management', 'Legal', 'Tax', 'Audit', 'Business Development'],
+  DEPARTMENTS: ['Management', 'Accounting', 'Operations', 'Documentation'],
 
   /**
    * Permission set granted by each department. A user assigned to multiple
    * departments receives the union of those permission sets.
    */
   DEPARTMENT_PERMISSIONS: {
+    'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:mark','bypass_review:tasks','approve_change:tasks','users:view','users:manage','audit:view_all'],
     'Accounting': ['clients:view','workflow:view','workflow:task_add','billing:view','billing:edit','disbursement:view','disbursement:create','disbursement:edit','dms:view','transmittal:view'],
     'Operations': ['clients:view','workflow:view','workflow:task_add','workflow:task_upload','billing:view','billing:request','disbursement:view','disbursement:request','dms:view','transmittal:view','transmittal:request'],
-    'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark'],
-    'HR': ['clients:view','workflow:view','billing:view','disbursement:view','dms:view'],
-    'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:mark','bypass_review:tasks','approve_change:tasks','users:view','users:manage','audit:view_all'],
-    'Legal': ['clients:view','workflow:view','billing:view','disbursement:view','dms:view','transmittal:view'],
-    'Tax': ['clients:view','workflow:view','billing:view','billing:edit','disbursement:view','dms:view','transmittal:view'],
-    'Audit': ['clients:view','workflow:view','billing:view','disbursement:view','dms:view','transmittal:view'],
-    'Business Development': ['clients:view','workflow:view','billing:view','disbursement:view','transmittal:view']
+    'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark']
   },
 
   updateSessionClasses(hasSession) {
@@ -152,14 +146,15 @@ const Auth = {
     if (!this.user.entities.includes(entity)) return false;
 
     // RBAC is driven entirely by department assignment. The effective
-    // permission set is the union of the permission sets for each department
-    // the user belongs to.
+    // permission set is the union of the permission sets for each allowed
+    // department the user belongs to.
     const granted = new Set();
+    const allowedDepts = new Set(this.DEPARTMENTS);
     const departments = Array.isArray(this.user.departments) ? this.user.departments : [];
-    const effectiveDepts = [...departments];
+    const effectiveDepts = departments.filter(dept => allowedDepts.has(dept));
     if (this.user.role) {
       const legacyDept = this.user.role === 'Manager' ? 'Management' : this.user.role;
-      if (this.DEPARTMENT_PERMISSIONS[legacyDept] && !effectiveDepts.includes(legacyDept)) {
+      if (allowedDepts.has(legacyDept) && this.DEPARTMENT_PERMISSIONS[legacyDept] && !effectiveDepts.includes(legacyDept)) {
         effectiveDepts.push(legacyDept);
       }
     }
