@@ -167,7 +167,7 @@
       return value;
     }).catch((err) => {
       // Route-change aborts are expected; do not spam the console with them.
-      if (err.name !== 'AbortError') {
+      if (err.name !== 'AbortError' && err.message !== 'route-change' && !err.message?.includes('aborted')) {
         console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
       }
       return fallback;
@@ -471,6 +471,8 @@
       create: (data) => post('/disbursements', data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       get: (id) => get(`/disbursements/${id}`),
       update: (id, data) => put(`/disbursements/${id}`, data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      remove: (id) => del(`/disbursements/${id}`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      delete: (id) => del(`/disbursements/${id}`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       submit: (id) => post(`/disbursements/${id}/submit`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       approve: (id) => post(`/disbursements/${id}/approve`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       release: (id) => post(`/disbursements/${id}/release`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),

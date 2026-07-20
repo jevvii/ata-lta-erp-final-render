@@ -650,3 +650,39 @@ module.exports = {
   updateDisbursementTemplate,
   deleteDisbursementTemplate,
 };
+
+/**
+ * Soft-delete a disbursement.
+ * @param {object} params
+ * @param {string} params.entityId
+ * @param {string} params.id
+ * @param {string} params.userId
+ * @returns {Promise<void>}
+ */
+const deleteDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ deleted_at: new Date().toISOString(), updated_by: userId })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to delete disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.delete',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+};
+
+module.exports.deleteDisbursement = deleteDisbursement;

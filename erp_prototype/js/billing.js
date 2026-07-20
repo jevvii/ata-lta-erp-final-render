@@ -993,7 +993,9 @@ const Billing = {
           return inv;
         });
       } catch (e) {
-        console.error('Failed to load pending invoice approvals', e);
+        if (e.name !== 'AbortError' && e.message !== 'route-change' && !e.message?.includes('aborted')) {
+          console.error('Failed to load pending invoice approvals', e);
+        }
       }
 
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
@@ -1330,9 +1332,13 @@ const Billing = {
         const newOrder = (idx + 1) * 1000;
         if (inv.boardOrder === newOrder) return;
         inv.boardOrder = newOrder;
-        // Never send optimistic temp ids to the backend.
-        if (this._isTempId(inv.id)) return;
-        window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => console.error('Failed to update board order', e));
+        // Never send optimistic temp ids or trashed/cancelled invoices to the backend.
+        if (this._isTempId(inv.id) || inv.status === 'Cancelled' || inv.archived) return;
+        window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => {
+          if (e.message !== 'route-change' && !e.message?.includes('aborted')) {
+            console.error('Failed to update board order', e);
+          }
+        });
       });
       const colPendingInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && inv.pendingChangeId);
       sortedInvs.push(...colInvs, ...colPendingInvs);
@@ -4037,13 +4043,16 @@ const Billing = {
       `Are you sure you want to move invoice "${inv.invoiceNumber}" to trash? Only Draft invoices can be trashed.`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
-        // Optimistic local update: mark cancelled/archived and upsert into the all-invoice cache.
+        // Optimistic local update: mark cancelled/archived and remove from list cache.
+        inv.status = 'Cancelled';
+        inv.archived = true;
+        inv.updatedAt = new Date().toISOString();
         if (this._detailCache[id]) {
           this._detailCache[id].status = 'Cancelled';
           this._detailCache[id].archived = true;
-          this._detailCache[id].updatedAt = new Date().toISOString();
-          this._addToListCache(this._detailCache[id]);
+          this._detailCache[id].updatedAt = inv.updatedAt;
         }
+        this._removeFromListCache(id);
         this._updateCounts(-1, 1);
         const skipGeneration = this._beginSkipGeneration();
         // If deleted from detail, route away before the success feedback so the
@@ -4054,6 +4063,8 @@ const Billing = {
         App.handleRoute();
         try {
           await window.apiClient.invoices.remove(id);
+          delete this._detailCache[id];
+          this._removeFromListCache(id);
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
         } catch (e) {

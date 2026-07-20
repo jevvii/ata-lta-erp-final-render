@@ -253,5 +253,17 @@ module.exports = {
     createDisbursementTemplate,
     updateDisbursementTemplate,
     deleteDisbursementTemplate,
+    deleteDisbursement: async (req, res, next) => {
+      try {
+        await service.deleteDisbursement({
+          entityId: req.activeEntity,
+          id: req.params.id,
+          userId: req.user.id,
+        });
+        res.status(204).end();
+      } catch (err) {
+        next(err);
+      }
+    },
   },
 };

@@ -101,4 +101,11 @@ router.post(
   disbursementsController.rejectDisbursement
 );
 
+router.delete(
+  '/:id',
+  requirePermission('disbursement:edit'),
+  audit('disbursement.delete', { table: 'disbursements' }),
+  disbursementsController.deleteDisbursement
+);
+
 module.exports = router;
