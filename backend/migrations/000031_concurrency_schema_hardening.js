@@ -53,6 +53,16 @@ exports.up = (pgm) => {
       DROP CONSTRAINT IF EXISTS chk_operations_requests_status,
       ADD CONSTRAINT chk_operations_requests_status
       CHECK (status IN ('pending', 'fulfilled', 'rejected', 'cancelled'));
+  `);
+
+  // 0.3b — Lifecycle CHECK: normalize existing bad values first, then enforce.
+  // The app currently only uses 'collected', 'active', and 'inactive'. Any other
+  // value is treated as 'active' for compatibility with older rows.
+  pgm.sql(`
+    UPDATE documents
+    SET document_lifecycle = 'active'
+    WHERE document_lifecycle IS NOT NULL
+      AND document_lifecycle NOT IN ('collected', 'active', 'inactive', 'transmitted');
 
     ALTER TABLE documents
       DROP CONSTRAINT IF EXISTS chk_documents_lifecycle,
