@@ -107,7 +107,7 @@ const computeAnalytics = async (entityId) => {
     totalOutstanding: 0,
     byStatus: {},
   };
-  for (const inv of (invoices || [])) {
+  for (const inv of invoices || []) {
     invoiceSummary.totalBilled += parseFloat(inv.total) || 0;
     invoiceSummary.totalCollected += parseFloat(inv.amount_paid) || 0;
     invoiceSummary.totalOutstanding += parseFloat(inv.balance) || 0;
@@ -120,7 +120,7 @@ const computeAnalytics = async (entityId) => {
     releasedAmount: 0,
     byStatus: {},
   };
-  for (const d of (disbursements || [])) {
+  for (const d of disbursements || []) {
     disbursementSummary.totalAmount += parseFloat(d.amount) || 0;
     if (d.status === 'Released') {
       disbursementSummary.releasedAmount += parseFloat(d.amount) || 0;
@@ -129,7 +129,7 @@ const computeAnalytics = async (entityId) => {
   }
 
   const transmittalSummary = { total: (transmittals || []).length, byStatus: {} };
-  for (const t of (transmittals || [])) {
+  for (const t of transmittals || []) {
     transmittalSummary.byStatus[t.status] = (transmittalSummary.byStatus[t.status] || 0) + 1;
   }
 
@@ -191,13 +191,20 @@ const resolveEntityIdOrAll = async (entityId) => {
  */
 const loadCalendarItemsForEntity = async (entityUuid) => {
   const today = new Date().toISOString().slice(0, 10);
-  const thirtyDaysLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const thirtyDaysLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
 
   // Fetch open work requests with a due date: overdue items plus upcoming 30 days.
   // We keep the query simple (no complex OR) and let the small result-set be
   // post-filtered for the calendar view.
   const openStatuses = ['Draft', 'In Progress', 'For Review'];
-  const [{ data: upcomingWrs }, { data: overdueWrs }, { data: upcomingDisbs }, { data: overdueDisbs }] = await Promise.all([
+  const [
+    { data: upcomingWrs },
+    { data: overdueWrs },
+    { data: upcomingDisbs },
+    { data: overdueDisbs },
+  ] = await Promise.all([
     supabaseAdmin
       .from('work_requests')
       .select('id, title, status, due_date, client_id, assigned_to, requested_by, entity_id')
@@ -246,11 +253,11 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
   const wrIds = (workRequests || []).map((wr) => wr.id);
   const { data: taskRows } = wrIds.length
     ? await supabaseAdmin
-      .from('tasks')
-      .select('*')
-      .in('work_request_id', wrIds)
-      .is('deleted_at', null)
-      .order('display_order', { ascending: true })
+        .from('tasks')
+        .select('*')
+        .in('work_request_id', wrIds)
+        .is('deleted_at', null)
+        .order('display_order', { ascending: true })
     : { data: [] };
 
   const tasksByWr = new Map();
@@ -358,7 +365,9 @@ const getDashboardSummary = async ({ entityId }) => {
   }
 
   try {
-    const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', { entity_id: resolved });
+    const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', {
+      entity_id: resolved,
+    });
     if (!error && data) {
       const result = Array.isArray(data) ? data[0] : data;
       if (result && typeof result === 'object') {
@@ -431,11 +440,11 @@ const getDailyReport = async ({ entityId, date }) => {
 
   const { data: payments } = invoiceIds.length
     ? await supabaseAdmin
-      .from('invoice_payments')
-      .select('id, amount, method, payment_date, invoice_id')
-      .in('invoice_id', invoiceIds)
-      .gte('created_at', dayStart)
-      .lte('created_at', dayEnd)
+        .from('invoice_payments')
+        .select('id, amount, method, payment_date, invoice_id')
+        .in('invoice_id', invoiceIds)
+        .gte('created_at', dayStart)
+        .lte('created_at', dayEnd)
     : { data: [] };
 
   // Disbursements filed
@@ -520,11 +529,11 @@ const getWeeklyReport = async ({ entityId, date }) => {
 
   const { data: payments } = invoiceIds.length
     ? await supabaseAdmin
-      .from('invoice_payments')
-      .select('id, amount, method, created_at')
-      .in('invoice_id', invoiceIds)
-      .gte('created_at', weekStart)
-      .lte('created_at', weekEnd)
+        .from('invoice_payments')
+        .select('id, amount, method, created_at')
+        .in('invoice_id', invoiceIds)
+        .gte('created_at', weekStart)
+        .lte('created_at', weekEnd)
     : { data: [] };
 
   const { data: disbursements } = await supabaseAdmin
@@ -675,7 +684,7 @@ const getAgingReport = async ({ entityId }) => {
     '90+': { total: 0, count: 0, invoices: [] },
   };
 
-  for (const inv of (invoices || [])) {
+  for (const inv of invoices || []) {
     const dueDate = new Date(inv.due_date);
     const daysOverdue = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
     const balance = parseFloat(inv.balance);

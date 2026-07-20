@@ -8,13 +8,18 @@
 const { z } = require('zod');
 
 const DOCUMENT_CATEGORIES = [
-  'SEC', 'BIR', 'CONTRACT', 'PERMIT', 'FINANCIAL',
-  'CORRESPONDENCE', 'LEGAL', 'HR', 'OTHER',
+  'SEC',
+  'BIR',
+  'CONTRACT',
+  'PERMIT',
+  'FINANCIAL',
+  'CORRESPONDENCE',
+  'LEGAL',
+  'HR',
+  'OTHER',
 ];
 
-const LIFECYCLE_STATES = [
-  'collected', 'with_documentations', 'scanned', 'in_envelope', 'stored',
-];
+const LIFECYCLE_STATES = ['collected', 'with_documentations', 'scanned', 'in_envelope', 'stored'];
 
 /**
  * Schema for creating document metadata (step 1 of upload flow).
@@ -43,24 +48,36 @@ const updateDocumentSchema = z.object({
   scannedBy: z.string().max(255).optional(),
   envelopeId: z.string().max(100).optional(),
   storedLocation: z.string().max(255).optional(),
-  handoverLog: z.array(z.object({
-    handed_to: z.string().min(1),
-    handed_date: z.string().min(1),
-    method: z.string().min(1),
-    notes: z.string().optional(),
-  })).optional(),
+  handoverLog: z
+    .array(
+      z.object({
+        handed_to: z.string().min(1),
+        handed_date: z.string().min(1),
+        method: z.string().min(1),
+        notes: z.string().optional(),
+      })
+    )
+    .optional(),
   archived: z.boolean().optional(),
-  comments: z.array(z.object({
-    userId: z.string().min(1),
-    date: z.string().min(1),
-    text: z.string().min(1),
-  })).optional(),
-  versions: z.array(z.object({
-    version: z.number().int().positive(),
-    fileName: z.string().min(1),
-    uploader: z.string().min(1),
-    uploadDate: z.string().min(1),
-  })).optional(),
+  comments: z
+    .array(
+      z.object({
+        userId: z.string().min(1),
+        date: z.string().min(1),
+        text: z.string().min(1),
+      })
+    )
+    .optional(),
+  versions: z
+    .array(
+      z.object({
+        version: z.number().int().positive(),
+        fileName: z.string().min(1),
+        uploader: z.string().min(1),
+        uploadDate: z.string().min(1),
+      })
+    )
+    .optional(),
 });
 
 /**

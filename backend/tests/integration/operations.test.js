@@ -32,7 +32,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('creates and retrieves a work request', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
     const client = await createClient(admin, 'ATA');
 
     const wrRes = await request(app)
@@ -55,7 +60,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('rejects invalid status transitions', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
     const client = await createClient(admin, 'ATA');
 
     const wr = await request(app)
@@ -74,7 +84,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('allows valid status transitions', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
     const client = await createClient(admin, 'ATA');
 
     const wr = await request(app)
@@ -95,7 +110,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('supports task CRUD under a work request', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
     const client = await createClient(admin, 'ATA');
 
     const wr = await request(app)
@@ -131,7 +151,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('forbids workflow:edit for staff without permission', async () => {
-    const token = registerUser({ email: 'ops@ata-lta.ph', name: 'Ops', role: 'Operations', entities: ['ATA'] });
+    const token = registerUser({
+      email: 'ops@ata-lta.ph',
+      name: 'Ops',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
 
     const res = await request(app)
       .post('/v1/work-requests')
@@ -144,7 +169,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('creates and lists retainer templates', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
     const client = await createClient(admin, 'ATA');
 
     await request(app)
@@ -171,7 +201,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('updates and deletes a retainer template', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
 
     const created = await request(app)
       .post('/v1/work-requests/templates')
@@ -197,7 +232,12 @@ describe('/v1/work-requests', () => {
   });
 
   it('creates and lists ground workers', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
 
     await request(app)
       .post('/v1/work-requests/ground-workers')
@@ -214,5 +254,49 @@ describe('/v1/work-requests', () => {
 
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].name).toBe('Juan Dela Cruz');
+  });
+
+  it('supports task creation with null/optional fields in checklist and task properties', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+    const client = await createClient(admin, 'ATA');
+
+    const wr = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Review Null Fields', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    const task = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Checklist task with null values',
+        assigneeId: null,
+        assigneeName: null,
+        description: null,
+        dueDate: null,
+        checklist: [
+          {
+            text: 'Subtask with null assignee',
+            completed: false,
+            assigneeId: null,
+            assigneeName: null,
+            category: null,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(task.body.data.title).toBe('Checklist task with null values');
+    expect(task.body.data.checklist).toHaveLength(1);
+    expect(task.body.data.checklist[0].assigneeId).toBeNull();
+    expect(task.body.data.checklist[0].assigneeName).toBeNull();
   });
 });

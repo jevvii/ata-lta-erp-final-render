@@ -17,7 +17,7 @@ const VALID_TRANSITIONS = {
 
 /* ── Cached entity resolution ─────────────────────────────────────── */
 const ENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const entityIdCache = new Map();   // code → { id, expiresAt }
+const entityIdCache = new Map(); // code → { id, expiresAt }
 const entityCodeCache = new Map(); // id   → { code, expiresAt }
 
 const resolveEntityId = async (code) => {
@@ -40,7 +40,11 @@ const resolveEntityCode = async (id) => {
   const cached = entityCodeCache.get(id);
   if (cached && Date.now() < cached.expiresAt) return cached.code;
 
-  const { data, error } = await supabaseAdmin.from('entities').select('code').eq('id', id).maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from('entities')
+    .select('code')
+    .eq('id', id)
+    .maybeSingle();
   if (error || !data) return id;
   entityCodeCache.set(id, { code: data.code, expiresAt: Date.now() + ENTITY_CACHE_TTL_MS });
   return data.code;
@@ -92,7 +96,22 @@ const toApiTask = (row, { checklist = [], timeLogs = [] } = {}) => ({
   updatedAt: row.updated_at,
 });
 
-const isManagerial = (user) => user.role === 'Admin' || user.role === 'Manager' || (user.departments || []).includes('Management');
+const isManagerial = (user) =>
+  user.role === 'Admin' ||
+  user.role === 'Manager' ||
+  (user.departments || []).includes('Management');
+
+const isBackOffice = (user) => {
+  if (!user) return false;
+  const depts = user.departments || [];
+  return (
+    user.role === 'Admin' ||
+    user.role === 'Manager' ||
+    depts.includes('Management') ||
+    depts.includes('Accounting') ||
+    depts.includes('Documentation')
+  );
+};
 
 const loadTasksForWorkRequests = async (wrIds) => {
   const tasks = new Map();
@@ -133,9 +152,7 @@ const loadTaskExtras = async (taskIds) => {
 const canViewWorkRequest = (wr, user, taskMap) => {
   if (!user) return false;
   if (user.role === 'Admin') return true;
-  if (isManagerial(user)) {
-    return wr.assigned_to === user.id || wr.requested_by === user.id;
-  }
+  if (isBackOffice(user)) return true;
   if (wr.assigned_to === user.id || wr.requested_by === user.id) return true;
   const tasks = taskMap.get(wr.id) || [];
   return tasks.some((t) => {
@@ -159,7 +176,9 @@ const listWorkRequests = async ({
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-  const sortField = ['created_at', 'due_date', 'title', 'status'].includes(sortBy) ? sortBy : 'created_at';
+  const sortField = ['created_at', 'due_date', 'title', 'status'].includes(sortBy)
+    ? sortBy
+    : 'created_at';
   const sortAsc = String(sortOrder).toLowerCase() === 'asc';
 
   let query = supabaseAdmin
@@ -185,19 +204,22 @@ const listWorkRequests = async ({
 
   const { data, error } = await query;
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list work requests' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list work requests',
+    });
   }
 
   // For Admin users, skip the expensive visibility filter entirely.
   // For other users, pre-filter using WR-level assignment (which doesn't need tasks).
   // Task-level assignment check happens after pagination to avoid loading all tasks.
   let visibleRows;
-  if (user.role === 'Admin') {
+  if (isBackOffice(user)) {
     visibleRows = data || [];
   } else {
-    visibleRows = (data || []).filter((row) =>
-      row.assigned_to === user.id || row.requested_by === user.id ||
-      isManagerial(user)
+    visibleRows = (data || []).filter(
+      (row) => row.assigned_to === user.id || row.requested_by === user.id
     );
   }
 
@@ -233,7 +255,9 @@ const listWorkRequests = async ({
     : new Map();
 
   const result = resultRows.map((row) => {
-    const code = entityCodeMap ? (entityCodeMap.get(row.entity_id) || row.entity_id) : singleEntityCode;
+    const code = entityCodeMap
+      ? entityCodeMap.get(row.entity_id) || row.entity_id
+      : singleEntityCode;
     const wr = toApiWorkRequest(row, code);
     if (withTasks) {
       wr.tasks = (taskMap.get(row.id) || []).map((t) => toApiTask(t));
@@ -257,7 +281,7 @@ const listWorkRequests = async ({
 };
 
 const createWorkRequest = async ({ entityId, data, user }) => {
-  const id = randomUUID();
+  const id = data.id || randomUUID();
   const now = new Date().toISOString();
   const record = {
     id,
@@ -275,7 +299,11 @@ const createWorkRequest = async ({ entityId, data, user }) => {
 
   const { error } = await supabaseAdmin.from('work_requests').insert(record);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create work request',
+    });
   }
 
   return getWorkRequestById({ id, entityId, user });
@@ -291,7 +319,11 @@ const getWorkRequestById = async ({ id, entityId, user }) => {
     .maybeSingle();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve work request',
+    });
   }
   if (!data) return null;
 
@@ -329,9 +361,17 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabaseAdmin.from('work_requests').update(updates).eq('id', id).eq('entity_id', entityId);
+  const { error } = await supabaseAdmin
+    .from('work_requests')
+    .update(updates)
+    .eq('id', id)
+    .eq('entity_id', entityId);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to update work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to update work request',
+    });
   }
 
   return getWorkRequestById({ id, entityId, user });
@@ -343,12 +383,20 @@ const deleteWorkRequest = async ({ id, entityId, user }) => {
 
   const { error } = await supabaseAdmin
     .from('work_requests')
-    .update({ deleted_at: new Date().toISOString(), status: 'Cancelled', updated_at: new Date().toISOString() })
+    .update({
+      deleted_at: new Date().toISOString(),
+      status: 'Cancelled',
+      updated_at: new Date().toISOString(),
+    })
     .eq('id', id)
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to delete work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to delete work request',
+    });
   }
   return true;
 };
@@ -362,15 +410,21 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
     .order('display_order', { ascending: true });
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list tasks' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list tasks',
+    });
   }
 
   const taskIds = (data || []).map((t) => t.id);
   const extras = await loadTaskExtras(taskIds);
-  return (data || []).map((t) => toApiTask(t, {
-    checklist: extras.checklist.get(t.id) || [],
-    timeLogs: extras.timeLogs.get(t.id) || [],
-  }));
+  return (data || []).map((t) =>
+    toApiTask(t, {
+      checklist: extras.checklist.get(t.id) || [],
+      timeLogs: extras.timeLogs.get(t.id) || [],
+    })
+  );
 };
 
 const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
@@ -383,7 +437,11 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
     .maybeSingle();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve task' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve task',
+    });
   }
   if (!data) return null;
 
@@ -395,7 +453,7 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
 };
 
 const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
-  const id = randomUUID();
+  const id = data.id || randomUUID();
   const now = new Date().toISOString();
   const record = {
     id,
@@ -414,7 +472,11 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
 
   const { error } = await supabaseAdmin.from('tasks').insert(record);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create task' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create task',
+    });
   }
 
   if (data.checklist?.length) {
@@ -472,9 +534,17 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabaseAdmin.from('tasks').update(updates).eq('id', taskId).eq('work_request_id', workRequestId);
+  const { error } = await supabaseAdmin
+    .from('tasks')
+    .update(updates)
+    .eq('id', taskId)
+    .eq('work_request_id', workRequestId);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to update task' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to update task',
+    });
   }
 
   if (data.checklist !== undefined) await upsertChecklist(taskId, data.checklist);
@@ -494,7 +564,11 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
     .eq('work_request_id', workRequestId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to delete task' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to delete task',
+    });
   }
   return true;
 };
@@ -526,41 +600,37 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
 
-  const [
-    { data: invoices },
-    { data: disbursements },
-    { data: transmittals },
-    { data: documents },
-  ] = await Promise.all([
-    supabaseAdmin
-      .from('invoices')
-      .select('*, clients(name)')
-      .eq('entity_id', relatedEntityId)
-      .eq('work_request_id', id)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('disbursements')
-      .select('*, clients(name)')
-      .eq('entity_id', relatedEntityId)
-      .eq('linked_work_request_id', id)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('transmittals')
-      .select('*, clients(name)')
-      .eq('entity_id', relatedEntityId)
-      .eq('work_request_id', id)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false }),
-    supabaseAdmin
-      .from('documents')
-      .select('*')
-      .eq('entity_id', relatedEntityId)
-      .eq('work_request_id', id)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false }),
-  ]);
+  const [{ data: invoices }, { data: disbursements }, { data: transmittals }, { data: documents }] =
+    await Promise.all([
+      supabaseAdmin
+        .from('invoices')
+        .select('*, clients(name)')
+        .eq('entity_id', relatedEntityId)
+        .eq('work_request_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin
+        .from('disbursements')
+        .select('*, clients(name)')
+        .eq('entity_id', relatedEntityId)
+        .eq('linked_work_request_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin
+        .from('transmittals')
+        .select('*, clients(name)')
+        .eq('entity_id', relatedEntityId)
+        .eq('work_request_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false }),
+      supabaseAdmin
+        .from('documents')
+        .select('*')
+        .eq('entity_id', relatedEntityId)
+        .eq('work_request_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false }),
+    ]);
 
   return {
     invoices: invoices || [],
@@ -610,10 +680,7 @@ const getTaskRelated = async ({ id, entityId }) => {
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
 
-  const [
-    { data: invoices },
-    { data: disbursements },
-  ] = await Promise.all([
+  const [{ data: invoices }, { data: disbursements }] = await Promise.all([
     supabaseAdmin
       .from('invoices')
       .select('*, clients(name)')
@@ -649,7 +716,11 @@ const listRetainerTemplates = async ({ entityId }) => {
     .order('name', { ascending: true });
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list retainer templates' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list retainer templates',
+    });
   }
 
   return data || [];
@@ -674,7 +745,11 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create retainer template' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create retainer template',
+    });
   }
 
   return template;
@@ -700,7 +775,11 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
     .single();
 
   if (error || !updated) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Retainer template not found' });
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Retainer template not found',
+    });
   }
 
   return updated;
@@ -714,7 +793,11 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to delete retainer template' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to delete retainer template',
+    });
   }
 
   return true;
@@ -725,10 +808,7 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
 // ============================================================
 
 const listGroundWorkers = async ({ entityId }) => {
-  let query = supabaseAdmin
-    .from('ground_workers')
-    .select('*')
-    .order('name', { ascending: true });
+  let query = supabaseAdmin.from('ground_workers').select('*').order('name', { ascending: true });
 
   if (entityId) {
     query = query.eq('entity_id', entityId);
@@ -737,7 +817,11 @@ const listGroundWorkers = async ({ entityId }) => {
   const { data, error } = await query;
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list ground workers' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list ground workers',
+    });
   }
 
   return data || [];
@@ -757,7 +841,11 @@ const createGroundWorker = async ({ entityId, userId, data }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create ground worker' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create ground worker',
+    });
   }
 
   return worker;

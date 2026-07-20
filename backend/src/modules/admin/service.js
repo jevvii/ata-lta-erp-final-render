@@ -8,6 +8,8 @@ const AppError = require('../../lib/AppError');
 const { randomUUID } = require('crypto');
 const clientsService = require('../clients/service');
 const operationsService = require('../operations/service');
+const { computePermissions } = require('../../middleware/rbac');
+const { hasPermission } = require('../../lib/permissions');
 
 const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
 
@@ -63,7 +65,11 @@ const setDepartments = async (userId, departmentNames) => {
 
   const invalid = departmentNames.filter((n) => !ALLOWED_DEPARTMENTS.includes(n));
   if (invalid.length) {
-    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Invalid departments: ${invalid.join(', ')}. Allowed: ${ALLOWED_DEPARTMENTS.join(', ')}` });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: `Invalid departments: ${invalid.join(', ')}. Allowed: ${ALLOWED_DEPARTMENTS.join(', ')}`,
+    });
   }
 
   const { data: deptRows } = await supabaseAdmin
@@ -74,7 +80,11 @@ const setDepartments = async (userId, departmentNames) => {
   const deptMap = new Map((deptRows || []).map((d) => [d.name, d.id]));
   const missing = departmentNames.filter((n) => !deptMap.has(n));
   if (missing.length) {
-    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Unknown departments: ${missing.join(', ')}` });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: `Unknown departments: ${missing.join(', ')}`,
+    });
   }
 
   const rows = departmentNames.map((name) => ({
@@ -91,10 +101,16 @@ const listUsers = async ({ entityId } = {}) => {
   const { data, error } = await query.order('name', { ascending: true });
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list users' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list users',
+    });
   }
 
-  const rows = (data || []).filter((u) => !entityId || entityId === 'ALL' || (u.entities || []).includes(entityId));
+  const rows = (data || []).filter(
+    (u) => !entityId || entityId === 'ALL' || (u.entities || []).includes(entityId)
+  );
   const usersWithDepts = await Promise.all(
     rows.map(async (u) => {
       const departments = await loadUserDepartments(u.id);
@@ -112,11 +128,21 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
     .eq('is_active', true);
 
   if (countError) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to verify user limit' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to verify user limit',
+    });
   }
 
   if (count >= 15) {
-    throw new AppError({ statusCode: 403, title: 'Forbidden', detail: 'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.', code: 'USER_LIMIT_REACHED' });
+    throw new AppError({
+      statusCode: 403,
+      title: 'Forbidden',
+      detail:
+        'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.',
+      code: 'USER_LIMIT_REACHED',
+    });
   }
 
   const password = data.password || 'ChangeMe123!';
@@ -128,7 +154,11 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
   });
 
   if (authError || !authData?.user) {
-    throw new AppError({ statusCode: 500, title: 'Auth Error', detail: authError?.message || 'Unable to create auth user' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Auth Error',
+      detail: authError?.message || 'Unable to create auth user',
+    });
   }
 
   const now = new Date().toISOString();
@@ -146,7 +176,11 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
 
   const { error } = await supabaseAdmin.from('users').insert(userRecord);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create ERP user profile' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create ERP user profile',
+    });
   }
 
   if (data.departments?.length) {
@@ -159,7 +193,11 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
 const getUserById = async (id) => {
   const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', id).maybeSingle();
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve user' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve user',
+    });
   }
   if (!data) return null;
   const departments = await loadUserDepartments(id);
@@ -182,7 +220,11 @@ const updateUser = async ({ id, data, updatedBy: _updatedBy }) => {
 
   const { error } = await supabaseAdmin.from('users').update(updates).eq('id', id);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to update user' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to update user',
+    });
   }
 
   if (data.departments !== undefined) {
@@ -202,7 +244,11 @@ const deleteUser = async ({ id, deletedBy: _deletedBy }) => {
     .eq('id', id);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to disable user' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to disable user',
+    });
   }
   return true;
 };
@@ -217,10 +263,15 @@ const toApiPendingChange = (row) => ({
   createdAt: row.created_at,
 });
 
-const listPendingApprovals = async ({ entityId, user: _user, status, tableName, parentRecordId, submittedBy } = {}) => {
-  let query = supabaseAdmin
-    .from('pending_changes')
-    .select('*');
+const listPendingApprovals = async ({
+  entityId,
+  user: _user,
+  status,
+  tableName,
+  parentRecordId,
+  submittedBy,
+} = {}) => {
+  let query = supabaseAdmin.from('pending_changes').select('*');
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
@@ -247,7 +298,11 @@ const listPendingApprovals = async ({ entityId, user: _user, status, tableName, 
   const { data, error } = await query.order('created_at', { ascending: false });
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list pending approvals' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list pending approvals',
+    });
   }
 
   return (data || []).map(toApiPendingChange);
@@ -271,17 +326,18 @@ const createPendingChange = async ({ entityId, userId, data }) => {
     .select();
 
   if (error || !inserted?.length) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to create pending change' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to create pending change',
+    });
   }
 
   return toApiPendingChange(inserted[0]);
 };
 
 const getPendingChangeById = async ({ entityId, id }) => {
-  let query = supabaseAdmin
-    .from('pending_changes')
-    .select('*')
-    .eq('id', id);
+  let query = supabaseAdmin.from('pending_changes').select('*').eq('id', id);
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
@@ -290,7 +346,11 @@ const getPendingChangeById = async ({ entityId, id }) => {
   const { data, error } = await query.maybeSingle();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to retrieve pending change' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve pending change',
+    });
   }
 
   if (!data) {
@@ -303,7 +363,17 @@ const getPendingChangeById = async ({ entityId, id }) => {
 const applyPendingChange = async (change, user) => {
   const proposed = change.proposed_data || {};
 
-  if (change.table_name === 'clients') {
+  // Normalize table_name: the frontend sends camelCase (e.g. 'workRequests')
+  // but the comparisons below use snake_case (e.g. 'work_requests').
+  const TABLE_NAME_MAP = {
+    workRequests: 'work_requests',
+    work_requests: 'work_requests',
+    clients: 'clients',
+    tasks: 'tasks',
+  };
+  const tableName = TABLE_NAME_MAP[change.table_name] || change.table_name;
+
+  if (tableName === 'clients') {
     if (change.parent_record_id) {
       await clientsService.updateClient({
         id: change.parent_record_id,
@@ -321,7 +391,7 @@ const applyPendingChange = async (change, user) => {
     return;
   }
 
-  if (change.table_name === 'work_requests') {
+  if (tableName === 'work_requests') {
     if (change.parent_record_id) {
       await operationsService.updateWorkRequest({
         id: change.parent_record_id,
@@ -330,16 +400,56 @@ const applyPendingChange = async (change, user) => {
         user,
       });
     } else {
-      await operationsService.createWorkRequest({
+      // Map the temporary work request ID to a new UUID
+      const wrUuid = randomUUID();
+      proposed.id = wrUuid;
+
+      // If there are tasks, map their temporary IDs to new UUIDs
+      const taskIdMap = {};
+      if (Array.isArray(proposed.tasks)) {
+        proposed.tasks.forEach((t) => {
+          const taskUuid = randomUUID();
+          taskIdMap[t.id] = taskUuid;
+          t.id = taskUuid;
+          t.workRequestId = wrUuid;
+        });
+
+        // Resolve predecessors using the map
+        proposed.tasks.forEach((t) => {
+          if (Array.isArray(t.predecessors)) {
+            t.predecessors = t.predecessors
+              .map((oldId) => taskIdMap[oldId] || oldId)
+              .filter(Boolean);
+          }
+        });
+      }
+
+      // Preserve the originally requesting manager's ID
+      if (!proposed.requestedBy && change.submitted_by) {
+        proposed.requestedBy = change.submitted_by;
+      }
+
+      const createdWr = await operationsService.createWorkRequest({
         entityId: change.entity_id,
         data: proposed,
         user,
       });
+
+      if (Array.isArray(proposed.tasks)) {
+        for (const t of proposed.tasks) {
+          await operationsService.createTask({
+            workRequestId: createdWr.id,
+            entityId: change.entity_id,
+            data: t,
+            user,
+          });
+        }
+      }
     }
     return;
   }
 
-  if (change.table_name === 'tasks' && proposed.workRequestId) {
+  if (tableName === 'tasks' && proposed.workRequestId) {
     await operationsService.updateTask({
       workRequestId: proposed.workRequestId,
       taskId: change.parent_record_id,
@@ -372,7 +482,11 @@ const approvePending = async ({ id, user }) => {
     .eq('id', id);
 
   if (updateError) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to approve change' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to approve change',
+    });
   }
 
   return { id, status: 'approved' };
@@ -385,9 +499,7 @@ const approvePending = async ({ id, user }) => {
  * @returns {Promise<number>}
  */
 const getAuditLogCount = async ({ entityCode }) => {
-  let query = supabaseAdmin
-    .from('audit_logs')
-    .select('*', { count: 'exact', head: true });
+  let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact', head: true });
 
   if (entityCode && entityCode !== 'ALL') {
     query = query.eq('entity', entityCode);
@@ -396,7 +508,11 @@ const getAuditLogCount = async ({ entityCode }) => {
   const { count, error } = await query;
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to count audit logs' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to count audit logs',
+    });
   }
 
   return count || 0;
@@ -410,19 +526,9 @@ const getAuditLogCount = async ({ entityCode }) => {
  * @returns {Promise<{ data: object[], meta: object }>}
  */
 const getAuditLogs = async ({ entityCode, filters = {} }) => {
-  const {
-    userId,
-    action,
-    table,
-    from,
-    to,
-    limit = 20,
-    offset = 0,
-  } = filters;
+  const { userId, action, table, from, to, limit = 20, offset = 0 } = filters;
 
-  let query = supabaseAdmin
-    .from('audit_logs')
-    .select('*', { count: 'exact' });
+  let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact' });
 
   if (entityCode && entityCode !== 'ALL') {
     query = query.eq('entity', entityCode);
@@ -453,7 +559,11 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
     .range(offset, offset + limit - 1);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to list audit logs' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list audit logs',
+    });
   }
 
   const rows = data || [];
@@ -491,14 +601,33 @@ const rejectPending = async ({ id, user, reason }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Pending change not found' });
   }
 
+  const permissions = computePermissions(user);
+  const canApprove = hasPermission(permissions, 'approve_change:*');
+  if (change.submitted_by !== user.id && !canApprove) {
+    throw new AppError({
+      statusCode: 403,
+      title: 'Forbidden',
+      detail: 'You are not authorized to reject this pending change',
+    });
+  }
+
   const now = new Date().toISOString();
   const { error: updateError } = await supabaseAdmin
     .from('pending_changes')
-    .update({ status: 'rejected', reviewed_by: user.id, reviewed_at: now, rejection_reason: reason })
+    .update({
+      status: 'rejected',
+      reviewed_by: user.id,
+      reviewed_at: now,
+      rejection_reason: reason,
+    })
     .eq('id', id);
 
   if (updateError) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to reject change' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to reject change',
+    });
   }
 
   return { id, status: 'rejected' };

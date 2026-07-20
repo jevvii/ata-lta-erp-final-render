@@ -44,9 +44,7 @@ describe('GET /v1/me', () => {
       entities: ['ATA'],
     });
 
-    const res = await request(app)
-      .get('/v1/me')
-      .set('Authorization', `Bearer ${token}`);
+    const res = await request(app).get('/v1/me').set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(200);
     expect(res.body.data.activeEntity).toBe('ATA');
@@ -60,9 +58,7 @@ describe('GET /v1/me', () => {
       entities: ['XYZ'],
     });
 
-    const res = await request(app)
-      .get('/v1/me')
-      .set('Authorization', `Bearer ${token}`);
+    const res = await request(app).get('/v1/me').set('Authorization', `Bearer ${token}`);
 
     expect(res.status).toBe(400);
   });

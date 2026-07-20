@@ -24,9 +24,7 @@ const AppError = require('../../lib/AppError');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {} }) => {
-  const {
-    status, clientId, linkedTaskId, search, archived, page = 1, limit = 50,
-  } = filters;
+  const { status, clientId, linkedTaskId, search, archived, page = 1, limit = 50 } = filters;
   const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
@@ -132,9 +130,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
     sort_order: idx,
   }));
 
-  const { error: lineErr } = await supabaseAdmin
-    .from('invoice_line_items')
-    .insert(lineItems);
+  const { error: lineErr } = await supabaseAdmin.from('invoice_line_items').insert(lineItems);
 
   if (lineErr) {
     // Rollback: delete the invoice if line items fail
@@ -447,18 +443,21 @@ const generateVoucherPdf = async ({ entityId, entityCode, id }) => {
  * @returns {string} HTML string
  */
 const buildInvoiceHtml = (invoice, entityId) => {
-  const entityName = entityId === 'ATA'
-    ? 'Amaya Tan & Associates'
-    : 'LTA — Lanting Tan & Associates';
+  const entityName =
+    entityId === 'ATA' ? 'Amaya Tan & Associates' : 'LTA — Lanting Tan & Associates';
 
-  const lineItemRows = (invoice.line_items || []).map((item, idx) => `
+  const lineItemRows = (invoice.line_items || [])
+    .map(
+      (item, idx) => `
     <tr>
       <td>${idx + 1}</td>
       <td>${item.description}</td>
       <td>${item.type}</td>
       <td style="text-align: right;">₱${Number(item.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
     </tr>
-  `).join('');
+  `
+    )
+    .join('');
 
   return `<!DOCTYPE html>
 <html>
@@ -536,11 +535,12 @@ const buildInvoiceHtml = (invoice, entityId) => {
  * @returns {string} HTML string
  */
 const buildVoucherHtml = (invoice, entityId) => {
-  const entityName = entityId === 'ATA'
-    ? 'Amaya Tan & Associates'
-    : 'LTA — Lanting Tan & Associates';
+  const entityName =
+    entityId === 'ATA' ? 'Amaya Tan & Associates' : 'LTA — Lanting Tan & Associates';
 
-  const paymentRows = (invoice.payments || []).map((p, idx) => `
+  const paymentRows = (invoice.payments || [])
+    .map(
+      (p, idx) => `
     <tr>
       <td>${idx + 1}</td>
       <td>${p.payment_date}</td>
@@ -548,7 +548,9 @@ const buildVoucherHtml = (invoice, entityId) => {
       <td>${p.reference || '-'}</td>
       <td style="text-align: right;">₱${Number(p.amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
     </tr>
-  `).join('');
+  `
+    )
+    .join('');
 
   return `<!DOCTYPE html>
 <html>
@@ -622,7 +624,7 @@ const getAgingReport = async ({ entityId }) => {
     '90+': { total: 0, invoices: [] },
   };
 
-  for (const inv of (invoices || [])) {
+  for (const inv of invoices || []) {
     const dueDate = new Date(inv.due_date);
     const daysOverdue = Math.floor((now - dueDate) / (1000 * 60 * 60 * 24));
     const balance = parseFloat(inv.balance);
@@ -685,13 +687,19 @@ const VALID_ENTITY_CODES = ['ATA', 'LTA'];
 
 const getInvoiceCounts = async ({ entityId, user }) => {
   const resolve = async (code) => {
-    const { data } = await supabaseAdmin.from('entities').select('id').eq('code', code).maybeSingle();
+    const { data } = await supabaseAdmin
+      .from('entities')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
     return data?.id;
   };
 
   const entityIds = [];
   if (entityId === 'ALL') {
-    const codes = (user?.entities || []).filter((c) => VALID_ENTITY_CODES.includes(c.toUpperCase()));
+    const codes = (user?.entities || []).filter((c) =>
+      VALID_ENTITY_CODES.includes(c.toUpperCase())
+    );
     const resolved = await Promise.all(codes.map(resolve));
     entityIds.push(...resolved.filter(Boolean));
   } else {
@@ -714,40 +722,42 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return count || 0;
   };
 
-  const baseQuery = () => supabaseAdmin
-    .from('invoices')
-    .select('*', { count: 'exact', head: true })
-    .in('entity_id', entityIds)
-    .is('deleted_at', null);
+  const baseQuery = () =>
+    supabaseAdmin
+      .from('invoices')
+      .select('*', { count: 'exact', head: true })
+      .in('entity_id', entityIds)
+      .is('deleted_at', null);
 
-  const [total, cancelled, paidArchived, pendingRejected, opsRejected, templates] = await Promise.all([
-    runCount(baseQuery()),
-    runCount(baseQuery().eq('status', 'Cancelled')),
-    runCount(baseQuery().eq('status', 'Paid').eq('archived', true)),
-    runCount(
-      supabaseAdmin
-        .from('pending_changes')
-        .select('*', { count: 'exact', head: true })
-        .in('entity_id', entityIds)
-        .eq('table_name', 'invoices')
-        .eq('status', 'rejected')
-    ),
-    runCount(
-      supabaseAdmin
-        .from('operations_requests')
-        .select('*', { count: 'exact', head: true })
-        .in('entity_id', entityIds)
-        .eq('type', 'billing')
-        .eq('status', 'rejected')
-    ),
-    runCount(
-      supabaseAdmin
-        .from('billing_templates')
-        .select('*', { count: 'exact', head: true })
-        .in('entity_id', entityIds)
-        .is('deleted_at', null)
-    ),
-  ]);
+  const [total, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
+    await Promise.all([
+      runCount(baseQuery()),
+      runCount(baseQuery().eq('status', 'Cancelled')),
+      runCount(baseQuery().eq('status', 'Paid').eq('archived', true)),
+      runCount(
+        supabaseAdmin
+          .from('pending_changes')
+          .select('*', { count: 'exact', head: true })
+          .in('entity_id', entityIds)
+          .eq('table_name', 'invoices')
+          .eq('status', 'rejected')
+      ),
+      runCount(
+        supabaseAdmin
+          .from('operations_requests')
+          .select('*', { count: 'exact', head: true })
+          .in('entity_id', entityIds)
+          .eq('type', 'billing')
+          .eq('status', 'rejected')
+      ),
+      runCount(
+        supabaseAdmin
+          .from('billing_templates')
+          .select('*', { count: 'exact', head: true })
+          .in('entity_id', entityIds)
+          .is('deleted_at', null)
+      ),
+    ]);
 
   const active = total - cancelled - paidArchived;
   const archived = cancelled + paidArchived;

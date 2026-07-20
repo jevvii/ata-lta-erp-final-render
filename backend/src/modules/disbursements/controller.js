@@ -18,11 +18,13 @@ const AppError = require('../../lib/AppError');
 /** @param {Error} err @param {import('express').NextFunction} next */
 const handleZodError = (err, next) => {
   if (err.name === 'ZodError') {
-    return next(new AppError({
-      statusCode: 400,
-      title: 'Validation Error',
-      detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-    }));
+    return next(
+      new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+      })
+    );
   }
   next(err);
 };
@@ -41,7 +43,10 @@ const listDisbursements = async (req, res, next) => {
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
     const result = await service.listDisbursements({ entityId: req.activeEntity, filters });
-    res.json({ data: result.data, meta: { total: result.count, page: filters.page, limit: filters.limit } });
+    res.json({
+      data: result.data,
+      meta: { total: result.count, page: filters.page, limit: filters.limit },
+    });
   } catch (err) {
     next(err);
   }
@@ -169,7 +174,10 @@ const rejectDisbursement = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const getDisbursementCounts = async (req, res, next) => {
   try {
-    const data = await service.getDisbursementCounts({ entityId: req.activeEntity, user: req.user });
+    const data = await service.getDisbursementCounts({
+      entityId: req.activeEntity,
+      user: req.user,
+    });
     res.json({ data });
   } catch (err) {
     next(err);

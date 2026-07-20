@@ -123,6 +123,20 @@ describe('/v1/operations-requests', () => {
     expect(list.body.data.length).toBe(2);
     expect(list.body.meta.total).toBe(2);
 
+    const listLimit1000 = await request(app)
+      .get('/v1/operations-requests?limit=1000')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(listLimit1000.body.meta.limit).toBe(1000);
+
+    await request(app)
+      .get('/v1/operations-requests?limit=1001')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(400);
+
     const filtered = await request(app)
       .get('/v1/operations-requests?type=billing')
       .set('Authorization', `Bearer ${token}`)

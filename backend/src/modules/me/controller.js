@@ -53,7 +53,11 @@ const updateMe = async (req, res, next) => {
     });
 
     if (Object.keys(payload).length === 0) {
-      throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'No updatable fields provided' });
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'No updatable fields provided',
+      });
     }
 
     const profile = await meService.updateProfile({ userId: req.user.id, data: payload });
@@ -120,4 +124,6 @@ const getTeam = async (req, res, next) => {
   }
 };
 
-module.exports = { meController: { getMe, getPermissions, updateMe, changePassword, getAvatarUploadUrl, getTeam } };
+module.exports = {
+  meController: { getMe, getPermissions, updateMe, changePassword, getAvatarUploadUrl, getTeam },
+};

@@ -3,15 +3,28 @@
  */
 
 const adminService = require('./service');
-const { createUserSchema, updateUserSchema, rejectPendingSchema, createPendingSchema, listAuditQuerySchema } = require('./schema');
+const {
+  createUserSchema,
+  updateUserSchema,
+  rejectPendingSchema,
+  createPendingSchema,
+  listAuditQuerySchema,
+} = require('./schema');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const { computePermissions } = require('../../middleware/rbac');
+const { hasPermission } = require('../../lib/permissions');
 
 const validate = (schema, data) => {
   const result = schema.safeParse(data);
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-    throw new AppError({ statusCode: 400, title: 'Validation Error', detail: issues, code: 'VALIDATION_ERROR' });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: issues,
+      code: 'VALIDATION_ERROR',
+    });
   }
   return result.data;
 };
@@ -62,7 +75,11 @@ const getUserById = async (req, res, next) => {
 const updateUser = async (req, res, next) => {
   try {
     const payload = validate(updateUserSchema, req.body);
-    const user = await adminService.updateUser({ id: req.params.id, data: payload, updatedBy: req.user.id });
+    const user = await adminService.updateUser({
+      id: req.params.id,
+      data: payload,
+      updatedBy: req.user.id,
+    });
 
     await auditService.log({
       action: 'user.updated',
@@ -104,13 +121,21 @@ const deleteUser = async (req, res, next) => {
 const listPendingApprovals = async (req, res, next) => {
   try {
     const entityId = await resolveEntityId(req);
+    const permissions = computePermissions(req.user);
+    const canApprove = hasPermission(permissions, 'approve_change:*');
+
+    let submittedBy = req.query.submittedBy;
+    if (!canApprove) {
+      submittedBy = req.user.id;
+    }
+
     const items = await adminService.listPendingApprovals({
       entityId,
       user: req.user,
       status: req.query.status,
       tableName: req.query.tableName,
       parentRecordId: req.query.parentRecordId,
-      submittedBy: req.query.submittedBy,
+      submittedBy,
     });
     res.status(200).json({ data: items });
   } catch (err) {
@@ -147,6 +172,17 @@ const getPendingById = async (req, res, next) => {
   try {
     const entityId = await resolveEntityId(req);
     const item = await adminService.getPendingChangeById({ entityId, id: req.params.id });
+
+    const permissions = computePermissions(req.user);
+    const canApprove = hasPermission(permissions, 'approve_change:*');
+    if (!canApprove && item.submittedBy !== req.user.id) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'You are not authorized to view this pending change',
+      });
+    }
+
     res.status(200).json({ data: item });
   } catch (err) {
     next(err);
@@ -175,7 +211,11 @@ const approvePending = async (req, res, next) => {
 const rejectPending = async (req, res, next) => {
   try {
     const payload = validate(rejectPendingSchema, req.body);
-    const result = await adminService.rejectPending({ id: req.params.id, user: req.user, reason: payload.reason });
+    const result = await adminService.rejectPending({
+      id: req.params.id,
+      user: req.user,
+      reason: payload.reason,
+    });
 
     await auditService.log({
       action: 'pending.rejected',

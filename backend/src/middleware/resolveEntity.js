@@ -51,9 +51,9 @@ function resolveEntity(options = {}) {
 
       const uuid = await resolveEntityId(code);
 
-      req.entityCode = code;     // preserve original string
-      req.entityUUID = uuid;     // add UUID
-      req.activeEntity = uuid;   // override for Agent B services
+      req.entityCode = code; // preserve original string
+      req.entityUUID = uuid; // add UUID
+      req.activeEntity = uuid; // override for Agent B services
 
       next();
     } catch (err) {

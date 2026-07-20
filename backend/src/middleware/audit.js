@@ -23,18 +23,20 @@ const audit = (action, options = {}) => {
       const auditMeta = res.locals.audit || {};
       if (res.statusCode >= 400) return;
 
-      auditService.log({
-        action: auditMeta.action || action,
-        table: auditMeta.table || options.table,
-        recordId: auditMeta.recordId || null,
-        // resolveEntity() overrides req.activeEntity to the entity UUID (36 chars),
-        // which exceeds audit_logs.entity varchar(10). Use the preserved short code.
-        entity: req.entityCode || req.activeEntity || null,
-        userId: req.user?.id || null,
-        details: auditMeta.details || {},
-      }).catch(() => {
-        // Swallow; auditService already logs errors.
-      });
+      auditService
+        .log({
+          action: auditMeta.action || action,
+          table: auditMeta.table || options.table,
+          recordId: auditMeta.recordId || null,
+          // resolveEntity() overrides req.activeEntity to the entity UUID (36 chars),
+          // which exceeds audit_logs.entity varchar(10). Use the preserved short code.
+          entity: req.entityCode || req.activeEntity || null,
+          userId: req.user?.id || null,
+          details: auditMeta.details || {},
+        })
+        .catch(() => {
+          // Swallow; auditService already logs errors.
+        });
     };
 
     res.on('finish', finishHandler);

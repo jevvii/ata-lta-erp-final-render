@@ -33,7 +33,9 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
   if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
   if (search) {
-    query = query.or(`tracking_number.ilike.%${search}%,notes.ilike.%${search}%,recipient_name.ilike.%${search}%`);
+    query = query.or(
+      `tracking_number.ilike.%${search}%,notes.ilike.%${search}%,recipient_name.ilike.%${search}%`
+    );
   }
 
   const offset = (page - 1) * limit;
@@ -90,7 +92,9 @@ const countTransmittals = async ({ entityId }) => {
   }
 
   const rows = data || [];
-  const active = rows.filter((t) => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)).length;
+  const active = rows.filter(
+    (t) => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)
+  ).length;
   const archived = rows.filter((t) => t.status === 'Acknowledged' && t.archived).length;
 
   return { active, archived, total: count || rows.length };
@@ -148,9 +152,7 @@ const createTransmittal = async ({ entityId, userId, data }) => {
     sort_order: idx,
   }));
 
-  const { error: itemErr } = await supabaseAdmin
-    .from('transmittal_items')
-    .insert(items);
+  const { error: itemErr } = await supabaseAdmin.from('transmittal_items').insert(items);
 
   if (itemErr) {
     await supabaseAdmin.from('transmittals').delete().eq('id', transmittal.id);

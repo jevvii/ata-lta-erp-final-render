@@ -10,10 +10,12 @@ const { z } = require('zod');
 /**
  * Schema for analytics query parameters.
  */
-const analyticsQuerySchema = z.object({
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
-}).optional();
+const analyticsQuerySchema = z
+  .object({
+    startDate: z.string().optional(),
+    endDate: z.string().optional(),
+  })
+  .optional();
 
 /**
  * Schema for daily report query parameters.
@@ -33,15 +35,20 @@ const weeklyQuerySchema = z.object({
  * Schema for monthly pending query parameters.
  */
 const monthlyPendingQuerySchema = z.object({
-  month: z.string().regex(/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format').optional(),
+  month: z
+    .string()
+    .regex(/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format')
+    .optional(),
 });
 
 /**
  * Schema for aging report query parameters.
  */
-const agingQuerySchema = z.object({
-  clientId: z.string().uuid().optional(),
-}).optional();
+const agingQuerySchema = z
+  .object({
+    clientId: z.string().uuid().optional(),
+  })
+  .optional();
 
 module.exports = {
   analyticsQuerySchema,

@@ -17,49 +17,49 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 // both ATA and LTA, which the frontend then filters by user permissions.
 router.use(resolveEntity({ allowAll: true }));
 
-router.get('/',
+router.get('/', requirePermission('transmittal:view'), transmittalsController.listTransmittals);
+
+router.get(
+  '/counts',
   requirePermission('transmittal:view'),
-  transmittalsController.listTransmittals,
+  transmittalsController.getTransmittalCounts
 );
 
-router.get('/counts',
-  requirePermission('transmittal:view'),
-  transmittalsController.getTransmittalCounts,
-);
-
-router.post('/',
+router.post(
+  '/',
   requirePermission('transmittal:create'),
   audit('transmittal.create', { table: 'transmittals' }),
-  transmittalsController.createTransmittal,
+  transmittalsController.createTransmittal
 );
 
-router.get('/:id',
-  requirePermission('transmittal:view'),
-  transmittalsController.getTransmittal,
-);
+router.get('/:id', requirePermission('transmittal:view'), transmittalsController.getTransmittal);
 
-router.put('/:id',
+router.put(
+  '/:id',
   requirePermission('transmittal:edit'),
   audit('transmittal.update', { table: 'transmittals' }),
-  transmittalsController.updateTransmittal,
+  transmittalsController.updateTransmittal
 );
 
-router.post('/:id/send',
+router.post(
+  '/:id/send',
   requirePermission('transmittal:mark'),
   audit('transmittal.send', { table: 'transmittals' }),
-  transmittalsController.sendTransmittal,
+  transmittalsController.sendTransmittal
 );
 
-router.post('/:id/acknowledge',
+router.post(
+  '/:id/acknowledge',
   requirePermission('transmittal:mark'),
   audit('transmittal.acknowledge', { table: 'transmittals' }),
-  transmittalsController.acknowledgeTransmittal,
+  transmittalsController.acknowledgeTransmittal
 );
 
-router.delete('/:id',
+router.delete(
+  '/:id',
   requirePermission('transmittal:delete'),
   audit('transmittal.delete', { table: 'transmittals' }),
-  transmittalsController.deleteTransmittal,
+  transmittalsController.deleteTransmittal
 );
 
 module.exports = router;

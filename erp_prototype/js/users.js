@@ -51,7 +51,7 @@ const Users = {
     }
     let count = 0;
     try {
-      const departments = Auth.user?.departments || [];
+      const departments = Auth.effectiveDepartments();
       const isAccounting = departments.includes('Accounting');
       const isDocumentation = departments.includes('Documentation');
       const isManagement = departments.includes('Management') || Auth.user?.role === 'Manager';
@@ -166,7 +166,7 @@ const Users = {
    */
   async loadCounts() {
     const canManageUsers = Auth.can('users:view');
-    const departments = Auth.user?.departments || [];
+    const departments = Auth.effectiveDepartments();
     const hasAccounting = departments.includes('Accounting');
     const hasDocumentation = departments.includes('Documentation');
     const isManagement = departments.includes('Management') || Auth.user?.role === 'Manager';
@@ -216,7 +216,7 @@ const Users = {
 
     const isAdmin = Auth.user.role === 'Admin';
     const canManageUsers = Auth.can('users:view');
-    const departments = Auth.user?.departments || [];
+    const departments = Auth.effectiveDepartments();
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
 
@@ -225,19 +225,21 @@ const Users = {
     // links and full-page detail routes are not overwritten.
     const urlAdminView = ((location.hash || '').match(/^#admin\/([^/?]+)/) || [])[1] || null;
     const isManagement = departments.includes('Management') || Auth.user?.role === 'Manager';
+    const isManager = isManagement;
     const hasDocOrAcctOrMgr = departments.includes('Accounting') || departments.includes('Documentation') || isManagement;
 
     if (canManageUsers) {
       const validAdminViews = ['users', 'audit', 'pending'];
-      if (urlAdminView && (validAdminViews.includes(urlAdminView) || this.sidePeekId)) {
+      if (isManagement) {
+        validAdminViews.push('myPending');
+      }
+      if (urlAdminView && validAdminViews.includes(urlAdminView)) {
         this.view = urlAdminView;
-      } else {
+      } else if (!validAdminViews.includes(this.view)) {
         this.view = 'users';
       }
-      if (!validAdminViews.includes(this.view) && !this.sidePeekId) this.view = 'users';
     } else {
       const showRequestsTab = hasOperations || hasManagement;
-      const isManager = hasManagement || Auth.user?.role === 'Manager';
       const validViews = ['myPending'];
       if (showRequestsTab) validViews.push('myRequests');
       if (isManager) validViews.push('pending');
@@ -245,11 +247,7 @@ const Users = {
 
       if (urlAdminView && validViews.includes(urlAdminView)) {
         this.view = urlAdminView;
-      } else if (!urlAdminView) {
-        this.view = showRequestsTab ? 'myRequests' : 'myPending';
-      }
-
-      if (!validViews.includes(this.view)) {
+      } else if (!validViews.includes(this.view)) {
         this.view = showRequestsTab ? 'myRequests' : 'myPending';
       }
     }
@@ -342,9 +340,10 @@ const Users = {
         if (r) {
           const fullPageRoute = `#admin/${this.view}/${r.id}`;
           const actions = [];
-          const isAccounting = Auth.user?.departments?.includes('Accounting');
-          const isDocumentation = Auth.user?.departments?.includes('Documentation');
-          const isManagement = Auth.user?.departments?.includes('Management') || Auth.user?.role === 'Manager';
+          const _effDepts = Auth.effectiveDepartments();
+          const isAccounting = _effDepts.includes('Accounting');
+          const isDocumentation = _effDepts.includes('Documentation');
+          const isManagement = _effDepts.includes('Management') || Auth.user?.role === 'Manager';
           const isFulfiller = isManagement || (isAccounting && (r.type === 'billing' || r.type === 'disbursement')) || (isDocumentation && r.type === 'transmittal');
 
           if (this.view === 'myRequests' && r.status === 'pending') {
@@ -432,7 +431,12 @@ const Users = {
                     Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
                     return;
                   }
-                  location.hash = '#admin';
+                  if (typeof triggerSyncReload === 'function') {
+                    await triggerSyncReload('#admin', { title: 'Approve Change', message: 'The request has been successfully approved.' });
+                  } else {
+                    location.hash = '#admin';
+                    App.handleRoute();
+                  }
                 }, 'success');
               }
             });
@@ -449,7 +453,12 @@ const Users = {
                       Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
                       return;
                     }
-                    location.hash = '#admin';
+                    if (typeof triggerSyncReload === 'function') {
+                      await triggerSyncReload('#admin', { title: 'Reject Change', message: 'The request has been rejected.', type: 'info' });
+                    } else {
+                      location.hash = '#admin';
+                      App.handleRoute();
+                    }
                   }, 'danger');
                 }
               }
@@ -466,7 +475,12 @@ const Users = {
                     Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
                     return;
                   }
-                  location.hash = '#admin';
+                  if (typeof triggerSyncReload === 'function') {
+                    await triggerSyncReload('#admin', { title: 'Withdraw Change', message: 'The submission has been withdrawn.', type: 'info' });
+                  } else {
+                    location.hash = '#admin';
+                    App.handleRoute();
+                  }
                 }, 'danger');
               }
             });
@@ -514,7 +528,7 @@ const Users = {
       container.appendChild(this.renderAuditSection());
     } else if (this.view === 'pending' && (canManageUsers || isManager)) {
       container.appendChild(await this.renderPendingSection());
-    } else if (this.view === 'myPending' && !canManageUsers) {
+    } else if (this.view === 'myPending' && (!canManageUsers || isManager)) {
       container.appendChild(this.renderMyPendingSection());
     } else if (this.view === 'myRequests' && !canManageUsers) {
       container.appendChild(this.renderMyRequestsSection());
@@ -556,6 +570,14 @@ const Users = {
         { key: 'audit', label: 'Audit Log', icon: BoardCardIcons.document, count: auditCount },
         { key: 'pending', label: 'Pending Approvals', icon: BoardCardIcons.checkCircle, count: pendingCount }
       ];
+
+      const departments = Auth.effectiveDepartments();
+      const isManager = departments.includes('Management') || Auth.user?.role === 'Manager';
+      if (isManager) {
+        const myPendingCount = (this._cachedMyPending || []).length;
+        tabs.push({ key: 'myPending', label: 'My Pending Submissions', icon: BoardCardIcons.checklist, count: myPendingCount });
+      }
+
       return renderModuleTabNav(tabs, this.view, changeTab);
     }
 
@@ -563,7 +585,7 @@ const Users = {
     const tabs = [
       { key: 'myPending', label: 'My Pending Submissions', icon: BoardCardIcons.checklist, count: myPendingCount }
     ];
-    const departments = Auth.user?.departments || [];
+    const departments = Auth.effectiveDepartments();
     const isManagement = departments.includes('Management') || Auth.user?.role === 'Manager';
     if (departments.includes('Accounting') || departments.includes('Documentation') || isManagement) {
       tabs.push({ key: 'pendingRequests', label: 'Pending Requests', icon: BoardCardIcons.document, count: this._counts.pendingRequests || 0 });
@@ -609,11 +631,28 @@ const Users = {
       baseLink.addEventListener('click', () => {
         this.pendingDetailId = null;
         this.editingId = null;
+        const hash = location.hash;
+        const needsHashReset = hash.startsWith('#admin/pending/') || 
+                               hash.startsWith('#admin/myPending/') || 
+                               hash.startsWith('#admin/myRequests/') || 
+                               hash.startsWith('#admin/pendingRequests/');
         if (isAdmin) {
-          this.view = 'users';
-          this.showUserList();
+          if (this.view === 'users') {
+            this.showUserList();
+          } else {
+            if (needsHashReset) {
+              location.hash = '#admin';
+            } else {
+              App.handleRoute();
+            }
+          }
+        } else {
+          if (needsHashReset) {
+            location.hash = '#admin';
+          } else {
+            App.handleRoute();
+          }
         }
-        App.handleRoute();
       });
       h1.appendChild(baseLink);
       h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
@@ -624,6 +663,12 @@ const Users = {
   },
 
   async init() {
+    await Promise.all([
+      window.apiClient.workRequestCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.userCache.ensure()
+    ]);
+
     if (this.editingId) {
       const userViewMode = window.SidePaneInstance ? window.SidePaneInstance.resolveMode({ viewContext: 'user-form' }) : 'side-peek';
       // Direct URL / new-tab full-page routes carry the form path in the hash.
@@ -824,9 +869,10 @@ const Users = {
 
   openRequestDetailSidePeek(r, mode = null) {
     const wrapper = this.renderRequestDetailContent(r);
-    const isAccounting = Auth.user?.departments?.includes('Accounting');
-    const isDocumentation = Auth.user?.departments?.includes('Documentation');
-    const isManagement = Auth.user?.departments?.includes('Management') || Auth.user?.role === 'Manager';
+    const _effDepts2 = Auth.effectiveDepartments();
+    const isAccounting = _effDepts2.includes('Accounting');
+    const isDocumentation = _effDepts2.includes('Documentation');
+    const isManagement = _effDepts2.includes('Management') || Auth.user?.role === 'Manager';
     const isFulfiller = isManagement || (isAccounting && (r.type === 'billing' || r.type === 'disbursement')) || (isDocumentation && r.type === 'transmittal');
 
     if (r.status === 'pending') {
@@ -2014,7 +2060,11 @@ const Users = {
         } catch (e) {
           console.error('[Users.approvePendingItem] failed to withdraw routing pending change', e);
         }
-        App.handleRoute();
+        if (typeof triggerSyncReload === 'function') {
+          await triggerSyncReload(null, { title: 'Approve Routing', message: 'Routing approved successfully.' });
+        } else {
+          App.handleRoute();
+        }
       }, 'success');
       return;
     }
@@ -2026,7 +2076,11 @@ const Users = {
           Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
           return;
         }
-        App.handleRoute();
+        if (typeof triggerSyncReload === 'function') {
+          await triggerSyncReload(null, { title: 'Approve Change', message: 'The change has been successfully approved.' });
+        } else {
+          App.handleRoute();
+        }
       }, 'success');
     }
   },
@@ -2036,9 +2090,19 @@ const Users = {
     if (reason === null) return;
 
     if (item.type === 'change') {
-      PendingChanges.reject(item.id, reason).catch(e => {
-        Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
-      }).finally(() => App.handleRoute());
+      Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', async () => {
+        try {
+          await PendingChanges.reject(item.id, reason);
+        } catch (e) {
+          Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
+          return;
+        }
+        if (typeof triggerSyncReload === 'function') {
+          await triggerSyncReload(null, { title: 'Reject Change', message: 'The change has been rejected.', type: 'info' });
+        } else {
+          App.handleRoute();
+        }
+      }, 'danger');
     }
   },
 
@@ -2058,8 +2122,13 @@ const Users = {
     });
 
     if (processed > 0) {
-      // Give the async approvals a moment to fire before re-rendering.
-      setTimeout(() => App.handleRoute(), 150);
+      setTimeout(async () => {
+        if (typeof triggerSyncReload === 'function') {
+          await triggerSyncReload(null, { title: 'Approve All', message: 'The changes have been approved.' });
+        } else {
+          App.handleRoute();
+        }
+      }, 150);
     } else {
       Workflow.showMessage('Approve All', 'Some items require individual review and cannot be bulk-approved.', 'warning');
     }
@@ -2400,6 +2469,7 @@ const Users = {
     };
 
     const getCategoryOptions = () => [
+      { value: 'workRequests', label: 'Work Requests' },
       { value: 'invoices', label: 'Invoices' },
       { value: 'disbursements', label: 'Disbursements' },
       { value: 'transmittals', label: 'Transmittals' },
@@ -2620,12 +2690,22 @@ const Users = {
         const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Withdraw' });
         withdrawBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => {
-            PendingChanges.delete(pc.id);
-            if (location.hash.includes('/')) {
-              location.hash = location.hash.split('/')[0];
+          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              Workflow.showMessage('Withdraw Submission', err.message || 'Unable to withdraw submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              const baseHash = location.hash.includes('/') ? location.hash.split('/')[0] : location.hash;
+              await triggerSyncReload(baseHash, { title: 'Withdraw Change', message: 'Submission withdrawn.', type: 'info' });
             } else {
-              App.handleRoute();
+              if (location.hash.includes('/')) {
+                location.hash = location.hash.split('/')[0];
+              } else {
+                App.handleRoute();
+              }
             }
           }, 'danger');
         });
@@ -2634,12 +2714,22 @@ const Users = {
         const dismissBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Dismiss' });
         dismissBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => {
-            PendingChanges.delete(pc.id);
-            if (location.hash.includes('/')) {
-              location.hash = location.hash.split('/')[0];
+          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              Workflow.showMessage('Dismiss Submission', err.message || 'Unable to dismiss submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              const baseHash = location.hash.includes('/') ? location.hash.split('/')[0] : location.hash;
+              await triggerSyncReload(baseHash, { title: 'Dismiss Change', message: 'Submission dismissed.', type: 'info' });
             } else {
-              App.handleRoute();
+              if (location.hash.includes('/')) {
+                location.hash = location.hash.split('/')[0];
+              } else {
+                App.handleRoute();
+              }
             }
           }, 'danger');
         });
@@ -2697,7 +2787,19 @@ const Users = {
           label: 'Withdraw',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-          onClick: () => Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (e) {
+              Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              await triggerSyncReload(null, { title: 'Withdraw Change', message: 'Submission withdrawn.', type: 'info' });
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger')
         });
       }
       if (pc.status === 'rejected') {
@@ -2705,7 +2807,19 @@ const Users = {
           label: 'Dismiss',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (e) {
+              Workflow.showMessage('Dismiss Submission', e.message || 'Unable to dismiss submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              await triggerSyncReload(null, { title: 'Dismiss Change', message: 'Submission dismissed.', type: 'info' });
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger')
         });
       }
       return menu;
@@ -2751,14 +2865,38 @@ const Users = {
       if (pc.status === 'pending') {
         const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Withdraw' });
         withdrawBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (e) {
+              Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              await triggerSyncReload(null, { title: 'Withdraw Change', message: 'Submission withdrawn.', type: 'info' });
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger');
         });
         rightActions.appendChild(withdrawBtn);
       }
       if (pc.status === 'rejected') {
         const dismissBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Dismiss' });
         dismissBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (e) {
+              Workflow.showMessage('Dismiss Submission', e.message || 'Unable to dismiss submission.', 'error');
+              return;
+            }
+            if (typeof triggerSyncReload === 'function') {
+              await triggerSyncReload(null, { title: 'Dismiss Change', message: 'Submission dismissed.', type: 'info' });
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger');
         });
         rightActions.appendChild(dismissBtn);
       }
@@ -3123,31 +3261,53 @@ const Users = {
       }
     };
 
+    const handleCloseReloadAndRoute = async (msgConfig) => {
+      this.pendingDetailId = null;
+      if (typeof triggerSyncReload === 'function') {
+        const baseHash = location.hash.includes('/') ? location.hash.split('/')[0] : location.hash;
+        await triggerSyncReload(baseHash, msgConfig);
+      } else {
+        handleCloseAndRoute();
+      }
+    };
+
     if (canApprove) {
       const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Change' });
       approveBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
-          PendingChanges.approve(pc.id);
-          handleCloseAndRoute();
+        Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', async () => {
+          try {
+            await PendingChanges.approve(pc.id);
+            await handleCloseReloadAndRoute({ title: 'Approve Change', message: 'The request has been successfully approved.' });
+          } catch (e) {
+            Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
+          }
         }, 'success');
       });
       actions.appendChild(approveBtn);
 
       const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject' });
-      rejectBtn.addEventListener('click', () => {
+      rejectBtn.addEventListener('click', async () => {
         const reason = prompt('Enter rejection reason:');
         if (reason !== null) {
-          PendingChanges.reject(pc.id, reason);
-          handleCloseAndRoute();
+          try {
+            await PendingChanges.reject(pc.id, reason);
+            await handleCloseReloadAndRoute({ title: 'Reject Change', message: 'The request has been rejected.', type: 'info' });
+          } catch (e) {
+            Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
+          }
         }
       });
       actions.appendChild(rejectBtn);
     } else if (isSubmitter && pc.status === 'pending') {
       const withdrawBtn = el('button', { class: 'btn btn-secondary', text: 'Withdraw Submission' });
       withdrawBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', () => {
-          PendingChanges.delete(pc.id);
-          handleCloseAndRoute();
+        Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', async () => {
+          try {
+            await PendingChanges.delete(pc.id);
+            await handleCloseReloadAndRoute({ title: 'Withdraw Change', message: 'Submission withdrawn.', type: 'info' });
+          } catch (e) {
+            Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
+          }
         }, 'danger');
       });
       actions.appendChild(withdrawBtn);
@@ -3186,9 +3346,13 @@ const Users = {
 
       const dismissBtn = el('button', { class: 'btn btn-danger', text: 'Dismiss Submission' });
       dismissBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => {
-          PendingChanges.delete(pc.id);
-          handleCloseAndRoute();
+        Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+          try {
+            await PendingChanges.delete(pc.id);
+            await handleCloseReloadAndRoute({ title: 'Dismiss Change', message: 'Submission dismissed.', type: 'info' });
+          } catch (e) {
+            Workflow.showMessage('Dismiss Submission', e.message || 'Unable to dismiss submission.', 'error');
+          }
         }, 'danger');
       });
       actions.appendChild(dismissBtn);
@@ -3320,7 +3484,7 @@ const Users = {
     let requests = [];
     const hasItems = await (async () => {
       try {
-        const res = await window.apiClient.operationsRequests.list({ requestedBy: Auth.user?.id, limit: 1000 });
+        const res = await window.apiClient.operationsRequests.list({ requestedBy: Auth.user?.id, limit: 100 });
         requests = (res?.data || []).map(r => this._normalizeOperationsRequest(r));
         return requests.length > 0;
       } catch (err) {
@@ -3674,7 +3838,7 @@ const Users = {
 
     const getCategoryOptions = () => {
       const opts = [];
-      const depts = Auth.user?.departments || [];
+      const depts = Auth.effectiveDepartments();
       const isManagement = depts.includes('Management') || Auth.user?.role === 'Manager';
       if (depts.includes('Accounting') || isManagement) {
         opts.push({ value: 'billing', label: 'Billing' });
@@ -3744,7 +3908,7 @@ const Users = {
     let requests = [];
     const hasItems = await (async () => {
       try {
-        const departments = Auth.user?.departments || [];
+        const departments = Auth.effectiveDepartments();
         const isAccounting = departments.includes('Accounting');
         const isDocumentation = departments.includes('Documentation');
         const isManagement = departments.includes('Management') || Auth.user?.role === 'Manager';

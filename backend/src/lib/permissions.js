@@ -10,40 +10,90 @@ const ALL_ROLES = ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentatio
 
 const STAFF_ROLES = ['Accounting', 'Operations', 'Documentation'];
 
-const DEPARTMENTS = [
-  'Management',
-  'Accounting',
-  'Operations',
-  'Documentation',
-];
+const DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
 
 const DEPARTMENT_PERMISSIONS = {
-  'Management': [
-    'clients:view', 'clients:edit', 'workflow:view', 'workflow:edit', 'workflow:task_approve',
-    'billing:view', 'billing:edit', 'billing:delete', 'billing:payments',
-    'billing:templates', 'billing:request', 'billing:mark_paid',
-    'disbursement:view', 'disbursement:create', 'disbursement:edit',
-    'disbursement:request', 'disbursement:mark_released',
-    'dms:view', 'dms:edit', 'dms:delete', 'dms:handover',
-    'transmittal:view', 'transmittal:create', 'transmittal:edit', 'transmittal:mark', 'transmittal:delete',
-    'reports:view', 'bypass_review:tasks', 'bypass_review:*',
-    'approve_change:tasks', 'approve_change:*', 'users:view', 'users:manage', 'audit:view_all',
+  Management: [
+    'clients:view',
+    'clients:edit',
+    'workflow:view',
+    'workflow:edit',
+    'workflow:task_approve',
+    'billing:view',
+    'billing:edit',
+    'billing:delete',
+    'billing:payments',
+    'billing:templates',
+    'billing:request',
+    'billing:mark_paid',
+    'disbursement:view',
+    'disbursement:create',
+    'disbursement:edit',
+    'disbursement:request',
+    'disbursement:mark_released',
+    'dms:view',
+    'dms:edit',
+    'dms:delete',
+    'dms:handover',
+    'transmittal:view',
+    'transmittal:create',
+    'transmittal:edit',
+    'transmittal:mark',
+    'transmittal:delete',
+    'reports:view',
+    'bypass_review:tasks',
+    'bypass_review:*',
+    'approve_change:tasks',
+    'approve_change:*',
+    'users:view',
+    'users:manage',
+    'audit:view_all',
   ],
-  'Accounting': [
-    'clients:view', 'clients:edit', 'workflow:view', 'workflow:task_add', 'billing:view',
-    'billing:edit', 'billing:delete', 'billing:payments', 'billing:templates',
-    'disbursement:view', 'disbursement:create', 'disbursement:edit',
-    'dms:view', 'transmittal:view', 'reports:view',
+  Accounting: [
+    'clients:view',
+    'clients:edit',
+    'workflow:view',
+    'workflow:task_add',
+    'billing:view',
+    'billing:edit',
+    'billing:delete',
+    'billing:payments',
+    'billing:templates',
+    'disbursement:view',
+    'disbursement:create',
+    'disbursement:edit',
+    'dms:view',
+    'transmittal:view',
+    'reports:view',
   ],
-  'Operations': [
-    'clients:view', 'workflow:view', 'workflow:task_add', 'workflow:task_upload',
-    'billing:view', 'billing:request', 'disbursement:view', 'disbursement:request',
-    'dms:view', 'transmittal:view', 'transmittal:request', 'reports:view',
+  Operations: [
+    'clients:view',
+    'workflow:view',
+    'workflow:task_add',
+    'workflow:task_upload',
+    'billing:view',
+    'billing:request',
+    'disbursement:view',
+    'disbursement:request',
+    'dms:view',
+    'transmittal:view',
+    'transmittal:request',
+    'reports:view',
   ],
-  'Documentation': [
-    'clients:view', 'workflow:view', 'workflow:task_add', 'billing:view',
-    'disbursement:view', 'dms:view', 'dms:edit', 'dms:delete', 'dms:handover',
-    'transmittal:view', 'transmittal:create', 'transmittal:edit', 'transmittal:mark',
+  Documentation: [
+    'clients:view',
+    'workflow:view',
+    'workflow:task_add',
+    'billing:view',
+    'disbursement:view',
+    'dms:view',
+    'dms:edit',
+    'dms:delete',
+    'dms:handover',
+    'transmittal:view',
+    'transmittal:create',
+    'transmittal:edit',
+    'transmittal:mark',
     'reports:view',
   ],
 };
@@ -84,7 +134,12 @@ const buildPermissionSet = ({ role, departments = [] }) => {
 
   // Map legacy role names to their department equivalents, but only if allowed.
   const legacyDept = role === 'Manager' ? 'Management' : role;
-  if (legacyDept && allowedDepts.has(legacyDept) && DEPARTMENT_PERMISSIONS[legacyDept] && !effectiveDepts.includes(legacyDept)) {
+  if (
+    legacyDept &&
+    allowedDepts.has(legacyDept) &&
+    DEPARTMENT_PERMISSIONS[legacyDept] &&
+    !effectiveDepts.includes(legacyDept)
+  ) {
     effectiveDepts.push(legacyDept);
   }
 
@@ -94,7 +149,9 @@ const buildPermissionSet = ({ role, departments = [] }) => {
 
   // Admin has all permissions.
   if (role === 'Admin') {
-    Object.values(DEPARTMENT_PERMISSIONS).flat().forEach((p) => granted.add(p));
+    Object.values(DEPARTMENT_PERMISSIONS)
+      .flat()
+      .forEach((p) => granted.add(p));
   }
 
   return granted;

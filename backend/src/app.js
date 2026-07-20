@@ -38,12 +38,14 @@ const app = express();
 
 // Security middleware
 app.use(helmet({ crossOriginResourcePolicy: false }));
-app.use(cors({
-  origin: env.isDevelopment ? true : env.frontendUrl,
-  credentials: true,
-  allowedHeaders: ['Authorization', 'Content-Type', 'X-Active-Entity'],
-  exposedHeaders: ['X-Request-Id'],
-}));
+app.use(
+  cors({
+    origin: env.isDevelopment ? true : env.frontendUrl,
+    credentials: true,
+    allowedHeaders: ['Authorization', 'Content-Type', 'X-Active-Entity'],
+    exposedHeaders: ['X-Request-Id'],
+  })
+);
 
 // Structured request logging
 app.use((req, res, next) => {
@@ -81,17 +83,19 @@ app.use((req, res, next) => {
 });
 
 // Rate limiting
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: env.isDevelopment ? 1000 : 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    status: 429,
-    title: 'Too Many Requests',
-    detail: 'Rate limit exceeded. Please slow down.',
-  },
-}));
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: env.isDevelopment ? 1000 : 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: {
+      status: 429,
+      title: 'Too Many Requests',
+      detail: 'Rate limit exceeded. Please slow down.',
+    },
+  })
+);
 
 // Compression for response bodies
 app.use(compression());
@@ -130,7 +134,9 @@ app.get('/health', async (req, res) => {
   try {
     await Promise.race([
       supabaseAdmin.from('entities').select('id').limit(1),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
+      ),
     ]);
     checks.supabase = true;
   } catch (e) {
@@ -139,7 +145,9 @@ app.get('/health', async (req, res) => {
   try {
     await Promise.race([
       supabaseAdmin.storage.listBuckets(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
+      ),
     ]);
     checks.storage = true;
   } catch (e) {

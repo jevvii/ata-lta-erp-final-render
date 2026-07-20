@@ -16,7 +16,11 @@ const signIn = async (req, res, next) => {
   try {
     const { email, password } = req.body || {};
     if (!email || !password) {
-      throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Email and password are required' });
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Email and password are required',
+      });
     }
 
     const { data, error } = await supabaseAdmin.auth.signInWithPassword({ email, password });

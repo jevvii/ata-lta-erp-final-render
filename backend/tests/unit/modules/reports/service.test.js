@@ -23,7 +23,7 @@ describe('Reports Service', () => {
       // 2026-01-07 is a Wednesday
       const { start, end } = getWeekBounds('2026-01-07');
       expect(start).toBe('2026-01-05'); // Monday
-      expect(end).toBe('2026-01-11');   // Sunday
+      expect(end).toBe('2026-01-11'); // Sunday
     });
 
     it('returns correct bounds for a Monday', () => {

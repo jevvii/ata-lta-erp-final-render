@@ -83,7 +83,11 @@ const create = async (req, res, next) => {
 const getById = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const client = await clientsService.getClientById({ id: req.params.id, entityId, allowCrossEntity: !entityId });
+    const client = await clientsService.getClientById({
+      id: req.params.id,
+      entityId,
+      allowCrossEntity: !entityId,
+    });
 
     if (!client) {
       throw new AppError({

@@ -5,11 +5,7 @@
  * Phase 7 — Agent B
  */
 
-const {
-  dailyQuerySchema,
-  weeklyQuerySchema,
-  monthlyPendingQuerySchema,
-} = require('./schema');
+const { dailyQuerySchema, weeklyQuerySchema, monthlyPendingQuerySchema } = require('./schema');
 const service = require('./service');
 const AppError = require('../../lib/AppError');
 
@@ -46,11 +42,13 @@ const daily = async (req, res, next) => {
     res.json({ data });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }
@@ -67,11 +65,13 @@ const weekly = async (req, res, next) => {
     res.json({ data });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }
@@ -88,11 +88,13 @@ const monthlyPending = async (req, res, next) => {
     res.json({ data });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }

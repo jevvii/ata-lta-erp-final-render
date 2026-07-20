@@ -96,7 +96,7 @@ const tableQuery = (table) => {
   const matchFilter = (row, { column, value, op: fop = 'eq' }) => {
     const rowValue = row[column];
     if (fop === 'is') {
-      return value === null ? (rowValue === null || rowValue === undefined) : rowValue === value;
+      return value === null ? rowValue === null || rowValue === undefined : rowValue === value;
     }
     if (fop === 'in') {
       return Array.isArray(value) && value.includes(rowValue);
@@ -180,7 +180,9 @@ const tableQuery = (table) => {
 
     if (limit) result = result.slice(0, limit);
     if (builder._postFilters) {
-      builder._postFilters.forEach((fn) => { result = fn(result); });
+      builder._postFilters.forEach((fn) => {
+        result = fn(result);
+      });
     }
     return result;
   };
@@ -293,7 +295,8 @@ const supabaseAdmin = {
   auth: {
     getUser: (token) => {
       const user = mockUsers.get(token);
-      if (!user) return Promise.resolve({ data: { user: null }, error: { message: 'Invalid token' } });
+      if (!user)
+        return Promise.resolve({ data: { user: null }, error: { message: 'Invalid token' } });
       return Promise.resolve({
         data: { user: { id: user.auth_user_id, email: user.email } },
         error: null,
@@ -321,8 +324,13 @@ const supabaseAdmin = {
   storage: {
     listBuckets: () => Promise.resolve({ data: [{ name: 'test-bucket' }], error: null }),
     from: () => ({
-      createSignedUploadUrl: () => Promise.resolve({ data: { signedUrl: 'https://storage.example.com/upload' }, error: null }),
-      createSignedUrl: () => Promise.resolve({ data: { signedUrl: 'https://storage.example.com/download' }, error: null }),
+      createSignedUploadUrl: () =>
+        Promise.resolve({ data: { signedUrl: 'https://storage.example.com/upload' }, error: null }),
+      createSignedUrl: () =>
+        Promise.resolve({
+          data: { signedUrl: 'https://storage.example.com/download' },
+          error: null,
+        }),
       remove: () => Promise.resolve({ data: null, error: null }),
       upload: () => Promise.resolve({ data: { path: 'test-path' }, error: null }),
     }),

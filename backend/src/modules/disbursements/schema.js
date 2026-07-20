@@ -10,9 +10,18 @@ const { z } = require('zod');
 const FUND_SOURCES = ['Firm Fund', 'Client Fund'];
 
 const DISBURSEMENT_CATEGORIES = [
-  'Professional Fee', 'Government Fee', 'Supplies', 'Transportation',
-  'Meals', 'Communication', 'Printing', 'Notarial', 'Filing Fee',
-  'Representation', 'Miscellaneous', 'Other',
+  'Professional Fee',
+  'Government Fee',
+  'Supplies',
+  'Transportation',
+  'Meals',
+  'Communication',
+  'Printing',
+  'Notarial',
+  'Filing Fee',
+  'Representation',
+  'Miscellaneous',
+  'Other',
 ];
 
 /**

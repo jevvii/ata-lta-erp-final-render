@@ -18,7 +18,12 @@ describe('/v1/admin', () => {
   });
 
   it('creates and lists users', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
 
     const res = await request(app)
       .post('/v1/admin/users')
@@ -47,7 +52,12 @@ describe('/v1/admin', () => {
   });
 
   it('rejects invalid department assignments', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
 
     const res = await request(app)
       .post('/v1/admin/users')
@@ -67,7 +77,12 @@ describe('/v1/admin', () => {
   });
 
   it('forbids user management without users:manage', async () => {
-    const token = registerUser({ email: 'accounting@ata-lta.ph', name: 'Accounting', role: 'Accounting', entities: ['ATA'] });
+    const token = registerUser({
+      email: 'accounting@ata-lta.ph',
+      name: 'Accounting',
+      role: 'Accounting',
+      entities: ['ATA'],
+    });
 
     const res = await request(app)
       .post('/v1/admin/users')
@@ -85,7 +100,12 @@ describe('/v1/admin', () => {
   });
 
   it('enforces the 15-user account cap', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
 
     // Fill the user table to the cap.
     for (let i = 1; i <= 15; i += 1) {
@@ -118,7 +138,12 @@ describe('/v1/admin', () => {
   });
 
   it('lists and approves a pending change', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
     const entity = mockTables.entities.get('ent-ata');
 
     await mockTables.pending_changes.set('pc-1', {
@@ -156,8 +181,79 @@ describe('/v1/admin', () => {
     expect(audit.some((a) => a.action === 'pending.approved')).toBe(true);
   });
 
+  it('approves a pending work request and creates tasks associated with it', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+    const entity = mockTables.entities.get('ent-ata');
+
+    await mockTables.pending_changes.set('pc-wr', {
+      id: 'pc-wr',
+      entity_id: entity.id,
+      table_name: 'work_requests',
+      parent_record_id: null,
+      proposed_data: {
+        title: 'New Proposed Work Request',
+        clientId: 'c1111111-1111-1111-1111-111111111111',
+        tasks: [
+          {
+            id: 'temp-task-1',
+            title: 'Subtask 1',
+            predecessors: [],
+          },
+          {
+            id: 'temp-task-2',
+            title: 'Subtask 2',
+            predecessors: ['temp-task-1'],
+          },
+        ],
+      },
+      submitted_by: 'manager-user-id-xyz',
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    });
+
+    const approve = await request(app)
+      .post('/v1/admin/pending-approvals/pc-wr/approve')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(approve.body.data.status).toBe('approved');
+
+    // Verify work request was created
+    const workRequests = Array.from(mockTables.work_requests.values());
+    expect(workRequests).toHaveLength(1);
+    expect(workRequests[0].title).toBe('New Proposed Work Request');
+    expect(workRequests[0].requested_by).toBe('manager-user-id-xyz');
+
+    // Verify tasks were created
+    const tasks = Array.from(mockTables.tasks.values());
+    expect(tasks).toHaveLength(2);
+
+    const task1 = tasks.find((t) => t.title === 'Subtask 1');
+    const task2 = tasks.find((t) => t.title === 'Subtask 2');
+
+    expect(task1).toBeDefined();
+    expect(task2).toBeDefined();
+
+    expect(task1.work_request_id).toBe(workRequests[0].id);
+    expect(task2.work_request_id).toBe(workRequests[0].id);
+
+    // Predecessors should be correctly mapped to the new task UUID
+    expect(task2.predecessors).toContain(task1.id);
+  });
+
   it('returns the audit log count for the active entity', async () => {
-    const admin = registerUser({ email: 'admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
 
     await request(app)
       .post('/v1/admin/users')

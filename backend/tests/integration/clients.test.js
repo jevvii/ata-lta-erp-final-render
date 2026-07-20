@@ -49,7 +49,9 @@ describe('/v1/clients', () => {
     expect(res.body.data.contactDetails).toHaveLength(1);
 
     const audit = Array.from(mockTables.audit_logs.values());
-    expect(audit.some((a) => a.action === 'client.created' && a.table_name === 'clients')).toBe(true);
+    expect(audit.some((a) => a.action === 'client.created' && a.table_name === 'clients')).toBe(
+      true
+    );
   });
 
   it('lists clients scoped to the active entity', async () => {
