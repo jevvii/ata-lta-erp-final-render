@@ -11837,10 +11837,16 @@ const Workflow = {
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
                 async () => {
                   const myGen = Workflow._startSkipGeneration();
-                  App.handleRoute();
-                  await WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
-                  Workflow._clearSkipGenerationIfLatest(myGen);
-                  App.handleRoute();
+                  try {
+                    await WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                    self.showMessage('Restored', `Work request "${wr.title}" has been restored to Draft.`, 'success');
+                  } catch (e) {
+                    console.error('Failed to restore work request to draft', e);
+                    self.showMessage('Error', 'Failed to restore work request to draft.', 'danger');
+                  } finally {
+                    Workflow._clearSkipGenerationIfLatest(myGen);
+                    App.handleRoute();
+                  }
                 }, 'warning');
             }
           }] : [])

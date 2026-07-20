@@ -38,9 +38,10 @@ const listInvoices = async ({ entityId, filters = {} }) => {
   }
 
   if (isArchived) {
-    query = query.eq('archived', true);
+    // Archive view shows both explicitly archived invoices and cancelled (trashed) invoices.
+    query = query.or('archived.eq.true,status.eq.Cancelled');
   } else if (archived === false || archived === 'false') {
-    query = query.eq('archived', false);
+    query = query.eq('archived', false).neq('status', 'Cancelled');
   }
   if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
@@ -939,9 +940,13 @@ const archiveInvoice = async ({ entityId, id, userId }) => {
 
 const unarchiveInvoice = async ({ entityId, id, userId }) => {
   const existing = await getInvoiceById({ entityId, id });
+  const updateData = { archived: false, updated_by: userId, updated_at: new Date().toISOString() };
+  if (existing && existing.status === 'Cancelled') {
+    updateData.status = 'Draft';
+  }
   const { data: updated, error } = await supabaseAdmin
     .from('invoices')
-    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .update(updateData)
     .eq('id', id)
     .eq('entity_id', entityId)
     .select()
