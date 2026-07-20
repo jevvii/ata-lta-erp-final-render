@@ -62,6 +62,18 @@ router.put(
   audit('invoice.update', { table: 'invoices' }),
   billingController.updateInvoice
 );
+router.post(
+  '/:id/archive',
+  requirePermission('billing:edit'),
+  audit('invoice.archive', { table: 'invoices' }),
+  billingController.archiveInvoice
+);
+router.post(
+  '/:id/unarchive',
+  requirePermission('billing:edit'),
+  audit('invoice.unarchive', { table: 'invoices' }),
+  billingController.unarchiveInvoice
+);
 router.delete(
   '/:id',
   requirePermission('billing:delete'),

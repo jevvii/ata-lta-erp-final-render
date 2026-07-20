@@ -98,6 +98,34 @@ const updateDisbursement = async (req, res, next) => {
 };
 
 /** @type {import('express').RequestHandler} */
+const archiveDisbursement = async (req, res, next) => {
+  try {
+    const data = await service.archiveDisbursement({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const unarchiveDisbursement = async (req, res, next) => {
+  try {
+    const data = await service.unarchiveDisbursement({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
 const submitDisbursement = async (req, res, next) => {
   try {
     const data = await service.submitDisbursement({
@@ -243,6 +271,8 @@ module.exports = {
     createDisbursement,
     getDisbursement,
     updateDisbursement,
+    archiveDisbursement,
+    unarchiveDisbursement,
     submitDisbursement,
     approveDisbursement,
     releaseDisbursement,
@@ -253,5 +283,17 @@ module.exports = {
     createDisbursementTemplate,
     updateDisbursementTemplate,
     deleteDisbursementTemplate,
+    deleteDisbursement: async (req, res, next) => {
+      try {
+        await service.deleteDisbursement({
+          entityId: req.activeEntity,
+          id: req.params.id,
+          userId: req.user.id,
+        });
+        res.status(204).end();
+      } catch (err) {
+        next(err);
+      }
+    },
   },
 };

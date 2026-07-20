@@ -109,11 +109,11 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
 
-  const [total, cancelled, fundedArchived, pendingRejected, opsRejected, awaitingRelease] =
+  const [total, archivedCount, cancelledCount, pendingRejected, opsRejected, awaitingRelease] =
     await Promise.all([
       runCount(baseQuery()),
-      runCount(baseQuery().eq('status', 'Cancelled')),
-      runCount(baseQuery().eq('status', 'Funded').eq('archived', true)),
+      runCount(baseQuery().eq('archived', true)),
+      runCount(baseQuery().eq('status', 'Cancelled').eq('archived', false)),
       runCount(
         supabaseAdmin
           .from('pending_changes')
@@ -130,11 +130,11 @@ const getDisbursementCounts = async ({ entityId, user }) => {
           .eq('type', 'disbursement')
           .eq('status', 'rejected')
       ),
-      canRelease ? runCount(baseQuery().eq('status', 'Approved')) : Promise.resolve(0),
+      canRelease ? runCount(baseQuery().eq('status', 'Approved').eq('archived', false)) : Promise.resolve(0),
     ]);
 
-  const active = total - cancelled - fundedArchived;
-  const archived = cancelled + fundedArchived;
+  const active = total - archivedCount - cancelledCount;
+  const archived = archivedCount + cancelledCount;
   const rejected = pendingRejected + opsRejected;
 
   return {
@@ -168,20 +168,18 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
   let query = supabaseAdmin
     .from('disbursements')
     .select('*, clients(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
 
-  if (isArchived) {
-    if (status === 'Funded') {
-      query = query.eq('status', 'Funded').eq('archived', true);
-    } else if (status === 'Cancelled') {
-      query = query.eq('status', 'Cancelled');
-    } else {
-      query = query.or('and(status.eq.Funded,archived.eq.true),status.eq.Cancelled');
-    }
-  } else {
-    if (status) query = query.eq('status', status);
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
   }
+
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
+  }
+  if (status) query = query.eq('status', status);
   if (category) query = query.eq('category', category);
   if (fundSource) query = query.eq('fund_source', fundSource);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
@@ -314,7 +312,22 @@ const getDisbursementById = async ({ entityId, id }) => {
 const updateDisbursement = async ({ entityId, id, userId, data }) => {
   const existing = await getDisbursementById({ entityId, id });
 
-  if (existing.status !== 'Draft') {
+  const contentFields = [
+    'category',
+    'description',
+    'amount',
+    'fundSource',
+    'clientId',
+    'employeeId',
+    'linkedInvoiceId',
+    'linkedWorkRequestId',
+    'linkedTaskId',
+    'dueDate',
+    'notes',
+  ];
+  const isUpdatingContent = contentFields.some((field) => data[field] !== undefined);
+
+  if (isUpdatingContent && existing.status !== 'Draft') {
     throw new AppError({
       statusCode: 409,
       title: 'Conflict',
@@ -339,6 +352,7 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
+  if (data.archived !== undefined) updates.archived = data.archived;
 
   const { data: updated, error } = await supabaseAdmin
     .from('disbursements')
@@ -357,6 +371,74 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   }
 
   return updated;
+};
+
+/**
+ * Archive a disbursement.
+ */
+const archiveDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to archive disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.archive',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
+};
+
+/**
+ * Unarchive a disbursement.
+ */
+const unarchiveDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to unarchive disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.unarchive',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
 };
 
 /**
@@ -639,6 +721,8 @@ module.exports = {
   createDisbursement,
   getDisbursementById,
   updateDisbursement,
+  archiveDisbursement,
+  unarchiveDisbursement,
   submitDisbursement,
   approveDisbursement,
   releaseDisbursement,
@@ -650,3 +734,39 @@ module.exports = {
   updateDisbursementTemplate,
   deleteDisbursementTemplate,
 };
+
+/**
+ * Soft-delete a disbursement.
+ * @param {object} params
+ * @param {string} params.entityId
+ * @param {string} params.id
+ * @param {string} params.userId
+ * @returns {Promise<void>}
+ */
+const deleteDisbursement = async ({ entityId, id, userId }) => {
+  const existing = await getDisbursementById({ entityId, id });
+  const { error } = await supabaseAdmin
+    .from('disbursements')
+    .update({ deleted_at: new Date().toISOString(), updated_by: userId })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to delete disbursement',
+    });
+  }
+
+  await auditService.log({
+    action: 'disbursement.delete',
+    table: 'disbursements',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { disbursementNumber: existing.disbursement_number },
+  });
+};
+
+module.exports.deleteDisbursement = deleteDisbursement;

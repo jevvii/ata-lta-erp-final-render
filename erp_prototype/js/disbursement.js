@@ -9,7 +9,7 @@ const Disbursement = {
   templateEditingId: null,
   listViewMode: 'table', // 'table' | 'board' | 'list'
   EDITABLE_STATUSES: ['Draft', 'Pending'],
-  PENDING_APPROVAL_STATUSES: ['Pending'],
+  PENDING_APPROVAL_STATUSES: ['Pending', 'Submitted', 'Under Review', 'Approved'],
   STANDARD_CATEGORIES: ['Transportation', 'Notary', 'Meals', 'Government Fee', 'Other'],
 
   // API-backed disbursement cache
@@ -253,6 +253,7 @@ const Disbursement = {
   _setActiveSkipGeneration() {
     this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
     this._activeSkipGeneration = this._skipFetchGeneration;
+    this._loadGeneration++;
     return this._activeSkipGeneration;
   },
 
@@ -299,11 +300,24 @@ const Disbursement = {
       if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
         return this._items || [];
       }
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+        return this._items || [];
+      }
       const cacheWarm = Array.isArray(this._items) && this._entity === entity;
       if (cacheWarm) {
         this._mergeItems(items);
       } else {
+        const localArchivedItems = Array.isArray(this._items) ? this._items.filter(d => d.archived === true || d.status === 'Cancelled') : [];
         this._items = items;
+        localArchivedItems.forEach(localD => {
+          const existing = this._items.find(d => d.id === localD.id);
+          if (existing) {
+            existing.archived = localD.archived;
+            existing.status = localD.status;
+          } else {
+            this._items.push(localD);
+          }
+        });
       }
       this._entity = entity;
       this._refreshCounts();
@@ -328,10 +342,20 @@ const Disbursement = {
   _mergeItems(serverItems) {
     if (!Array.isArray(this._items)) this._items = [];
     const existingMap = new Map(this._items.map(d => [d.id, d]));
+    const isSkipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
     serverItems.forEach(serverItem => {
       const existing = existingMap.get(serverItem.id);
       if (existing) {
-        Object.assign(existing, serverItem);
+        const localNewer = existing.updatedAt && serverItem.updatedAt && new Date(existing.updatedAt) > new Date(serverItem.updatedAt);
+        if (isSkipActive || localNewer || existing.archived || existing.status === 'Cancelled') {
+          const localArchived = existing.archived;
+          const localStatus = existing.status;
+          Object.assign(existing, serverItem);
+          if (localArchived !== undefined) existing.archived = localArchived;
+          if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
+        } else {
+          Object.assign(existing, serverItem);
+        }
       } else if (!this._isTempId(serverItem.id)) {
         this._items.push(serverItem);
       }
@@ -339,6 +363,9 @@ const Disbursement = {
   },
 
   async backgroundRefresh() {
+    if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+      return this._items || [];
+    }
     if (this._backgroundPromise) return this._backgroundPromise;
     const loadGen = ++this._loadGeneration;
     this._backgroundPromise = this._load(loadGen).finally(() => {
@@ -401,19 +428,23 @@ const Disbursement = {
   },
 
   _entityMatches(item, entity = this._getActiveEntity()) {
-    const itemEnt = (item.entity || '').toUpperCase();
-    if (entity === 'ALL') {
-      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(itemEnt);
+    if (!item) return false;
+    const itemEnt = (item?.entity || item?.entityCode || item?.entity_code || '').toUpperCase();
+    if (!itemEnt) return true;
+    const active = (entity || '').toUpperCase();
+    if (!active || active === 'ALL') {
+      const userEnts = (Auth.user?.entities || []).map(e => e.toUpperCase());
+      return userEnts.length > 0 ? userEnts.includes(itemEnt) : true;
     }
-    return itemEnt === (entity || '').toUpperCase();
+    return itemEnt === active;
   },
 
   _activeBadgeFilter(d) {
-    return d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived);
+    return !d.archived && d.status !== 'Cancelled';
   },
 
   _archiveBadgeFilter(d) {
-    return (d.status === 'Funded' && d.archived) || d.status === 'Cancelled' || d.status === 'Rejected';
+    return !!d.archived || d.status === 'Cancelled';
   },
 
   _recalcCounts(entity = this._getActiveEntity()) {
@@ -643,6 +674,12 @@ const Disbursement = {
     try {
       const result = await apiCall();
       this._clearSkipGenerationIfCurrent(gen);
+      if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+        window.apiClient.disbursements.invalidateCounts();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
       App.handleRoute();
       return result;
     } catch (e) {
@@ -680,6 +717,12 @@ const Disbursement = {
     try {
       const result = await apiCall();
       this._clearSkipGenerationIfCurrent(gen);
+      if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+        window.apiClient.disbursements.invalidateCounts();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
       App.handleRoute();
       return result;
     } catch (e) {
@@ -796,21 +839,13 @@ const Disbursement = {
           actions.appendChild(editBtn);
         }
 
-        // Delete button — Admin only (checked via can('disbursement:delete'))
-        if (Auth.can('disbursement:delete')) {
-          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
-          deleteBtn.addEventListener('click', () => {
-            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
-              location.hash = '#disbursement';
-              try {
-                await this._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
-                Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
-              } catch (e) {
-                // Error surfaced by _optimisticDelete.
-              }
-            }, 'danger');
+        // Trash button — Admin / Managers
+        if (Auth.can('disbursement:delete') && !d.archived) {
+          const trashBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Trash', style: 'margin-right:8px;' });
+          trashBtn.addEventListener('click', () => {
+            this.trashDisbursement(d.id);
           });
-          actions.appendChild(deleteBtn);
+          actions.appendChild(trashBtn);
         }
         if (d.status === 'Draft' && Auth.can('disbursement:create')) {
           const submitBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Submit Expense', style: 'margin-right:8px;' });
@@ -1310,10 +1345,9 @@ const Disbursement = {
     await this.ensure();
 
     let allItems = this._items || [];
-    let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
+    let items = allItems.filter(d => this._entityMatches(d, entity));
 
-    items = items.filter(d => Auth.canViewDisbursement(d));
-    items = items.filter(d => d.status !== 'Cancelled' && !(d.status === 'Funded' && d.archived));
+    items = items.filter(d => this._activeBadgeFilter(d));
     const hasItems = items.length > 0;
 
     if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {
@@ -1517,16 +1551,7 @@ const Disbursement = {
     const isAccounting = departments.includes('Accounting');
     const isOperations = departments.includes('Operations');
 
-    if (isAdmin) {
-      return [
-        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
-        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
-        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
-        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
-      ];
-    }
-
-    if (isAccounting) {
+    if (isAdmin || isAccounting) {
       return [
         { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
         { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
@@ -1538,7 +1563,8 @@ const Disbursement = {
 
     if (isOperations) {
       return [
-        { key: 'Requested', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#94a3b8' },
+        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
+        { key: 'Requested', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
         { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
         { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
         { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
@@ -1546,6 +1572,8 @@ const Disbursement = {
     }
 
     return [
+      { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
+      { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
       { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
       { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
       { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
@@ -1592,7 +1620,7 @@ const Disbursement = {
     // Normalize boardOrder within each visible column (skip pending-change proxies).
     const sortedItems = [];
     boardPhases.forEach(phase => {
-      const colItems = items.filter(d => phase.statuses.includes(d.status) && !d.pendingChangeId);
+      const colItems = items.filter(d => phase.statuses.includes(d.status) && !d.pendingChangeId && !d.archived && d.status !== 'Cancelled');
       colItems.sort((a, b) => {
         const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
         const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
@@ -1602,11 +1630,14 @@ const Disbursement = {
         return new Date(a.createdAt || a.submittedAt || 0) - new Date(b.createdAt || b.submittedAt || 0);
       });
       colItems.forEach((d, idx) => {
+        if (this._isTempId(d.id) || d.status === 'Cancelled' || d.archived) return;
         const newOrder = (idx + 1) * 1000;
         if (d.boardOrder !== newOrder) {
           d.boardOrder = newOrder;
-          if (this._isTempId(d.id)) return;
           window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
+            if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
+              return;
+            }
             console.error('Failed to update disbursement board order', d.id, e);
           });
         }
@@ -1710,19 +1741,12 @@ const Disbursement = {
           onClick: () => self.showForm(d.id)
         });
       }
-      if (canDelete && !d.pendingChangeId && !self._isTempId(d.id)) {
+      if (canDelete && !d.pendingChangeId && !self._isTempId(d.id) && !d.archived) {
         menu.push({
-          label: 'Delete',
+          label: 'Trash',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
-            try {
-              await self._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
-              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
-            } catch (e) {
-              // Error surfaced by _optimisticDelete.
-            }
-          }, 'danger')
+          onClick: () => self.trashDisbursement(d.id)
         });
       }
       if (canCreate && d.status === 'Draft' && !d.pendingChangeId && !self._isTempId(d.id)) {
@@ -3663,42 +3687,62 @@ const Disbursement = {
 
   async archiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
-    if (!d || d.status !== 'Funded' || d.archived) return;
+    if (!d || d.archived) return;
     try {
-      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.update(id, { archived: true }), 'Archive Failed');
+      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Archive Failed');
       Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
     } catch (e) {
       // Error surfaced by _optimisticUpdate.
     }
   },
 
+  async trashDisbursement(id) {
+    const d = await this.loadDisbursement(id);
+    if (!d || d.archived) return;
+    Workflow.showConfirm('Trash Expense', `Are you sure you want to move disbursement "${d.description || d.category || '(untitled)'}" to trash? It will be moved to Archive.`, async () => {
+      if (this.view === 'detail' && this.detailId === id) {
+        location.hash = '#disbursement';
+      }
+      try {
+        await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Trash Failed');
+        Workflow.showMessage('Trashed', 'Disbursement has been moved to Archive.', 'success');
+      } catch (e) {
+        // Error surfaced by _optimisticUpdate.
+      }
+    }, 'warning');
+  },
+
   async bulkArchiveDisbursements(ids) {
     await this.loadDisbursements();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(d => d.id === id))
-      .filter(d => d && d.status === 'Funded' && !d.archived);
+      .filter(d => d && !d.archived);
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'Only Funded disbursements can be archived.', 'info');
+      Workflow.showMessage('No eligible records', 'No active disbursements to archive.', 'info');
       return;
     }
 
     Workflow.showConfirm('Bulk Archive',
-      `Are you sure you want to archive ${eligible.length} funded disbursement(s)?`,
+      `Are you sure you want to archive ${eligible.length} disbursement(s)?`,
       async () => {
         let count = 0;
+        const failedIds = [];
         for (const d of eligible) {
           try {
-            await this._optimisticUpdate(d.id, { archived: true }, () =>
-              window.apiClient.disbursements.update(d.id, { archived: true }), 'Archive Failed');
+            await this._optimisticUpdate(d.id, { archived: true, updatedAt: new Date().toISOString() }, () =>
+              window.apiClient.disbursements.archive(d.id), 'Archive Failed');
             count++;
           } catch (e) {
-            // Error surfaced by _optimisticUpdate; stop remaining bulk operations.
-            break;
+            failedIds.push(d.id);
           }
         }
-        if (count > 0) {
+        if (failedIds.length > 0 && count > 0) {
+          Workflow.showMessage('Partial Success', `${count} disbursement(s) archived, ${failedIds.length} failed.`, 'warning');
+        } else if (count > 0) {
           Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
+        } else if (failedIds.length > 0) {
+          Workflow.showMessage('Archive Failed', `Unable to archive ${failedIds.length} disbursement(s).`, 'error');
         }
       },
       'warning'
@@ -3707,9 +3751,9 @@ const Disbursement = {
 
   async unarchiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
-    if (!d || d.status !== 'Funded' || !d.archived) return;
+    if (!d || !d.archived) return;
     try {
-      await this._optimisticUpdate(id, { archived: false }, () => window.apiClient.disbursements.update(id, { archived: false }), 'Unarchive Failed');
+      await this._optimisticUpdate(id, { archived: false }, () => window.apiClient.disbursements.unarchive(id), 'Unarchive Failed');
       Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
     } catch (e) {
       // Error surfaced by _optimisticUpdate.
@@ -3720,11 +3764,11 @@ const Disbursement = {
     const d = await this.loadDisbursement(id);
     if (!d) return;
     if (Auth.user?.role !== 'Admin' && !Auth.can('disbursement:delete') && !Auth.isManagerial()) {
-      Workflow.showMessage('Permission Denied', 'Only authorized users can permanently delete disbursements.', 'danger');
+      Workflow.showMessage('Permission Denied', 'Only authorized users can delete disbursements.', 'danger');
       return;
     }
-    Workflow.showConfirm('Permanently Delete Disbursement',
-      `Are you sure you want to permanently delete disbursement "${d.description || d.category}"? This action cannot be undone.`,
+    Workflow.showConfirm('Delete Disbursement',
+      `Are you sure you want to delete disbursement "${d.description || d.category}"?`,
       async () => {
         try {
           await this._optimisticDelete(id, () => window.apiClient.disbursements.remove(id), 'Delete Failed');
@@ -3760,8 +3804,20 @@ const Disbursement = {
       this._lastArchiveMeta = {};
     }
 
-    const funded = archivedDisbursements.filter(d => d.status === 'Funded' && d.archived === true);
-    const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled');
+    const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
+    const localArchived = isFirstPageOrSkip ? (this._items || []).filter(d => this._entityMatches(d, entity) && d.archived === true) : [];
+    const dMap = new Map();
+    archivedDisbursements.forEach(d => dMap.set(d.id, d));
+    localArchived.forEach(d => {
+      if (!dMap.has(d.id)) dMap.set(d.id, d);
+    });
+    archivedDisbursements = Array.from(dMap.values()).filter(d => {
+      const cached = this._getCachedItem(d.id);
+      return !cached || cached.archived !== false;
+    });
+
+    const funded = archivedDisbursements.filter(d => d.archived === true);
+    const cancelled = archivedDisbursements.filter(d => d.status === 'Cancelled' && !d.archived);
 
     let rejectedDisbursementChanges = [];
     let rejectedDisbursementRequests = [];
@@ -3769,8 +3825,8 @@ const Disbursement = {
       const pendingRes = await window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'disbursements' });
       rejectedDisbursementChanges = (pendingRes.data || []).filter(pc => {
         const data = pc.proposedData || {};
-        if (!entFilter(data.entity)) return false;
-        if (!isManagerial && pc.submittedBy !== Auth.user.id) return false;
+        if (!this._entityMatches(data, entity)) return false;
+        if (!isManagerial && pc.submittedBy !== Auth.user?.id) return false;
         return true;
       });
     } catch (e) {
@@ -3779,8 +3835,8 @@ const Disbursement = {
     try {
       const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'disbursement' });
       rejectedDisbursementRequests = (opReqRes.data || []).filter(r => {
-        if (!entFilter(r.entity)) return false;
-        if (!isManagerial && r.requestedBy !== Auth.user.id) return false;
+        if (!this._entityMatches(r, entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user?.id) return false;
         return true;
       });
     } catch (e) {

@@ -4119,13 +4119,13 @@ tbody tr:hover {
 
 /* Stacking context elevation when menu is active */
 .board-column-v2.menu-open {
-  z-index: 50 !important;
+  z-index: 10 !important;
 }
 .board-card-v2.menu-open {
-  z-index: 60 !important;
+  z-index: 15 !important;
 }
 .card-v2-action-menu.menu-open {
-  z-index: 70 !important;
+  z-index: 16 !important;
 }
 
 .board-card-v2.compact .card-v2-action-menu {

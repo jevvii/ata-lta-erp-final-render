@@ -30,21 +30,19 @@ const listInvoices = async ({ entityId, filters = {} }) => {
 
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients!inner(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
+    .select('*, clients(name)', { count: 'exact' })
     .is('deleted_at', null);
 
-  if (isArchived) {
-    if (status === 'Paid') {
-      query = query.eq('status', 'Paid').eq('archived', true);
-    } else if (status === 'Cancelled') {
-      query = query.eq('status', 'Cancelled');
-    } else {
-      query = query.or('and(status.eq.Paid,archived.eq.true),status.eq.Cancelled');
-    }
-  } else {
-    if (status) query = query.eq('status', status);
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
   }
+
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
+  }
+  if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
@@ -913,11 +911,65 @@ const deleteTemplate = async ({ entityId, id }) => {
   }
 };
 
+const archiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.archive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
+const unarchiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.unarchive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
 module.exports = {
   listInvoices,
   createInvoice,
   getInvoiceById,
   updateInvoice,
+  archiveInvoice,
+  unarchiveInvoice,
   deleteInvoice,
   recordPayment,
   generateInvoicePdf,

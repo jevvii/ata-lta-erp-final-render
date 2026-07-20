@@ -76,12 +76,22 @@ const listDocuments = async ({ entityId, filters = {} }) => {
     page = 1,
     limit = 50,
   } = filters;
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('documents')
     .select('*', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else {
+    query = query.eq('archived', false);
+  }
 
   if (category) query = query.eq('category', category);
   if (status) query = query.eq('status', status);
@@ -89,7 +99,6 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   if (clientId) query = query.eq('client_id', clientId);
   if (workRequestId) query = query.eq('work_request_id', workRequestId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
-  if (typeof archived === 'boolean') query = query.eq('archived', archived);
   if (search) {
     query = query.or(
       `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
@@ -145,6 +154,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     entity_id: entityId,
     status: 'pending_upload',
     document_lifecycle: 'collected',
+    archived: false,
     file_size: data.fileSize,
     content_type: data.contentType,
     storage_path: storagePath,
@@ -291,19 +301,6 @@ const deleteDocument = async ({ entityId, id, userId }) => {
     });
   }
 
-  // Clean up storage object if it exists
-  if (doc.storage_path) {
-    try {
-      await deleteObject(doc.storage_path);
-    } catch (storageErr) {
-      // Log but don't fail — metadata is already soft-deleted
-      logger.warn('failed to delete storage object', {
-        path: doc.storage_path,
-        error: storageErr.message,
-      });
-    }
-  }
-
   await auditService.log({
     action: 'document.delete',
     table: 'documents',
@@ -312,6 +309,76 @@ const deleteDocument = async ({ entityId, id, userId }) => {
     userId,
     details: { fileName: doc.original_name },
   });
+};
+
+const archiveDocument = async ({ entityId, id, userId }) => {
+  const existing = await getDocumentById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('documents')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive document' });
+  }
+
+  await auditService.log({
+    action: 'document.archive',
+    table: 'documents',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { fileName: existing.original_name },
+  });
+
+  return updated;
+};
+
+const unarchiveDocument = async ({ entityId, id, userId }) => {
+  const existing = await getDocumentById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('documents')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive document' });
+  }
+
+  await auditService.log({
+    action: 'document.unarchive',
+    table: 'documents',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { fileName: existing.original_name },
+  });
+
+  return updated;
+};
+
+const countDocuments = async ({ entityId }) => {
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q;
+  };
+
+  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+    baseQuery().eq('archived', false),
+    baseQuery().eq('archived', true),
+  ]);
+
+  return { active: activeCount || 0, archived: archivedCount || 0 };
 };
 
 /**
@@ -442,6 +509,9 @@ module.exports = {
   getDocumentById,
   updateDocument,
   deleteDocument,
+  archiveDocument,
+  unarchiveDocument,
+  countDocuments,
   confirmUpload,
   getDownloadUrl,
   updateLifecycle,

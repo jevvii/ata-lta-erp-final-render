@@ -220,23 +220,10 @@ const App = {
       console.error('[App.updateSidebarNotifications] operations request counts failed', opsResult.reason);
     }
 
-    // Disbursement nav badge only surfaces work awaiting release.
-    // Pending approvals and release requests are handled in the dedicated Admin > Pending Approvals page.
-    const awaitingRelease = disbCounts?.data?.awaitingRelease || 0;
-
     const navLink = document.querySelector('nav a[href="#disbursement"]');
     if (navLink) {
-      let badge = navLink.querySelector('.nav-badge');
-      if (awaitingRelease > 0) {
-        if (!badge) {
-          badge = document.createElement('span');
-          badge.className = 'nav-badge';
-          navLink.appendChild(badge);
-        }
-        badge.textContent = awaitingRelease > 99 ? '99+' : awaitingRelease;
-      } else if (badge) {
-        badge.remove();
-      }
+      const badge = navLink.querySelector('.nav-badge');
+      if (badge) badge.remove();
     }
 
     // Admin nav badge: reflect pending approvals / pending submissions to draw attention.

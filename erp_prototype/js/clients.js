@@ -112,7 +112,20 @@ const ClientsData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { clients: this._clients || [] };
     }
-    this._clients = clients;
+    if (Array.isArray(this._clients)) {
+      const localArchived = this._clients.filter(c => c.status === 'Archived');
+      this._clients = clients;
+      localArchived.forEach(localC => {
+        const existing = this._clients.find(c => c.id === localC.id);
+        if (existing) {
+          existing.status = localC.status;
+        } else {
+          this._clients.push(localC);
+        }
+      });
+    } else {
+      this._clients = clients;
+    }
     this._entity = entity;
     return { clients };
   },
@@ -192,6 +205,9 @@ const Clients = {
   _startOptimisticSkip() {
     this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
     this._activeSkipGeneration = this._skipFetchGeneration;
+    if (typeof ClientsData !== 'undefined') {
+      ClientsData._loadGeneration++;
+    }
     return this._activeSkipGeneration;
   },
 
@@ -377,11 +393,21 @@ const Clients = {
     App.updateStickyOffsets();
   },
 
-  getClientCounts() {
-    const clients = ClientsData.getAllClients();
-    const activeCount = clients.filter(c => c.status !== 'Archived').length;
-    const archivedCount = clients.filter(c => c.status === 'Archived').length;
-    return { activeCount, archivedCount };
+  async getClientCounts() {
+    try {
+      const res = await window.apiClient.clients.counts(Auth.activeEntity);
+      const data = res?.data || res || {};
+      return {
+        activeCount: data.active ?? data.activeCount ?? 0,
+        archivedCount: data.archived ?? data.archivedCount ?? 0
+      };
+    } catch (e) {
+      console.error('Failed to get client counts', e);
+      const clients = ClientsData.getAllClients();
+      const activeCount = clients.filter(c => c.status !== 'Archived').length;
+      const archivedCount = clients.filter(c => c.status === 'Archived').length;
+      return { activeCount, archivedCount };
+    }
   },
 
   async renderTabNav() {
@@ -400,7 +426,7 @@ const Clients = {
 
     try {
       await ClientsData.ensure();
-      const counts = this.getClientCounts();
+      const counts = await this.getClientCounts();
       activeCount = counts.activeCount;
       archivedCount = counts.archivedCount;
 
@@ -910,7 +936,10 @@ const Clients = {
     footer.appendChild(footerCenter);
 
     refreshBtn.addEventListener('click', () => {
-      this._activeSkipGeneration = 0;
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+        return;
+      }
+      ClientsData.invalidate();
       this.renderList(container, query);
     });
   },
@@ -1601,8 +1630,9 @@ const Clients = {
     if (client) client.status = 'Active';
     App.handleRoute();
     try {
-      await window.apiClient.clients.update(id, { status: 'Active' });
+      await window.apiClient.clients.unarchive(id);
       window.apiClient.clientCache.invalidate();
+      ClientsData.invalidate();
       this._clearOptimisticSkipIfCurrent(restoreGeneration);
       await App.handleRoute();
     } catch (e) {
@@ -1635,7 +1665,7 @@ const Clients = {
         let lastError = null;
         for (const id of clientIds) {
           try {
-            await window.apiClient.clients.update(id, { status: 'Active' });
+            await window.apiClient.clients.unarchive(id);
           } catch (e) {
             failedCount++;
             lastError = e;
@@ -1646,6 +1676,7 @@ const Clients = {
         }
 
         window.apiClient.clientCache.invalidate();
+        ClientsData.invalidate();
         this._clearOptimisticSkipIfCurrent(restoreGeneration);
         await App.handleRoute();
         if (failedCount > 0) {
@@ -1686,6 +1717,13 @@ const Clients = {
     };
 
     let archived = await this.getArchivedClients(query);
+    const localArchived = (ClientsData.getAllClients() || []).filter(c => entFilter(c.entity) && c.status === 'Archived');
+    const cMap = new Map();
+    archived.forEach(c => cMap.set(c.id, c));
+    localArchived.forEach(c => {
+      if (!cMap.has(c.id)) cMap.set(c.id, c);
+    });
+    archived = Array.from(cMap.values());
 
     let rejectedClientChanges = [];
     let rejectedClientRequests = [];

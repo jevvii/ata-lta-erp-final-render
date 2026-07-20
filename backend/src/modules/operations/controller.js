@@ -29,6 +29,16 @@ const validate = (schema, data) => {
   return result.data;
 };
 
+const counts = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await operationsService.getWorkRequestCounts({ entityId, user: req.user });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const list = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
@@ -38,6 +48,7 @@ const list = async (req, res, next) => {
       search: req.query.search,
       status: req.query.status,
       clientId: req.query.clientId,
+      archived: req.query.archived,
       page: req.query.page,
       limit: req.query.limit,
       sortBy: req.query.sortBy,
@@ -46,6 +57,34 @@ const list = async (req, res, next) => {
     });
     const isPaginated = req.query.page !== undefined || req.query.limit !== undefined;
     res.status(200).json(isPaginated ? { data, meta } : { data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const archive = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await operationsService.archiveWorkRequest({
+      id: req.params.id,
+      entityId,
+      user: req.user,
+    });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const unarchive = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await operationsService.unarchiveWorkRequest({
+      id: req.params.id,
+      entityId,
+      user: req.user,
+    });
+    res.status(200).json({ data });
   } catch (err) {
     next(err);
   }
@@ -402,9 +441,12 @@ const createGroundWorker = async (req, res, next) => {
 module.exports = {
   operationsController: {
     list,
+    counts,
     create,
     getById,
     update,
+    archive,
+    unarchive,
     remove,
     listTasks,
     createTask,

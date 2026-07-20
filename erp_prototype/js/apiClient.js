@@ -158,6 +158,14 @@
   const countCache = new Map();
   const COUNT_TTL_MS = 30 * 1000;
 
+  const isAbortError = (err) => {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    if (err.message === 'route-change' || err.reason === 'route-change') return true;
+    const str = String(err.message || err.reason || err || '').toLowerCase();
+    return str.includes('aborted') || str.includes('route-change') || str.includes('cancel');
+  };
+
   const cachedCount = (cacheKey, fetcher, fallback) => {
     const now = Date.now();
     const cached = countCache.get(cacheKey);
@@ -167,7 +175,7 @@
       return value;
     }).catch((err) => {
       // Route-change aborts are expected; do not spam the console with them.
-      if (err.name !== 'AbortError') {
+      if (!isAbortError(err)) {
         console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
       }
       return fallback;
@@ -354,10 +362,18 @@
         const q = qs.toString();
         return get(`/clients${q ? '?' + q : ''}`);
       },
-      create: (data) => post('/clients', data),
+      counts: (entityId) => cachedCount(
+        `clients.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/clients/counts', entityId)),
+        { data: { active: 0, archived: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('clients.counts'),
+      create: (data) => post('/clients', data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
       get: (id) => get(`/clients/${id}`),
-      update: (id, data) => put(`/clients/${id}`, data),
-      remove: (id) => del(`/clients/${id}`),
+      update: (id, data) => put(`/clients/${id}`, data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
+      archive: (id) => post(`/clients/${id}/archive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),
+      unarchive: (id) => post(`/clients/${id}/unarchive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),
+      remove: (id) => del(`/clients/${id}`).then((res) => { invalidateCountCache('clients.counts'); return res; }),
     },
 
     documents: {
@@ -367,10 +383,18 @@
         const q = qs.toString();
         return get(`/documents${q ? '?' + q : ''}`);
       },
-      create: (data) => post('/documents', data),
+      counts: (entityId) => cachedCount(
+        `documents.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/documents/counts', entityId)),
+        { data: { active: 0, archived: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('documents.counts'),
+      create: (data) => post('/documents', data).then((res) => { invalidateCountCache('documents.counts'); return res; }),
       get: (id) => get(`/documents/${id}`),
-      update: (id, data) => put(`/documents/${id}`, data),
-      remove: (id) => del(`/documents/${id}`),
+      update: (id, data) => put(`/documents/${id}`, data).then((res) => { invalidateCountCache('documents.counts'); return res; }),
+      archive: (id) => post(`/documents/${id}/archive`).then((res) => { invalidateCountCache('documents.counts'); return res; }),
+      unarchive: (id) => post(`/documents/${id}/unarchive`).then((res) => { invalidateCountCache('documents.counts'); return res; }),
+      remove: (id) => del(`/documents/${id}`).then((res) => { invalidateCountCache('documents.counts'); return res; }),
       confirmUpload: (id) => post(`/documents/${id}/confirm-upload`),
       downloadUrl: (id) => get(`/documents/${id}/download-url`),
       updateLifecycle: (id, data) => put(`/documents/${id}/lifecycle`, data),
@@ -383,10 +407,18 @@
         const q = qs.toString();
         return get(`/work-requests${q ? '?' + q : ''}`);
       },
-      create: (data) => post('/work-requests', data),
+      counts: (entityId) => cachedCount(
+        `workRequests.counts:${entityId || getActiveEntity() || 'none'}`,
+        () => get(countUrl('/work-requests/counts', entityId)),
+        { data: { active: 0, archived: 0 } }
+      ),
+      invalidateCounts: () => invalidateCountCache('workRequests.counts'),
+      create: (data) => post('/work-requests', data).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       get: (id) => get(`/work-requests/${id}`),
-      update: (id, data, options) => put(`/work-requests/${id}`, data, options),
-      remove: (id) => del(`/work-requests/${id}`),
+      update: (id, data, options) => put(`/work-requests/${id}`, data, options).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
+      archive: (id) => post(`/work-requests/${id}/archive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
+      unarchive: (id) => post(`/work-requests/${id}/unarchive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
+      remove: (id) => del(`/work-requests/${id}`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       getRelated: (id) => get(`/work-requests/${id}/related`),
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
@@ -445,6 +477,8 @@
       create: (data) => post('/invoices', data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       get: (id) => get(`/invoices/${id}`),
       update: (id, data) => put(`/invoices/${id}`, data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      archive: (id) => post(`/invoices/${id}/archive`).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
+      unarchive: (id) => post(`/invoices/${id}/unarchive`).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       remove: (id) => del(`/invoices/${id}`).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       recordPayment: (id, data) => post(`/invoices/${id}/payments`, data).then((res) => { invalidateCountCache('invoices.counts'); return res; }),
       pdf: (id) => get(`/invoices/${id}/pdf`),
@@ -471,6 +505,10 @@
       create: (data) => post('/disbursements', data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       get: (id) => get(`/disbursements/${id}`),
       update: (id, data) => put(`/disbursements/${id}`, data).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      archive: (id) => post(`/disbursements/${id}/archive`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      unarchive: (id) => post(`/disbursements/${id}/unarchive`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      remove: (id) => del(`/disbursements/${id}`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
+      delete: (id) => del(`/disbursements/${id}`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       submit: (id) => post(`/disbursements/${id}/submit`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       approve: (id) => post(`/disbursements/${id}/approve`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
       release: (id) => post(`/disbursements/${id}/release`).then((res) => { invalidateCountCache('disbursements.counts'); return res; }),
@@ -500,6 +538,8 @@
       update: (id, data) => put(`/transmittals/${id}`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       send: (id) => post(`/transmittals/${id}/send`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       acknowledge: (id) => post(`/transmittals/${id}/acknowledge`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      archive: (id) => post(`/transmittals/${id}/archive`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      unarchive: (id) => post(`/transmittals/${id}/unarchive`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       remove: (id) => del(`/transmittals/${id}`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
     },
 

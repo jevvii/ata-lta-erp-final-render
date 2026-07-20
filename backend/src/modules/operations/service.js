@@ -9,7 +9,7 @@ const { randomUUID } = require('crypto');
 
 const VALID_TRANSITIONS = {
   Draft: ['In Progress', 'Cancelled'],
-  'In Progress': ['For Review', 'Cancelled'],
+  'In Progress': ['For Review', 'Completed', 'Cancelled'],
   'For Review': ['Completed', 'In Progress'],
   Completed: [],
   Cancelled: [],
@@ -58,6 +58,7 @@ const toApiWorkRequest = (row, entityCode) => ({
   clientId: row.client_id,
   status: row.status,
   priority: row.priority || 'Normal',
+  archived: row.archived ?? false,
   requestedBy: row.requested_by || null,
   assignedTo: row.assigned_to || null,
   dueDate: row.due_date || null,
@@ -168,6 +169,7 @@ const listWorkRequests = async ({
   search,
   status,
   clientId,
+  archived,
   page,
   limit,
   sortBy,
@@ -181,6 +183,7 @@ const listWorkRequests = async ({
     ? sortBy
     : 'created_at';
   const sortAsc = String(sortOrder).toLowerCase() === 'asc';
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('work_requests')
@@ -188,13 +191,12 @@ const listWorkRequests = async ({
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.or('archived.is.null,archived.eq.false');
   }
-
-  if (status) {
-    query = query.eq('status', status);
-  }
+  if (status) query = query.eq('status', status);
   if (clientId) {
     query = query.eq('client_id', clientId);
   }
@@ -364,6 +366,8 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     updated_at: new Date().toISOString(),
   };
 
+  if (data.archived !== undefined) updates.archived = data.archived;
+
   const { error } = await supabaseAdmin
     .from('work_requests')
     .update(updates)
@@ -378,6 +382,62 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
   }
 
   return getWorkRequestById({ id, entityId, user });
+};
+
+const archiveWorkRequest = async ({ id, entityId, user }) => {
+  const existing = await getWorkRequestById({ id, entityId, user });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  }
+
+  const { error } = await supabaseAdmin
+    .from('work_requests')
+    .update({ archived: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive work request' });
+  }
+
+  return { ...existing, archived: true };
+};
+
+const unarchiveWorkRequest = async ({ id, entityId, user }) => {
+  const existing = await getWorkRequestById({ id, entityId, user });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  }
+
+  const { error } = await supabaseAdmin
+    .from('work_requests')
+    .update({ archived: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore work request' });
+  }
+
+  return { ...existing, archived: false };
+};
+
+const getWorkRequestCounts = async ({ entityId }) => {
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('work_requests')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q;
+  };
+
+  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+    baseQuery().or('archived.is.null,archived.eq.false'),
+    baseQuery().eq('archived', true),
+  ]);
+
+  return { active: activeCount || 0, archived: archivedCount || 0 };
 };
 
 const deleteWorkRequest = async ({ id, entityId, user }) => {
@@ -585,20 +645,15 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
  */
 const getWorkRequestRelated = async ({ id, entityId }) => {
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', id)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .maybeSingle();
 
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
-
-  if (wrErr || !wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  if (!wr) {
+    return { invoices: [], disbursements: [], transmittals: [], documents: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
@@ -654,31 +709,26 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[] }>}
  */
 const getTaskRelated = async ({ id, entityId }) => {
-  const { data: task, error: taskErr } = await supabaseAdmin
+  const { data: task } = await supabaseAdmin
     .from('tasks')
     .select('id, work_request_id')
     .eq('id', id)
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (taskErr || !task) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  if (!task || !task.work_request_id) {
+    return { invoices: [], disbursements: [] };
   }
 
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', task.work_request_id)
-    .is('deleted_at', null);
-
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr } = await wrQuery.maybeSingle();
+    .is('deleted_at', null)
+    .maybeSingle();
 
   if (!wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+    return { invoices: [], disbursements: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
@@ -859,6 +909,9 @@ module.exports = {
   createWorkRequest,
   getWorkRequestById,
   updateWorkRequest,
+  archiveWorkRequest,
+  unarchiveWorkRequest,
+  getWorkRequestCounts,
   deleteWorkRequest,
   listTasks,
   getTaskById,

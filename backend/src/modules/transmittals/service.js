@@ -19,7 +19,8 @@ const AppError = require('../../lib/AppError');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listTransmittals = async ({ entityId, filters = {} }) => {
-  const { status, clientId, search, page = 1, limit = 50 } = filters;
+  const { status, clientId, search, archived, page = 1, limit = 50 } = filters;
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('transmittals')
@@ -30,7 +31,13 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
     query = query.eq('entity_id', entityId);
   }
 
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false);
+  }
   if (status) query = query.eq('status', status);
+
   if (clientId) query = query.eq('client_id', clientId);
   if (search) {
     query = query.or(
@@ -419,6 +426,74 @@ const deleteTransmittal = async ({ entityId, id, userId }) => {
   });
 };
 
+const archiveTransmittal = async ({ entityId, id, userId }) => {
+  const existing = await getTransmittalById({ entityId, id });
+  if (existing.status !== 'Acknowledged') {
+    throw new AppError({
+      statusCode: 409,
+      title: 'Conflict',
+      detail: 'Only Acknowledged transmittals can be archived',
+    });
+  }
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('transmittals')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to archive transmittal',
+    });
+  }
+
+  await auditService.log({
+    action: 'transmittal.archive',
+    table: 'transmittals',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { trackingNumber: existing.tracking_number },
+  });
+
+  return updated;
+};
+
+const unarchiveTransmittal = async ({ entityId, id, userId }) => {
+  const existing = await getTransmittalById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('transmittals')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to unarchive transmittal',
+    });
+  }
+
+  await auditService.log({
+    action: 'transmittal.unarchive',
+    table: 'transmittals',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { trackingNumber: existing.tracking_number },
+  });
+
+  return updated;
+};
+
 module.exports = {
   listTransmittals,
   countTransmittals,
@@ -427,5 +502,7 @@ module.exports = {
   updateTransmittal,
   sendTransmittal,
   acknowledgeTransmittal,
+  archiveTransmittal,
+  unarchiveTransmittal,
   deleteTransmittal,
 };

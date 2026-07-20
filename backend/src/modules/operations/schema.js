@@ -34,7 +34,9 @@ const createWorkRequestSchema = z.object({
   priority: z.string().max(50).optional(),
 });
 
-const updateWorkRequestSchema = createWorkRequestSchema.partial();
+const updateWorkRequestSchema = createWorkRequestSchema.partial().extend({
+  archived: z.boolean().optional(),
+});
 
 const createTaskSchema = z.object({
   title: z.string().min(1).max(255),
