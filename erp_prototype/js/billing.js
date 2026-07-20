@@ -24,7 +24,9 @@ const Billing = {
   _activeSkipGeneration: 0, // generation currently honored by the list renderer
   _templates: [], // cached billing templates for the active entity
   _templatesPromise: null, // in-flight loadTemplates() promise
-  _backgroundPromise: null, // in-flight background refresh
+  _templatesEntity: null,
+  _templatesGeneration: 0,
+  _templatesBackgroundPromise: null, // in-flight template background refresh
 
   _entityMatches(invEntity, entity) {
     const u = (invEntity || '').toUpperCase();
@@ -100,7 +102,10 @@ const Billing = {
     this._counts = null;
     this._countsEntity = null;
     this._templates = [];
+    this._templatesEntity = null;
+    this._templatesGeneration++;
     this._templatesPromise = null;
+    this._templatesBackgroundPromise = null;
   },
 
   _beginSkipGeneration() {
@@ -742,31 +747,71 @@ const Billing = {
     }
   },
 
+  _isTemplatesFresh() {
+    return this._templatesEntity === Auth.activeEntity;
+  },
+
+  async ensureTemplates() {
+    const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (skipping || this._isTemplatesFresh()) return;
+    if (this._templatesPromise) return this._templatesPromise;
+    const loadGen = ++this._templatesGeneration;
+    this._templatesPromise = this._loadTemplates(loadGen).finally(() => {
+      if (this._templatesGeneration === loadGen) this._templatesPromise = null;
+    });
+    return this._templatesPromise;
+  },
+
+  async _loadTemplates(loadGen, { merge = false } = {}) {
+    const entity = Auth.activeEntity;
+    try {
+      const all = await this.fetchTemplates();
+      if (loadGen !== this._templatesGeneration || Auth.activeEntity !== entity) {
+        return this._templates || [];
+      }
+      const filtered = all.filter(t => {
+        if (entity === 'ALL') {
+          return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
+        }
+        return (t.entity || '').toUpperCase() === entity.toUpperCase();
+      });
+      if (merge && this._templatesEntity === entity) {
+        const existingMap = new Map(this._templates.map(t => [t.id, t]));
+        filtered.forEach(t => {
+          const existing = existingMap.get(t.id);
+          if (existing) Object.assign(existing, t);
+          else if (!this._isTempId(t.id)) this._templates.push(t);
+        });
+      } else {
+        this._templates = filtered;
+      }
+      this._templatesEntity = entity;
+      return this._templates;
+    } catch (e) {
+      console.error('Failed to load billing templates', e);
+      if (loadGen !== this._templatesGeneration) return this._templates || [];
+      if (!Array.isArray(this._templates)) this._templates = [];
+      this._templatesEntity = entity;
+      return this._templates;
+    }
+  },
+
+  async backgroundRefreshTemplates() {
+    if (this._templatesBackgroundPromise) return this._templatesBackgroundPromise;
+    const loadGen = ++this._templatesGeneration;
+    this._templatesBackgroundPromise = this._loadTemplates(loadGen, { merge: true }).finally(() => {
+      if (this._templatesGeneration === loadGen) this._templatesBackgroundPromise = null;
+    });
+    return this._templatesBackgroundPromise;
+  },
+
   /**
    * Load billing templates for the active entity into a local cache.
    * Deduplicates concurrent calls via _templatesPromise.
    */
   async loadTemplates() {
-    if (this._templatesPromise) return this._templatesPromise;
-    this._templatesPromise = (async () => {
-      try {
-        const all = await this.fetchTemplates();
-        const entity = Auth.activeEntity;
-        this._templates = all.filter(t => {
-          if (entity === 'ALL') {
-            return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
-          }
-          return (t.entity || '').toUpperCase() === entity.toUpperCase();
-        });
-      } catch (e) {
-        console.error('Failed to load billing templates', e);
-        this._templates = [];
-      } finally {
-        this._templatesPromise = null;
-      }
-      return this._templates;
-    })();
-    return this._templatesPromise;
+    await this.ensureTemplates();
+    return this._templates;
   },
 
   /**
@@ -778,7 +823,7 @@ const Billing = {
     const cached = this._templates.find(t => t.id === id);
     if (cached) return deepClone(cached);
     try {
-      await this.loadTemplates();
+      await this.ensureTemplates();
       const template = this._templates.find(t => t.id === id) || null;
       return template ? deepClone(template) : null;
     } catch (e) {
@@ -3508,7 +3553,7 @@ const Billing = {
     const entity = Auth.activeEntity;
     const wrapper = el('div', { class: 'page-content-section' });
 
-    await this.loadTemplates();
+    await this.ensureTemplates();
     const templates = this._templates;
 
     const backlogItems = templates.map(t => {
@@ -3523,6 +3568,10 @@ const Billing = {
           { text: formatPHP(t.pfAmount || 0), type: 'amount' }
         ]
       };
+    });
+
+    this.backgroundRefreshTemplates().catch(err => {
+      if (!isAbortError(err)) console.warn('Billing template background refresh failed', err);
     });
 
     const backlog = JiraBacklogList.render({
@@ -3815,15 +3864,18 @@ const Billing = {
 
     if (!template) {
       const client = window.apiClient.clientCache.getById(payload.clientId);
+      const recordEntity = (entity && entity !== 'ALL') ? entity : (client?.entity || Auth.user?.entities?.[0] || 'ATA');
       const optimisticTemplate = {
         ...payload,
         id: optimisticId,
+        entity: recordEntity,
         active: true,
         clientName: client?.name || null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
       this._templates.push(optimisticTemplate);
+      this._templatesEntity = entity;
     } else {
       const idx = this._templates.findIndex(t => t.id === template.id);
       if (idx >= 0) {

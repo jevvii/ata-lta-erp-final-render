@@ -713,7 +713,7 @@ const getTaskRelated = async ({ id, entityId }) => {
 const listRetainerTemplates = async ({ entityId }) => {
   const { data, error } = await supabaseAdmin
     .from('retainer_templates')
-    .select('*, clients(name)')
+    .select('*, entities(code), clients(name)')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order('name', { ascending: true });
@@ -744,7 +744,7 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
   const { data: template, error } = await supabaseAdmin
     .from('retainer_templates')
     .insert(row)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error) {
@@ -774,7 +774,7 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
     .eq('id', id)
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error || !updated) {

@@ -31,6 +31,9 @@ const Disbursement = {
   // API-backed disbursement template cache
   _templates: [],
   _templatesPromise: null,
+  _templatesEntity: null,
+  _templatesGeneration: 0,
+  _templatesBackgroundPromise: null,
 
   normalizeTemplate(doc) {
     if (!doc) return doc;
@@ -74,31 +77,67 @@ const Disbursement = {
     }
   },
 
-  async loadTemplates() {
+  _isTemplatesFresh() {
+    return this._templatesEntity === Auth.activeEntity;
+  },
+
+  async ensureTemplates() {
+    const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (skipping || this._isTemplatesFresh()) return;
     if (this._templatesPromise) return this._templatesPromise;
-    const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
-    if (shouldSkip) {
-      return this._templates || [];
-    }
-    this._templatesPromise = (async () => {
-      try {
-        const entity = Auth.activeEntity;
-        const all = await this.fetchTemplates();
-        this._templates = all.filter(t => {
-          if (entity === 'ALL') {
-            return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
-          }
-          return (t.entity || '').toUpperCase() === entity.toUpperCase();
-        });
-      } catch (e) {
-        console.error('Failed to load disbursement templates', e);
-        this._templates = [];
-      } finally {
-        this._templatesPromise = null;
-      }
-      return this._templates;
-    })();
+    const loadGen = ++this._templatesGeneration;
+    this._templatesPromise = this._loadTemplates(loadGen).finally(() => {
+      if (this._templatesGeneration === loadGen) this._templatesPromise = null;
+    });
     return this._templatesPromise;
+  },
+
+  async _loadTemplates(loadGen, { merge = false } = {}) {
+    const entity = Auth.activeEntity;
+    try {
+      const all = await this.fetchTemplates();
+      if (loadGen !== this._templatesGeneration || Auth.activeEntity !== entity) {
+        return this._templates || [];
+      }
+      const filtered = all.filter(t => {
+        if (entity === 'ALL') {
+          return Auth.user.entities.map(e => e.toUpperCase()).includes((t.entity || '').toUpperCase());
+        }
+        return (t.entity || '').toUpperCase() === entity.toUpperCase();
+      });
+      if (merge && this._templatesEntity === entity) {
+        const existingMap = new Map(this._templates.map(t => [t.id, t]));
+        filtered.forEach(t => {
+          const existing = existingMap.get(t.id);
+          if (existing) Object.assign(existing, t);
+          else if (!this._isTempId(t.id)) this._templates.push(t);
+        });
+      } else {
+        this._templates = filtered;
+      }
+      this._templatesEntity = entity;
+      return this._templates;
+    } catch (e) {
+      console.error('Failed to load disbursement templates', e);
+      if (loadGen !== this._templatesGeneration) return this._templates || [];
+      if (!Array.isArray(this._templates)) this._templates = [];
+      this._templatesEntity = entity;
+      return this._templates;
+    }
+  },
+
+  async backgroundRefreshTemplates() {
+    if (this._templatesBackgroundPromise) return this._templatesBackgroundPromise;
+    const loadGen = ++this._templatesGeneration;
+    this._templatesBackgroundPromise = this._loadTemplates(loadGen, { merge: true }).finally(() => {
+      if (this._templatesGeneration === loadGen) this._templatesBackgroundPromise = null;
+    });
+    return this._templatesBackgroundPromise;
+  },
+
+  async loadTemplates() {
+    await this.ensureTemplates();
+    return this._templates;
   },
 
   async getTemplateById(id) {
@@ -106,7 +145,7 @@ const Disbursement = {
     const cached = (this._templates || []).find(t => t.id === id);
     if (cached) return JSON.parse(JSON.stringify(cached));
     try {
-      await this.loadTemplates();
+      await this.ensureTemplates();
       const template = (this._templates || []).find(t => t.id === id) || null;
       return template ? JSON.parse(JSON.stringify(template)) : null;
     } catch (e) {
@@ -328,6 +367,11 @@ const Disbursement = {
     this._rejectedArchiveCounts = null;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
+    this._templates = [];
+    this._templatesEntity = null;
+    this._templatesGeneration++;
+    this._templatesPromise = null;
+    this._templatesBackgroundPromise = null;
   },
 
   async loadDisbursement(id) {
@@ -3178,7 +3222,7 @@ const Disbursement = {
   // ============================================================
   async renderTemplates() {
     const entity = Auth.activeEntity;
-    await this.loadTemplates();
+    await this.ensureTemplates();
     const templates = this._templates;
 
     const wrapper = el('div', { class: 'page-content-section' });
@@ -3322,6 +3366,14 @@ const Disbursement = {
           }
         }
       ]
+    });
+
+    this.backgroundRefreshTemplates().catch(err => {
+      if (!isAbortError(err)) console.warn('Disbursement template background refresh failed', err);
+    });
+
+    this.backgroundRefreshTemplates().catch(err => {
+      if (!isAbortError(err)) console.warn('Disbursement template background refresh failed', err);
     });
 
     wrapper.appendChild(backlog);
@@ -3490,6 +3542,7 @@ const Disbursement = {
           updatedAt: new Date().toISOString()
         });
         this._templates.push(optimisticTemplate);
+        this._templatesEntity = Auth.activeEntity;
         templateGen = this._setActiveSkipGeneration();
         if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
           App.handleRoute();

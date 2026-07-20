@@ -1013,6 +1013,9 @@ const Workflow = {
 
   _retainerTemplates: null,
   _retainerTemplatesPromise: null,
+  _retainerTemplatesEntity: null,
+  _retainerTemplatesGeneration: 0,
+  _retainerTemplatesBackgroundPromise: null,
   _groundWorkers: null,
   _groundWorkersPromise: null,
 
@@ -1033,21 +1036,98 @@ const Workflow = {
     return this._groundWorkersPromise;
   },
 
-  async _loadRetainerTemplates() {
-    if (this._retainerTemplates) return this._retainerTemplates;
+  _resolveTemplateEntity(record) {
+    const activeEntity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    if (activeEntity && activeEntity !== 'ALL') return activeEntity;
+    if (record && record.clientId) {
+      const client = window.apiClient.clientCache.getById(record.clientId);
+      if (client && client.entity) return client.entity;
+    }
+    return (Auth.user?.entities?.[0] || 'ATA');
+  },
+
+  _entityMatchesRetainerTemplate(t, entity) {
+    const tEnt = (t?.entity || '').toUpperCase();
+    if (!tEnt) return false;
+    if (entity === 'ALL') {
+      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(tEnt);
+    }
+    return tEnt === (entity || '').toUpperCase();
+  },
+
+  _normalizeRetainerTemplate(doc) {
+    if (!doc) return doc;
+    const entity = doc.entities?.code || doc.entity_code || doc.entity || (doc.entity_id ? null : null);
+    return {
+      ...doc,
+      entity,
+      tasks: doc.tasks || [],
+      pfAmount: typeof doc.pf_amount === 'number' ? doc.pf_amount : (parseFloat(doc.pf_amount) || 0),
+      clientId: doc.client_id || doc.clientId || null,
+      schedule: doc.schedule || null
+    };
+  },
+
+  _retainerTemplatesFresh() {
+    return Array.isArray(this._retainerTemplates) && this._retainerTemplatesEntity === Auth.activeEntity;
+  },
+
+  async ensureRetainerTemplates() {
+    // Honor the optimistic skip window so a server fetch cannot overwrite a
+    // template that was just created locally.
+    const skipping = Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
+    if (skipping || this._retainerTemplatesFresh()) return;
+    const activeEntity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
     if (this._retainerTemplatesPromise) return this._retainerTemplatesPromise;
-    this._retainerTemplatesPromise = window.apiClient.operations.listTemplates()
-      .then(res => {
-        this._retainerTemplates = res.data || [];
-        return this._retainerTemplates;
-      })
-      .catch(err => {
-        console.error('[Workflow] failed to load retainer templates', err);
-        this._retainerTemplates = [];
-        return this._retainerTemplates;
-      })
-      .finally(() => { this._retainerTemplatesPromise = null; });
+    const loadGen = ++this._retainerTemplatesGeneration;
+    this._retainerTemplatesPromise = this._loadRetainerTemplates(loadGen).finally(() => {
+      if (this._retainerTemplatesGeneration === loadGen) this._retainerTemplatesPromise = null;
+    });
     return this._retainerTemplatesPromise;
+  },
+
+  async _loadRetainerTemplates(loadGen) {
+    const entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    try {
+      const res = await window.apiClient.operations.listTemplates();
+      if (loadGen !== this._retainerTemplatesGeneration || (typeof Auth !== 'undefined' && Auth.activeEntity) !== entity) {
+        return this._retainerTemplates || [];
+      }
+      const templates = (res.data || []).map(t => this._normalizeRetainerTemplate(t));
+      const cacheWarm = Array.isArray(this._retainerTemplates) && this._retainerTemplatesEntity === entity;
+      if (cacheWarm) {
+        this._mergeRetainerTemplates(templates);
+      } else {
+        this._retainerTemplates = templates;
+      }
+      this._retainerTemplatesEntity = entity;
+      return this._retainerTemplates;
+    } catch (err) {
+      console.error('[Workflow] failed to load retainer templates', err);
+      if (loadGen !== this._retainerTemplatesGeneration) return this._retainerTemplates || [];
+      if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
+      this._retainerTemplatesEntity = entity;
+      return this._retainerTemplates;
+    }
+  },
+
+  _mergeRetainerTemplates(serverTemplates) {
+    if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
+    const existingMap = new Map(this._retainerTemplates.map(t => [t.id, t]));
+    serverTemplates.forEach(serverT => {
+      const existing = existingMap.get(serverT.id);
+      if (existing) Object.assign(existing, serverT);
+      else if (!this._isTempId(serverT.id)) this._retainerTemplates.push(serverT);
+    });
+  },
+
+  async backgroundRefreshRetainerTemplates() {
+    if (this._retainerTemplatesBackgroundPromise) return this._retainerTemplatesBackgroundPromise;
+    const loadGen = ++this._retainerTemplatesGeneration;
+    this._retainerTemplatesBackgroundPromise = this._loadRetainerTemplates(loadGen).finally(() => {
+      if (this._retainerTemplatesGeneration === loadGen) this._retainerTemplatesBackgroundPromise = null;
+    });
+    return this._retainerTemplatesBackgroundPromise;
   },
 
   _getRetainerTemplateById(id) {
@@ -1089,12 +1169,15 @@ const Workflow = {
   async _addRetainerTemplate(record) {
     if (!record || !record.name) return null;
     if (!this._retainerTemplates) this._retainerTemplates = [];
+    record.entity = this._resolveTemplateEntity(record);
     this._retainerTemplates.push(record);
+    this._retainerTemplatesEntity = Auth.activeEntity;
     const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     try {
       const res = await window.apiClient.operations.createTemplate(record);
-      const created = res.data;
+      const created = this._normalizeRetainerTemplate(res.data);
+      if (!created.entity) created.entity = record.entity;
       const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
       if (idx >= 0) this._retainerTemplates[idx] = created;
       else this._retainerTemplates.push(created);
@@ -1114,13 +1197,20 @@ const Workflow = {
   async _updateRetainerTemplate(id, record) {
     const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
     if (idx === -1) return null;
+    const previous = { ...this._retainerTemplates[idx] };
+    const optimistic = { ...previous, ...record, id };
+    this._retainerTemplates[idx] = optimistic;
+    this._retainerTemplatesEntity = Auth.activeEntity;
     try {
       const res = await window.apiClient.operations.updateTemplate(id, record);
-      const updated = res.data;
+      const updated = this._normalizeRetainerTemplate(res.data);
+      if (!updated.entity) updated.entity = previous.entity || this._resolveTemplateEntity(record);
       this._retainerTemplates[idx] = updated;
       return updated;
     } catch (e) {
       console.error('[Workflow] failed to update retainer template', e);
+      this._retainerTemplates[idx] = previous;
+      this.showMessage('Error', e.message || 'Unable to update retainer template.', 'error');
       return null;
     }
   },
@@ -6088,7 +6178,7 @@ const Workflow = {
     form.appendChild(descSection);
 
     // Use Retainer Template button (only on creation, not edit) — placed above tasks
-    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => this._entityMatchesRetainerTemplate(t, entity));
     let selectedTemplateId = null;
     let templateBtnRef = null;
     if (!wr && templates.length > 0) {
@@ -11269,9 +11359,9 @@ const Workflow = {
       return el('div');
     }
 
-    await Promise.all([this._loadRetainerTemplates(), window.apiClient.clientCache.ensure()]);
+    await Promise.all([this.ensureRetainerTemplates(), window.apiClient.clientCache.ensure()]);
     const entity = Auth.activeEntity;
-    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => this._entityMatchesRetainerTemplate(t, entity));
 
     const wrapper = el('div', { class: 'page-content-section' });
 
@@ -11369,6 +11459,13 @@ const Workflow = {
     });
 
     wrapper.appendChild(backlog);
+
+    // Silently merge any new/updated server templates without overwriting
+    // optimistic records.
+    this.backgroundRefreshRetainerTemplates().catch(err => {
+      if (!isAbortError(err)) console.warn('Retainer template background refresh failed', err);
+    });
+
     return wrapper;
   },
 
@@ -11755,6 +11852,18 @@ const Workflow = {
 
     if (failedTaskTitles.length > 0) {
       this.showMessage('Warning', `Work request generated but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
+    }
+
+    // Sync generated work request to the shared cache so billing/disbursement
+    // forms can select it without a manual refresh.
+    if (createdWr && window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (!Array.isArray(cache._wrs)) cache._wrs = [];
+      const normalizedForCache = { ...createdWr, tasks: createdWr.tasks || [] };
+      const idx = cache._wrs.findIndex(wr => wr.id === normalizedForCache.id);
+      if (idx >= 0) cache._wrs[idx] = normalizedForCache;
+      else cache._wrs.push(normalizedForCache);
+      cache._loadedAt = Date.now();
     }
 
     if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();

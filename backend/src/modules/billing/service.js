@@ -784,7 +784,7 @@ const getInvoiceCounts = async ({ entityId, user }) => {
 const listTemplates = async ({ entityId }) => {
   const { data, error } = await supabaseAdmin
     .from('billing_templates')
-    .select('*, clients(name)')
+    .select('*, entities(code), clients(name)')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .eq('active', true)
@@ -824,7 +824,7 @@ const createTemplate = async ({ entityId, userId, data }) => {
   const { data: template, error } = await supabaseAdmin
     .from('billing_templates')
     .insert(row)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error) {
@@ -861,7 +861,7 @@ const updateTemplate = async ({ entityId, id, data }) => {
     .eq('id', id)
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error || !updated) {
