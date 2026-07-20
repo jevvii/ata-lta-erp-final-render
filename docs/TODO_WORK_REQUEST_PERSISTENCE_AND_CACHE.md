@@ -41,10 +41,10 @@ for all GET `/v1/*` responses. The service worker (`erp_prototype/sw.js`) also c
 Sequence that produces the symptom:
 1. User opens Operations list → browser/SW caches the GET `/v1/work-requests` response.
 2. User creates a work request (POST is not cached).
-3. User navigates to Clients/Transmittal and back → `triggerSyncReload` invalidates
-   `WorkflowData` in memory, but **not** the browser/SW cache.
-4. `WorkflowData._load()` / `loadPage()` re-fetches the list → browser/SW serves the
-   stale pre-creation cached response → new work request is missing.
+3. User navigates to Clients/Transmittal and back → the app clears the skip-generation
+   flag but does **not** invalidate the browser/SW cache.
+4. `WorkflowData.loadPage()` re-fetches the list → browser/SW serves the stale
+   pre-creation cached response → new work request is missing.
 5. Hard refresh bypasses the browser/SW cache → fresh response includes the record.
 
 Clients and Transmittal appear to work because they use direct API creation and the
@@ -81,15 +81,18 @@ HTTP/SW cache window when testing them. The underlying cache issue affects all m
 ## Code Fix Needed
 
 Add cache busting to `WorkflowData._load()` and `WorkflowData.loadPage()` so that
-after `WorkflowData.invalidate()` (which is called by `triggerSyncReload` on every
-navigation/sync), the next list fetch bypasses the browser/SW cache and gets the
-newly created record immediately.
+after any work-request mutation, the next list fetch bypasses the browser/SW cache
+and gets the newly created record immediately.
 
 Approach:
 - Add `WorkflowData._needsFreshFetch` flag.
-- Set it to `true` in `invalidate()` and after any mutation that affects work requests.
+- Set it to `true` in `invalidate()` and in every mutation method:
+  `createWorkRequest`, `_adoptServerWorkRequest`, `createTask`, `updateWorkRequest`,
+  `updateTask`, `deleteWorkRequest`, `deleteTask`, and the task-add bypass path.
 - In `_load()` and `loadPage()`, when `_needsFreshFetch` is true, append a cache-busting
   `_t=<timestamp>` query parameter to `apiClient.workRequests.list()` and clear the flag.
+- In `_load()`, only clear the flag after committing the data, so stale concurrent
+  loads do not accidentally consume it.
 
 This makes the creation flow behave like Clients/Transmittal: the new item is visible
 immediately after creation and remains visible after navigation.
@@ -99,9 +102,10 @@ immediately after creation and remains visible after navigation.
 ## Implementation Checklist
 
 - [x] Added `_needsFreshFetch` flag to `WorkflowData`.
-- [x] Set `_needsFreshFetch = true` in `WorkflowData.invalidate()`.
+- [x] Set `_needsFreshFetch = true` in `WorkflowData.invalidate()` and all mutation methods.
 - [x] Appended `_t=<timestamp>` cache-busting query param in `_load()` and `loadPage()`
-  when the flag is set, then cleared it.
+  when the flag is set.
+- [x] Fixed `_load()` to only clear the flag after committing data, not before.
 - [x] Updated this TODO status to "Implemented (not committed)".
 - [x] Verified `node --check` passes for all modified files.
 - [x] Documented the required manual migration + server-restart steps below.
@@ -116,7 +120,8 @@ immediately after creation and remains visible after navigation.
 
 - The `_needsFreshFetch` flag is intentionally cleared after the first fresh fetch so
   normal navigation can still benefit from the backend's 30-second cache.
-- The flag is set by `invalidate()`, which is already called by `triggerSyncReload` on
-  every route change/sync, so no extra mutation hooks were needed.
+- The flag is set by mutation methods directly because plain nav-link clicks and
+  view-mode switches call `App.handleRoute()` directly (not `triggerSyncReload`),
+  so relying only on `invalidate()` is insufficient.
 - This fix does **not** remove the need to run the backend migration and restart the
   server; it only fixes the stale-list symptom after those steps are done.

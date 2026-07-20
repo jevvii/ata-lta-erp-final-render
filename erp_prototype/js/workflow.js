@@ -262,9 +262,9 @@ const WorkflowData = {
       window.apiClient.clientCache.ensure()
     ]);
     const listParams = { includeTasks: true, ...options };
-    if (this._needsFreshFetch) {
+    const freshFetch = this._needsFreshFetch;
+    if (freshFetch) {
       listParams._t = Date.now();
-      this._needsFreshFetch = false;
     }
     const res = await window.apiClient.workRequests.list(listParams);
     const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
@@ -287,6 +287,7 @@ const WorkflowData = {
     this._workRequests = wrs;
     this._tasks = tasks;
     this._entity = entity;
+    if (freshFetch) this._needsFreshFetch = false;
     return { workRequests: wrs, tasks, meta: res.meta || {} };
   },
 
@@ -368,6 +369,7 @@ const WorkflowData = {
     }
     // Keep the cache marked fresh for the active entity after a successful create.
     this._entity = this._getActiveEntity();
+    this._needsFreshFetch = true;
     return created;
   },
 
@@ -399,6 +401,7 @@ const WorkflowData = {
 
     // Keep the in-memory cache fresh for the active entity after adoption.
     this._entity = this._getActiveEntity();
+    this._needsFreshFetch = true;
 
     const finalWrId = normalizedWr.id;
     const parentWr = this.getWorkRequestById(finalWrId);
@@ -472,6 +475,7 @@ const WorkflowData = {
         parentWr.tasks.push(created);
       }
     }
+    this._needsFreshFetch = true;
     return created;
   },
 
@@ -570,6 +574,7 @@ const WorkflowData = {
     // fetches fresh server state, unless a newer mutation has already started.
     if (typeof Workflow !== 'undefined') Workflow._clearSkipGenerationIfLatest(activeGenAtStart);
     this.invalidateRelatedForWorkRequest(id);
+    this._needsFreshFetch = true;
     return updated;
   },
 
@@ -613,6 +618,7 @@ const WorkflowData = {
       console.error('Failed to update task', e);
     }
     this.invalidateRelatedForTask(id);
+    this._needsFreshFetch = true;
     return updated;
   },
 
@@ -629,6 +635,7 @@ const WorkflowData = {
       console.error('Failed to delete work request', e);
     }
     this.invalidateRelatedForWorkRequest(id);
+    this._needsFreshFetch = true;
   },
 
   async deleteTask(id) {
@@ -655,6 +662,7 @@ const WorkflowData = {
     }
     this.invalidateRelatedForTask(id);
     this.invalidateRelatedForWorkRequest(wrId);
+    this._needsFreshFetch = true;
   },
 
   // ============================================================
@@ -10495,6 +10503,7 @@ const Workflow = {
               if (idx >= 0) parentWr.tasks[idx] = serverTask;
               else parentWr.tasks.push(serverTask);
             }
+            WorkflowData._needsFreshFetch = true;
           } else {
             await WorkflowData.createTask(newTask);
           }
