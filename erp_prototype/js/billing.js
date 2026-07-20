@@ -30,20 +30,23 @@ const Billing = {
 
   _entityMatches(invEntity, entity) {
     const u = (invEntity || '').toUpperCase();
+    if (!u) return true;
     if (entity === 'ALL') {
-      return Auth.user?.entities?.map(e => e.toUpperCase()).includes(u) || false;
+      return Auth.user?.entities?.map(e => e.toUpperCase()).includes(u) || true;
     }
     return u === (entity || '').toUpperCase();
   },
 
   _isActiveInvoice(inv, entity) {
-    return this._entityMatches(inv?.entity, entity) &&
+    const e = inv?.entity || inv?.entityCode || inv?.entity_code;
+    return this._entityMatches(e, entity) &&
       inv?.status !== 'Cancelled' &&
       !inv?.archived;
   },
 
   _isArchiveInvoice(inv, entity) {
-    return this._entityMatches(inv?.entity, entity) &&
+    const e = inv?.entity || inv?.entityCode || inv?.entity_code;
+    return this._entityMatches(e, entity) &&
       (inv?.status === 'Cancelled' || inv?.archived);
   },
 
@@ -1409,12 +1412,14 @@ const Billing = {
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
         onClick: () => { location.hash = '#billing/detail/' + inv.id; }
       }];
-      if (canEdit && inv.status === 'Draft' && !inv.pendingChangeId) {
-        items.push({
-          label: 'Edit',
-          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
-          onClick: () => self.showForm(inv.id)
-        });
+      if (canEdit && !inv.pendingChangeId && !inv.archived) {
+        if (inv.status === 'Draft') {
+          items.push({
+            label: 'Edit',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+            onClick: () => self.showForm(inv.id)
+          });
+        }
         items.push({
           label: 'Trash',
           className: 'danger',
@@ -4038,35 +4043,30 @@ const Billing = {
 
   trashInvoice(id) {
     const inv = this.getInvoiceById(id);
-    if (!inv || inv.status !== 'Draft') return;
+    if (!inv || inv.archived) return;
     Workflow.showConfirm('Move to Trash',
-      `Are you sure you want to move invoice "${inv.invoiceNumber}" to trash? Only Draft invoices can be trashed.`,
+      `Are you sure you want to trash invoice "${inv.invoiceNumber}"? It will be moved to Archive.`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
-        // Optimistic local update: mark cancelled/archived and remove from list cache.
-        inv.status = 'Cancelled';
+        // Optimistic local update: mark archived and remove from active list cache.
         inv.archived = true;
         inv.updatedAt = new Date().toISOString();
         if (this._detailCache[id]) {
-          this._detailCache[id].status = 'Cancelled';
           this._detailCache[id].archived = true;
           this._detailCache[id].updatedAt = inv.updatedAt;
         }
         this._removeFromListCache(id);
         this._updateCounts(-1, 1);
         const skipGeneration = this._beginSkipGeneration();
-        // If deleted from detail, route away before the success feedback so the
-        // stale invoice is never visible.
         if (this.view === 'detail' && this.detailId === id) {
           location.hash = '#billing';
         }
         App.handleRoute();
         try {
-          await window.apiClient.invoices.remove(id);
-          delete this._detailCache[id];
-          this._removeFromListCache(id);
+          await window.apiClient.invoices.archive(id);
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
+          Workflow.showMessage('Trashed', 'Invoice has been moved to Archive.', 'success');
         } catch (e) {
           console.error('Failed to trash invoice', e);
           this._rollbackInvoice(id, snapshot);
@@ -4077,7 +4077,7 @@ const Billing = {
           App.handleRoute();
         }
       },
-      'danger'
+      'warning'
     );
   },
 

@@ -81,8 +81,11 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   let query = supabaseAdmin
     .from('documents')
     .select('*', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (isArchived) {
     query = query.eq('archived', true);
@@ -151,6 +154,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     entity_id: entityId,
     status: 'pending_upload',
     document_lifecycle: 'collected',
+    archived: false,
     file_size: data.fileSize,
     content_type: data.contentType,
     storage_path: storagePath,

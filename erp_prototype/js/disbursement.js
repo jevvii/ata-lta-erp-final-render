@@ -401,9 +401,10 @@ const Disbursement = {
   },
 
   _entityMatches(item, entity = this._getActiveEntity()) {
-    const itemEnt = (item.entity || '').toUpperCase();
+    const itemEnt = (item?.entity || item?.entityCode || item?.entity_code || '').toUpperCase();
+    if (!itemEnt) return true;
     if (entity === 'ALL') {
-      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(itemEnt);
+      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(itemEnt) || true;
     }
     return itemEnt === (entity || '').toUpperCase();
   },
@@ -796,21 +797,13 @@ const Disbursement = {
           actions.appendChild(editBtn);
         }
 
-        // Delete button — Admin only (checked via can('disbursement:delete'))
-        if (Auth.can('disbursement:delete')) {
-          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
-          deleteBtn.addEventListener('click', () => {
-            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
-              location.hash = '#disbursement';
-              try {
-                await this._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
-                Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
-              } catch (e) {
-                // Error surfaced by _optimisticDelete.
-              }
-            }, 'danger');
+        // Trash button — Admin / Managers
+        if (Auth.can('disbursement:delete') && !d.archived) {
+          const trashBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Trash', style: 'margin-right:8px;' });
+          trashBtn.addEventListener('click', () => {
+            this.trashDisbursement(d.id);
           });
-          actions.appendChild(deleteBtn);
+          actions.appendChild(trashBtn);
         }
         if (d.status === 'Draft' && Auth.can('disbursement:create')) {
           const submitBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Submit Expense', style: 'margin-right:8px;' });
@@ -1713,19 +1706,12 @@ const Disbursement = {
           onClick: () => self.showForm(d.id)
         });
       }
-      if (canDelete && !d.pendingChangeId && !self._isTempId(d.id)) {
+      if (canDelete && !d.pendingChangeId && !self._isTempId(d.id) && !d.archived) {
         menu.push({
-          label: 'Delete',
+          label: 'Trash',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', async () => {
-            try {
-              await self._optimisticDelete(d.id, () => window.apiClient.disbursements.remove(d.id), 'Delete Failed');
-              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
-            } catch (e) {
-              // Error surfaced by _optimisticDelete.
-            }
-          }, 'danger')
+          onClick: () => self.trashDisbursement(d.id)
         });
       }
       if (canCreate && d.status === 'Draft' && !d.pendingChangeId && !self._isTempId(d.id)) {
@@ -3673,6 +3659,22 @@ const Disbursement = {
     } catch (e) {
       // Error surfaced by _optimisticUpdate.
     }
+  },
+
+  async trashDisbursement(id) {
+    const d = await this.loadDisbursement(id);
+    if (!d || d.archived) return;
+    Workflow.showConfirm('Trash Expense', `Are you sure you want to move disbursement "${d.description || d.category || '(untitled)'}" to trash? It will be moved to Archive.`, async () => {
+      if (this.view === 'detail' && this.detailId === id) {
+        location.hash = '#disbursement';
+      }
+      try {
+        await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Trash Failed');
+        Workflow.showMessage('Trashed', 'Disbursement has been moved to Archive.', 'success');
+      } catch (e) {
+        // Error surfaced by _optimisticUpdate.
+      }
+    }, 'warning');
   },
 
   async bulkArchiveDisbursements(ids) {

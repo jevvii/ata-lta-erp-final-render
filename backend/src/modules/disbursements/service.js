@@ -168,8 +168,11 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
   let query = supabaseAdmin
     .from('disbursements')
     .select('*, clients(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (isArchived) {
     query = query.eq('archived', true);

@@ -30,9 +30,12 @@ const listInvoices = async ({ entityId, filters = {} }) => {
 
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients!inner(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
+    .select('*, clients(name)', { count: 'exact' })
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
 
   if (isArchived) {
     query = query.eq('archived', true);
