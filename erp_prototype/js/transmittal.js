@@ -94,6 +94,35 @@ const Transmittal = {
     return original;
   },
 
+  /**
+   * Replace an optimistic record (matched by id) with the server-approved record.
+   */
+  _replaceInCache(localId, serverRecord) {
+    if (!this._items || !serverRecord) return;
+    const idx = this._items.findIndex(t => t.id === localId);
+    if (idx === -1) {
+      // If the optimistic row is no longer present, prepend the server record.
+      this._items = [serverRecord, ...this._items];
+      return;
+    }
+    this._items = this._items.map((t, i) => i === idx ? serverRecord : t);
+  },
+
+  /**
+   * Remove an optimistic record from the local cache (used for rollback).
+   */
+  _removeFromCache(localId) {
+    if (!this._items) return;
+    this._items = this._items.filter(t => t.id !== localId);
+  },
+
+  /**
+   * Generate a stable temporary id for optimistic records.
+   */
+  _generateTempId() {
+    return 'tx-temp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
+  },
+
   // ============================================================
   // Normalization helpers (backend snake_case -> UI camelCase)
   // ============================================================
@@ -1111,7 +1140,10 @@ const Transmittal = {
       }
     }
 
-    await window.apiClient.clientCache.ensure();
+    await Promise.all([
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
 
     const container = el('div');
 
@@ -1181,7 +1213,7 @@ const Transmittal = {
       let matchedCurrent = false;
       const allWrs = window.apiClient.workRequestCache._wrs || [];
       allWrs.filter(wr => {
-        if (wr.entity !== entity) return false;
+        if (!matchesEntity(wr.entity, entity)) return false;
         return extraWrIds.has(wr.id) || !selectedClientId || wr.clientId === selectedClientId;
       }).forEach(wr => {
         const opt = el('option', { value: wr.id, text: wr.title });
@@ -1308,42 +1340,101 @@ const Transmittal = {
       return;
     }
 
+    const recordEntity = entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity;
     const payload = {
       workRequestId: data.workRequestId,
       clientId: data.clientId,
-      trackingNumber: data.trackingNumber || this.generateTrackingNumber(entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity),
+      trackingNumber: data.trackingNumber || this.generateTrackingNumber(recordEntity),
       items,
       notes: data.notes || null
     };
 
     let savedTransmittal = null;
-    try {
-      let res;
-      if (isNew) {
-        res = await window.apiClient.transmittals.create(payload);
+
+    if (isNew) {
+      // ============================================================
+      // Optimistic create: insert a local Draft record before the API.
+      // ============================================================
+      const now = new Date().toISOString();
+      const localId = this._generateTempId();
+      const optimisticItems = items.map((it, idx) => ({
+        id: this._generateTempId(),
+        transmittal_id: localId,
+        description: it.description,
+        document_type: it.documentType,
+        quantity: 1,
+        sort_order: idx
+      }));
+      const optimisticT = this.normalizeTransmittal({
+        id: localId,
+        work_request_id: data.workRequestId,
+        client_id: data.clientId,
+        tracking_number: payload.trackingNumber,
+        status: 'Draft',
+        notes: payload.notes,
+        items: optimisticItems,
+        created_at: now,
+        updated_at: now,
+        created_by: Auth.user?.id,
+        updated_by: Auth.user?.id,
+        entity_code: recordEntity,
+        archived: false
+      }, recordEntity);
+
+      if (this._items) {
+        this._items = [optimisticT, ...this._items];
       } else {
-        res = await window.apiClient.transmittals.update(this.detailId, payload);
+        this._items = [optimisticT];
+        this._entity = this._getActiveEntity();
       }
-      savedTransmittal = this.normalizeTransmittal(res?.data);
-      // Update the local cache directly so the next list render is stable.
-      if (savedTransmittal) {
-        if (this._items) {
-          if (isNew) {
-            this._items = [savedTransmittal, ...this._items];
-          } else {
-            this._items = this._items.map(t => t.id === savedTransmittal.id ? savedTransmittal : t);
-          }
-        } else {
-          this._items = [savedTransmittal];
-          this._entity = this._getActiveEntity();
+      this._skipNextListFetch = true;
+
+      const targetRoute = isResubmitting ? '#admin' : '#transmittal';
+      closeFormPanelAndRoute(targetRoute, {
+        title: 'Transmittal Created',
+        message: 'Transmittal has been created successfully.',
+        type: 'success'
+      });
+
+      try {
+        const res = await window.apiClient.transmittals.create(payload);
+        savedTransmittal = this.normalizeTransmittal(res?.data);
+        if (savedTransmittal) {
+          this._replaceInCache(localId, savedTransmittal);
         }
+        if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+          Dashboard.invalidateCache();
+        }
+        if (savedTransmittal?.workRequestId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+          WorkflowData.invalidateRelatedForWorkRequest(savedTransmittal.workRequestId);
+        }
+      } catch (e) {
+        console.error('Failed to create transmittal', e);
+        this._removeFromCache(localId);
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        Workflow.showMessage('Error', e.message || 'Unable to create transmittal.', 'error');
+        return;
       }
-      if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
-        Dashboard.invalidateCache();
+    } else {
+      try {
+        const res = await window.apiClient.transmittals.update(this.detailId, payload);
+        savedTransmittal = this.normalizeTransmittal(res?.data);
+        if (savedTransmittal) {
+          if (this._items) {
+            this._items = this._items.map(t => t.id === savedTransmittal.id ? savedTransmittal : t);
+          } else {
+            this._items = [savedTransmittal];
+            this._entity = this._getActiveEntity();
+          }
+        }
+        if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+          Dashboard.invalidateCache();
+        }
+      } catch (e) {
+        Workflow.showMessage('Update Transmittal', e.message || 'Unable to update transmittal.', 'error');
+        return;
       }
-    } catch (e) {
-      Workflow.showMessage(isNew ? 'Create Transmittal' : 'Update Transmittal', e.message || 'Unable to save transmittal.', 'error');
-      return;
     }
 
     // Fulfill pending operations request if any.
@@ -1365,14 +1456,16 @@ const Transmittal = {
     this.prefilledWrId = null;
     this.prefilledClientId = null;
 
-    const msgConfig = {
-      title: isNew ? 'Transmittal Created' : 'Transmittal Updated',
-      message: 'Transmittal has been ' + (isNew ? 'created' : 'updated') + ' successfully.',
-      type: 'success'
-    };
-    const targetRoute = isResubmitting ? '#admin' : '#transmittal';
-    this._skipNextListFetch = true;
-    closeFormPanelAndRoute(targetRoute, msgConfig);
+    if (!isNew) {
+      const msgConfig = {
+        title: 'Transmittal Updated',
+        message: 'Transmittal has been updated successfully.',
+        type: 'success'
+      };
+      const targetRoute = isResubmitting ? '#admin' : '#transmittal';
+      this._skipNextListFetch = true;
+      closeFormPanelAndRoute(targetRoute, msgConfig);
+    }
   },
 
   // ============================================================

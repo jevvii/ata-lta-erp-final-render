@@ -16,6 +16,8 @@ const Users = {
   pendingCategory: sessionStorage.getItem('admin_pending_category') || 'all',
   _counts: { audit: 0, myRequests: 0 },
   _countTs: { audit: 0, myRequests: 0 },
+  _skipNextListFetch: false,
+  _usersLoaded: false,
 
   /**
    * Cached count of the current user's operations requests.
@@ -805,13 +807,28 @@ const Users = {
   users: [],
 
   async loadUsers() {
+    if (this._usersLoaded) return;
     try {
       const res = await window.apiClient.admin.listUsers();
       this.users = res.data || [];
+      this._usersLoaded = true;
     } catch (e) {
       this.users = [];
-      Workflow.showMessage('Users', 'Unable to load users from the server.', 'error');
+      this._usersLoaded = false;
+      if (!isAbortError(e)) {
+        Workflow.showMessage('Users', 'Unable to load users from the server.', 'error');
+      }
     }
+  },
+
+  invalidateCache() {
+    this._usersLoaded = false;
+    this._skipNextListFetch = false;
+  },
+
+  hasCachedData(entity) {
+    // Users are global (not entity-scoped); the cache is valid once loaded.
+    return this._usersLoaded && Array.isArray(this.users);
   },
 
   renderUsersSection() {
@@ -831,7 +848,11 @@ const Users = {
 
   async renderUserList(container) {
     this.clearNode(container);
-    await this.loadUsers();
+    if (this._skipNextListFetch) {
+      this._skipNextListFetch = false;
+    } else {
+      await this.loadUsers();
+    }
     const users = this.users;
 
     if (users.length === 0) {
@@ -887,26 +908,51 @@ const Users = {
           onClick: (ids) => {
             const hasSelf = ids.includes(Auth.user.id);
             const targetIds = ids.filter(id => id !== Auth.user.id);
-            
+
             if (targetIds.length === 0) {
-              alert('You cannot disable your own user account.');
+              Workflow.showMessage('Error', 'You cannot disable your own user account.', 'error');
               return;
             }
-            
+
             let message = `Are you sure you want to disable ${targetIds.length} selected user${targetIds.length === 1 ? '' : 's'}?`;
             if (hasSelf) {
               message += ' (Your own account will not be disabled.)';
             }
-            
+
             Workflow.showConfirm('Disable Users', message, async () => {
-              for (const id of targetIds) {
+              const removed = [];
+              targetIds.forEach(id => {
+                const idx = this.users.findIndex(u => u.id === id);
+                if (idx !== -1) {
+                  removed.push({ user: this.users.splice(idx, 1)[0], index: idx });
+                }
+              });
+              if (removed.length > 0) {
+                this._skipNextListFetch = true;
+                App.handleRoute();
+              }
+
+              const failures = [];
+              for (const { user, index } of removed) {
                 try {
-                  await window.apiClient.admin.deleteUser(id);
+                  await window.apiClient.admin.deleteUser(user.id);
                 } catch (e) {
-                  Workflow.showMessage('Disable User', e.message || 'Unable to disable user.', 'error');
+                  console.error('Failed to disable user', user.id, e);
+                  failures.push({ user, index, error: e.message || 'Unable to disable user.' });
                 }
               }
-              App.handleRoute();
+
+              if (failures.length > 0) {
+                failures.forEach(({ user, index }) => {
+                  this.users.splice(Math.min(index, this.users.length), 0, user);
+                });
+                this._skipNextListFetch = true;
+                App.handleRoute();
+                const summary = failures.length === 1
+                  ? failures[0].error
+                  : `${failures.length} of ${targetIds.length} users could not be disabled.`;
+                Workflow.showMessage('Error', summary, 'error');
+              }
             }, 'warning');
           }
         },
@@ -916,26 +962,51 @@ const Users = {
           onClick: (ids) => {
             const hasSelf = ids.includes(Auth.user.id);
             const targetIds = ids.filter(id => id !== Auth.user.id);
-            
+
             if (targetIds.length === 0) {
-              alert('You cannot delete your own user account.');
+              Workflow.showMessage('Error', 'You cannot delete your own user account.', 'error');
               return;
             }
-            
+
             let message = `Are you sure you want to permanently delete ${targetIds.length} selected user${targetIds.length === 1 ? '' : 's'}? This cannot be undone.`;
             if (hasSelf) {
               message += ' (Your own account will not be deleted.)';
             }
-            
+
             Workflow.showConfirm('Delete Users', message, async () => {
-              for (const id of targetIds) {
+              const removed = [];
+              targetIds.forEach(id => {
+                const idx = this.users.findIndex(u => u.id === id);
+                if (idx !== -1) {
+                  removed.push({ user: this.users.splice(idx, 1)[0], index: idx });
+                }
+              });
+              if (removed.length > 0) {
+                this._skipNextListFetch = true;
+                App.handleRoute();
+              }
+
+              const failures = [];
+              for (const { user, index } of removed) {
                 try {
-                  await window.apiClient.admin.deleteUser(id);
+                  await window.apiClient.admin.deleteUser(user.id);
                 } catch (e) {
-                  Workflow.showMessage('Delete User', e.message || 'Unable to delete user.', 'error');
+                  console.error('Failed to delete user', user.id, e);
+                  failures.push({ user, index, error: e.message || 'Unable to delete user.' });
                 }
               }
-              App.handleRoute();
+
+              if (failures.length > 0) {
+                failures.forEach(({ user, index }) => {
+                  this.users.splice(Math.min(index, this.users.length), 0, user);
+                });
+                this._skipNextListFetch = true;
+                App.handleRoute();
+                const summary = failures.length === 1
+                  ? failures[0].error
+                  : `${failures.length} of ${targetIds.length} users could not be deleted.`;
+                Workflow.showMessage('Error', summary, 'error');
+              }
             }, 'danger');
           }
         }
@@ -1185,11 +1256,57 @@ const Users = {
           record.password = data.password.trim();
         }
         await window.apiClient.admin.updateUser(this.editingId, record);
+        // Patch the shared cache in place rather than wiping it, so dropdowns stay populated.
+        if (window.apiClient?.userCache && Array.isArray(window.apiClient.userCache._users)) {
+          const uidx = window.apiClient.userCache._users.findIndex(u => u.id === this.editingId);
+          if (uidx >= 0) {
+            window.apiClient.userCache._users[uidx] = { ...window.apiClient.userCache._users[uidx], ...record, id: this.editingId };
+          }
+        }
+        this.showUserList();
       } else {
         record.password = data.password.trim();
-        await window.apiClient.admin.createUser(record);
+        const optimisticId = generateId('usr-opt');
+        const optimisticUser = {
+          id: optimisticId,
+          ...record,
+          createdAt: new Date().toISOString()
+        };
+        this.users.unshift(optimisticUser);
+        this._usersLoaded = true;
+        this._skipNextListFetch = true;
+        this.showUserList();
+
+        try {
+          const res = await window.apiClient.admin.createUser(record);
+          const serverUser = res?.data || res;
+          const idx = this.users.findIndex(u => u.id === optimisticId);
+          if (serverUser && idx !== -1) {
+            this.users[idx] = serverUser;
+          }
+          // Keep the shared user cache warm so assignee/dropdown pickers stay usable.
+          if (window.apiClient?.userCache) {
+            if (!Array.isArray(window.apiClient.userCache._users)) {
+              window.apiClient.userCache._users = [serverUser];
+            } else {
+              const uidx = window.apiClient.userCache._users.findIndex(u => u.id === serverUser.id);
+              if (uidx >= 0) window.apiClient.userCache._users[uidx] = serverUser;
+              else window.apiClient.userCache._users.push(serverUser);
+            }
+            window.apiClient.userCache._loadedAt = Date.now();
+          }
+          App.handleRoute();
+          Workflow.showMessage('Created', 'User created successfully.', 'success');
+        } catch (e) {
+          console.error('Failed to create user', e);
+          this.users = this.users.filter(u => u.id !== optimisticId);
+          if (this.users.length === 0) this._usersLoaded = false;
+          this._skipNextListFetch = true;
+          App.handleRoute();
+          Workflow.showMessage('Error', e.message || 'Unable to create user.', 'error');
+          return;
+        }
       }
-      this.showUserList();
     } catch (e) {
       const detail = e.message || 'Unable to save user.';
       Workflow.showMessage('Save User', detail, 'error');

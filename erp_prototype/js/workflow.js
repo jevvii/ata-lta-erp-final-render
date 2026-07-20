@@ -306,26 +306,115 @@ const WorkflowData = {
   getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
 
   async createWorkRequest(record) {
+    const localId = record && record.id;
     const res = await window.apiClient.workRequests.create(record);
     const created = this.normalizeWorkRequest(res.data);
     created.tasks = [];
-    (this._workRequests || []).push(created);
+    const existing = localId ? this.getWorkRequestById(localId) : null;
+    if (existing) {
+      // Replace the optimistic record in place so references/order are preserved.
+      if (created.id === localId) {
+        Object.assign(existing, created);
+      } else {
+        const idx = (this._workRequests || []).findIndex(r => r.id === localId);
+        if (idx >= 0) {
+          (this._workRequests || []).splice(idx, 1, created);
+        } else {
+          (this._workRequests || []).push(created);
+        }
+      }
+    } else {
+      (this._workRequests || []).push(created);
+    }
     return created;
   },
 
   async createTask(record) {
+    const localId = record && record.id;
     const wrId = record.workRequestId;
     const payload = { ...record };
     delete payload.id;
     delete payload.workRequestId;
     delete payload.createdAt;
     delete payload.updatedAt;
+    // The backend task schema treats assignee fields as optional strings; null is rejected.
+    if (payload.assigneeId == null) delete payload.assigneeId;
+    if (payload.assigneeName == null) delete payload.assigneeName;
+    if (Array.isArray(payload.checklist)) {
+      payload.checklist = payload.checklist.map(item => {
+        const clean = { ...item };
+        if (clean.assigneeId == null) delete clean.assigneeId;
+        if (clean.assigneeName == null) delete clean.assigneeName;
+        return clean;
+      });
+    }
     const res = await window.apiClient.workRequests.createTask(wrId, payload);
     const created = this.normalizeTask(res.data);
-    (this._tasks || []).push(created);
+    if (!Array.isArray(this._tasks)) this._tasks = [];
+    const existing = localId ? this.getTaskById(localId) : null;
+    if (existing) {
+      if (created.id === localId) {
+        Object.assign(existing, created);
+      } else {
+        const idx = this._tasks.findIndex(t => t.id === localId);
+        if (idx >= 0) this._tasks.splice(idx, 1, created);
+        else this._tasks.push(created);
+      }
+    } else {
+      this._tasks.push(created);
+    }
     const wr = this.getWorkRequestById(wrId);
-    if (wr && wr.tasks) wr.tasks.push(created);
+    if (wr) {
+      if (!Array.isArray(wr.tasks)) wr.tasks = [];
+      const wrTaskIdx = wr.tasks.findIndex(t => (localId && t.id === localId) || t.id === created.id);
+      if (wrTaskIdx >= 0) {
+        wr.tasks[wrTaskIdx] = created;
+      } else {
+        wr.tasks.push(created);
+      }
+    }
     return created;
+  },
+
+  _addOptimisticWorkRequest(record) {
+    const normalized = this.normalizeWorkRequest(record);
+    if (!normalized.tasks) normalized.tasks = [];
+    if (!Array.isArray(this._workRequests)) this._workRequests = [];
+    this._workRequests.push(normalized);
+    return normalized;
+  },
+
+  _removeWorkRequest(id) {
+    if (!Array.isArray(this._workRequests)) return;
+    const idx = this._workRequests.findIndex(r => r.id === id);
+    if (idx >= 0) this._workRequests.splice(idx, 1);
+  },
+
+  _addOptimisticTask(record) {
+    const normalized = this.normalizeTask(record);
+    if (!Array.isArray(this._tasks)) this._tasks = [];
+    this._tasks.push(normalized);
+    const wr = this.getWorkRequestById(normalized.workRequestId);
+    if (wr) {
+      if (!Array.isArray(wr.tasks)) wr.tasks = [];
+      wr.tasks.push(normalized);
+    }
+    return normalized;
+  },
+
+  _removeTask(id) {
+    const existing = this.getTaskById(id);
+    if (Array.isArray(this._tasks)) {
+      const idx = this._tasks.findIndex(t => t.id === id);
+      if (idx >= 0) this._tasks.splice(idx, 1);
+    }
+    if (existing) {
+      const wr = this.getWorkRequestById(existing.workRequestId);
+      if (wr && Array.isArray(wr.tasks)) {
+        const tidx = wr.tasks.findIndex(t => t.id === id);
+        if (tidx >= 0) wr.tasks.splice(tidx, 1);
+      }
+    }
   },
 
   async updateWorkRequest(id, changes) {
@@ -788,14 +877,24 @@ const Workflow = {
   },
   async _addRetainerTemplate(record) {
     if (!record || !record.name) return null;
+    if (!this._retainerTemplates) this._retainerTemplates = [];
+    this._retainerTemplates.push(record);
+    Workflow._skipNextListFetch = true;
+    App.handleRoute();
     try {
       const res = await window.apiClient.operations.createTemplate(record);
       const created = res.data;
-      if (!this._retainerTemplates) this._retainerTemplates = [];
-      this._retainerTemplates.push(created);
+      const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
+      if (idx >= 0) this._retainerTemplates[idx] = created;
+      else this._retainerTemplates.push(created);
       return created;
     } catch (e) {
       console.error('[Workflow] failed to create retainer template', e);
+      const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
+      if (idx >= 0) this._retainerTemplates.splice(idx, 1);
+      Workflow._skipNextListFetch = true;
+      App.handleRoute();
+      this.showMessage('Error', e.message || 'Unable to create retainer template.', 'error');
       return null;
     }
   },
@@ -6366,18 +6465,49 @@ const Workflow = {
     let apiWrId = this.editingId;
     if (result.approved) {
       if (isNew) {
-        const createdWr = await WorkflowData.createWorkRequest(record);
-        apiWrId = createdWr ? createdWr.id : record.id;
-      } else {
-        await WorkflowData.updateWorkRequest(this.editingId, record);
-      }
+        // Optimistic WR insert so the list and nav badge update immediately.
+        WorkflowData._addOptimisticWorkRequest(record);
+        Workflow._skipNextListFetch = true;
+        App.handleRoute();
+        let createdWr = null;
+        try {
+          createdWr = await WorkflowData.createWorkRequest(record);
+          apiWrId = createdWr ? createdWr.id : record.id;
+        } catch (e) {
+          console.error('Failed to create work request', e);
+          WorkflowData._removeWorkRequest(record.id);
+          Workflow._skipNextListFetch = true;
+          App.handleRoute();
+          this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
+          return;
+        }
 
-      if (isNew) {
+        // Optimistically insert each task, then confirm with the API. Roll back
+        // only the tasks that fail without stopping the whole batch.
+        const failedTaskTitles = [];
         for (const t of taskRecords) {
           t.workRequestId = apiWrId;
-          await WorkflowData.createTask(t);
+          WorkflowData._addOptimisticTask(t);
+        }
+        Workflow._skipNextListFetch = true;
+        App.handleRoute();
+        for (const t of taskRecords) {
+          t.workRequestId = apiWrId;
+          try {
+            await WorkflowData.createTask(t);
+          } catch (e) {
+            console.error('Failed to create task', t.title, e);
+            WorkflowData._removeTask(t.id);
+            failedTaskTitles.push(t.title);
+          }
+        }
+        if (failedTaskTitles.length > 0) {
+          Workflow._skipNextListFetch = true;
+          App.handleRoute();
+          this.showMessage('Error', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
         }
       } else {
+        await WorkflowData.updateWorkRequest(this.editingId, record);
         const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
         for (const t of existing) await WorkflowData.deleteTask(t.id);
         for (const t of taskRecords) {
@@ -6389,7 +6519,7 @@ const Workflow = {
       // Staged tasks are stored inside record.tasks in the pending changes proposedData.
     }
 
-    if (data.isRetainer) {
+    if (data.isRetainer && result.approved) {
       const tmplId = generateId('rt');
       const tmplMap = new Map();
       tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
@@ -6403,7 +6533,7 @@ const Workflow = {
           predecessors: predId ? [predId] : []
         };
       });
-      this._addRetainerTemplate({
+      await this._addRetainerTemplate({
         id: tmplId,
         name: record.title + ' Template',
         description: record.description,
@@ -6418,6 +6548,11 @@ const Workflow = {
     }
 
     const isApproved = result.approved;
+    if (isApproved) {
+      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+    }
+
     const msgConfig = {
       title: isNew ? 'Work Request Created' : 'Work Request Saved',
       message: isApproved
@@ -10117,6 +10252,24 @@ const Workflow = {
         comments: []
       };
       const result = await PendingChanges.submit('tasks', newTask, true);
+      if (result.approved) {
+        // Optimistic task insert so the WR detail/board task count updates immediately.
+        WorkflowData._addOptimisticTask(newTask);
+        Workflow._skipNextListFetch = true;
+        App.handleRoute();
+        try {
+          await WorkflowData.createTask(newTask);
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        } catch (e) {
+          console.error('Failed to add task', e);
+          WorkflowData._removeTask(newTask.id);
+          Workflow._skipNextListFetch = true;
+          App.handleRoute();
+          this.showMessage('Error', e.message || 'Unable to add task.', 'error');
+          return;
+        }
+      }
       const msgConfig = {
         title: 'Task Added',
         message: result.approved
@@ -11050,7 +11203,7 @@ const Workflow = {
     return container;
   },
 
-  submitTemplateForm(form, tasksList) {
+  async submitTemplateForm(form, tasksList) {
     const data = Object.fromEntries(new FormData(form).entries());
     const now = new Date().toISOString();
 
@@ -11129,7 +11282,8 @@ const Workflow = {
       this._updateRetainerTemplate(this.templateEditingId, record);
     } else {
       record.createdAt = now;
-      this._addRetainerTemplate(record);
+      this._skipNextListFetch = true;
+      await this._addRetainerTemplate(record);
     }
 
     this.view = 'templates';
@@ -11262,16 +11416,34 @@ const Workflow = {
       updatedAt: nowIso,
       boardOrder: maxOrder + 1000
     };
-    const createdWr = await WorkflowData.createWorkRequest(workRequest);
+
+    // Optimistic WR insert so the active list badge updates immediately.
+    WorkflowData._addOptimisticWorkRequest(workRequest);
+    Workflow._skipNextListFetch = true;
+    App.handleRoute();
+    let createdWr;
+    try {
+      createdWr = await WorkflowData.createWorkRequest(workRequest);
+    } catch (e) {
+      console.error('Failed to generate work request from template', e);
+      WorkflowData._removeWorkRequest(workRequest.id);
+      Workflow._skipNextListFetch = true;
+      App.handleRoute();
+      this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
+      return;
+    }
     const wrId = createdWr ? createdWr.id : workRequest.id;
 
     const idMap = new Map();
     (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
 
+    // Insert tasks optimistically, then confirm with API. Roll back only failures.
+    const failedTaskTitles = [];
+    const taskRecords = [];
     for (const t of (template.tasks || [])) {
       const idx = (template.tasks || []).indexOf(t);
       const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-      await WorkflowData.createTask({
+      const taskRecord = {
         id: idMap.get(t.id),
         workRequestId: wrId,
         title: t.title,
@@ -11283,9 +11455,28 @@ const Workflow = {
         createdAt: nowIso,
         updatedAt: nowIso,
         sortOrder: idx
-      });
+      };
+      taskRecords.push(taskRecord);
+      WorkflowData._addOptimisticTask(taskRecord);
+    }
+    Workflow._skipNextListFetch = true;
+    App.handleRoute();
+    for (const taskRecord of taskRecords) {
+      try {
+        await WorkflowData.createTask(taskRecord);
+      } catch (e) {
+        console.error('Failed to create generated task', taskRecord.title, e);
+        WorkflowData._removeTask(taskRecord.id);
+        failedTaskTitles.push(taskRecord.title);
+      }
     }
 
+    if (failedTaskTitles.length > 0) {
+      this.showMessage('Warning', `Work request generated but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
+    }
+
+    if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+    if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
     location.hash = '#operations/detail/' + wrId;
   },
 
@@ -11296,6 +11487,10 @@ const Workflow = {
     const nowIso = now.toISOString();
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     let generatedCount = 0;
+    const failedTemplates = [];
+
+    Workflow._skipNextListFetch = true;
+    App.handleRoute();
 
     for (const templateId of templateIds) {
       const template = this._getRetainerTemplateById(templateId);
@@ -11317,17 +11512,29 @@ const Workflow = {
         updatedAt: nowIso,
         boardOrder: maxOrder + 1000
       };
-      const createdWr = await WorkflowData.createWorkRequest(workRequest);
+
+      WorkflowData._addOptimisticWorkRequest(workRequest);
+      let createdWr;
+      try {
+        createdWr = await WorkflowData.createWorkRequest(workRequest);
+      } catch (e) {
+        console.error('Failed to generate work request from template', template.name, e);
+        WorkflowData._removeWorkRequest(workRequest.id);
+        failedTemplates.push(template.name || templateId);
+        continue;
+      }
       const wrId = createdWr ? createdWr.id : workRequest.id;
 
       const idMap = new Map();
       (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
 
       const tmplTasks = template.tasks || [];
+      const failedTaskTitles = [];
+      const taskRecords = [];
       for (let idx = 0; idx < tmplTasks.length; idx++) {
         const t = tmplTasks[idx];
         const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-        await WorkflowData.createTask({
+        const taskRecord = {
           id: idMap.get(t.id),
           workRequestId: wrId,
           title: t.title,
@@ -11339,17 +11546,42 @@ const Workflow = {
           createdAt: nowIso,
           updatedAt: nowIso,
           sortOrder: idx
-        });
+        };
+        taskRecords.push(taskRecord);
+        WorkflowData._addOptimisticTask(taskRecord);
+      }
+      for (const taskRecord of taskRecords) {
+        try {
+          await WorkflowData.createTask(taskRecord);
+        } catch (e) {
+          console.error('Failed to create generated task', taskRecord.title, e);
+          WorkflowData._removeTask(taskRecord.id);
+          failedTaskTitles.push(taskRecord.title);
+        }
       }
 
-      generatedCount++;
+      if (failedTaskTitles.length > 0) {
+        failedTemplates.push(`${template.name} (tasks: ${failedTaskTitles.join(', ')})`);
+      } else {
+        generatedCount++;
+      }
     }
 
-    this.showMessage(
-      'Bulk Generation Complete',
-      `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
-      'success'
-    );
+    Workflow._skipNextListFetch = true;
+    App.handleRoute();
+
+    if (failedTemplates.length > 0) {
+      this.showMessage('Error', `Some generations failed: ${failedTemplates.join('; ')}`, 'error');
+    } else {
+      this.showMessage(
+        'Bulk Generation Complete',
+        `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
+        'success'
+      );
+    }
+
+    if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+    if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
 
     this.view = 'list';
     App.handleRoute();

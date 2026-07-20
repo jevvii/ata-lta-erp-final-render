@@ -118,6 +118,33 @@ const ClientsData = {
   getClientById(id) { return (this._clients || []).find(c => c.id === id) || null; },
   getClientsWhere(predicate) { return (this._clients || []).filter(predicate); },
 
+  addClient(client) {
+    const activeEntity = this._getActiveEntity();
+    if (!Array.isArray(this._clients)) this._clients = [];
+    this._clients.unshift(client);
+    this._entity = activeEntity;
+  },
+
+  replaceClientById(tempId, client) {
+    if (!Array.isArray(this._clients)) {
+      this._clients = [client];
+      this._entity = this._getActiveEntity();
+      return;
+    }
+    const idx = this._clients.findIndex(c => c.id === tempId);
+    if (idx >= 0) {
+      this._clients[idx] = client;
+    } else {
+      this._clients.unshift(client);
+    }
+  },
+
+  _removeFromCache(id) {
+    if (!Array.isArray(this._clients)) return;
+    const idx = this._clients.findIndex(c => c.id === id);
+    if (idx >= 0) this._clients.splice(idx, 1);
+  },
+
   async updateClient(id, changes) {
     const existing = this.getClientById(id);
     const updated = { ...(existing || {}), ...changes, id };
@@ -1275,21 +1302,71 @@ const Clients = {
 
     const isNew = !this.editingId || this.editingId === 'new';
     const canEditDirectly = Auth.can('clients:edit');
+    const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
+
+    if (isNew) {
+      const optimisticId = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+      const now = new Date().toISOString();
+      const optimisticClient = this.normalizeClient({
+        ...record,
+        id: optimisticId,
+        status: 'Active',
+        createdAt: now,
+        updatedAt: now
+      });
+
+      ClientsData.addClient(optimisticClient);
+      this._skipNextListFetch = true;
+      this.editingId = null;
+      closeFormPanelAndRoute('#clients');
+
+      let serverClient = null;
+      try {
+        const res = await window.apiClient.clients.create(record);
+        serverClient = this.normalizeClient(res.data);
+        ClientsData.replaceClientById(optimisticId, serverClient);
+        // Add/update the shared client cache so pickers/dropdowns stay usable.
+        if (window.apiClient?.clientCache) {
+          if (!Array.isArray(window.apiClient.clientCache._clients)) {
+            window.apiClient.clientCache._clients = [serverClient];
+          } else {
+            const idx = window.apiClient.clientCache._clients.findIndex(c => c.id === serverClient.id);
+            if (idx >= 0) window.apiClient.clientCache._clients[idx] = serverClient;
+            else window.apiClient.clientCache._clients.push(serverClient);
+          }
+          window.apiClient.clientCache._loadedAt = Date.now();
+        }
+        if (typeof Dashboard !== 'undefined') {
+          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+          else if (Dashboard._dataCache) Dashboard._dataCache = null;
+        }
+        Workflow.showMessage('Client Created', `Client ${serverClient.name || record.name} has been successfully created.`, 'success');
+      } catch (e) {
+        console.error('Failed to create client', e);
+        ClientsData._removeFromCache(optimisticId);
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        Workflow.showMessage('Error', e.message || 'Unable to create client.', 'error');
+        return;
+      }
+      return;
+    }
 
     try {
-      if (isNew) {
-        await window.apiClient.clients.create(record);
-      } else {
-        await window.apiClient.clients.update(this.editingId, record);
+      await window.apiClient.clients.update(this.editingId, record);
+      // Patch the shared cache in place rather than wiping it, so dropdowns stay populated.
+      if (window.apiClient?.clientCache && Array.isArray(window.apiClient.clientCache._clients)) {
+        const idx = window.apiClient.clientCache._clients.findIndex(c => c.id === this.editingId);
+        if (idx >= 0) {
+          window.apiClient.clientCache._clients[idx] = { ...window.apiClient.clientCache._clients[idx], ...record, id: this.editingId };
+        }
       }
-      window.apiClient.clientCache.invalidate();
       this.invalidateCache();
     } catch (e) {
       Workflow.showMessage('Save Client', e.message || 'Unable to save client.', 'error');
       return;
     }
 
-    const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
     const msgConfig = {
       title: isNew ? 'Client Created' : 'Client Updated',
       message: isApproved 

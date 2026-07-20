@@ -166,7 +166,10 @@
       countCache.set(cacheKey, { ts: Date.now(), value });
       return value;
     }).catch((err) => {
-      console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
+      // Route-change aborts are expected; do not spam the console with them.
+      if (err.name !== 'AbortError') {
+        console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
+      }
       return fallback;
     });
   };

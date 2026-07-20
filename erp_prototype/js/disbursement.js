@@ -25,6 +25,7 @@ const Disbursement = {
   _lastArchiveMeta: {},
   _rejectedArchiveCounts: null,
   _skipNextListFetch: false,
+  _skipNextTemplatesFetch: false,
 
   // API-backed disbursement template cache
   _templates: [],
@@ -74,6 +75,10 @@ const Disbursement = {
 
   async loadTemplates() {
     if (this._templatesPromise) return this._templatesPromise;
+    if (this._skipNextTemplatesFetch) {
+      this._skipNextTemplatesFetch = false;
+      return this._templates || [];
+    }
     this._templatesPromise = (async () => {
       try {
         const entity = Auth.activeEntity;
@@ -276,6 +281,7 @@ const Disbursement = {
     this._entity = null;
     this._rejectedArchiveCounts = null;
     this._skipNextListFetch = false;
+    this._skipNextTemplatesFetch = false;
   },
 
   async loadDisbursement(id) {
@@ -363,6 +369,142 @@ const Disbursement = {
       return removed;
     }
     return null;
+  },
+
+  _tempId(prefix = 'tmp') {
+    return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  },
+
+  _getOptimisticEntity() {
+    const activeEntity = this._getActiveEntity();
+    return (activeEntity && activeEntity !== 'ALL') ? activeEntity : (Auth.user?.entities?.[0] || 'ATA');
+  },
+
+  _assignEntity(record) {
+    if (!record.entity) {
+      record.entity = this._getOptimisticEntity();
+    }
+    record.entityId = record.entityId || record.entity || null;
+    return record;
+  },
+
+  _buildOptimisticDisbursement(source = {}, overrides = {}) {
+    const now = new Date().toISOString();
+    const record = this.normalizeDisbursement({
+      id: this._tempId(),
+      disbursementNumber: null,
+      category: '',
+      description: '',
+      amount: 0,
+      fundSource: 'Firm Fund',
+      status: 'Draft',
+      clientId: null,
+      clientName: null,
+      employeeId: Auth.user?.id || null,
+      linkedInvoiceId: null,
+      linkedWorkRequestId: null,
+      linkedTaskId: null,
+      requestedBy: Auth.user?.id || null,
+      dueDate: null,
+      notes: null,
+      approvedBy: null,
+      approvedAt: null,
+      releasedBy: null,
+      releasedAt: null,
+      rejectedBy: null,
+      rejectedAt: null,
+      rejectionReason: null,
+      paymentHandledBy: null,
+      paymentDetails: null,
+      receiptS3Key: null,
+      receiptFilename: null,
+      releaseFilename: null,
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
+      createdBy: Auth.user?.id || null,
+      updatedBy: Auth.user?.id || null,
+      fromTemplate: false,
+      submittedAt: now,
+      voucherNumber: null,
+      boardOrder: null,
+      ...source,
+      ...overrides
+    });
+    return this._assignEntity(record);
+  },
+
+  _replaceInItems(localId, serverRecord) {
+    if (!this._items) return;
+    const idx = this._items.findIndex(d => d.id === localId);
+    if (idx >= 0) {
+      this._items[idx] = serverRecord;
+    } else {
+      this._items.unshift(serverRecord);
+    }
+  },
+
+  _removeFromItems(localId) {
+    if (!this._items) return;
+    const idx = this._items.findIndex(d => d.id === localId);
+    if (idx >= 0) this._items.splice(idx, 1);
+    if (this._detailCache[localId]) delete this._detailCache[localId];
+  },
+
+  _insertOptimisticDisbursement(record) {
+    if (!this._items) {
+      this._items = [];
+      this._entity = this._getActiveEntity();
+    }
+    this._items.unshift(record);
+    this._refreshCounts();
+    this._invalidateDashboardCache();
+    this._skipNextListFetch = true;
+    return record;
+  },
+
+  _addOptimisticDisbursement(record) {
+    this._insertOptimisticDisbursement(record);
+    if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+      App.handleRoute();
+    }
+    return record;
+  },
+
+  _replaceOptimisticCreate(localId, serverRecord) {
+    this._replaceInItems(localId, serverRecord);
+    this._detailCache[serverRecord.id] = serverRecord;
+    this._invalidateRelatedCaches(serverRecord);
+  },
+
+  _rollbackOptimisticCreate(localId, error, title = 'Error') {
+    this._removeFromItems(localId);
+    this._refreshCounts();
+    this._invalidateDashboardCache();
+    this._skipNextListFetch = true;
+    if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+      App.handleRoute();
+    }
+    Workflow.showMessage('Error', (error && error.message) || title, 'error');
+  },
+
+  _invalidateRelatedCaches(record) {
+    this._invalidateDashboardCache();
+    if (record && record.linkedWorkRequestId) {
+      // Patch the linked work request in the operations cache instead of wiping it,
+      // so the board/list and any open dropdowns stay usable.
+      const wr = typeof WorkflowData !== 'undefined' ? WorkflowData.getWorkRequestById(record.linkedWorkRequestId) : null;
+      if (wr) {
+        if (!Array.isArray(wr.linkedDisbursementIds)) wr.linkedDisbursementIds = [];
+        if (!wr.linkedDisbursementIds.includes(record.id)) wr.linkedDisbursementIds.push(record.id);
+      }
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.ensure === 'function') {
+        WorkflowData.ensure().catch(() => {});
+      }
+    }
+    if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+      App.updateSidebarNotifications().catch(() => {});
+    }
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
@@ -503,11 +645,11 @@ const Disbursement = {
         const isPendingStatus = ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status);
         if (canEdit && isPendingStatus) {
           const editBtn = el('button', { class: 'btn btn-warning btn-sm', text: '✏️ Edit Expense', style: 'margin-right:8px;' });
-          editBtn.addEventListener('click', () => {
+          editBtn.addEventListener('click', async () => {
             this.detailId = d.id;
             openFormPanel({
               icon: '💰', title: 'Edit Expense',
-              formContent: this.renderForm({ existing: d }), formId: 'disbursement-form',
+              formContent: await this.renderForm({ existing: d }), formId: 'disbursement-form',
               viewContext: 'expense-form',
               fullPageRoute: `#disbursement/form/${d.id}`,
               actions: [
@@ -649,7 +791,7 @@ const Disbursement = {
     if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') {
       await this._loadPrefilledOpReq();
-      container.appendChild(this.renderForm({ hideHeader: true, existing }));
+      container.appendChild(await this.renderForm({ hideHeader: true, existing }));
     }
     else if (this.view === 'detail') container.appendChild(await this.renderDetail());
     else if (this.view === 'report') container.appendChild(await this.renderReport());
@@ -797,7 +939,7 @@ const Disbursement = {
     openFormPanel({
       icon: '💰',
       title: isNew ? 'File Expense' : `Edit Expense — ${existing?.description || ''}`.trim(),
-      formContent: this.renderForm({ existing }),
+      formContent: await this.renderForm({ existing }),
       formId: 'disbursement-form',
       mode,
       viewContext: 'expense-form',
@@ -1608,8 +1750,13 @@ const Disbursement = {
   // ============================================================
   // Expense Filing Form
   // ============================================================
-  renderForm(opts = {}) {
+  async renderForm(opts = {}) {
     const { hideHeader = false, existing = null } = opts;
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
     // Allow access if user can create new disbursements OR can edit existing ones
     const isNew = !this.detailId;
     if (isNew && !Auth.can('disbursement:create')) {
@@ -1902,29 +2049,32 @@ const Disbursement = {
     };
 
     let record;
-    try {
-      if (isNew) {
+    if (isNew) {
+      const optimisticRecord = this._buildOptimisticDisbursement(payload);
+      this._addOptimisticDisbursement(optimisticRecord);
+      try {
         const res = await window.apiClient.disbursements.create(payload);
         record = this.normalizeDisbursement(res.data);
-        this._detailCache[record.id] = record;
-        if (!this._items) {
-          this._items = [];
-          this._entity = this._getActiveEntity();
-        }
-        this._items.unshift(record);
-      } else {
+        this._replaceOptimisticCreate(optimisticRecord.id, record);
+        this._skipNextListFetch = true;
+      } catch (e) {
+        this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Save Failed');
+        return;
+      }
+    } else {
+      try {
         const res = await window.apiClient.disbursements.update(this.detailId, payload);
         record = this.normalizeDisbursement(res.data);
         this._detailCache[this.detailId] = record;
         this._updateCachedDisbursement(record.id, record);
+        this._refreshCounts();
+        this._invalidateDashboardCache();
+        this._skipNextListFetch = true;
+      } catch (e) {
+        console.error('Failed to save disbursement', e);
+        Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
+        return;
       }
-      this._refreshCounts();
-      this._invalidateDashboardCache();
-      this._skipNextListFetch = true;
-    } catch (e) {
-      console.error('Failed to save disbursement', e);
-      Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
-      return;
     }
 
     // Fulfill pending operations request if any
@@ -2979,33 +3129,55 @@ const Disbursement = {
               ? 'Are you sure you want to generate a disbursement for this selected template?'
               : `Are you sure you want to generate disbursements for all ${ids.length} selected templates?`;
             Workflow.showConfirm(title, message, async () => {
-              let count = 0;
-              for (const id of ids) {
-                const t = templates.find(temp => temp.id === id);
-                if (t) {
-                  try {
-                    await window.apiClient.disbursements.create({
-                      category: t.category,
-                      description: t.description || t.name,
-                      amount: t.amount,
-                      fundSource: t.fundSource,
-                      linkedInvoiceId: t.linkedInvoiceId || null,
-                      linkedWorkRequestId: t.linkedWorkRequestId || null,
-                      clientId: null,
-                      employeeId: Auth.user.id,
-                      notes: null
-                    });
-                    count++;
-                  } catch (e) {
-                    console.error('Failed to generate disbursement from template', e);
-                  }
+              const templatesToGenerate = ids.map(id => templates.find(temp => temp.id === id)).filter(Boolean);
+              if (templatesToGenerate.length === 0) return;
+
+              this.view = 'list';
+              const optimistic = [];
+              templatesToGenerate.forEach(t => {
+                const payload = {
+                  category: t.category,
+                  description: t.description || t.name,
+                  amount: t.amount,
+                  fundSource: t.fundSource,
+                  linkedInvoiceId: t.linkedInvoiceId || null,
+                  linkedWorkRequestId: t.linkedWorkRequestId || null,
+                  clientId: null,
+                  employeeId: Auth.user.id,
+                  notes: null
+                };
+                const record = this._buildOptimisticDisbursement({ ...payload, fromTemplate: true });
+                this._insertOptimisticDisbursement(record);
+                optimistic.push({ localId: record.id, payload, template: t });
+              });
+              this._skipNextListFetch = true;
+              App.handleRoute();
+
+              let successCount = 0;
+              const failures = [];
+              for (const { localId, payload, template } of optimistic) {
+                try {
+                  const res = await window.apiClient.disbursements.create(payload);
+                  const serverRecord = this.normalizeDisbursement(res.data);
+                  this._replaceOptimisticCreate(localId, serverRecord);
+                  successCount++;
+                } catch (e) {
+                  this._removeFromItems(localId);
+                  this._refreshCounts();
+                  this._invalidateDashboardCache();
+                  failures.push(template.name);
+                  console.error('Failed to generate disbursement from template', template.id, e);
                 }
               }
-              Workflow.showMessage('Success', `Generated ${count} disbursement${count === 1 ? '' : 's'} successfully.`, 'success');
-              this.invalidateCache();
-              this._invalidateDashboardCache();
-              this.view = 'list';
+
+              this._skipNextListFetch = true;
               App.handleRoute();
+
+              if (failures.length === 0) {
+                Workflow.showMessage('Success', `Generated ${successCount} disbursement${successCount === 1 ? '' : 's'} successfully.`, 'success');
+              } else {
+                Workflow.showMessage('Partial Success', `Generated ${successCount} of ${optimistic.length}. Failed: ${failures.join(', ')}`, 'warning');
+              }
             });
           }
         },
@@ -3174,6 +3346,7 @@ const Disbursement = {
       linkedInvoiceId: data.linkedInvoiceId || null
     };
 
+    let optimisticTemplate = null;
     try {
       if (template) {
         const res = await window.apiClient.disbursements.updateTemplate(template.id, payload);
@@ -3182,12 +3355,36 @@ const Disbursement = {
         if (idx >= 0) this._templates[idx] = updated;
         else this._templates.push(updated);
       } else {
+        const recordEntity = this._getOptimisticEntity();
+        optimisticTemplate = this.normalizeTemplate({
+          ...payload,
+          id: this._tempId('tpl'),
+          entity: recordEntity,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+        this._templates.push(optimisticTemplate);
+        this._skipNextTemplatesFetch = true;
+        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+          App.handleRoute();
+        }
         const res = await window.apiClient.disbursements.createTemplate(payload);
         const created = this.normalizeTemplate(res.data);
-        this._templates.push(created);
+        if (!created.entity) created.entity = recordEntity;
+        const idx = this._templates.findIndex(t => t.id === optimisticTemplate.id);
+        if (idx >= 0) this._templates[idx] = created;
+        else this._templates.push(created);
+        this._skipNextTemplatesFetch = true;
       }
     } catch (e) {
       console.error('Failed to save disbursement template', e);
+      if (!template && optimisticTemplate) {
+        this._templates = this._templates.filter(t => t.id !== optimisticTemplate.id);
+        this._skipNextTemplatesFetch = true;
+        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+          App.handleRoute();
+        }
+      }
       Workflow.showMessage('Save Failed', e.message || 'Unable to save template.', 'error');
       return;
     }
@@ -3218,25 +3415,34 @@ const Disbursement = {
   },
 
   async generateFromTemplate(template) {
+    const payload = {
+      category: template.category,
+      description: template.description || template.name,
+      amount: template.amount,
+      fundSource: template.fundSource,
+      linkedInvoiceId: template.linkedInvoiceId || null,
+      linkedWorkRequestId: template.linkedWorkRequestId || null,
+      clientId: null,
+      employeeId: Auth.user.id,
+      notes: null
+    };
+
+    this.view = 'list';
+    const optimisticRecord = this._buildOptimisticDisbursement({ ...payload, fromTemplate: true });
+    this._addOptimisticDisbursement(optimisticRecord);
+
     try {
-      await window.apiClient.disbursements.create({
-        category: template.category,
-        description: template.description || template.name,
-        amount: template.amount,
-        fundSource: template.fundSource,
-        linkedInvoiceId: template.linkedInvoiceId || null,
-        linkedWorkRequestId: template.linkedWorkRequestId || null,
-        clientId: null,
-        employeeId: Auth.user.id,
-        notes: null
-      });
+      const res = await window.apiClient.disbursements.create(payload);
+      const serverRecord = this.normalizeDisbursement(res.data);
+      this._replaceOptimisticCreate(optimisticRecord.id, serverRecord);
       Workflow.showMessage('Template Success', 'Disbursement generated from template: ' + template.name, 'success');
-      this.view = 'list';
-      App.handleRoute();
     } catch (e) {
-      console.error('Failed to generate disbursement from template', e);
-      Workflow.showMessage('Generation Failed', e.message || 'Unable to generate disbursement.', 'error');
+      this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Generation Failed');
+      return;
     }
+
+    this._skipNextListFetch = true;
+    App.handleRoute();
   },
 
   async archiveDisbursement(id) {

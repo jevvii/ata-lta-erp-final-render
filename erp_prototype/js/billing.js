@@ -90,13 +90,61 @@ const Billing = {
     this._listCache = this._listCache.filter(inv => inv.id !== id);
   },
 
-  _addToListCache(inv) {
-    if (!inv || !Array.isArray(this._listCache)) return;
+  _addToListCache(inv, { prepend = false } = {}) {
+    if (!inv) return;
     const entity = Auth.activeEntity;
+    // If the list cache has not been loaded yet, initialize it from this record
+    // so optimistic inserts are visible immediately.
+    if (!Array.isArray(this._listCache)) {
+      this._listCache = [];
+      this._listCacheEntity = entity;
+      this._listCacheGeneration = (this._listCacheGeneration || 0) + 1;
+    }
     if (!this._entityMatches(inv?.entity, entity)) return;
     const idx = this._listCache.findIndex(i => i.id === inv.id);
-    if (idx >= 0) this._listCache[idx] = inv;
-    else this._listCache.push(inv);
+    if (idx >= 0) {
+      this._listCache[idx] = inv;
+    } else if (prepend) {
+      this._listCache.unshift(inv);
+    } else {
+      this._listCache.push(inv);
+    }
+  },
+
+  _removeFromListCache(id) {
+    if (!id || !Array.isArray(this._listCache)) return;
+    this._listCache = this._listCache.filter(inv => inv.id !== id);
+  },
+
+  _replaceInListCache(tempId, record) {
+    if (!tempId || !record) return;
+    if (!Array.isArray(this._listCache)) {
+      this._addToListCache(record, { prepend: true });
+      return;
+    }
+    const idx = this._listCache.findIndex(i => i.id === tempId);
+    if (idx >= 0) {
+      this._listCache[idx] = record;
+    } else {
+      this._addToListCache(record, { prepend: true });
+    }
+  },
+
+  _invalidateRelatedCaches(record) {
+    // Update the linked work request in the shared cache instead of invalidating it,
+    // so that work-request dropdowns in other forms do not become empty.
+    if (record?.workRequestId && window.apiClient?.workRequestCache?.getById) {
+      const wr = window.apiClient.workRequestCache.getById(record.workRequestId);
+      if (wr) {
+        if (!Array.isArray(wr.linkedInvoiceIds)) wr.linkedInvoiceIds = [];
+        if (!wr.linkedInvoiceIds.includes(record.id)) wr.linkedInvoiceIds.push(record.id);
+      }
+      // Background refresh keeps the cache warm without nulling dropdown reads.
+      if (typeof window.apiClient.workRequestCache.ensure === 'function') {
+        window.apiClient.workRequestCache.ensure().catch(() => {});
+      }
+    }
+    if (window.Dashboard?._dataCache) window.Dashboard._dataCache = null;
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -329,7 +377,7 @@ const Billing = {
     if (this.view === 'list') container.appendChild(await this.renderList());
     else if (this.view === 'form') {
       await this._loadPrefilledOpReq();
-      container.appendChild(this.renderForm(this.detailId));
+      container.appendChild(await this.renderForm(this.detailId));
     }
     else if (this.view === 'detail') container.appendChild(this.renderDetail());
     else if (this.view === 'aging') {
@@ -1474,7 +1522,12 @@ const Billing = {
   // ============================================================
   // Create / Edit Form
   // ============================================================
-  renderForm(invoiceId = null) {
+  async renderForm(invoiceId = null) {
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure()
+    ]);
     if (!Auth.can('billing:edit')) {
       this.view = 'list';
       App.handleRoute();
@@ -1739,7 +1792,14 @@ const Billing = {
     }
 
     const data = Object.fromEntries(new FormData(form).entries());
-    const entity = Auth.activeEntity;
+    const activeEntity = Auth.activeEntity;
+    // Resolve a concrete entity for the optimistic record. The backend resolves the
+    // actual entity from the request header / client, but the local cache matching
+    // needs a real ATA/LTA code (not 'ALL').
+    const clientForEntity = window.apiClient.clientCache.getById(data.clientId);
+    const recordEntity = (activeEntity && activeEntity !== 'ALL')
+      ? activeEntity
+      : (clientForEntity?.entity || Auth.user?.entities?.[0] || 'ATA');
 
     const rows = form.querySelectorAll('.notion-line-item-row');
     const lineItems = [];
@@ -1764,7 +1824,7 @@ const Billing = {
       clientId: data.clientId,
       workRequestId: data.workRequestId || null,
       linkedTaskId: data.linkedTaskId || null,
-      entity: entity,
+      entity: recordEntity,
       issueDate: data.issueDate,
       dueDate: data.dueDate,
       lineItems,
@@ -1795,13 +1855,37 @@ const Billing = {
     const isApprover = Auth.canBypassReview('invoices');
     const requiresApproval = !isApprover;
 
+    // Optimistic local cache update for new invoices BEFORE the API call.
+    const optimisticId = isNew ? ('temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2)) : null;
+    if (isNew) {
+      const client = window.apiClient.clientCache.getById(data.clientId);
+      const optimisticRecord = {
+        ...record,
+        id: optimisticId,
+        status: 'Draft',
+        archived: false,
+        paidAmount: 0,
+        balance: subtotal,
+        fromTemplate: false,
+        clientName: client?.name || null,
+        createdBy: Auth.user.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      this._detailCache[optimisticId] = optimisticRecord;
+      this._detailCacheEntity = activeEntity;
+      this._addToListCache(optimisticRecord, { prepend: true });
+      this._updateCounts(1, 0);
+      this._skipNextListFetch = true;
+      const targetRoute = isResubmitting ? '#admin' : '#billing';
+      closeFormPanelAndRoute(targetRoute);
+    }
+
+    let serverRecord = null;
     try {
       if (isNew) {
         const res = await window.apiClient.invoices.create(apiPayload);
-        record.id = res.data.id;
-        record.createdAt = res.data.created_at || res.data.createdAt;
-        record.updatedAt = res.data.updated_at || res.data.updatedAt;
-        record.status = res.data.status;
+        serverRecord = this.normalizeInvoice(res.data);
       } else {
         if (record.status === 'Draft' || !requiresApproval) {
           const res = await window.apiClient.invoices.update(record.id, apiPayload);
@@ -1818,8 +1902,29 @@ const Billing = {
       }
     } catch (e) {
       console.error('Failed to save invoice', e);
-      Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
+      if (isNew) {
+        delete this._detailCache[optimisticId];
+        this._removeFromListCache(optimisticId);
+        this._updateCounts(-1, 0);
+        this._skipNextListFetch = true;
+        App.handleRoute();
+        Workflow.showMessage('Error', e.message || 'Unable to create invoice.', 'error');
+      } else {
+        Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
+      }
       return;
+    }
+
+    // Replace optimistic record (or update existing) in the local cache.
+    if (serverRecord) {
+      this._detailCache[serverRecord.id] = serverRecord;
+      this._detailCacheEntity = activeEntity;
+      if (isNew) {
+        delete this._detailCache[optimisticId];
+        this._replaceInListCache(optimisticId, serverRecord);
+      } else {
+        this._addToListCache(serverRecord);
+      }
     }
 
     // Fulfill pending operations request if any
@@ -1834,7 +1939,7 @@ const Billing = {
           status: 'fulfilled',
           fulfilledBy: Auth.user.id,
           fulfilledAt: new Date().toISOString(),
-          linkedRecordId: record.id
+          linkedRecordId: serverRecord ? serverRecord.id : record.id
         });
       }
     } catch (e) {
@@ -1850,18 +1955,27 @@ const Billing = {
     const msgConfig = {
       title: 'Invoice ' + (isNew ? 'Created' : 'Updated'),
       message: isApproved
-        ? 'Invoice ' + record.invoiceNumber + ' has been ' + (isNew ? 'created' : 'updated') + ' successfully.' + linkMsg
+        ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been ' + (isNew ? 'created' : 'updated') + ' successfully.' + linkMsg
         : 'Invoice ' + record.invoiceNumber + ' ' + (isNew ? 'creation' : 'update') + ' request has been submitted for Admin approval.',
       type: 'success'
     };
     const targetRoute = isResubmitting ? '#admin' : '#billing';
-    if (result && result.approved) {
-      const wasCached = Array.isArray(this._listCache) && this._listCache.some(i => i.id === record.id);
-      this._addToListCache(record);
-      if (!wasCached) this._updateCounts(1, 0);
+
+    if (isNew) {
+      // Already routed to the list before the API; refresh from warm cache and toast.
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      if (isApproved) Workflow.showMessage('Invoice Created', msgConfig.message, 'success');
+      this._invalidateRelatedCaches(serverRecord);
+    } else {
+      if (result && result.approved) {
+        const wasCached = Array.isArray(this._listCache) && this._listCache.some(i => i.id === record.id);
+        this._addToListCache(serverRecord || record);
+        if (!wasCached) this._updateCounts(1, 0);
+      }
+      this._skipNextListFetch = true;
+      closeFormPanelAndRoute(targetRoute, msgConfig);
     }
-    this._skipNextListFetch = true;
-    closeFormPanelAndRoute(targetRoute, msgConfig);
   },
 
   async showForm(invoiceId = null, mode = null) {
@@ -1876,7 +1990,7 @@ const Billing = {
     openFormPanel({
       icon: '🧾',
       title: isNew ? 'Create Sales Invoice' : `Edit Invoice ${inv?.invoiceNumber || ''}`.trim(),
-      formContent: this.renderForm(invoiceId),
+      formContent: await this.renderForm(invoiceId),
       formId: 'invoice-form',
       mode,
       viewContext: 'invoice-form',
@@ -3391,34 +3505,93 @@ const Billing = {
               ? 'Are you sure you want to generate an invoice for this selected template?'
               : `Are you sure you want to generate invoices for all ${ids.length} selected templates?`;
             Workflow.showConfirm(title, message, async () => {
-              let count = 0;
+              const activeEntity = Auth.activeEntity;
+              const templatesToGenerate = [];
+
+              // Build all optimistic records first so the UI updates in one shot.
               for (const id of ids) {
                 const t = templates.find(temp => temp.id === id);
-                if (t) {
-                  const entity = Auth.activeEntity;
-                  const now = new Date();
-                  const payload = {
-                    invoiceNumber: await this.nextInvoiceNumber(entity),
-                    clientId: t.clientId,
-                    workRequestId: null,
-                    issueDate: now.toISOString().slice(0, 10),
-                    dueDate: new Date(now.getFullYear(), now.getMonth() + 1, now.getDate()).toISOString().slice(0, 10),
-                    status: 'Draft',
-                    lineItems: (t.lineItems || []).map(item => ({ ...item, amount: parseFloat(item.amount) || 0, type: item.type || 'Professional Fee' })),
-                    notes: null,
-                    terms: null,
-                  };
-                  try {
-                    await window.apiClient.invoices.create(payload);
-                    count++;
-                  } catch (e) {
-                    console.error('Failed to generate invoice from template', e);
-                  }
+                if (!t) continue;
+                const client = window.apiClient.clientCache.getById(t.clientId);
+                const recordEntity = (activeEntity && activeEntity !== 'ALL')
+                  ? activeEntity
+                  : (client?.entity || Auth.user?.entities?.[0] || 'ATA');
+                const now = new Date();
+                const invoiceNumber = await this.nextInvoiceNumber(recordEntity);
+                const subtotal = (t.lineItems || []).reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+                const optimisticId = 'temp-bulk-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '-' + id;
+                const payload = {
+                  invoiceNumber,
+                  clientId: t.clientId,
+                  workRequestId: null,
+                  issueDate: now.toISOString().slice(0, 10),
+                  dueDate: new Date(now.getFullYear(), now.getMonth() + 1, now.getDate()).toISOString().slice(0, 10),
+                  status: 'Draft',
+                  lineItems: (t.lineItems || []).map(item => ({ ...item, amount: parseFloat(item.amount) || 0, type: item.type || 'Professional Fee' })),
+                  notes: null,
+                  terms: null,
+                };
+                const optimisticRecord = {
+                  ...payload,
+                  id: optimisticId,
+                  entity: recordEntity,
+                  archived: false,
+                  paidAmount: 0,
+                  subtotal,
+                  total: subtotal,
+                  balance: subtotal,
+                  fromTemplate: t.id,
+                  clientName: client?.name || null,
+                  createdBy: Auth.user.id,
+                  createdAt: now.toISOString(),
+                  updatedAt: now.toISOString()
+                };
+                this._detailCache[optimisticId] = optimisticRecord;
+                this._addToListCache(optimisticRecord, { prepend: true });
+                templatesToGenerate.push({ t, optimisticId, payload, recordEntity });
+              }
+
+              if (templatesToGenerate.length === 0) return;
+
+              this._detailCacheEntity = activeEntity;
+              this._updateCounts(templatesToGenerate.length, 0);
+              this.view = 'list';
+              this._skipNextListFetch = true;
+              App.handleRoute();
+
+              const failed = [];
+              let succeededCount = 0;
+              for (const { t, optimisticId, payload, recordEntity } of templatesToGenerate) {
+                try {
+                  const res = await window.apiClient.invoices.create(payload);
+                  const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity: recordEntity });
+                  delete this._detailCache[optimisticId];
+                  this._detailCache[inv.id] = inv;
+                  this._replaceInListCache(optimisticId, inv);
+                  this._invalidateRelatedCaches(inv);
+                  succeededCount++;
+                } catch (e) {
+                  console.error('Failed to generate invoice from template', t.id, e);
+                  failed.push({ t, optimisticId, error: e });
+                  delete this._detailCache[optimisticId];
+                  this._removeFromListCache(optimisticId);
                 }
               }
-              Workflow.showMessage('Success', `Generated ${count} invoice${count === 1 ? '' : 's'} successfully.`, 'success');
-              this.view = 'list';
+
+              // Recalc counts if any generation failed.
+              if (failed.length > 0) {
+                this._updateCounts(-failed.length, 0);
+              }
+
+              // Refresh from warm cache and report results.
+              this._skipNextListFetch = true;
               App.handleRoute();
+              if (failed.length === 0) {
+                Workflow.showMessage('Success', `Generated ${succeededCount} invoice${succeededCount === 1 ? '' : 's'} successfully.`, 'success');
+              } else {
+                const names = failed.map(f => `"${f.t.name}"`).join(', ');
+                Workflow.showMessage('Error', `${failed.length} template(s) could not be generated (${names}).`, 'error');
+              }
             });
           }
         },
@@ -3557,28 +3730,66 @@ const Billing = {
       ]
     };
 
+    // Optimistic local cache update BEFORE the API call.
+    const optimisticId = !template ? ('temp-tpl-' + Date.now() + '-' + Math.random().toString(36).slice(2)) : null;
+    const priorTemplate = template ? deepClone(template) : null;
+
+    if (!template) {
+      const client = window.apiClient.clientCache.getById(payload.clientId);
+      const optimisticTemplate = {
+        ...payload,
+        id: optimisticId,
+        active: true,
+        clientName: client?.name || null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      this._templates.push(optimisticTemplate);
+    } else {
+      const idx = this._templates.findIndex(t => t.id === template.id);
+      if (idx >= 0) {
+        this._templates[idx] = { ...this._templates[idx], ...payload, updatedAt: new Date().toISOString() };
+      }
+    }
+    this.view = 'templates';
+    this.templateEditingId = null;
+    this._skipNextListFetch = true;
+    closeFormPanelAndRoute('#billing');
+
+    let serverTemplate = null;
     try {
       if (template) {
         const res = await window.apiClient.invoices.updateTemplate(template.id, payload);
-        const updated = this.normalizeTemplate(res.data);
-        const idx = this._templates.findIndex(t => t.id === updated.id);
-        if (idx >= 0) this._templates[idx] = updated;
-        else this._templates.push(updated);
+        serverTemplate = this.normalizeTemplate(res.data);
       } else {
         const res = await window.apiClient.invoices.createTemplate(payload);
-        const created = this.normalizeTemplate(res.data);
-        this._templates.push(created);
+        serverTemplate = this.normalizeTemplate(res.data);
       }
-      this._counts = null; // invalidate counts
     } catch (e) {
       console.error('Failed to save billing template', e);
-      Workflow.showMessage('Save Failed', e.message || 'Unable to save template.', 'error');
+      if (optimisticId) {
+        this._templates = this._templates.filter(t => t.id !== optimisticId);
+      } else if (priorTemplate) {
+        const idx = this._templates.findIndex(t => t.id === priorTemplate.id);
+        if (idx >= 0) this._templates[idx] = priorTemplate;
+      }
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || 'Unable to save template.', 'error');
       return;
     }
 
-    this.view = 'templates';
-    this.templateEditingId = null;
-    closeFormPanelAndRoute('#billing');
+    if (serverTemplate) {
+      const idx = this._templates.findIndex(t => t.id === serverTemplate.id || (optimisticId && t.id === optimisticId));
+      if (idx >= 0) this._templates[idx] = serverTemplate;
+      else this._templates.push(serverTemplate);
+    }
+    this._counts = null; // invalidate counts
+
+    // Refresh from warm cache with the server-approved template and toast.
+    this._skipNextListFetch = true;
+    App.handleRoute();
+    Workflow.showMessage('Template Saved', `Template "${serverTemplate?.name || payload.name}" saved successfully.`, 'success');
   },
 
   async showTemplateForm(existing = null, mode = null) {
@@ -3602,10 +3813,16 @@ const Billing = {
   },
 
   async generateFromTemplate(t) {
-    const entity = Auth.activeEntity;
+    const activeEntity = Auth.activeEntity;
+    const client = window.apiClient.clientCache.getById(t.clientId);
+    const recordEntity = (activeEntity && activeEntity !== 'ALL')
+      ? activeEntity
+      : (client?.entity || Auth.user?.entities?.[0] || 'ATA');
     const now = new Date();
+    const invoiceNumber = await this.nextInvoiceNumber(recordEntity);
+    const optimisticId = 'temp-gen-' + Date.now() + '-' + Math.random().toString(36).slice(2);
     const payload = {
-      invoiceNumber: await this.nextInvoiceNumber(entity),
+      invoiceNumber,
       clientId: t.clientId,
       workRequestId: null,
       issueDate: now.toISOString().slice(0, 10),
@@ -3615,18 +3832,50 @@ const Billing = {
       notes: null,
       terms: null,
     };
+
+    // Optimistic local cache update BEFORE the API call.
+    const subtotal = payload.lineItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    const optimisticRecord = {
+      ...payload,
+      id: optimisticId,
+      entity: recordEntity,
+      archived: false,
+      paidAmount: 0,
+      subtotal,
+      total: subtotal,
+      balance: subtotal,
+      fromTemplate: t.id,
+      clientName: client?.name || null,
+      createdBy: Auth.user.id,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    this._detailCache[optimisticId] = optimisticRecord;
+    this._detailCacheEntity = activeEntity;
+    this._addToListCache(optimisticRecord, { prepend: true });
+    this._updateCounts(1, 0);
+    this.view = 'list';
+    this._skipNextListFetch = true;
+    App.handleRoute();
+
     try {
       const res = await window.apiClient.invoices.create(payload);
-      const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity });
-      this._addToListCache(inv);
-      this._updateCounts(1, 0);
-      Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
-      this.view = 'list';
+      const inv = this.normalizeInvoice({ ...res.data, fromTemplate: t.id, entity: recordEntity });
+      delete this._detailCache[optimisticId];
+      this._detailCache[inv.id] = inv;
+      this._replaceInListCache(optimisticId, inv);
+      this._invalidateRelatedCaches(inv);
       this._skipNextListFetch = true;
       App.handleRoute();
+      Workflow.showMessage('Invoice Success', 'Generated invoice ' + inv.invoiceNumber, 'success');
     } catch (e) {
       console.error('Failed to generate invoice from template', e);
-      Workflow.showMessage('Generation Failed', e.message || 'Unable to generate invoice.', 'error');
+      delete this._detailCache[optimisticId];
+      this._removeFromListCache(optimisticId);
+      this._updateCounts(-1, 0);
+      this._skipNextListFetch = true;
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || 'Unable to generate invoice.', 'error');
     }
   },
 

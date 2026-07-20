@@ -2079,6 +2079,9 @@ async function triggerSyncReload(hash, messageConfig) {
       if (typeof Transmittal !== 'undefined' && typeof Transmittal.invalidateCache === 'function') {
         Transmittal.invalidateCache();
       }
+      if (typeof Users !== 'undefined' && typeof Users.invalidateCache === 'function') {
+        Users.invalidateCache();
+      }
       if (typeof window.apiClient.abortRequests === 'function') {
         window.apiClient.abortRequests('sync-reload');
       }
