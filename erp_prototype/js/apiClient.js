@@ -158,6 +158,14 @@
   const countCache = new Map();
   const COUNT_TTL_MS = 30 * 1000;
 
+  const isAbortError = (err) => {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    if (err.message === 'route-change' || err.reason === 'route-change') return true;
+    const str = String(err.message || err.reason || err || '').toLowerCase();
+    return str.includes('aborted') || str.includes('route-change') || str.includes('cancel');
+  };
+
   const cachedCount = (cacheKey, fetcher, fallback) => {
     const now = Date.now();
     const cached = countCache.get(cacheKey);
@@ -167,7 +175,7 @@
       return value;
     }).catch((err) => {
       // Route-change aborts are expected; do not spam the console with them.
-      if (err.name !== 'AbortError' && err.message !== 'route-change' && !err.message?.includes('aborted')) {
+      if (!isAbortError(err)) {
         console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
       }
       return fallback;

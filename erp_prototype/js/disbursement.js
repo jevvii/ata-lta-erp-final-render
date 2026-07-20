@@ -428,12 +428,15 @@ const Disbursement = {
   },
 
   _entityMatches(item, entity = this._getActiveEntity()) {
+    if (!item) return false;
     const itemEnt = (item?.entity || item?.entityCode || item?.entity_code || '').toUpperCase();
     if (!itemEnt) return true;
-    if (entity === 'ALL') {
-      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(itemEnt) || true;
+    const active = (entity || '').toUpperCase();
+    if (!active || active === 'ALL') {
+      const userEnts = (Auth.user?.entities || []).map(e => e.toUpperCase());
+      return userEnts.length > 0 ? userEnts.includes(itemEnt) : true;
     }
-    return itemEnt === (entity || '').toUpperCase();
+    return itemEnt === active;
   },
 
   _activeBadgeFilter(d) {
@@ -1342,7 +1345,7 @@ const Disbursement = {
     await this.ensure();
 
     let allItems = this._items || [];
-    let items = allItems.filter(d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
+    let items = allItems.filter(d => this._entityMatches(d, entity));
 
     items = items.filter(d => this._activeBadgeFilter(d));
     const hasItems = items.length > 0;
