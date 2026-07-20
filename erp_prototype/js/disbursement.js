@@ -307,7 +307,17 @@ const Disbursement = {
       if (cacheWarm) {
         this._mergeItems(items);
       } else {
+        const localArchivedItems = Array.isArray(this._items) ? this._items.filter(d => d.archived === true || d.status === 'Cancelled') : [];
         this._items = items;
+        localArchivedItems.forEach(localD => {
+          const existing = this._items.find(d => d.id === localD.id);
+          if (existing) {
+            existing.archived = localD.archived;
+            existing.status = localD.status;
+          } else {
+            this._items.push(localD);
+          }
+        });
       }
       this._entity = entity;
       this._refreshCounts();
@@ -337,12 +347,12 @@ const Disbursement = {
       const existing = existingMap.get(serverItem.id);
       if (existing) {
         const localNewer = existing.updatedAt && serverItem.updatedAt && new Date(existing.updatedAt) > new Date(serverItem.updatedAt);
-        if (isSkipActive || localNewer) {
+        if (isSkipActive || localNewer || existing.archived || existing.status === 'Cancelled') {
           const localArchived = existing.archived;
           const localStatus = existing.status;
           Object.assign(existing, serverItem);
           if (localArchived !== undefined) existing.archived = localArchived;
-          if (localStatus !== undefined) existing.status = localStatus;
+          if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
         } else {
           Object.assign(existing, serverItem);
         }

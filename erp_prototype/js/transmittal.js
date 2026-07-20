@@ -124,7 +124,21 @@ const Transmittal = {
     if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
       return this._items || [];
     }
-    this._items = items;
+    if (Array.isArray(this._items)) {
+      const localArchived = this._items.filter(t => t.archived === true || t.status === 'Cancelled');
+      this._items = items;
+      localArchived.forEach(localT => {
+        const existing = this._items.find(t => t.id === localT.id);
+        if (existing) {
+          existing.archived = localT.archived;
+          existing.status = localT.status;
+        } else {
+          this._items.push(localT);
+        }
+      });
+    } else {
+      this._items = items;
+    }
     this._entity = entity;
     return items;
   },

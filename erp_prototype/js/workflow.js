@@ -312,12 +312,12 @@ const WorkflowData = {
           serverWr.priority = existing.priority;
         }
         const localNewer = existing.updatedAt && serverWr.updatedAt && new Date(existing.updatedAt) > new Date(serverWr.updatedAt);
-        if (isSkipActive || localNewer) {
+        if (isSkipActive || localNewer || existing.archived || existing.status === 'Cancelled') {
           const localArchived = existing.archived;
           const localStatus = existing.status;
           Object.assign(existing, serverWr);
           if (localArchived !== undefined) existing.archived = localArchived;
-          if (localStatus !== undefined) existing.status = localStatus;
+          if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
         } else {
           Object.assign(existing, serverWr);
         }

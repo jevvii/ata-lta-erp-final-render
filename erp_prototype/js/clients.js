@@ -112,10 +112,20 @@ const ClientsData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { clients: this._clients || [] };
     }
-    if (typeof Clients !== 'undefined' && Clients._activeSkipGeneration > 0 && Clients._activeSkipGeneration === Clients._skipFetchGeneration) {
-      return { clients: this._clients || [] };
+    if (Array.isArray(this._clients)) {
+      const localArchived = this._clients.filter(c => c.status === 'Archived');
+      this._clients = clients;
+      localArchived.forEach(localC => {
+        const existing = this._clients.find(c => c.id === localC.id);
+        if (existing) {
+          existing.status = localC.status;
+        } else {
+          this._clients.push(localC);
+        }
+      });
+    } else {
+      this._clients = clients;
     }
-    this._clients = clients;
     this._entity = entity;
     return { clients };
   },
@@ -1709,6 +1719,13 @@ const Clients = {
     };
 
     let archived = await this.getArchivedClients(query);
+    const localArchived = (ClientsData.getAllClients() || []).filter(c => entFilter(c.entity) && c.status === 'Archived');
+    const cMap = new Map();
+    archived.forEach(c => cMap.set(c.id, c));
+    localArchived.forEach(c => {
+      if (!cMap.has(c.id)) cMap.set(c.id, c);
+    });
+    archived = Array.from(cMap.values());
 
     let rejectedClientChanges = [];
     let rejectedClientRequests = [];

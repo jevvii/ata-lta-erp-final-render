@@ -77,12 +77,12 @@ const Billing = {
           const existing = existingMap.get(inv.id);
           if (existing) {
             const localNewer = existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt);
-            if (localNewer) {
+            if (localNewer || existing.archived || existing.status === 'Cancelled') {
               const localArchived = existing.archived;
               const localStatus = existing.status;
               Object.assign(existing, inv);
               if (localArchived !== undefined) existing.archived = localArchived;
-              if (localStatus !== undefined) existing.status = localStatus;
+              if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
             } else {
               Object.assign(existing, inv);
             }
@@ -91,7 +91,17 @@ const Billing = {
           }
         });
       } else {
+        const localArchivedItems = Array.isArray(this._listCache) ? this._listCache.filter(inv => inv.archived === true || inv.status === 'Cancelled') : [];
         this._listCache = invoices;
+        localArchivedItems.forEach(localInv => {
+          const existingInNew = this._listCache.find(inv => inv.id === localInv.id);
+          if (existingInNew) {
+            existingInNew.archived = localInv.archived;
+            existingInNew.status = localInv.status;
+          } else {
+            this._listCache.push(localInv);
+          }
+        });
       }
       this._listCacheEntity = entity;
     } catch (e) {
