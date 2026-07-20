@@ -1,3 +1,4 @@
+/* eslint-disable no-console */
 /**
  * Minimal structured JSON logger.
  * Outputs one JSON object per line for easy parsing by log aggregators.
