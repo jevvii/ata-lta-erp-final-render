@@ -264,7 +264,8 @@ const Disbursement = {
   },
 
   async ensure() {
-    if (this.hasData()) return;
+    const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (skipping || this.hasData()) return;
     const activeEntity = this._getActiveEntity();
     if (this._promise && this._loadingEntity === activeEntity) return this._promise;
     const loadGen = ++this._loadGeneration;
@@ -525,7 +526,13 @@ const Disbursement = {
   },
 
   _replaceInItems(localId, serverRecord) {
-    if (!this._items) return;
+    if (!this._items) {
+      this._items = [serverRecord];
+      this._entity = this._getActiveEntity();
+      return;
+    }
+    // Avoid duplicates if a background fetch already returned the server record.
+    this._items = this._items.filter(d => d.id !== serverRecord.id);
     const idx = this._items.findIndex(d => d.id === localId);
     if (idx >= 0) {
       this._items[idx] = serverRecord;
@@ -553,9 +560,9 @@ const Disbursement = {
     return record;
   },
 
-  _addOptimisticDisbursement(record) {
+  _addOptimisticDisbursement(record, { skipRoute = false } = {}) {
     this._insertOptimisticDisbursement(record);
-    if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
+    if (!skipRoute && this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
       App.handleRoute();
     }
     return record;
@@ -564,6 +571,7 @@ const Disbursement = {
   _replaceOptimisticCreate(localId, serverRecord) {
     this._replaceInItems(localId, serverRecord);
     this._detailCache[serverRecord.id] = serverRecord;
+    this._refreshCounts();
     this._invalidateRelatedCaches(serverRecord);
   },
 
@@ -2210,11 +2218,23 @@ const Disbursement = {
       employeeId: Auth.user.id
     };
 
+    const targetRoute = isResubmitting ? '#admin' : '#disbursement';
     let record;
+
     if (isNew) {
+      // Optimistic create: show the confirmation modal first, then persist the
+      // server record once the API responds.
       const optimisticRecord = this._buildOptimisticDisbursement(payload);
-      this._addOptimisticDisbursement(optimisticRecord);
+      this._addOptimisticDisbursement(optimisticRecord, { skipRoute: true });
       const completedGen = this._activeSkipGeneration;
+
+      const msgConfig = {
+        title: 'Expense Submitted',
+        message: 'Disbursement expense has been submitted successfully.',
+        type: 'success'
+      };
+      await closeFormPanelAndRoute(targetRoute, msgConfig);
+
       try {
         const res = await window.apiClient.disbursements.create(payload);
         record = this.normalizeDisbursement(res.data);
@@ -2222,6 +2242,7 @@ const Disbursement = {
         this._clearSkipGenerationIfCurrent(completedGen);
       } catch (e) {
         this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Save Failed');
+        this._clearSkipGenerationIfCurrent(completedGen);
         return;
       }
     } else {
@@ -2237,9 +2258,17 @@ const Disbursement = {
         Workflow.showMessage('Save Failed', e.message || 'Unable to save disbursement.', 'error');
         return;
       }
+
+      const msgConfig = {
+        title: 'Expense Updated',
+        message: 'Disbursement expense has been updated successfully.',
+        type: 'success'
+      };
+      closeFormPanelAndRoute(targetRoute, msgConfig);
+      return;
     }
 
-    // Fulfill pending operations request if any
+    // Fulfill pending operations request if any (only reached for new creates)
     try {
       let reqId = this.prefilledRequestId || null;
       if (!reqId && record.linkedWorkRequestId) {
@@ -2257,13 +2286,7 @@ const Disbursement = {
     this.prefilledClientId = null;
     this._prefilledOpReq = null;
 
-    const msgConfig = {
-      title: isNew ? 'Expense Submitted' : 'Expense Updated',
-      message: 'Disbursement expense has been ' + (isNew ? 'submitted' : 'updated') + ' successfully.',
-      type: 'success'
-    };
-    const targetRoute = isResubmitting ? '#admin' : '#disbursement';
-    closeFormPanelAndRoute(targetRoute, msgConfig);
+    App.handleRoute();
   },
 
   async showRequestDisbursementModal() {

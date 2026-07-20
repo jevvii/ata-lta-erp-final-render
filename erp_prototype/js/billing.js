@@ -52,7 +52,8 @@ const Billing = {
   },
 
   async ensure() {
-    if (this._isListCacheFresh()) return;
+    const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+    if (skipping || this._isListCacheFresh()) return;
     const loadGen = ++this._listCacheGeneration;
     await this._loadInvoices(loadGen, { merge: false });
   },
@@ -182,6 +183,8 @@ const Billing = {
       this._listCacheEntity = Auth.activeEntity;
       return;
     }
+    // Avoid duplicates if a background fetch already returned the server record.
+    this._listCache = this._listCache.filter(i => i.id !== record.id);
     const idx = this._listCache.findIndex(i => i.id === tempId);
     if (idx >= 0) {
       this._listCache[idx] = record;
@@ -957,7 +960,8 @@ const Billing = {
 
       // Ensure the in-memory cache is loaded for the active entity. If it is
       // already warm (including during an optimistic skip), this returns immediately.
-      await this.ensure();
+      const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+      if (!skipping) await this.ensure();
 
       let baseInvoices = (this._listCache || []).filter(inv => this._isActiveInvoice(inv, entity));
 
@@ -1966,15 +1970,19 @@ const Billing = {
       record.id = this.detailId;
     }
 
-    let result = { approved: true };
     const apiPayload = this.toApiInvoice(record);
     const isApprover = Auth.canBypassReview('invoices');
     const requiresApproval = !isApprover;
+    const targetRoute = isResubmitting ? '#admin' : '#billing';
 
-    // Optimistic local cache update for new invoices BEFORE the API call.
-    const optimisticId = isNew ? ('temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2)) : null;
+    let result = { approved: true };
+    let serverRecord = null;
     let skipGeneration = 0;
+
     if (isNew) {
+      // Optimistic create: show the confirmation modal first, then persist the
+      // server record once the API responds.
+      const optimisticId = 'temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       const client = window.apiClient.clientCache.getById(data.clientId);
       const optimisticRecord = {
         ...record,
@@ -1994,52 +2002,62 @@ const Billing = {
       this._addToListCache(optimisticRecord, { prepend: true });
       this._updateCounts(1, 0);
       skipGeneration = this._beginSkipGeneration();
-      const targetRoute = isResubmitting ? '#admin' : '#billing';
-      closeFormPanelAndRoute(targetRoute);
-    }
 
-    let serverRecord = null;
-    try {
-      if (isNew) {
+      const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
+      const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
+      const msgConfig = {
+        title: 'Invoice Created',
+        message: 'Invoice ' + (record.invoiceNumber || '') + ' has been created successfully.' + linkMsg,
+        type: 'success'
+      };
+      await closeFormPanelAndRoute(targetRoute, msgConfig);
+
+      try {
         const res = await window.apiClient.invoices.create(apiPayload);
         serverRecord = this.normalizeInvoice(res.data);
-      } else {
-        if (record.status === 'Draft' || !requiresApproval) {
-          const res = await window.apiClient.invoices.update(record.id, apiPayload);
-          record.updatedAt = res.data.updated_at || res.data.updatedAt;
-          record.status = res.data.status;
-        } else {
-          result = await PendingChanges.submit('invoices', record, false);
-          if (result.approved) {
-            const res = await window.apiClient.invoices.update(record.id, apiPayload);
-            record.updatedAt = res.data.updated_at || res.data.updatedAt;
-            record.status = res.data.status;
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Failed to save invoice', e);
-      if (isNew) {
+      } catch (e) {
+        console.error('Failed to create invoice', e);
         delete this._detailCache[optimisticId];
         this._removeFromListCache(optimisticId);
         this._updateCounts(-1, 0);
         this._endSkipGeneration(skipGeneration);
         App.handleRoute();
         Workflow.showMessage('Error', e.message || 'Unable to create invoice.', 'error');
-      } else {
-        Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
+        return;
       }
-      return;
-    }
 
-    // Replace optimistic record (or update existing) in the local cache.
-    if (serverRecord) {
-      this._detailCache[serverRecord.id] = serverRecord;
-      this._detailCacheEntity = activeEntity;
-      if (isNew) {
+      if (serverRecord) {
+        this._detailCache[serverRecord.id] = serverRecord;
+        this._detailCacheEntity = activeEntity;
         delete this._detailCache[optimisticId];
         this._replaceInListCache(optimisticId, serverRecord);
-      } else {
+        this._updateCounts(0, 0);
+      }
+    } else {
+      try {
+        if (record.status === 'Draft' || !requiresApproval) {
+          const res = await window.apiClient.invoices.update(record.id, apiPayload);
+          record.updatedAt = res.data.updated_at || res.data.updatedAt;
+          record.status = res.data.status;
+          serverRecord = record;
+        } else {
+          result = await PendingChanges.submit('invoices', record, false);
+          if (result.approved) {
+            const res = await window.apiClient.invoices.update(record.id, apiPayload);
+            record.updatedAt = res.data.updated_at || res.data.updatedAt;
+            record.status = res.data.status;
+            serverRecord = record;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to save invoice', e);
+        Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
+        return;
+      }
+
+      if (serverRecord) {
+        this._detailCache[serverRecord.id] = serverRecord;
+        this._detailCacheEntity = activeEntity;
         this._addToListCache(serverRecord);
       }
     }
@@ -2056,7 +2074,7 @@ const Billing = {
           status: 'fulfilled',
           fulfilledBy: Auth.user.id,
           fulfilledAt: new Date().toISOString(),
-          linkedRecordId: serverRecord ? serverRecord.id : record.id
+          linkedRecordId: serverRecord ? serverRecord.id : null
         });
       }
     } catch (e) {
@@ -2066,31 +2084,21 @@ const Billing = {
     this.prefilledWrId = null;
     this.prefilledClientId = null;
 
-    const isApproved = result ? result.approved : true;
-    const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
-    const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
-    const msgConfig = {
-      title: 'Invoice ' + (isNew ? 'Created' : 'Updated'),
-      message: isApproved
-        ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been ' + (isNew ? 'created' : 'updated') + ' successfully.' + linkMsg
-        : 'Invoice ' + record.invoiceNumber + ' ' + (isNew ? 'creation' : 'update') + ' request has been submitted for Admin approval.',
-      type: 'success'
-    };
-    const targetRoute = isResubmitting ? '#admin' : '#billing';
-
     if (isNew) {
-      // The optimistic list render is already visible; toast and invalidate related caches,
-      // then clear the skip generation so the next route handles fresh server state.
-      if (isApproved) Workflow.showMessage('Invoice Created', msgConfig.message, 'success');
       this._invalidateRelatedCaches(serverRecord);
       this._endSkipGeneration(skipGeneration);
       App.handleRoute();
     } else {
-      if (result && result.approved) {
-        const wasCached = Array.isArray(this._listCache) && this._listCache.some(i => i.id === record.id);
-        this._addToListCache(serverRecord || record);
-        if (!wasCached) this._updateCounts(1, 0);
-      }
+      const isApproved = result ? result.approved : true;
+      const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
+      const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
+      const msgConfig = {
+        title: 'Invoice ' + (isNew ? 'Created' : 'Updated'),
+        message: isApproved
+          ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been ' + (isNew ? 'created' : 'updated') + ' successfully.' + linkMsg
+          : 'Invoice ' + record.invoiceNumber + ' ' + (isNew ? 'creation' : 'update') + ' request has been submitted for Admin approval.',
+        type: 'success'
+      };
       closeFormPanelAndRoute(targetRoute, msgConfig);
     }
   },
