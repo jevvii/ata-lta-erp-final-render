@@ -2332,7 +2332,9 @@ function createJiraFilterToolbar(config) {
         });
         const checkbox = el('input', { type: 'checkbox', class: 'jira-filter-checkbox' });
         checkbox.checked = isChecked;
-        checkbox.addEventListener('click', (e) => e.stopPropagation());
+        checkbox.addEventListener('click', (e) => {
+          e.preventDefault();
+        });
 
         const label = el('span', { text: opt.label });
         row.appendChild(checkbox);
@@ -2344,6 +2346,7 @@ function createJiraFilterToolbar(config) {
             if (catSet.has(opt.value)) catSet.delete(opt.value);
             else catSet.add(opt.value);
           }
+          checkbox.checked = catSet.has(opt.value);
           updateFilterUI();
           if (onFilterChange) onFilterChange();
         });
@@ -3296,7 +3299,9 @@ const JiraBacklogList = {
       bulkActions,
       countLabel = 'template',
       columns,
-      selectable = true
+      selectable = true,
+      pagination,
+      onPageChange
     } = options;
 
     const hasColumns = Array.isArray(columns) && columns.length > 0;
@@ -3359,20 +3364,34 @@ const JiraBacklogList = {
     // Optional column header (table-like alignment).
     // The lead spacers line up with the checkbox/icon/key/title area so the
     // first data column header sits directly above the first row data column.
+    const titleColWidth = options.titleColumnWidth !== undefined ? options.titleColumnWidth : '1fr';
+    const hasTitleCol = titleColWidth !== '0px' && titleColWidth !== '0' && titleColWidth !== 0 && titleColWidth !== false;
+
     if (hasColumns) {
       const colHeader = el('div', { class: 'jira-backlog-columns-header' });
       // Fixed lead widths so the header and body columns line up exactly.
-      const titleColWidth = options.titleColumnWidth || '1fr';
       const actionsCol = hasRowActions ? 'minmax(120px, max-content)' : '';
-      const leadCols = `28px 24px 75px ${titleColWidth}`;
+      const leadCols = hasTitleCol ? `28px 24px 75px ${titleColWidth}` : `28px 24px 75px`;
       const metaCols = columns.map(c => c.width || '1fr').join(' ');
       colHeader.style.gridTemplateColumns = `${leadCols} ${metaCols}${actionsCol ? ' ' + actionsCol : ''}`;
 
-      // Lead-column placeholders: checkbox, icon, key, title.
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+      // Lead-column placeholders: checkbox, icon, key, (title if present).
+      if (options.leadColumnLabel) {
+        const leadSpan = hasTitleCol ? 4 : 3;
+        const h = el('div', {
+          class: 'jira-backlog-col-header jira-backlog-col-header--lead',
+          text: options.leadColumnLabel,
+          style: `grid-column: span ${leadSpan};`
+        });
+        colHeader.appendChild(h);
+      } else {
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        if (hasTitleCol) {
+          colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        }
+      }
 
       columns.forEach(col => {
         const alignClass = col.align ? ' jira-backlog-col-header--' + col.align : '';
@@ -3491,7 +3510,18 @@ const JiraBacklogList = {
       });
     }
 
-    items.forEach((item, index) => {
+    let displayItems = items;
+    let pageStartIndex = 0;
+    if (pagination) {
+      const pageSize = pagination.pageSize || 20;
+      const totalPages = Math.ceil(items.length / pageSize) || 1;
+      const safePage = Math.max(1, Math.min(pagination.currentPage || 1, totalPages));
+      pageStartIndex = (safePage - 1) * pageSize;
+      displayItems = items.slice(pageStartIndex, pageStartIndex + pageSize);
+    }
+
+    displayItems.forEach((item, index) => {
+      const globalIndex = pageStartIndex + index;
       const rowClasses = ['jira-backlog-row'];
       if (hasColumns) rowClasses.push('jira-backlog-row--columns');
       if (hasColumns && options.titleColumnWidth) rowClasses.push('jira-backlog-row--fixed-title');
@@ -3531,20 +3561,21 @@ const JiraBacklogList = {
       row.appendChild(iconWrap);
 
       // Unique Key/ID
-      const keyIndex = String(index + 1).padStart(2, '0');
+      const keyIndex = String(globalIndex + 1).padStart(2, '0');
       const keyVal = item.keyText || `${rowIdPrefix}-${keyIndex}`;
       const keyNode = el('div', { class: 'jira-backlog-row-key', text: keyVal });
       row.appendChild(keyNode);
 
-      // Primary Title
-      const titleNode = el('div', { class: 'jira-backlog-row-title', text: item.name });
-      row.appendChild(titleNode);
+      // Primary Title (only if title column is enabled)
+      if (hasTitleCol) {
+        const titleNode = el('div', { class: 'jira-backlog-row-title', text: item.name || '' });
+        row.appendChild(titleNode);
+      }
 
       // Column-mode grid sizing (lead columns + metadata columns)
       if (hasColumns) {
-        const titleColWidth = options.titleColumnWidth || '1fr';
         const actionsCol = hasRowActions ? 'minmax(120px, max-content)' : '';
-        const leadCols = `28px 24px 75px ${titleColWidth}`;
+        const leadCols = hasTitleCol ? `28px 24px 75px ${titleColWidth}` : `28px 24px 75px`;
         const metaCols = columns.map(c => c.width || '1fr').join(' ');
         row.style.gridTemplateColumns = `${leadCols} ${metaCols}${actionsCol ? ' ' + actionsCol : ''}`;
       }
@@ -3553,7 +3584,8 @@ const JiraBacklogList = {
       const tagsNode = el('div', { class: 'jira-backlog-row-tags' + (hasColumns ? ' jira-backlog-row-tags--columns' : '') });
       if (hasColumns) {
         tagsNode.style.gridTemplateColumns = columns.map(c => c.width || '1fr').join(' ');
-        tagsNode.style.gridColumn = `5 / span ${columns.length}`;
+        const leadColCount = hasTitleCol ? 5 : 4;
+        tagsNode.style.gridColumn = `${leadColCount} / span ${columns.length}`;
       }
       const tagList = item.tags || [];
       tagList.forEach((tag, tagIdx) => {
@@ -3661,6 +3693,52 @@ const JiraBacklogList = {
 
     body.appendChild(list);
     container.appendChild(body);
+
+    if (pagination) {
+      const pageSize = pagination.pageSize || 20;
+      const totalPages = Math.ceil(items.length / pageSize) || 1;
+      const safePage = Math.max(1, Math.min(pagination.currentPage || 1, totalPages));
+
+      const paginationFooter = el('div', { class: 'jira-backlog-pagination' });
+
+      const prevBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-secondary btn-sm jira-pagination-prev',
+        text: 'Previous'
+      });
+      if (safePage <= 1) {
+        prevBtn.disabled = true;
+      } else {
+        prevBtn.addEventListener('click', () => {
+          if (onPageChange) onPageChange(safePage - 1);
+        });
+      }
+
+      const pageInfo = el('span', {
+        class: 'jira-pagination-info',
+        text: `Page ${safePage} of ${totalPages}`
+      });
+
+      const nextBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-secondary btn-sm jira-pagination-next',
+        text: 'Next'
+      });
+      if (safePage >= totalPages) {
+        nextBtn.disabled = true;
+      } else {
+        nextBtn.addEventListener('click', () => {
+          if (onPageChange) onPageChange(safePage + 1);
+        });
+      }
+
+      paginationFooter.appendChild(prevBtn);
+      paginationFooter.appendChild(pageInfo);
+      paginationFooter.appendChild(nextBtn);
+
+      container.appendChild(paginationFooter);
+    }
+
     return container;
   }
 };

@@ -1409,7 +1409,6 @@ const Users = {
     // Jira Filter Toolbar & Active Filters State
     const activeFilters = {
       user: new Set(),
-      client: new Set(),
       date: new Set()
     };
 
@@ -1421,20 +1420,17 @@ const Users = {
     const savedFilters = App.restoreFilters('audit');
     if (savedFilters && canViewAllAudit) {
       if (Array.isArray(savedFilters.user)) savedFilters.user.forEach(v => activeFilters.user.add(v));
-      if (Array.isArray(savedFilters.client)) savedFilters.client.forEach(v => activeFilters.client.add(v));
       if (Array.isArray(savedFilters.date)) savedFilters.date.forEach(v => activeFilters.date.add(v));
     }
 
     const saveCurrentFilters = () => {
       App.saveFilters('audit', {
         user: Array.from(activeFilters.user),
-        client: Array.from(activeFilters.client),
         date: Array.from(activeFilters.date)
       });
     };
 
     const getUserOptions = () => (window.apiClient.userCache._users || []).map(u => ({ value: u.name, label: u.name }));
-    const getClientOptions = () => (window.apiClient.clientCache._clients || []).map(c => ({ value: c.name, label: c.name }));
     const getDueDateOptions = () => [
       { value: 'Overdue', label: 'Overdue' },
       { value: 'Due Today', label: 'Due Today' },
@@ -1445,12 +1441,12 @@ const Users = {
 
     const categories = {
       user: { label: 'User', getOptions: getUserOptions },
-      client: { label: 'Client', getOptions: getClientOptions },
       date: { label: 'Date', hasDatePicker: true, getOptions: getDueDateOptions }
     };
 
     let searchQuery = '';
     let currentSort = App.restoreSort('audit') || 'newest';
+    let currentPage = 1;
 
     const toolbarContainer = createJiraFilterToolbar({
       moduleName: 'audit',
@@ -1485,15 +1481,19 @@ const Users = {
     content.appendChild(tableContainer);
     wrapper.appendChild(content);
 
-    const triggerRefresh = async () => {
-      await this.refreshAuditLog(tableContainer, activeFilters, searchQuery, currentSort);
+    const triggerRefresh = async (resetPage = true) => {
+      if (resetPage) currentPage = 1;
+      await this.refreshAuditLog(tableContainer, activeFilters, searchQuery, currentSort, currentPage, (newPage) => {
+        currentPage = newPage;
+        triggerRefresh(false);
+      });
     };
 
     triggerRefresh().catch(err => console.error('[Users.renderAuditLogSection] refresh failed', err));
     return wrapper;
   },
 
-  async refreshAuditLog(container, activeFilters, searchQuery, sortOrder) {
+  async refreshAuditLog(container, activeFilters, searchQuery, sortOrder, currentPage = 1, onPageChange = null) {
     this.clearNode(container);
 
     let allLogs = [];
@@ -1502,7 +1502,7 @@ const Users = {
       let offset = 0;
       while (true) {
         const res = await window.apiClient.admin.listAudit({ limit: pageSize, offset });
-        const page = res?.data || [];
+        const page = (res?.data || []).map(r => this._normalizeAuditLog(r));
         allLogs = allLogs.concat(page);
         if (!res?.meta?.hasMore || page.length === 0) break;
         offset += pageSize;
@@ -1526,13 +1526,6 @@ const Users = {
 
     if (activeFilters && activeFilters.user && activeFilters.user.size > 0) {
       logs = logs.filter(l => activeFilters.user.has(l.userName || (window.apiClient.userCache.getById(l.userId)?.name)));
-    }
-    if (activeFilters && activeFilters.client && activeFilters.client.size > 0) {
-      logs = logs.filter(l => {
-        if (!l.details) return false;
-        const detailsLower = l.details.toLowerCase();
-        return Array.from(activeFilters.client).some(clientName => detailsLower.includes(clientName.toLowerCase()));
-      });
     }
     if (activeFilters && activeFilters.date && activeFilters.date.size > 0) {
       const now = new Date();
@@ -1561,7 +1554,7 @@ const Users = {
       logs = logs.filter(l => {
         const hay = [
           l.action || '',
-          l.details || '',
+          typeof l.details === 'object' ? JSON.stringify(l.details) : (l.details || ''),
           l.userName || '',
         ].join(' ').toLowerCase();
         return hay.includes(searchQuery);
@@ -1620,8 +1613,6 @@ const Users = {
 
     const getActionClass = (action) => {
       if (!action) return '';
-      // Normalize underscores to spaces so phrase mappings like
-      // 'work request created' match 'WORK_REQUEST_CREATED'.
       const normalized = action.toLowerCase().replace(/_/g, ' ');
       const key = Object.keys(actionClassMap).find(k => normalized.includes(k));
       return key ? actionClassMap[key] : '';
@@ -1639,12 +1630,11 @@ const Users = {
       const seqNum = (l.id && logSequenceMap.get(l.id)) || (idx + 1);
       return {
         id: l.id || idx,
-        keyText: 'AUD-' + String(seqNum).padStart(2, '0'),
-        name: l.details || '—',
+        keyText: 'AUR-' + String(seqNum).padStart(3, '0'),
         iconHtml: avatarIcon,
         tags: [
           { text: l.action || 'Activity', type: 'action', className: 'jira-backlog-tag-action ' + getActionClass(l.action) },
-          { text: l.entity, type: 'entity', className: 'badge badge-' + (l.entity === 'ATA' ? 'ata' : 'lta') },
+          { text: l.entity || 'ATA', type: 'entity', className: 'badge badge-' + ((l.entity || 'ATA') === 'ATA' ? 'ata' : 'lta') },
           { text: userName, type: 'client' },
           { text: formatDate(l.timestamp) + ' ' + ts.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }), type: 'schedule' }
         ]
@@ -1656,15 +1646,21 @@ const Users = {
       subtitle: 'system activity and changes',
       items,
       emptyText: 'No audit log entries found',
-      rowIdPrefix: 'AUD',
+      rowIdPrefix: 'AUR',
       countLabel: 'entry',
       bulkActions: [],
       selectable: false,
+      titleColumnWidth: '0px',
+      leadColumnLabel: 'ID',
+      pagination: { pageSize: 20, currentPage },
+      onPageChange: onPageChange || ((newPage) => {
+        this.refreshAuditLog(container, activeFilters, searchQuery, sortOrder, newPage, onPageChange);
+      }),
       columns: [
-        { label: 'Action', width: '220px' },
-        { label: 'Entity', width: '60px' },
-        { label: 'User', width: '140px' },
-        { label: 'Timestamp', width: '160px' }
+        { label: 'ACTION', width: 'minmax(200px, 32%)' },
+        { label: 'ENTITY', width: 'minmax(80px, 12%)' },
+        { label: 'USER', width: 'minmax(180px, 26%)' },
+        { label: 'TIMESTAMP', width: 'minmax(180px, 30%)', align: 'right' }
       ]
     });
 

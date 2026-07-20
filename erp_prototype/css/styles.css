@@ -14283,12 +14283,35 @@ html.loading-active #loading-screen:not(.hidden) {
 
 .jira-backlog-body {
   transition: max-height 0.2s ease-in-out;
-  max-height: 2000px;
-  overflow: hidden;
 }
 
 .jira-backlog-body.collapsed {
   max-height: 0 !important;
+  overflow: hidden;
+}
+
+.jira-backlog-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--color-bg-light, #fafafa);
+  border-top: 1px solid var(--color-border);
+}
+
+.jira-pagination-info {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.audit-log-details-text {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin-left: 8px;
+  word-break: break-word;
+  vertical-align: middle;
 }
 
 .jira-backlog-list {
@@ -14866,7 +14889,7 @@ html.loading-active #loading-screen:not(.hidden) {
   background: var(--color-bg-light, #fafafa);
 }
 
-.jira-backlog-columns-header .jira-backlog-col-header:last-child {
+.jira-backlog-columns-header .jira-backlog-col-header--actions:last-child {
   position: sticky;
   right: 16px;
   background: var(--color-bg-light, #fafafa);
@@ -14875,6 +14898,21 @@ html.loading-active #loading-screen:not(.hidden) {
   padding-right: 8px;
   text-align: right;
   box-shadow: -4px 0 8px rgba(0, 0, 0, 0.04);
+}
+
+.jira-backlog-col-header--lead {
+  padding-left: 8px;
+}
+
+.jira-backlog-col-header--right {
+  text-align: right !important;
+  padding-right: 8px;
+}
+
+.jira-backlog-tag.jira-backlog-col-cell--right {
+  justify-self: end !important;
+  text-align: right !important;
+  margin-left: auto;
 }
 
 /* Empty checkbox spacer used when selectable=false to preserve column alignment. */
@@ -14951,11 +14989,7 @@ html.loading-active #loading-screen:not(.hidden) {
 }
 
 .jira-backlog-row-tags--columns {
-  display: grid;
-  align-items: start;
-  gap: 12px;
-  margin-left: 0;
-  margin-right: 0;
+  display: contents;
 }
 
 /* In column mode the badge should shrink to its content and only its left edge
