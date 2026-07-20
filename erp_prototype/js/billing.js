@@ -66,6 +66,7 @@ const Billing = {
     try {
       const res = await window.apiClient.invoices.list({ limit: 10000 });
       if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) return;
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) return;
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
       invoices.forEach(inv => { this._detailCache[inv.id] = inv; });
       this._detailCacheEntity = entity;
@@ -74,8 +75,20 @@ const Billing = {
         const existingMap = new Map(this._listCache.map(inv => [inv.id, inv]));
         invoices.forEach(inv => {
           const existing = existingMap.get(inv.id);
-          if (existing) Object.assign(existing, inv);
-          else if (!this._isTempId(inv.id)) this._listCache.push(inv);
+          if (existing) {
+            const localNewer = existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt);
+            if (localNewer) {
+              const localArchived = existing.archived;
+              const localStatus = existing.status;
+              Object.assign(existing, inv);
+              if (localArchived !== undefined) existing.archived = localArchived;
+              if (localStatus !== undefined) existing.status = localStatus;
+            } else {
+              Object.assign(existing, inv);
+            }
+          } else if (!this._isTempId(inv.id)) {
+            this._listCache.push(inv);
+          }
         });
       } else {
         this._listCache = invoices;
@@ -87,6 +100,7 @@ const Billing = {
   },
 
   async backgroundRefresh() {
+    if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) return;
     if (this._backgroundPromise) return this._backgroundPromise;
     const loadGen = ++this._listCacheGeneration;
     this._backgroundPromise = this._loadInvoices(loadGen, { merge: true }).finally(() => {
@@ -115,6 +129,7 @@ const Billing = {
   _beginSkipGeneration() {
     this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
     this._activeSkipGeneration = this._skipFetchGeneration;
+    this._listCacheGeneration++;
     return this._skipFetchGeneration;
   },
 
@@ -733,6 +748,9 @@ const Billing = {
       if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) {
         this._lastInvoiceMeta = {};
         return [];
+      }
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+        return this._listCache || [];
       }
       this._lastInvoiceMeta = res.meta || {};
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
@@ -4043,19 +4061,14 @@ const Billing = {
 
   trashInvoice(id) {
     const inv = this.getInvoiceById(id);
-    if (!inv || inv.archived) return;
+    if (!inv || inv.archived || inv.status === 'Cancelled') return;
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to trash invoice "${inv.invoiceNumber}"? It will be moved to Archive.`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
-        // Optimistic local update: mark archived and remove from active list cache.
-        inv.archived = true;
-        inv.updatedAt = new Date().toISOString();
-        if (this._detailCache[id]) {
-          this._detailCache[id].archived = true;
-          this._detailCache[id].updatedAt = inv.updatedAt;
-        }
-        this._addToListCache({ ...inv });
+        const trashed = { ...inv, status: 'Cancelled', archived: true, updatedAt: new Date().toISOString() };
+        this._detailCache[id] = trashed;
+        this._addToListCache(trashed);
         this._updateCounts(-1, 1);
         const skipGeneration = this._beginSkipGeneration();
         if (this.view === 'detail' && this.detailId === id) {
@@ -4063,7 +4076,7 @@ const Billing = {
         }
         App.handleRoute();
         try {
-          await window.apiClient.invoices.archive(id);
+          await window.apiClient.invoices.update(id, { status: 'Cancelled', archived: true });
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
           Workflow.showMessage('Trashed', 'Invoice has been moved to Archive.', 'success');
@@ -4173,7 +4186,7 @@ const Billing = {
         const failed = [];
         for (const inv of eligible) {
           try {
-            await window.apiClient.invoices.update(inv.id, { archived: true });
+            await window.apiClient.invoices.archive(inv.id);
           } catch (e) {
             console.error('Failed to archive invoice', inv.id, e);
             failed.push(inv.id);
@@ -4233,7 +4246,7 @@ const Billing = {
         const failed = [];
         for (const inv of eligible) {
           try {
-            await window.apiClient.invoices.remove(inv.id);
+            await window.apiClient.invoices.update(inv.id, { status: 'Cancelled', archived: true });
           } catch (e) {
             console.error('Failed to trash invoice', inv.id, e);
             failed.push(inv.id);
@@ -4273,10 +4286,10 @@ const Billing = {
         const skipGeneration = this._beginSkipGeneration();
         App.handleRoute();
         try {
-          await window.apiClient.invoices.update(id, { archived: false });
+          await window.apiClient.invoices.unarchive(id);
           this._endSkipGeneration(skipGeneration);
           App.handleRoute();
-          Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
+          Workflow.showMessage('Unarchived', 'Invoice has been unarchived.', 'success');
         } catch (e) {
           console.error('Failed to unarchive invoice', e);
           this._rollbackInvoice(id, snapshot);

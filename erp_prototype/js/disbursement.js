@@ -253,6 +253,7 @@ const Disbursement = {
   _setActiveSkipGeneration() {
     this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
     this._activeSkipGeneration = this._skipFetchGeneration;
+    this._loadGeneration++;
     return this._activeSkipGeneration;
   },
 
@@ -299,6 +300,9 @@ const Disbursement = {
       if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
         return this._items || [];
       }
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+        return this._items || [];
+      }
       const cacheWarm = Array.isArray(this._items) && this._entity === entity;
       if (cacheWarm) {
         this._mergeItems(items);
@@ -328,10 +332,20 @@ const Disbursement = {
   _mergeItems(serverItems) {
     if (!Array.isArray(this._items)) this._items = [];
     const existingMap = new Map(this._items.map(d => [d.id, d]));
+    const isSkipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
     serverItems.forEach(serverItem => {
       const existing = existingMap.get(serverItem.id);
       if (existing) {
-        Object.assign(existing, serverItem);
+        const localNewer = existing.updatedAt && serverItem.updatedAt && new Date(existing.updatedAt) > new Date(serverItem.updatedAt);
+        if (isSkipActive || localNewer) {
+          const localArchived = existing.archived;
+          const localStatus = existing.status;
+          Object.assign(existing, serverItem);
+          if (localArchived !== undefined) existing.archived = localArchived;
+          if (localStatus !== undefined) existing.status = localStatus;
+        } else {
+          Object.assign(existing, serverItem);
+        }
       } else if (!this._isTempId(serverItem.id)) {
         this._items.push(serverItem);
       }
@@ -339,6 +353,9 @@ const Disbursement = {
   },
 
   async backgroundRefresh() {
+    if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+      return this._items || [];
+    }
     if (this._backgroundPromise) return this._backgroundPromise;
     const loadGen = ++this._loadGeneration;
     this._backgroundPromise = this._load(loadGen).finally(() => {
@@ -3703,18 +3720,22 @@ const Disbursement = {
       `Are you sure you want to archive ${eligible.length} disbursement(s)?`,
       async () => {
         let count = 0;
+        const failedIds = [];
         for (const d of eligible) {
           try {
-            await this._optimisticUpdate(d.id, { archived: true }, () =>
+            await this._optimisticUpdate(d.id, { archived: true, updatedAt: new Date().toISOString() }, () =>
               window.apiClient.disbursements.archive(d.id), 'Archive Failed');
             count++;
           } catch (e) {
-            // Error surfaced by _optimisticUpdate; stop remaining bulk operations.
-            break;
+            failedIds.push(d.id);
           }
         }
-        if (count > 0) {
+        if (failedIds.length > 0 && count > 0) {
+          Workflow.showMessage('Partial Success', `${count} disbursement(s) archived, ${failedIds.length} failed.`, 'warning');
+        } else if (count > 0) {
           Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
+        } else if (failedIds.length > 0) {
+          Workflow.showMessage('Archive Failed', `Unable to archive ${failedIds.length} disbursement(s).`, 'error');
         }
       },
       'warning'
@@ -3776,7 +3797,8 @@ const Disbursement = {
       this._lastArchiveMeta = {};
     }
 
-    const localArchived = (this._items || []).filter(d => this._entityMatches(d, entity) && d.archived === true);
+    const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
+    const localArchived = isFirstPageOrSkip ? (this._items || []).filter(d => this._entityMatches(d, entity) && d.archived === true) : [];
     const dMap = new Map();
     archivedDisbursements.forEach(d => dMap.set(d.id, d));
     localArchived.forEach(d => {

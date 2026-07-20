@@ -112,6 +112,9 @@ const ClientsData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { clients: this._clients || [] };
     }
+    if (typeof Clients !== 'undefined' && Clients._activeSkipGeneration > 0 && Clients._activeSkipGeneration === Clients._skipFetchGeneration) {
+      return { clients: this._clients || [] };
+    }
     this._clients = clients;
     this._entity = entity;
     return { clients };
@@ -192,6 +195,9 @@ const Clients = {
   _startOptimisticSkip() {
     this._skipFetchGeneration = (this._skipFetchGeneration || 0) + 1;
     this._activeSkipGeneration = this._skipFetchGeneration;
+    if (typeof ClientsData !== 'undefined') {
+      ClientsData._loadGeneration++;
+    }
     return this._activeSkipGeneration;
   },
 
@@ -377,11 +383,21 @@ const Clients = {
     App.updateStickyOffsets();
   },
 
-  getClientCounts() {
-    const clients = ClientsData.getAllClients();
-    const activeCount = clients.filter(c => c.status !== 'Archived').length;
-    const archivedCount = clients.filter(c => c.status === 'Archived').length;
-    return { activeCount, archivedCount };
+  async getClientCounts() {
+    try {
+      const res = await window.apiClient.clients.counts(Auth.activeEntity);
+      const data = res?.data || res || {};
+      return {
+        activeCount: data.active ?? data.activeCount ?? 0,
+        archivedCount: data.archived ?? data.archivedCount ?? 0
+      };
+    } catch (e) {
+      console.error('Failed to get client counts', e);
+      const clients = ClientsData.getAllClients();
+      const activeCount = clients.filter(c => c.status !== 'Archived').length;
+      const archivedCount = clients.filter(c => c.status === 'Archived').length;
+      return { activeCount, archivedCount };
+    }
   },
 
   async renderTabNav() {
@@ -400,7 +416,7 @@ const Clients = {
 
     try {
       await ClientsData.ensure();
-      const counts = this.getClientCounts();
+      const counts = await this.getClientCounts();
       activeCount = counts.activeCount;
       archivedCount = counts.archivedCount;
 
@@ -912,7 +928,10 @@ const Clients = {
     footer.appendChild(footerCenter);
 
     refreshBtn.addEventListener('click', () => {
-      this._activeSkipGeneration = 0;
+      if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
+        return;
+      }
+      ClientsData.invalidate();
       this.renderList(container, query);
     });
   },
@@ -1605,6 +1624,7 @@ const Clients = {
     try {
       await window.apiClient.clients.unarchive(id);
       window.apiClient.clientCache.invalidate();
+      ClientsData.invalidate();
       this._clearOptimisticSkipIfCurrent(restoreGeneration);
       await App.handleRoute();
     } catch (e) {
@@ -1648,6 +1668,7 @@ const Clients = {
         }
 
         window.apiClient.clientCache.invalidate();
+        ClientsData.invalidate();
         this._clearOptimisticSkipIfCurrent(restoreGeneration);
         await App.handleRoute();
         if (failedCount > 0) {
