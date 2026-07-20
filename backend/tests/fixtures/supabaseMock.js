@@ -1,6 +1,7 @@
 /**
  * Mock Supabase admin client for integration tests.
  * Allows tests to register fake users and audit expectations.
+ * Supports the atomic RPC transitions introduced by the concurrency hardening plan.
  */
 
 const mockUsers = new Map();
@@ -31,6 +32,8 @@ const mockTables = {
   disbursement_templates: new Map(),
   retainer_templates: new Map(),
   ground_workers: new Map(),
+  idempotency_keys: new Map(),
+  status_history: new Map(),
 };
 
 let sequence = 0;
@@ -38,6 +41,8 @@ const nextId = () => {
   sequence += 1;
   return `mock-${sequence}`;
 };
+
+const nowIso = () => new Date().toISOString();
 
 /**
  * Seed the entities and departments required by most tests.
@@ -120,7 +125,6 @@ const tableQuery = (table) => {
   };
 
   const parseOrPart = (part) => {
-    // Expected: column.ilike.%value% or column.eq.value
     const m = part.match(/^([^.]+)\.([^.]+)\.%?(.+)%?$/);
     if (!m) return null;
     return { column: m[1], value: m[3], op: m[2] };
@@ -157,6 +161,9 @@ const tableQuery = (table) => {
     }
 
     if (op === 'insert') {
+      if (builder._insertError) {
+        return [];
+      }
       const inserted = [];
       insertRecords.forEach((rec) => {
         const id = rec.id || nextId();
@@ -215,7 +222,6 @@ const tableQuery = (table) => {
       return builder;
     },
     range: (from, to) => {
-      // Store as a filter that slices after ordering; we apply in execute via postFilters
       if (!builder._postFilters) builder._postFilters = [];
       builder._postFilters.push((result) => result.slice(from, to + 1));
       return builder;
@@ -237,7 +243,6 @@ const tableQuery = (table) => {
       return builder;
     },
     or: (expression) => {
-      // Very coarse OR parser for patterns like col.ilike.%term%,col2.ilike.%term%
       const parts = expression.split(',');
       filters.push({ op: 'or', parts });
       return builder;
@@ -245,6 +250,52 @@ const tableQuery = (table) => {
     insert: (records) => {
       op = 'insert';
       insertRecords = Array.isArray(records) ? records : [records];
+
+      for (const rec of insertRecords) {
+        const id = rec.id || nextId();
+        const stored = { ...rec, id };
+
+        // Simulate unique constraints for concurrency-safety tests.
+        if (table === 'clients' && stored.tin) {
+          const dup = Array.from(rows.values()).find(
+            (r) => r.entity_id === stored.entity_id && r.tin === stored.tin && !r.deleted_at
+          );
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "clients_entity_id_tin_key"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'invoices' && stored.invoice_number) {
+          const dup = Array.from(rows.values()).find(
+            (r) => r.entity_id === stored.entity_id && r.invoice_number === stored.invoice_number
+          );
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "invoices_entity_id_invoice_number_key"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'disbursements' && stored.disbursement_number) {
+          const dup = Array.from(rows.values()).find(
+            (r) =>
+              r.entity_id === stored.entity_id && r.disbursement_number === stored.disbursement_number
+          );
+          if (dup) {
+            builder._insertError = {
+              message:
+                'duplicate key value violates unique constraint "disbursements_entity_id_disbursement_number_key"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+      }
+
       return builder;
     },
     update: (updates) => {
@@ -257,10 +308,16 @@ const tableQuery = (table) => {
       return builder;
     },
     maybeSingle: () => {
+      if (builder._insertError) {
+        return Promise.resolve({ data: null, error: builder._insertError });
+      }
       const result = execute();
       return Promise.resolve({ data: result[0] || null, error: null });
     },
     single: () => {
+      if (builder._insertError) {
+        return Promise.resolve({ data: null, error: builder._insertError });
+      }
       const result = execute();
       if (result.length === 0) {
         return Promise.resolve({ data: null, error: { message: 'No rows found' } });
@@ -268,6 +325,9 @@ const tableQuery = (table) => {
       return Promise.resolve({ data: result[0], error: null });
     },
     count: (options = {}) => {
+      if (builder._insertError) {
+        return Promise.resolve({ data: null, error: builder._insertError });
+      }
       const result = execute();
       const count = result.length;
       if (options.head) {
@@ -276,6 +336,9 @@ const tableQuery = (table) => {
       return Promise.resolve({ data: [{ count }], count, error: null });
     },
     then: (resolve) => {
+      if (builder._insertError) {
+        return Promise.resolve({ data: null, error: builder._insertError }).then(resolve);
+      }
       const result = execute();
       const response = { data: result, error: null };
       if (countOptions) {
@@ -289,6 +352,218 @@ const tableQuery = (table) => {
   };
 
   return builder;
+};
+
+/**
+ * Atomic RPC transition helpers for concurrency tests.
+ */
+const rpcImpl = {
+  disbursement_transition: (params) => {
+    const row = mockTables.disbursements.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    const fromStatuses = Array.isArray(params.p_from_statuses) ? params.p_from_statuses : [params.p_from_statuses];
+    if (!fromStatuses.includes(row.status)) return { data: [], error: null };
+
+    const now = nowIso();
+    row.status = params.p_to_status;
+    row.updated_at = now;
+    row.updated_by = params.p_user_id;
+    row.version = (row.version || 1) + 1;
+
+    if (params.p_to_status === 'Approved') {
+      row.approved_by = params.p_user_id;
+      row.approved_at = now;
+    }
+    if (params.p_to_status === 'Released') {
+      row.released_by = params.p_user_id;
+      row.released_at = now;
+      const pd = params.p_payment_details || {};
+      if (pd.method !== undefined) row.payment_method = pd.method || null;
+      if (pd.reference !== undefined) row.payment_reference = pd.reference || null;
+      if (pd.bank !== undefined) row.payment_bank = pd.bank || null;
+      if (pd.date !== undefined) row.payment_date = pd.date || null;
+      row.payment_processed_by = params.p_user_id;
+    }
+    if (params.p_to_status === 'Funded') {
+      row.funded_by = params.p_user_id;
+      row.funded_at = now;
+    }
+    if (params.p_to_status === 'Rejected') {
+      row.rejected_by = params.p_user_id;
+      row.rejected_at = now;
+      row.rejection_reason = params.p_reason || null;
+    }
+
+    return { data: [row], error: null };
+  },
+
+  work_request_transition: (params) => {
+    const row = mockTables.work_requests.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.status !== params.p_from_status) return { data: [], error: null };
+
+    row.status = params.p_to_status;
+    row.updated_at = nowIso();
+    row.updated_by = params.p_user_id;
+    row.version = (row.version || 1) + 1;
+    if (params.p_archived !== undefined && params.p_archived !== null) {
+      row.archived = params.p_archived;
+    }
+
+    return { data: [row], error: null };
+  },
+
+  task_transition: (params) => {
+    const row = mockTables.tasks.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.work_request_id !== params.p_work_request_id) return { data: [], error: null };
+    if (row.status !== params.p_from_status) return { data: [], error: null };
+
+    row.status = params.p_to_status;
+    row.updated_at = nowIso();
+    row.version = (row.version || 1) + 1;
+
+    return { data: [row], error: null };
+  },
+
+  operations_request_fulfill: (params) => {
+    const row = mockTables.operations_requests.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.status !== 'pending') return { data: [], error: null };
+
+    const now = nowIso();
+    row.status = 'fulfilled';
+    row.fulfilled_by = params.p_fulfilled_by;
+    row.fulfilled_at = now;
+    row.updated_at = now;
+    row.version = (row.version || 1) + 1;
+
+    return { data: [row], error: null };
+  },
+
+  operations_request_reject: (params) => {
+    const row = mockTables.operations_requests.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.status !== 'pending') return { data: [], error: null };
+
+    row.status = 'rejected';
+    row.rejection_reason = params.p_rejection_reason || null;
+    row.updated_at = nowIso();
+    row.version = (row.version || 1) + 1;
+
+    return { data: [row], error: null };
+  },
+
+  pending_change_approve: (params) => {
+    const row = mockTables.pending_changes.get(params.p_id);
+    if (!row) return { data: [], error: null };
+    if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.status !== 'pending') return { data: [], error: null };
+
+    const now = nowIso();
+    row.status = 'approved';
+    row.reviewed_by = params.p_user_id;
+    row.reviewed_at = now;
+    row.version = (row.version || 1) + 1;
+
+    return { data: [row], error: null };
+  },
+
+  invoice_record_payment: (params) => {
+    const invoice = mockTables.invoices.get(params.p_invoice_id);
+    if (!invoice) {
+      return { data: null, error: { message: 'Invoice not found', code: 'P0002' } };
+    }
+    if (invoice.entity_id !== params.p_entity_id) {
+      return { data: null, error: { message: 'Invoice not found', code: 'P0002' } };
+    }
+    if (invoice.deleted_at) {
+      return { data: null, error: { message: 'Invoice not found', code: 'P0002' } };
+    }
+
+    const payment = {
+      id: nextId(),
+      invoice_id: params.p_invoice_id,
+      amount: Number(params.p_amount),
+      method: params.p_method || null,
+      reference: params.p_reference || null,
+      payment_date: params.p_payment_date,
+      recorded_by: params.p_recorded_by,
+      notes: params.p_notes || null,
+      created_at: nowIso(),
+    };
+    mockTables.invoice_payments.set(payment.id, payment);
+
+    const totalPaid = Array.from(mockTables.invoice_payments.values())
+      .filter((p) => p.invoice_id === params.p_invoice_id)
+      .reduce((sum, p) => sum + Number(p.amount), 0);
+
+    const balance = Number(invoice.total) - totalPaid;
+
+    if (balance < 0) {
+      mockTables.invoice_payments.delete(payment.id);
+      return {
+        data: null,
+        error: { message: 'Overpayment: payment would exceed invoice balance', code: 'P0001' },
+      };
+    }
+
+    const status = balance === 0 ? 'Paid' : 'Partially Paid';
+    invoice.amount_paid = totalPaid;
+    invoice.balance = balance;
+    invoice.status = status;
+    invoice.updated_at = nowIso();
+    invoice.updated_by = params.p_recorded_by;
+    invoice.version = (invoice.version || 1) + 1;
+
+    return { data: { payment, invoice }, error: null };
+  },
+
+  client_archive_cascade: (params) => {
+    const client = mockTables.clients.get(params.p_id);
+    if (!client) return { data: [], error: null };
+    if (client.entity_id !== params.p_entity_id) return { data: [], error: null };
+
+    const now = nowIso();
+    const unarchive = params.p_unarchive === true;
+    client.status = unarchive ? 'Active' : 'Archived';
+    client.deleted_at = unarchive ? null : now;
+    client.archived_at = unarchive ? null : now;
+    client.archived_by = unarchive ? null : params.p_user_id;
+    client.updated_by = params.p_user_id;
+    client.updated_at = now;
+    client.version = (client.version || 1) + 1;
+
+    const wrs = Array.from(mockTables.work_requests.values()).filter(
+      (wr) => wr.client_id === params.p_id && wr.entity_id === params.p_entity_id
+    );
+    wrs.forEach((wr) => {
+      if (!unarchive) {
+        wr.status = 'Cancelled';
+        wr.updated_at = now;
+        wr.updated_by = params.p_user_id;
+        wr.version = (wr.version || 1) + 1;
+      }
+
+      const docs = Array.from(mockTables.documents.values()).filter(
+        (doc) => doc.work_request_id === wr.id && doc.entity_id === params.p_entity_id
+      );
+      docs.forEach((doc) => {
+        doc.status = unarchive ? doc.status : 'Archived';
+        doc.archived = !unarchive;
+        doc.archived_at = unarchive ? doc.archived_at : now;
+        doc.archived_by = unarchive ? doc.archived_by : params.p_user_id;
+        doc.updated_at = now;
+        doc.version = (doc.version || 1) + 1;
+      });
+    });
+
+    return { data: [client], error: null };
+  },
 };
 
 const supabaseAdmin = {
@@ -320,7 +595,13 @@ const supabaseAdmin = {
     },
   },
   from: (tableName) => tableQuery(tableName),
-  rpc: () => Promise.resolve({ data: null, error: null }),
+  rpc: (functionName, params = {}) => {
+    const impl = rpcImpl[functionName];
+    if (!impl) {
+      return Promise.resolve({ data: null, error: null });
+    }
+    return Promise.resolve(impl(params));
+  },
   storage: {
     listBuckets: () => Promise.resolve({ data: [{ name: 'test-bucket' }], error: null }),
     from: () => ({
@@ -342,8 +623,6 @@ const resetMock = () => {
   mockTokens.clear();
   Object.keys(mockTables).forEach((key) => mockTables[key].clear());
   sequence = 0;
-  // Clear the auth middleware's in-memory profile cache so stale cached
-  // profiles from a previous test don't leak into the next test.
   try {
     const { clearProfileCache } = require('../../src/middleware/auth');
     clearProfileCache();

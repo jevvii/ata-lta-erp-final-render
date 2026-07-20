@@ -149,6 +149,80 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
     });
   }
 
+  // Atomic transition for the two terminal statuses.
+  if (data.status === 'fulfilled') {
+    const { data: rows, error: rpcError } = await supabaseAdmin.rpc('operations_request_fulfill', {
+      p_id: id,
+      p_fulfilled_by: data.fulfilledBy || userId,
+      p_entity_id: entityId,
+    });
+
+    if (rpcError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to fulfill operations request',
+      });
+    }
+
+    if (!rows || rows.length === 0) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: 'This operations request has already been fulfilled or rejected',
+        code: 'OPERATIONS_REQUEST_ALREADY_RESOLVED',
+      });
+    }
+
+    await auditService.log({
+      action: 'operations_request.update',
+      table: 'operations_requests',
+      recordId: id,
+      entity: entityId,
+      userId,
+      details: { status: 'fulfilled', fulfilledBy: data.fulfilledBy || userId },
+    });
+
+    return rows[0];
+  }
+
+  if (data.status === 'rejected') {
+    const { data: rows, error: rpcError } = await supabaseAdmin.rpc('operations_request_reject', {
+      p_id: id,
+      p_rejection_reason: data.rejectionReason || null,
+      p_user_id: userId,
+      p_entity_id: entityId,
+    });
+
+    if (rpcError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to reject operations request',
+      });
+    }
+
+    if (!rows || rows.length === 0) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: 'This operations request has already been fulfilled or rejected',
+        code: 'OPERATIONS_REQUEST_ALREADY_RESOLVED',
+      });
+    }
+
+    await auditService.log({
+      action: 'operations_request.update',
+      table: 'operations_requests',
+      recordId: id,
+      entity: entityId,
+      userId,
+      details: { status: 'rejected', rejectionReason: data.rejectionReason || null },
+    });
+
+    return rows[0];
+  }
+
   const updates = {
     updated_at: new Date().toISOString(),
   };
@@ -157,11 +231,6 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.rejectionReason !== undefined) updates.rejection_reason = data.rejectionReason;
   if (data.fulfilledBy !== undefined) updates.fulfilled_by = data.fulfilledBy;
-
-  if (updates.status === 'fulfilled') {
-    updates.fulfilled_by = data.fulfilledBy || userId;
-    updates.fulfilled_at = new Date().toISOString();
-  }
 
   if (updates.status === 'pending') {
     updates.fulfilled_by = null;
