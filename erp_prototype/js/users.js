@@ -1307,7 +1307,7 @@ const Users = {
     let optimisticId = null;
 
     try {
-      if (this.editingId) {
+      if (this.editingId && this.editingId !== 'new') {
         if (data.password && data.password.trim()) {
           record.password = data.password.trim();
         }
