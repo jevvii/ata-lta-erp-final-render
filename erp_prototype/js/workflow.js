@@ -99,6 +99,11 @@ const WorkflowData = {
   _pendingApprovalsLoadedAt: null,
   PENDING_APPROVALS_TTL_MS: 30 * 1000,
 
+  // Force the next list fetch to bypass browser/service-worker cache. Set by
+  // invalidate() and any mutation so navigation after creation sees the new
+  // record immediately instead of a stale pre-creation cached response.
+  _needsFreshFetch: false,
+
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
     return {
@@ -164,6 +169,7 @@ const WorkflowData = {
     this._pendingApprovals = null;
     this._pendingApprovalsPromise = null;
     this._pendingApprovalsLoadedAt = null;
+    this._needsFreshFetch = true;
   },
 
   async loadPendingApprovals(force = false) {
@@ -255,7 +261,12 @@ const WorkflowData = {
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure()
     ]);
-    const res = await window.apiClient.workRequests.list({ includeTasks: true, ...options });
+    const listParams = { includeTasks: true, ...options };
+    if (this._needsFreshFetch) {
+      listParams._t = Date.now();
+      this._needsFreshFetch = false;
+    }
+    const res = await window.apiClient.workRequests.list(listParams);
     const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
     // Tasks are embedded when includeTasks is true; normalize them in place.
     const tasks = [];
@@ -288,6 +299,10 @@ const WorkflowData = {
     if (sortBy) params.sortBy = sortBy;
     if (sortOrder) params.sortOrder = sortOrder;
     if (signal) params.signal = signal;
+    if (this._needsFreshFetch) {
+      params._t = Date.now();
+      this._needsFreshFetch = false;
+    }
     const res = await window.apiClient.workRequests.list(params);
     const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
     const tasks = [];
