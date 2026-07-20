@@ -316,9 +316,12 @@ const WorkflowData = {
     delete payload.tasks;
     const res = await window.apiClient.workRequests.create(payload);
     const created = this.normalizeWorkRequest(res.data);
-    const existing = localId ? this.getWorkRequestById(localId) : null;
+    let existing = localId ? this.getWorkRequestById(localId) : null;
+    if (!existing && localId && this._isTempId(localId) && Array.isArray(this._workRequests)) {
+      existing = this._workRequests.find(r => this._isTempId(r.id) && r.title === created.title && r.clientId === created.clientId);
+    }
     if (existing) {
-      // Preserve the optimistic task list when the server omits it.
+      const oldId = existing.id;
       const existingTasks = existing.tasks || [];
       const serverTasks = Array.isArray(created.tasks) && created.tasks.length > 0
         ? created.tasks.map(t => {
@@ -328,18 +331,22 @@ const WorkflowData = {
           })
         : null;
       created.tasks = serverTasks || existingTasks;
-      // Replace the optimistic record in place so references/order are preserved.
       Object.assign(existing, created);
-      // If the server assigned a different id, retarget any optimistic tasks.
-      if (created.id !== localId) {
+      if (created.id !== oldId) {
         (this._tasks || []).forEach(t => {
-          if (t.workRequestId === localId) t.workRequestId = created.id;
+          if (t.workRequestId === oldId) t.workRequestId = created.id;
         });
-        this.invalidateRelatedForWorkRequest(localId);
+        this.invalidateRelatedForWorkRequest(oldId);
       }
     } else {
       if (!Array.isArray(created.tasks)) created.tasks = [];
-      (this._workRequests || []).push(created);
+      if (!Array.isArray(this._workRequests)) this._workRequests = [];
+      const dupIdx = this._workRequests.findIndex(r => r.id === created.id);
+      if (dupIdx >= 0) {
+        Object.assign(this._workRequests[dupIdx], created);
+      } else {
+        this._workRequests.push(created);
+      }
     }
     return created;
   },
@@ -840,6 +847,14 @@ const Workflow = {
   _resetSkipGenerations() {
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
+  },
+
+  _navigateToWrDetail(wrId) {
+    if (WorkflowData._isTempId(wrId)) {
+      this.showMessage('Saving...', 'This work request is still being saved. Please wait a moment.', 'info');
+      return;
+    }
+    location.hash = '#operations/detail/' + wrId;
   },
 
   // Tell the app shell whether the cached WorkflowData is fresh for the given
@@ -2917,7 +2932,8 @@ const Workflow = {
       }
       if (!wr || !Auth.canViewWr(wr)) {
         this.view = 'list';
-        App.handleRoute();
+        this.detailWrId = null;
+        location.hash = '#operations';
         return el('div');
       }
       // Breadcrumb title bar consistent with the rest of the system
@@ -4058,7 +4074,7 @@ const Workflow = {
       }
 
       const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/detail/' + wr.id; });
+      viewBtn.addEventListener('click', (e) => { e.stopPropagation(); this._navigateToWrDetail(wr.id); });
       wrapper.appendChild(viewBtn);
 
       if (isPendingWr(wr)) {
@@ -4182,7 +4198,7 @@ const Workflow = {
         return actions;
       },
       rowId: (wr) => wr.id,
-      onRowClick: (wr) => { location.hash = '#operations/detail/' + wr.id; },
+      onRowClick: (wr) => { this._navigateToWrDetail(wr.id); },
       rowClass: (wr) => isPendingWr(wr) ? 'pending-approval-row' : ''
     });
 
@@ -4319,7 +4335,7 @@ const Workflow = {
         avatars: assignees.slice(0, 3).map(u => ({ name: u.name, avatarUrl: u.avatarUrl })),
         counts,
         isOptimistic: wr.isOptimistic,
-        onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+        onClick: () => { this._navigateToWrDetail(wr.id); }
       });
     };
 
@@ -4331,7 +4347,7 @@ const Workflow = {
       items.push({
         label: 'View Details',
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-        onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+        onClick: () => { this._navigateToWrDetail(wr.id); }
       });
 
       if (showQuickRoute) {
@@ -4839,7 +4855,7 @@ const Workflow = {
         });
         row.appendChild(cancelBtn);
       }
-      row.addEventListener('click', () => { location.hash = '#operations/detail/' + wr.id; });
+      row.addEventListener('click', () => { this._navigateToWrDetail(wr.id); });
       list.appendChild(row);
     });
     container.appendChild(list);
@@ -6552,7 +6568,6 @@ const Workflow = {
 
     if (result.approved) {
       if (isNew) {
-        // Optimistic WR + tasks insert so the list and nav badge update immediately.
         WorkflowData._addOptimisticWorkRequest(record);
         for (const t of taskRecords) {
           t.workRequestId = record.id;
@@ -6594,7 +6609,6 @@ const Workflow = {
         }
 
         Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
       } else {
         await WorkflowData.updateWorkRequest(this.editingId, record);
         const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
@@ -6832,7 +6846,8 @@ const Workflow = {
     }
     if (!wr) {
       this.view = 'list';
-      App.handleRoute();
+      this.detailWrId = null;
+      location.hash = '#operations';
       return el('div');
     }
     if (this.lastRenderedWrId !== this.detailWrId) {
@@ -11426,7 +11441,7 @@ const Workflow = {
           {
             label: 'View',
             icon: ArchivePage.icons.view,
-            onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+            onClick: () => { this._navigateToWrDetail(wr.id); }
           },
           ...(category === 'accomplished' ? [{
             label: 'Unarchive',
@@ -11474,7 +11489,7 @@ const Workflow = {
             label: 'View Request',
             icon: ArchivePage.icons.view,
             onClick: () => {
-              if (wr) location.hash = '#operations/detail/' + wr.id;
+              if (wr) this._navigateToWrDetail(wr.id);
             }
           }
         ]
