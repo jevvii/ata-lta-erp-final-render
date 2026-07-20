@@ -128,7 +128,9 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-  const sortField = ['name', 'created_at', 'updated_at', 'status'].includes(sortBy) ? sortBy : 'name';
+  const sortField = ['name', 'created_at', 'updated_at', 'status'].includes(sortBy)
+    ? sortBy
+    : 'name';
   const sortAsc = String(sortOrder).toLowerCase() === 'asc';
 
   let query = supabaseAdmin
@@ -327,11 +329,7 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * @returns {Promise<object|null>}
  */
 const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
-  let query = supabaseAdmin
-    .from('clients')
-    .select('*')
-    .eq('id', id)
-    .is('deleted_at', null);
+  let query = supabaseAdmin.from('clients').select('*').eq('id', id).is('deleted_at', null);
 
   if (entityId) {
     query = query.eq('entity_id', entityId);
@@ -355,10 +353,7 @@ const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
 
   if (!data) return null;
 
-  const [related, entityCode] = await Promise.all([
-    loadRelated([id]),
-    resolveEntityCode(entityId),
-  ]);
+  const [related, entityCode] = await Promise.all([loadRelated([id]), resolveEntityCode(entityId)]);
 
   return toApiClient(data, {
     entityCode,

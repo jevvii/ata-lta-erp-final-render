@@ -19,7 +19,12 @@ const validate = (schema, data) => {
   const result = schema.safeParse(data);
   if (!result.success) {
     const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-    throw new AppError({ statusCode: 400, title: 'Validation Error', detail: issues, code: 'VALIDATION_ERROR' });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: issues,
+      code: 'VALIDATION_ERROR',
+    });
   }
   return result.data;
 };
@@ -52,10 +57,18 @@ const create = async (req, res, next) => {
     const entityId = req.entityUUID;
 
     if (payload.entity && payload.entity !== req.entityCode) {
-      throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Work request entity must match active entity' });
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Work request entity must match active entity',
+      });
     }
 
-    const wr = await operationsService.createWorkRequest({ entityId, data: payload, user: req.user });
+    const wr = await operationsService.createWorkRequest({
+      entityId,
+      data: payload,
+      user: req.user,
+    });
 
     await auditService.log({
       action: 'work_request.created',
@@ -75,7 +88,11 @@ const create = async (req, res, next) => {
 const getById = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const wr = await operationsService.getWorkRequestById({ id: req.params.id, entityId, user: req.user });
+    const wr = await operationsService.getWorkRequestById({
+      id: req.params.id,
+      entityId,
+      user: req.user,
+    });
     if (!wr) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
     }
@@ -91,10 +108,19 @@ const update = async (req, res, next) => {
     const entityId = req.entityUUID;
 
     if (payload.entity && payload.entity !== req.entityCode) {
-      throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Work request entity must match active entity' });
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Work request entity must match active entity',
+      });
     }
 
-    const wr = await operationsService.updateWorkRequest({ id: req.params.id, entityId, data: payload, user: req.user });
+    const wr = await operationsService.updateWorkRequest({
+      id: req.params.id,
+      entityId,
+      data: payload,
+      user: req.user,
+    });
 
     await auditService.log({
       action: 'work_request.updated',
@@ -114,7 +140,11 @@ const update = async (req, res, next) => {
 const remove = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const removed = await operationsService.deleteWorkRequest({ id: req.params.id, entityId, user: req.user });
+    const removed = await operationsService.deleteWorkRequest({
+      id: req.params.id,
+      entityId,
+      user: req.user,
+    });
     if (!removed) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
     }
@@ -258,7 +288,11 @@ const createRetainerTemplate = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
     const payload = validate(retainerTemplateSchema, req.body);
-    const template = await operationsService.createRetainerTemplate({ entityId, userId: req.user.id, data: payload });
+    const template = await operationsService.createRetainerTemplate({
+      entityId,
+      userId: req.user.id,
+      data: payload,
+    });
 
     await auditService.log({
       action: 'retainer-template.created',
@@ -308,7 +342,11 @@ const deleteRetainerTemplate = async (req, res, next) => {
       id: req.params.templateId,
     });
     if (!removed) {
-      throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Retainer template not found' });
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Retainer template not found',
+      });
     }
 
     await auditService.log({
@@ -340,7 +378,11 @@ const createGroundWorker = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
     const payload = validate(groundWorkerSchema, req.body);
-    const worker = await operationsService.createGroundWorker({ entityId, userId: req.user.id, data: payload });
+    const worker = await operationsService.createGroundWorker({
+      entityId,
+      userId: req.user.id,
+      data: payload,
+    });
 
     await auditService.log({
       action: 'ground-worker.created',

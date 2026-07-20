@@ -261,7 +261,13 @@ const App = {
           const categories = Users.getPendingCategories();
           approvalsCount = Object.values(categories).reduce((sum, arr) => sum + (arr || []).length, 0);
         }
-        adminCount = pendingChanges.length + myReqsPending + approvalsCount;
+        let accountingReqsCount = 0;
+        const userDepts = Auth.user?.departments || [];
+        const needsPending = userDepts.includes('Accounting') || userDepts.includes('Documentation') || userDepts.includes('Management') || Auth.user?.role === 'Manager';
+        if (needsPending && typeof Users !== 'undefined' && typeof Users.countPendingRequests === 'function') {
+          accountingReqsCount = await Users.countPendingRequests();
+        }
+        adminCount = pendingChanges.length + myReqsPending + approvalsCount + accountingReqsCount;
       }
 
       let adminBadge = adminNav.querySelector('.nav-badge');

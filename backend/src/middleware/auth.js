@@ -49,7 +49,9 @@ const loadUserProfile = async (authUserId) => {
   // Combined query: users + departments in one round-trip
   const { data: user, error: userError } = await supabaseAdmin
     .from('users')
-    .select('id, auth_user_id, email, name, role, entities, is_active, user_departments(departments(name))')
+    .select(
+      'id, auth_user_id, email, name, role, entities, is_active, user_departments(departments(name))'
+    )
     .eq('auth_user_id', authUserId)
     .maybeSingle();
 
@@ -96,7 +98,10 @@ const auth = async (req, res, next) => {
     const { data, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !data?.user) {
-      logger.warn('token verification failed', { error: error?.message, statusCode: error?.status });
+      logger.warn('token verification failed', {
+        error: error?.message,
+        statusCode: error?.status,
+      });
       throw new AppError({
         statusCode: 401,
         title: 'Unauthorized',

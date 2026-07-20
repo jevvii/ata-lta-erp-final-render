@@ -15,34 +15,16 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 // Resolve entity code → UUID for all routes in this module
 router.use(resolveEntity({ allowAll: true }));
 
-router.get('/analytics',
-  requirePermission('reports:view'),
-  reportsController.analytics,
-);
+router.get('/analytics', requirePermission('reports:view'), reportsController.analytics);
 
-router.get('/dashboard',
-  requirePermission('workflow:view'),
-  reportsController.dashboard,
-);
+router.get('/dashboard', requirePermission('workflow:view'), reportsController.dashboard);
 
-router.get('/daily',
-  requirePermission('reports:view'),
-  reportsController.daily,
-);
+router.get('/daily', requirePermission('reports:view'), reportsController.daily);
 
-router.get('/weekly',
-  requirePermission('reports:view'),
-  reportsController.weekly,
-);
+router.get('/weekly', requirePermission('reports:view'), reportsController.weekly);
 
-router.get('/monthly-pending',
-  requirePermission('reports:view'),
-  reportsController.monthlyPending,
-);
+router.get('/monthly-pending', requirePermission('reports:view'), reportsController.monthlyPending);
 
-router.get('/aging',
-  requirePermission('billing:view'),
-  reportsController.aging,
-);
+router.get('/aging', requirePermission('billing:view'), reportsController.aging);
 
 module.exports = router;

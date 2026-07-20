@@ -1772,7 +1772,8 @@ const Disbursement = {
 
     const entity = Auth.activeEntity;
     const opReq = this._prefilledOpReq || null;
-    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : null;
+    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : 
+                    (opReq ? { workRequestId: opReq.workRequestId || opReq.work_request_id, clientId: opReq.clientId || opReq.client_id, linkedTaskId: opReq.linkedTaskId || opReq.linked_task_id } : null);
 
     const container = el('div');
 
@@ -1912,9 +1913,14 @@ const Disbursement = {
     // Task link (Dynamic based on WR)
     const taskGroup = el('div', { class: 'notion-prop' });
     taskGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> Task' }));
-    const taskSel = el('select', { name: 'linkedTaskId', class: 'notion-prop-select' });
+    const taskSelAttrs = { name: 'linkedTaskId', class: 'notion-prop-select' };
+    if (prefill && prefill.linkedTaskId) taskSelAttrs.disabled = true;
+    const taskSel = el('select', taskSelAttrs);
     taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
     taskGroup.appendChild(taskSel);
+    if (prefill && prefill.linkedTaskId) {
+      taskGroup.appendChild(el('input', { type: 'hidden', name: 'linkedTaskId', value: prefill.linkedTaskId }));
+    }
     propsGrid.appendChild(taskGroup);
 
     // Amount
@@ -1967,7 +1973,7 @@ const Disbursement = {
         (wr?.tasks || []).forEach(t => {
           const opt = el('option', { value: t.id, text: t.title });
           if (existing && existing.linkedTaskId === t.id) opt.selected = true;
-          else if (!existing && opReq && opReq.linkedTaskId === t.id) opt.selected = true;
+          else if (!existing && prefill && prefill.linkedTaskId === t.id) opt.selected = true;
           taskSel.appendChild(opt);
         });
       }

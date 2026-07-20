@@ -16,15 +16,7 @@ const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listRequests = async ({ entityId, filters = {} }) => {
-  const {
-    status,
-    type,
-    workRequestId,
-    clientId,
-    requestedBy,
-    page = 1,
-    limit = 50,
-  } = filters;
+  const { status, type, workRequestId, clientId, linkedTaskId, requestedBy, page = 1, limit = 50 } = filters;
 
   let query = supabaseAdmin
     .from('operations_requests')
@@ -39,6 +31,7 @@ const listRequests = async ({ entityId, filters = {} }) => {
   if (type) query = query.eq('type', type);
   if (workRequestId) query = query.eq('work_request_id', workRequestId);
   if (clientId) query = query.eq('client_id', clientId);
+  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (requestedBy) query = query.eq('requested_by', requestedBy);
 
   const offset = (page - 1) * limit;
@@ -71,6 +64,7 @@ const createRequest = async ({ entityId, userId, data }) => {
     type: data.type,
     work_request_id: data.workRequestId || null,
     client_id: data.clientId || null,
+    linked_task_id: data.linkedTaskId || null,
     requested_by: userId,
     amount: data.amount ?? null,
     status: 'pending',
@@ -116,7 +110,9 @@ const createRequest = async ({ entityId, userId, data }) => {
 const getRequestById = async ({ entityId, id }) => {
   const { data, error } = await supabaseAdmin
     .from('operations_requests')
-    .select('*, clients(name), work_requests(title), requester:requested_by(name), fulfiller:fulfilled_by(name)')
+    .select(
+      '*, clients(name), work_requests(title), requester:requested_by(name), fulfiller:fulfilled_by(name)'
+    )
     .eq('id', id)
     .eq('entity_id', entityId)
     .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected')
@@ -195,7 +191,11 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
     recordId: id,
     entity: entityId,
     userId,
-    details: { status: updates.status, rejectionReason: updates.rejection_reason, fulfilledBy: updates.fulfilled_by },
+    details: {
+      status: updates.status,
+      rejectionReason: updates.rejection_reason,
+      fulfilledBy: updates.fulfilled_by,
+    },
   });
 
   return updated;
@@ -271,7 +271,10 @@ const getCounts = async ({ entityId, user }) => {
 
   const canFulfill = (() => {
     if (!user) return false;
-    const permissions = buildPermissionSet({ role: user.role || '', departments: user.departments || [] });
+    const permissions = buildPermissionSet({
+      role: user.role || '',
+      departments: user.departments || [],
+    });
     return hasPermission(permissions, 'workflow:edit');
   })();
 
@@ -280,9 +283,7 @@ const getCounts = async ({ entityId, user }) => {
     runCount(baseQuery().eq('status', 'pending')),
     runCount(baseQuery().eq('status', 'fulfilled')),
     runCount(baseQuery().eq('status', 'rejected')),
-    canFulfill
-      ? runCount(baseQuery().eq('status', 'pending'))
-      : Promise.resolve(0),
+    canFulfill ? runCount(baseQuery().eq('status', 'pending')) : Promise.resolve(0),
   ]);
 
   return { total, pending, fulfilled, rejected, awaitingFulfillment };

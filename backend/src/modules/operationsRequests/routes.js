@@ -14,43 +14,49 @@ const { audit } = require('../../middleware/audit');
 
 router.use(auth, entityScope);
 
-router.get('/counts',
+router.get(
+  '/counts',
   resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
-  operationsRequestsController.getCounts,
+  operationsRequestsController.getCounts
 );
 
-router.get('/',
+router.get(
+  '/',
   resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
-  operationsRequestsController.listRequests,
+  operationsRequestsController.listRequests
 );
 
-router.post('/',
+router.post(
+  '/',
   resolveEntity(),
-  requirePermission('workflow:edit'),
+  requirePermission('workflow:view'),
   audit('operations_request.create', { table: 'operations_requests' }),
-  operationsRequestsController.createRequest,
+  operationsRequestsController.createRequest
 );
 
-router.get('/:id',
+router.get(
+  '/:id',
   resolveEntity(),
   requirePermission('workflow:view'),
-  operationsRequestsController.getRequest,
+  operationsRequestsController.getRequest
 );
 
-router.put('/:id',
+router.put(
+  '/:id',
   resolveEntity(),
-  requirePermission('workflow:edit'),
+  requirePermission('workflow:view'),
   audit('operations_request.update', { table: 'operations_requests' }),
-  operationsRequestsController.updateRequest,
+  operationsRequestsController.updateRequest
 );
 
-router.delete('/:id',
+router.delete(
+  '/:id',
   resolveEntity(),
-  requirePermission('workflow:edit'),
+  requirePermission('workflow:view'),
   audit('operations_request.delete', { table: 'operations_requests' }),
-  operationsRequestsController.deleteRequest,
+  operationsRequestsController.deleteRequest
 );
 
 module.exports = router;

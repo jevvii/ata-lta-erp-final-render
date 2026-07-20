@@ -30,11 +30,13 @@ const assertBucket = () => {
  * @param {number} [params.expiresInSeconds=300]
  * @returns {Promise<string>}
  */
-const getSignedUploadUrl = async ({ path, contentType: _contentType, expiresInSeconds: _expiresInSeconds = 300 }) => {
+const getSignedUploadUrl = async ({
+  path,
+  contentType: _contentType,
+  expiresInSeconds: _expiresInSeconds = 300,
+}) => {
   assertBucket();
-  const { data, error } = await supabaseAdmin.storage
-    .from(bucket)
-    .createSignedUploadUrl(path);
+  const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUploadUrl(path);
 
   if (error) {
     throw new AppError({
@@ -99,12 +101,10 @@ const deleteObject = async (path) => {
  */
 const uploadBuffer = async ({ path, buffer, contentType }) => {
   assertBucket();
-  const { error: uploadError } = await supabaseAdmin.storage
-    .from(bucket)
-    .upload(path, buffer, {
-      contentType,
-      upsert: true,
-    });
+  const { error: uploadError } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, {
+    contentType,
+    upsert: true,
+  });
 
   if (uploadError) {
     throw new AppError({

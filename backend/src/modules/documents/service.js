@@ -8,7 +8,11 @@
 
 const { randomUUID } = require('crypto');
 const { supabaseAdmin } = require('../../services/supabaseClient');
-const { getSignedUploadUrl, getSignedDownloadUrl, deleteObject } = require('../../services/storageService');
+const {
+  getSignedUploadUrl,
+  getSignedDownloadUrl,
+  deleteObject,
+} = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 const logger = require('../../lib/logger');
@@ -61,8 +65,16 @@ const generateStoragePath = ({ entityCode, clientId, workRequestId, documentId, 
  */
 const listDocuments = async ({ entityId, filters = {} }) => {
   const {
-    category, status, lifecycle, clientId, workRequestId, linkedTaskId,
-    search, archived, page = 1, limit = 50,
+    category,
+    status,
+    lifecycle,
+    clientId,
+    workRequestId,
+    linkedTaskId,
+    search,
+    archived,
+    page = 1,
+    limit = 50,
   } = filters;
 
   let query = supabaseAdmin
@@ -79,7 +91,9 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (typeof archived === 'boolean') query = query.eq('archived', archived);
   if (search) {
-    query = query.or(`original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`);
+    query = query.or(
+      `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
+    );
   }
 
   const offset = (page - 1) * limit;

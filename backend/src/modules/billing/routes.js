@@ -13,82 +13,72 @@ const { audit } = require('../../middleware/audit');
 const { resolveEntity } = require('../../middleware/resolveEntity');
 
 // --- Badge Counts (before resolveEntity so ALL can be summed) ---
-router.get('/counts',
+router.get(
+  '/counts',
   resolveEntity({ allowAll: true }),
   requirePermission('billing:view'),
-  billingController.getInvoiceCounts,
+  billingController.getInvoiceCounts
 );
 
 // Resolve entity code → UUID for all remaining routes in this module
 router.use(resolveEntity());
 
 // --- Billing Templates (must come before /:id routes) ---
-router.get('/templates',
-  requirePermission('billing:view'),
-  billingController.listTemplates,
-);
-router.post('/templates',
+router.get('/templates', requirePermission('billing:view'), billingController.listTemplates);
+router.post(
+  '/templates',
   requirePermission('billing:templates'),
   audit('billing-template.create', { table: 'billing_templates' }),
-  billingController.createTemplate,
+  billingController.createTemplate
 );
-router.put('/templates/:templateId',
+router.put(
+  '/templates/:templateId',
   requirePermission('billing:templates'),
   audit('billing-template.update', { table: 'billing_templates' }),
-  billingController.updateTemplate,
+  billingController.updateTemplate
 );
-router.delete('/templates/:templateId',
+router.delete(
+  '/templates/:templateId',
   requirePermission('billing:templates'),
   audit('billing-template.delete', { table: 'billing_templates' }),
-  billingController.deleteTemplate,
+  billingController.deleteTemplate
 );
 
 // --- Aging Report ---
-router.get('/aging',
-  requirePermission('billing:view'),
-  billingController.getAgingReport,
-);
+router.get('/aging', requirePermission('billing:view'), billingController.getAgingReport);
 
 // --- Invoice CRUD ---
-router.get('/',
-  requirePermission('billing:view'),
-  billingController.listInvoices,
-);
-router.post('/',
+router.get('/', requirePermission('billing:view'), billingController.listInvoices);
+router.post(
+  '/',
   requirePermission('billing:edit'),
   audit('invoice.create', { table: 'invoices' }),
-  billingController.createInvoice,
+  billingController.createInvoice
 );
-router.get('/:id',
-  requirePermission('billing:view'),
-  billingController.getInvoice,
-);
-router.put('/:id',
+router.get('/:id', requirePermission('billing:view'), billingController.getInvoice);
+router.put(
+  '/:id',
   requirePermission('billing:edit'),
   audit('invoice.update', { table: 'invoices' }),
-  billingController.updateInvoice,
+  billingController.updateInvoice
 );
-router.delete('/:id',
+router.delete(
+  '/:id',
   requirePermission('billing:delete'),
   audit('invoice.delete', { table: 'invoices' }),
-  billingController.deleteInvoice,
+  billingController.deleteInvoice
 );
 
 // --- Payments ---
-router.post('/:id/payments',
+router.post(
+  '/:id/payments',
   requirePermission('billing:payments'),
   audit('invoice.payment', { table: 'invoice_payments' }),
-  billingController.recordPayment,
+  billingController.recordPayment
 );
 
 // --- PDF Generation ---
-router.get('/:id/pdf',
-  requirePermission('billing:view'),
-  billingController.getInvoicePdf,
-);
-router.get('/:id/voucher',
-  requirePermission('billing:view'),
-  billingController.getVoucherPdf,
-);
+router.get('/:id/pdf', requirePermission('billing:view'), billingController.getInvoicePdf);
+router.get('/:id/voucher', requirePermission('billing:view'), billingController.getVoucherPdf);
 
 module.exports = router;

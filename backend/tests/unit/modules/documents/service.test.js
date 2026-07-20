@@ -79,7 +79,9 @@ describe('Documents Service', () => {
         clientId: 'client-uuid',
         workRequestId: null,
       });
-      expect(path).toBe('entities/ATA/clients/client-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe(
+        'entities/ATA/clients/client-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf'
+      );
     });
 
     it('generates work-request-based path when workRequestId is provided', () => {
@@ -88,7 +90,9 @@ describe('Documents Service', () => {
         clientId: null,
         workRequestId: 'wr-uuid',
       });
-      expect(path).toBe('entities/ATA/work-requests/wr-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe(
+        'entities/ATA/work-requests/wr-uuid/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf'
+      );
     });
 
     it('generates general path when neither clientId nor workRequestId', () => {
@@ -97,7 +101,9 @@ describe('Documents Service', () => {
         clientId: null,
         workRequestId: null,
       });
-      expect(path).toBe('entities/ATA/general/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf');
+      expect(path).toBe(
+        'entities/ATA/general/documents/123e4567-e89b-12d3-a456-426614174000/test-file.pdf'
+      );
     });
 
     it('prefers clientId over workRequestId when both provided', () => {

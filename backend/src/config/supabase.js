@@ -31,23 +31,19 @@ if (!env.supabase.url || !env.supabase.serviceKey) {
   const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 25 });
   const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 25 });
 
-  supabaseAdmin = createClient(
-    env.supabase.url,
-    env.supabase.serviceKey,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
+  supabaseAdmin = createClient(env.supabase.url, env.supabase.serviceKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+    global: {
+      fetch: (url, options = {}) => {
+        const parsedUrl = typeof url === 'string' ? new URL(url) : url;
+        const agent = parsedUrl.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent;
+        return fetch(url, { ...options, agent });
       },
-      global: {
-        fetch: (url, options = {}) => {
-          const parsedUrl = typeof url === 'string' ? new URL(url) : url;
-          const agent = parsedUrl.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent;
-          return fetch(url, { ...options, agent });
-        },
-      },
-    }
-  );
+    },
+  });
 }
 
 module.exports = { supabaseAdmin };

@@ -145,7 +145,9 @@ describe('/v1/admin pending approvals and audit', () => {
     });
 
     const res = await request(app)
-      .get('/v1/admin/pending-approvals?status=rejected&parentRecordId=client-1&submittedBy=user-staff')
+      .get(
+        '/v1/admin/pending-approvals?status=rejected&parentRecordId=client-1&submittedBy=user-staff'
+      )
       .set('Authorization', `Bearer ${token}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);

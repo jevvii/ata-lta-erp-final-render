@@ -45,9 +45,17 @@ const loadUserDepartments = async (userId) => {
 };
 
 const getProfile = async (userId) => {
-  const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', userId).maybeSingle();
+  const { data, error } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to load profile' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to load profile',
+    });
   }
   if (!data) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'User profile not found' });
@@ -74,7 +82,11 @@ const updateProfile = async ({ userId, data }) => {
 
   const { error } = await supabaseAdmin.from('users').update(updates).eq('id', userId);
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to update profile' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to update profile',
+    });
   }
 
   return getProfile(userId);
@@ -82,11 +94,19 @@ const updateProfile = async ({ userId, data }) => {
 
 const changePassword = async ({ userId, authUserId, currentPassword, newPassword }) => {
   if (!currentPassword || !newPassword) {
-    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'Current password and new password are required' });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'Current password and new password are required',
+    });
   }
 
   if (newPassword.length < 8) {
-    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: 'New password must be at least 8 characters' });
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'New password must be at least 8 characters',
+    });
   }
 
   // Note: Supabase service-role password update does not require the current
@@ -98,7 +118,11 @@ const changePassword = async ({ userId, authUserId, currentPassword, newPassword
   });
 
   if (updateError) {
-    throw new AppError({ statusCode: 500, title: 'Auth Error', detail: updateError.message || 'Unable to change password' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Auth Error',
+      detail: updateError.message || 'Unable to change password',
+    });
   }
 
   const { error: profileError } = await supabaseAdmin
@@ -107,7 +131,11 @@ const changePassword = async ({ userId, authUserId, currentPassword, newPassword
     .eq('id', userId);
 
   if (profileError) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Password changed but unable to update profile timestamp' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Password changed but unable to update profile timestamp',
+    });
   }
 };
 

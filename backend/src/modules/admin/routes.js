@@ -13,20 +13,72 @@ const { audit } = require('../../middleware/audit');
 
 // Users
 router.get('/users', auth, entityScope, requirePermission('users:view'), adminController.listUsers);
-router.post('/users', auth, entityScope, requirePermission('users:manage'), audit('user.created', { table: 'users' }), adminController.createUser);
-router.get('/users/:id', auth, entityScope, requirePermission('users:view'), adminController.getUserById);
-router.put('/users/:id', auth, entityScope, requirePermission('users:manage'), audit('user.updated', { table: 'users' }), adminController.updateUser);
-router.delete('/users/:id', auth, entityScope, requirePermission('users:manage'), audit('user.disabled', { table: 'users' }), adminController.deleteUser);
+router.post(
+  '/users',
+  auth,
+  entityScope,
+  requirePermission('users:manage'),
+  audit('user.created', { table: 'users' }),
+  adminController.createUser
+);
+router.get(
+  '/users/:id',
+  auth,
+  entityScope,
+  requirePermission('users:view'),
+  adminController.getUserById
+);
+router.put(
+  '/users/:id',
+  auth,
+  entityScope,
+  requirePermission('users:manage'),
+  audit('user.updated', { table: 'users' }),
+  adminController.updateUser
+);
+router.delete(
+  '/users/:id',
+  auth,
+  entityScope,
+  requirePermission('users:manage'),
+  audit('user.disabled', { table: 'users' }),
+  adminController.deleteUser
+);
 
 // Pending approvals
-router.get('/pending-approvals', auth, entityScope, requirePermission('approve_change:*'), adminController.listPendingApprovals);
-router.get('/pending-approvals/:id', auth, entityScope, requirePermission('approve_change:*'), adminController.getPendingById);
-router.post('/pending-approvals', auth, entityScope, audit('pending.created', { table: 'pending_changes' }), adminController.createPending);
-router.post('/pending-approvals/:id/approve', auth, entityScope, requirePermission('approve_change:*'), audit('pending.approved', { table: 'pending_changes' }), adminController.approvePending);
-router.post('/pending-approvals/:id/reject', auth, entityScope, requirePermission('approve_change:*'), audit('pending.rejected', { table: 'pending_changes' }), adminController.rejectPending);
+router.get('/pending-approvals', auth, entityScope, adminController.listPendingApprovals);
+router.get('/pending-approvals/:id', auth, entityScope, adminController.getPendingById);
+router.post(
+  '/pending-approvals',
+  auth,
+  entityScope,
+  audit('pending.created', { table: 'pending_changes' }),
+  adminController.createPending
+);
+router.post(
+  '/pending-approvals/:id/approve',
+  auth,
+  entityScope,
+  requirePermission('approve_change:*'),
+  audit('pending.approved', { table: 'pending_changes' }),
+  adminController.approvePending
+);
+router.post(
+  '/pending-approvals/:id/reject',
+  auth,
+  entityScope,
+  audit('pending.rejected', { table: 'pending_changes' }),
+  adminController.rejectPending
+);
 
 // Audit log count (for admin tab badge)
-router.get('/audit/count', auth, entityScope, requirePermission('users:view'), adminController.getAuditLogCount);
+router.get(
+  '/audit/count',
+  auth,
+  entityScope,
+  requirePermission('users:view'),
+  adminController.getAuditLogCount
+);
 router.get('/audit', auth, entityScope, requirePermission('users:view'), adminController.listAudit);
 
 module.exports = router;

@@ -21,9 +21,7 @@ const validInvoice = {
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
-  lineItems: [
-    { description: 'Professional services', amount: 10000, type: 'Professional Fee' },
-  ],
+  lineItems: [{ description: 'Professional services', amount: 10000, type: 'Professional Fee' }],
   notes: 'Test invoice',
   terms: 'Due within 30 days',
 };

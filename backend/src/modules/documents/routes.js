@@ -16,56 +16,52 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 router.use(resolveEntity());
 
 // List documents
-router.get('/',
-  requirePermission('dms:view'),
-  documentsController.listDocuments,
-);
+router.get('/', requirePermission('dms:view'), documentsController.listDocuments);
 
 // Create document metadata + get upload URL
-router.post('/',
+router.post(
+  '/',
   requirePermission('dms:edit'),
   audit('document.create', { table: 'documents' }),
-  documentsController.createDocument,
+  documentsController.createDocument
 );
 
 // Get single document
-router.get('/:id',
-  requirePermission('dms:view'),
-  documentsController.getDocument,
-);
+router.get('/:id', requirePermission('dms:view'), documentsController.getDocument);
 
 // Update document metadata
-router.put('/:id',
+router.put(
+  '/:id',
   requirePermission('dms:edit'),
   audit('document.update', { table: 'documents' }),
-  documentsController.updateDocument,
+  documentsController.updateDocument
 );
 
 // Soft-delete document
-router.delete('/:id',
+router.delete(
+  '/:id',
   requirePermission('dms:delete'),
   audit('document.delete', { table: 'documents' }),
-  documentsController.deleteDocument,
+  documentsController.deleteDocument
 );
 
 // Confirm storage upload completed
-router.post('/:id/confirm-upload',
+router.post(
+  '/:id/confirm-upload',
   requirePermission('dms:edit'),
   audit('document.confirm-upload', { table: 'documents' }),
-  documentsController.confirmUpload,
+  documentsController.confirmUpload
 );
 
 // Get signed download URL
-router.get('/:id/download-url',
-  requirePermission('dms:view'),
-  documentsController.getDownloadUrl,
-);
+router.get('/:id/download-url', requirePermission('dms:view'), documentsController.getDownloadUrl);
 
 // Transition lifecycle state
-router.put('/:id/lifecycle',
+router.put(
+  '/:id/lifecycle',
   requirePermission('dms:handover'),
   audit('document.lifecycle', { table: 'documents' }),
-  documentsController.updateLifecycle,
+  documentsController.updateLifecycle
 );
 
 module.exports = router;

@@ -57,13 +57,19 @@ const VALID_ENTITY_CODES = ['ATA', 'LTA'];
 
 const getDisbursementCounts = async ({ entityId, user }) => {
   const resolve = async (code) => {
-    const { data } = await supabaseAdmin.from('entities').select('id').eq('code', code).maybeSingle();
+    const { data } = await supabaseAdmin
+      .from('entities')
+      .select('id')
+      .eq('code', code)
+      .maybeSingle();
     return data?.id;
   };
 
   const entityIds = [];
   if (entityId === 'ALL') {
-    const codes = (user?.entities || []).filter((c) => VALID_ENTITY_CODES.includes(c.toUpperCase()));
+    const codes = (user?.entities || []).filter((c) =>
+      VALID_ENTITY_CODES.includes(c.toUpperCase())
+    );
     const resolved = await Promise.all(codes.map(resolve));
     entityIds.push(...resolved.filter(Boolean));
   } else {
@@ -86,42 +92,45 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return count || 0;
   };
 
-  const baseQuery = () => supabaseAdmin
-    .from('disbursements')
-    .select('*', { count: 'exact', head: true })
-    .in('entity_id', entityIds)
-    .is('deleted_at', null);
+  const baseQuery = () =>
+    supabaseAdmin
+      .from('disbursements')
+      .select('*', { count: 'exact', head: true })
+      .in('entity_id', entityIds)
+      .is('deleted_at', null);
 
   const canRelease = (() => {
     if (!user) return false;
-    const permissions = buildPermissionSet({ role: user.role || '', departments: user.departments || [] });
+    const permissions = buildPermissionSet({
+      role: user.role || '',
+      departments: user.departments || [],
+    });
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
 
-  const [total, cancelled, fundedArchived, pendingRejected, opsRejected, awaitingRelease] = await Promise.all([
-    runCount(baseQuery()),
-    runCount(baseQuery().eq('status', 'Cancelled')),
-    runCount(baseQuery().eq('status', 'Funded').eq('archived', true)),
-    runCount(
-      supabaseAdmin
-        .from('pending_changes')
-        .select('*', { count: 'exact', head: true })
-        .in('entity_id', entityIds)
-        .eq('table_name', 'disbursements')
-        .eq('status', 'rejected')
-    ),
-    runCount(
-      supabaseAdmin
-        .from('operations_requests')
-        .select('*', { count: 'exact', head: true })
-        .in('entity_id', entityIds)
-        .eq('type', 'disbursement')
-        .eq('status', 'rejected')
-    ),
-    canRelease
-      ? runCount(baseQuery().eq('status', 'Approved'))
-      : Promise.resolve(0),
-  ]);
+  const [total, cancelled, fundedArchived, pendingRejected, opsRejected, awaitingRelease] =
+    await Promise.all([
+      runCount(baseQuery()),
+      runCount(baseQuery().eq('status', 'Cancelled')),
+      runCount(baseQuery().eq('status', 'Funded').eq('archived', true)),
+      runCount(
+        supabaseAdmin
+          .from('pending_changes')
+          .select('*', { count: 'exact', head: true })
+          .in('entity_id', entityIds)
+          .eq('table_name', 'disbursements')
+          .eq('status', 'rejected')
+      ),
+      runCount(
+        supabaseAdmin
+          .from('operations_requests')
+          .select('*', { count: 'exact', head: true })
+          .in('entity_id', entityIds)
+          .eq('type', 'disbursement')
+          .eq('status', 'rejected')
+      ),
+      canRelease ? runCount(baseQuery().eq('status', 'Approved')) : Promise.resolve(0),
+    ]);
 
   const active = total - cancelled - fundedArchived;
   const archived = cancelled + fundedArchived;
@@ -144,7 +153,14 @@ const getDisbursementCounts = async ({ entityId, user }) => {
  */
 const listDisbursements = async ({ entityId, filters = {} }) => {
   const {
-    status, category, fundSource, linkedTaskId, search, archived, page = 1, limit = 50,
+    status,
+    category,
+    fundSource,
+    linkedTaskId,
+    search,
+    archived,
+    page = 1,
+    limit = 50,
   } = filters;
   const isArchived = archived === true || archived === 'true';
 
@@ -304,7 +320,8 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.employeeId !== undefined) updates.employee_id = data.employeeId;
   if (data.linkedInvoiceId !== undefined) updates.linked_invoice_id = data.linkedInvoiceId;
-  if (data.linkedWorkRequestId !== undefined) updates.linked_work_request_id = data.linkedWorkRequestId;
+  if (data.linkedWorkRequestId !== undefined)
+    updates.linked_work_request_id = data.linkedWorkRequestId;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
@@ -342,9 +359,7 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
   const existing = await getDisbursementById({ entityId, id });
   const transition = VALID_TRANSITIONS[action];
 
-  const validFrom = Array.isArray(transition.from)
-    ? transition.from
-    : [transition.from];
+  const validFrom = Array.isArray(transition.from) ? transition.from : [transition.from];
 
   if (!validFrom.includes(existing.status)) {
     throw new AppError({
@@ -394,7 +409,9 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
  */
 const submitDisbursement = async ({ entityId, id, userId }) => {
   return performTransition({
-    entityId, id, userId,
+    entityId,
+    id,
+    userId,
     action: 'submit',
     extraUpdates: {},
   });
@@ -405,7 +422,9 @@ const submitDisbursement = async ({ entityId, id, userId }) => {
  */
 const approveDisbursement = async ({ entityId, id, userId }) => {
   return performTransition({
-    entityId, id, userId,
+    entityId,
+    id,
+    userId,
     action: 'approve',
     extraUpdates: {
       approved_by: userId,
@@ -419,7 +438,9 @@ const approveDisbursement = async ({ entityId, id, userId }) => {
  */
 const releaseDisbursement = async ({ entityId, id, userId, paymentDetails = {} }) => {
   return performTransition({
-    entityId, id, userId,
+    entityId,
+    id,
+    userId,
     action: 'release',
     extraUpdates: {
       released_by: userId,
@@ -438,7 +459,9 @@ const releaseDisbursement = async ({ entityId, id, userId, paymentDetails = {} }
  */
 const fundDisbursement = async ({ entityId, id, userId }) => {
   return performTransition({
-    entityId, id, userId,
+    entityId,
+    id,
+    userId,
     action: 'fund',
     extraUpdates: {
       funded_by: userId,
@@ -452,7 +475,9 @@ const fundDisbursement = async ({ entityId, id, userId }) => {
  */
 const rejectDisbursement = async ({ entityId, id, userId, reason }) => {
   return performTransition({
-    entityId, id, userId,
+    entityId,
+    id,
+    userId,
     action: 'reject',
     extraUpdates: {
       rejected_by: userId,
@@ -547,7 +572,8 @@ const updateDisbursementTemplate = async ({ entityId, id, data }) => {
   if (data.fundSource !== undefined) updates.fund_source = data.fundSource;
   if (data.schedule !== undefined) updates.schedule = data.schedule;
   if (data.description !== undefined) updates.description = data.description;
-  if (data.linkedWorkRequestId !== undefined) updates.linked_work_request_id = data.linkedWorkRequestId;
+  if (data.linkedWorkRequestId !== undefined)
+    updates.linked_work_request_id = data.linkedWorkRequestId;
   if (data.linkedInvoiceId !== undefined) updates.linked_invoice_id = data.linkedInvoiceId;
 
   const { data: updated, error } = await supabaseAdmin

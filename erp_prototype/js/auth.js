@@ -168,6 +168,20 @@ const Auth = {
     return false;
   },
 
+  effectiveDepartments() {
+    if (!this.user) return [];
+    const allowedDepts = new Set(this.DEPARTMENTS);
+    const departments = Array.isArray(this.user.departments) ? this.user.departments : [];
+    const effective = departments.filter(dept => allowedDepts.has(dept));
+    if (this.user.role) {
+      const legacyDept = this.user.role === 'Manager' ? 'Management' : this.user.role;
+      if (allowedDepts.has(legacyDept) && this.DEPARTMENT_PERMISSIONS[legacyDept] && !effective.includes(legacyDept)) {
+        effective.push(legacyDept);
+      }
+    }
+    return effective;
+  },
+
   canBypassReview(table) {
     return this.can('bypass_review:' + table);
   },

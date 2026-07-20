@@ -5,11 +5,7 @@
  * Phase 3 — Agent B
  */
 
-const {
-  createDocumentSchema,
-  updateDocumentSchema,
-  lifecycleSchema,
-} = require('./schema');
+const { createDocumentSchema, updateDocumentSchema, lifecycleSchema } = require('./schema');
 const service = require('./service');
 const AppError = require('../../lib/AppError');
 
@@ -30,12 +26,16 @@ const listDocuments = async (req, res, next) => {
       workRequestId: req.query.workRequestId,
       linkedTaskId: req.query.linkedTaskId,
       search: req.query.search,
-      archived: req.query.archived === 'true' ? true : req.query.archived === 'false' ? false : undefined,
+      archived:
+        req.query.archived === 'true' ? true : req.query.archived === 'false' ? false : undefined,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
     const result = await service.listDocuments({ entityId, filters });
-    res.json({ data: result.data, meta: { total: result.count, page: filters.page, limit: filters.limit } });
+    res.json({
+      data: result.data,
+      meta: { total: result.count, page: filters.page, limit: filters.limit },
+    });
   } catch (err) {
     next(err);
   }
@@ -59,11 +59,13 @@ const createDocument = async (req, res, next) => {
     res.status(201).json({ data: result });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }
@@ -105,11 +107,13 @@ const updateDocument = async (req, res, next) => {
     res.json({ data });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }
@@ -188,11 +192,13 @@ const updateLifecycle = async (req, res, next) => {
     res.json({ data });
   } catch (err) {
     if (err.name === 'ZodError') {
-      return next(new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: err.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
-      }));
+      return next(
+        new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        })
+      );
     }
     next(err);
   }

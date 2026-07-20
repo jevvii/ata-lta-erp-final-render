@@ -29,7 +29,9 @@ const entityScope = async (req, res, next) => {
 
     // ALL is only allowed for managerial users who can access both entities.
     if (requested === 'ALL') {
-      const canSeeAll = req.user?.role === 'Admin' || req.user?.role === 'Manager' ||
+      const canSeeAll =
+        req.user?.role === 'Admin' ||
+        req.user?.role === 'Manager' ||
         (req.user?.departments || []).includes('Management');
       if (!canSeeAll) {
         throw new AppError({
@@ -42,7 +44,9 @@ const entityScope = async (req, res, next) => {
 
     // ALL requires the user to have access to both real entities.
     if (requested === 'ALL') {
-      const hasBoth = VALID_ENTITIES.filter(e => e !== 'ALL').every(e => userEntities.includes(e));
+      const hasBoth = VALID_ENTITIES.filter((e) => e !== 'ALL').every((e) =>
+        userEntities.includes(e)
+      );
       if (!hasBoth) {
         throw new AppError({
           statusCode: 403,
