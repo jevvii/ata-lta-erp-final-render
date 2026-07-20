@@ -124,16 +124,24 @@ const Transmittal = {
     if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) {
       return this._items || [];
     }
-    if (Array.isArray(this._items)) {
-      const localArchived = this._items.filter(t => t.archived === true || t.status === 'Cancelled');
-      this._items = items;
-      localArchived.forEach(localT => {
-        const existing = this._items.find(t => t.id === localT.id);
+    if (Array.isArray(this._items) && this._entity === entity) {
+      const existingMap = new Map(this._items.map(t => [t.id, t]));
+      const isSkipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+      items.forEach(serverT => {
+        const existing = existingMap.get(serverT.id);
         if (existing) {
-          existing.archived = localT.archived;
-          existing.status = localT.status;
-        } else {
-          this._items.push(localT);
+          const localNewer = existing.updatedAt && serverT.updatedAt && new Date(existing.updatedAt) > new Date(serverT.updatedAt);
+          if (isSkipActive || localNewer) {
+            const localArchived = existing.archived;
+            const localStatus = existing.status;
+            Object.assign(existing, serverT);
+            if (localArchived !== undefined) existing.archived = localArchived;
+            if (localStatus !== undefined) existing.status = localStatus;
+          } else {
+            Object.assign(existing, serverT);
+          }
+        } else if (!this._isTempId(serverT.id)) {
+          this._items.push(serverT);
         }
       });
     } else {
