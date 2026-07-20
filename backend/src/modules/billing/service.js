@@ -330,33 +330,33 @@ const deleteInvoice = async ({ entityId, id, userId }) => {
  * @returns {Promise<object>}
  */
 const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
-  const invoice = await getInvoiceById({ entityId, id: invoiceId });
+  const { data: result, error: rpcError } = await supabaseAdmin.rpc('invoice_record_payment', {
+    p_invoice_id: invoiceId,
+    p_amount: data.amount,
+    p_method: data.method,
+    p_reference: data.reference || null,
+    p_payment_date: data.date,
+    p_recorded_by: userId,
+    p_entity_id: entityId,
+    p_notes: data.notes || null,
+  });
 
-  if (invoice.balance <= 0) {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: 'Invoice is already fully paid',
-    });
-  }
-
-  const paymentRow = {
-    invoice_id: invoiceId,
-    amount: data.amount,
-    method: data.method,
-    reference: data.reference || null,
-    payment_date: data.date,
-    recorded_by: userId,
-    notes: data.notes || null,
-  };
-
-  const { data: payment, error: payErr } = await supabaseAdmin
-    .from('invoice_payments')
-    .insert(paymentRow)
-    .select()
-    .single();
-
-  if (payErr) {
+  if (rpcError) {
+    if (rpcError.code === 'P0001') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Overpayment',
+        detail: rpcError.message || 'Payment would exceed invoice balance',
+        code: 'OVERPAYMENT',
+      });
+    }
+    if (rpcError.code === 'P0002') {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Invoice not found',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -364,32 +364,13 @@ const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
     });
   }
 
-  // Update invoice totals
-  const newAmountPaid = parseFloat(invoice.amount_paid) + data.amount;
-  const newBalance = parseFloat(invoice.total) - newAmountPaid;
-  let newStatus = invoice.status;
-
-  if (newBalance <= 0) {
-    newStatus = 'Paid';
-  } else if (newAmountPaid > 0) {
-    newStatus = 'Partially Paid';
-  }
-
-  await supabaseAdmin
-    .from('invoices')
-    .update({
-      amount_paid: newAmountPaid,
-      balance: Math.max(newBalance, 0),
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-      updated_by: userId,
-    })
-    .eq('id', invoiceId);
+  const payment = result?.payment;
+  const invoice = result?.invoice;
 
   await auditService.log({
     action: 'invoice.payment',
     table: 'invoice_payments',
-    recordId: payment.id,
+    recordId: payment?.id,
     entity: entityId,
     userId,
     details: { invoiceId, amount: data.amount, method: data.method },

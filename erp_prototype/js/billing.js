@@ -78,8 +78,9 @@ const Billing = {
       });
       this._detailCacheEntity = entity;
       this._lastInvoiceMeta = res.meta || {};
-      if (merge && Array.isArray(this._listCache) && this._listCacheEntity === entity) {
+      if (Array.isArray(this._listCache) && this._listCacheEntity === entity) {
         const existingMap = new Map(this._listCache.map(inv => [inv.id, inv]));
+        const isSkipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
         invoices.forEach(inv => {
           const existing = existingMap.get(inv.id);
           if (existing) {
@@ -4144,11 +4145,12 @@ const Billing = {
     );
   },
 
-  restoreInvoice(id) {
-    const inv = this.getInvoiceById(id);
-    if (!inv || inv.status !== 'Cancelled') return;
+  async restoreInvoice(id) {
+    let inv = this.getInvoiceById(id) || (this._detailCache && this._detailCache[id]);
+    if (!inv) inv = await this.loadInvoice(id);
+    if (!inv) return;
     Workflow.showConfirm('Restore Invoice',
-      `Are you sure you want to restore invoice "${inv.invoiceNumber}"?`,
+      `Are you sure you want to restore invoice "${inv.invoiceNumber || '(untitled)'}"?`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
         const restored = { ...inv, status: 'Draft', archived: false, updatedAt: new Date().toISOString() };
@@ -4165,6 +4167,9 @@ const Billing = {
             this._addToListCache(normalized);
           }
           this._endSkipGeneration(skipGeneration);
+          if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+            window.apiClient.invoices.invalidateCounts();
+          }
           App.handleRoute();
           Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
           this._schedulePostMutationRefresh();
@@ -4346,11 +4351,12 @@ const Billing = {
     );
   },
 
-  unarchiveInvoice(id) {
-    const inv = this.getInvoiceById(id);
-    if (!inv || !inv.archived) return;
+  async unarchiveInvoice(id) {
+    let inv = this.getInvoiceById(id) || (this._detailCache && this._detailCache[id]);
+    if (!inv) inv = await this.loadInvoice(id);
+    if (!inv) return;
     Workflow.showConfirm('Unarchive Invoice',
-      `Are you sure you want to unarchive invoice "${inv.invoiceNumber}"?`,
+      `Are you sure you want to unarchive invoice "${inv.invoiceNumber || '(untitled)'}"?`,
       async () => {
         const snapshot = this._snapshotInvoice(id);
         const targetStatus = inv.status === 'Cancelled' ? 'Draft' : inv.status;
@@ -4371,6 +4377,9 @@ const Billing = {
           this._detailCache[id] = updated;
           this._addToListCache(updated);
           this._endSkipGeneration(skipGeneration);
+          if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+            window.apiClient.invoices.invalidateCounts();
+          }
           App.handleRoute();
           Workflow.showMessage('Unarchived', 'Invoice has been unarchived.', 'success');
           this._schedulePostMutationRefresh();

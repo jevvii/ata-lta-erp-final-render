@@ -30,7 +30,7 @@ const VALID_TRANSITIONS = {
  * @param {string} entityCode - entity code (ATA or LTA)
  * @returns {Promise<string>}
  */
-const generateDisbursementNumber = async (entityId, entityCode) => {
+const generateDisbursementNumber = async (entityId, entityCode, attempt = 0) => {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const prefix = `DISB-${entityCode}-${today}`;
 
@@ -40,7 +40,7 @@ const generateDisbursementNumber = async (entityId, entityCode) => {
     .eq('entity_id', entityId)
     .ilike('disbursement_number', `${prefix}%`);
 
-  const seq = String((count || 0) + 1).padStart(4, '0');
+  const seq = String((count || 0) + 1 + attempt).padStart(4, '0');
   return `${prefix}-${seq}`;
 };
 
@@ -223,54 +223,75 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
  * @returns {Promise<object>}
  */
 const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
-  const disbursementNumber = await generateDisbursementNumber(entityId, entityCode || entityId);
+  const MAX_RETRIES = 5;
+  let lastError = null;
 
-  const row = {
-    disbursement_number: disbursementNumber,
-    entity_id: entityId,
-    category: data.category,
-    description: data.description,
-    amount: data.amount,
-    fund_source: data.fundSource,
-    status: 'Draft',
-    client_id: data.clientId || null,
-    employee_id: data.employeeId || null,
-    linked_invoice_id: data.linkedInvoiceId || null,
-    linked_work_request_id: data.linkedWorkRequestId || null,
-    linked_task_id: data.linkedTaskId || null,
-    requested_by: userId,
-    due_date: data.dueDate || null,
-    notes: data.notes || null,
-    created_by: userId,
-    updated_by: userId,
-  };
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const disbursementNumber = await generateDisbursementNumber(
+      entityId,
+      entityCode || entityId,
+      attempt
+    );
 
-  const { data: disbursement, error } = await supabaseAdmin
-    .from('disbursements')
-    .insert(row)
-    .select()
-    .single();
+    const row = {
+      disbursement_number: disbursementNumber,
+      entity_id: entityId,
+      category: data.category,
+      description: data.description,
+      amount: data.amount,
+      fund_source: data.fundSource,
+      status: 'Draft',
+      client_id: data.clientId || null,
+      employee_id: data.employeeId || null,
+      linked_invoice_id: data.linkedInvoiceId || null,
+      linked_work_request_id: data.linkedWorkRequestId || null,
+      linked_task_id: data.linkedTaskId || null,
+      requested_by: userId,
+      due_date: data.dueDate || null,
+      notes: data.notes || null,
+      created_by: userId,
+      updated_by: userId,
+    };
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to create disbursement',
-    });
+    const { data: disbursement, error } = await supabaseAdmin
+      .from('disbursements')
+      .insert(row)
+      .select()
+      .single();
+
+    if (!error) {
+      await auditService.log({
+        action: 'disbursement.create',
+        table: 'disbursements',
+        recordId: disbursement.id,
+        entity: entityId,
+        userId,
+        details: { disbursementNumber, total: data.amount },
+      });
+
+      const entityCodeResolved = await resolveEntityCode(disbursement.entity_id);
+      return { ...disbursement, entity_code: entityCodeResolved };
+    }
+
+    if (error.code !== '23505') {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to create disbursement',
+      });
+    }
+
+    lastError = error;
   }
 
-  await auditService.log({
-    action: 'disbursement.create',
-    table: 'disbursements',
-    recordId: disbursement.id,
-    entity: entityId,
-    userId,
-    details: { disbursementNumber, amount: data.amount, category: data.category },
+  throw new AppError({
+    statusCode: 409,
+    title: 'Conflict',
+    detail: 'Unable to generate a unique disbursement number. Please retry.',
+    code: 'DUPLICATE_DISBURSEMENT_NUMBER',
   });
-
-  const code = entityCode || (await resolveEntityCode(entityId));
-  return { ...disbursement, entity_code: code };
 };
+
 
 /**
  * Get a single disbursement by ID.
@@ -452,35 +473,29 @@ const unarchiveDisbursement = async ({ entityId, id, userId }) => {
  * @returns {Promise<object>}
  */
 const performTransition = async ({ entityId, id, userId, action, extraUpdates = {} }) => {
-  const existing = await getDisbursementById({ entityId, id });
   const transition = VALID_TRANSITIONS[action];
-
   const validFrom = Array.isArray(transition.from) ? transition.from : [transition.from];
 
-  if (!validFrom.includes(existing.status)) {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Invalid Transition',
-      detail: `Cannot ${action} a disbursement in "${existing.status}" status. Expected: ${validFrom.join(' or ')}.`,
-    });
-  }
+  const paymentDetails = action === 'release' ? {
+    method: extraUpdates.payment_method,
+    reference: extraUpdates.payment_reference,
+    bank: extraUpdates.payment_bank,
+    date: extraUpdates.payment_date,
+  } : undefined;
 
-  const updates = {
-    status: transition.to,
-    updated_by: userId,
-    updated_at: new Date().toISOString(),
-    ...extraUpdates,
-  };
+  const reason = action === 'reject' ? extraUpdates.rejection_reason : undefined;
 
-  const { data: updated, error } = await supabaseAdmin
-    .from('disbursements')
-    .update(updates)
-    .eq('id', id)
-    .eq('entity_id', entityId)
-    .select()
-    .single();
+  const { data: rows, error: rpcError } = await supabaseAdmin.rpc('disbursement_transition', {
+    p_id: id,
+    p_from_statuses: validFrom,
+    p_to_status: transition.to,
+    p_user_id: userId,
+    p_entity_id: entityId,
+    p_reason: reason,
+    p_payment_details: paymentDetails,
+  });
 
-  if (error) {
+  if (rpcError) {
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -488,13 +503,25 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
     });
   }
 
+  if (!rows || rows.length === 0) {
+    const current = await getDisbursementById({ entityId, id });
+    throw new AppError({
+      statusCode: 409,
+      title: 'Invalid Transition',
+      detail: `Cannot ${action} a disbursement in "${current?.status || 'unknown'}" status. Expected: ${validFrom.join(' or ')}.`,
+      code: 'CONFLICT_CURRENT_STATUS',
+    });
+  }
+
+  const updated = rows[0];
+
   await auditService.log({
     action: `disbursement.${action}`,
     table: 'disbursements',
     recordId: id,
     entity: entityId,
     userId,
-    details: { from: existing.status, to: transition.to },
+    details: { from: validFrom, to: transition.to },
   });
 
   const entityCode = await resolveEntityCode(updated.entity_id);

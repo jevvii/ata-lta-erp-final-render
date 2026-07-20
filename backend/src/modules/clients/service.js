@@ -218,15 +218,6 @@ const listClients = async ({ entityId, search, status, archived, page, limit, so
  * @returns {Promise<object>}
  */
 const createClient = async ({ entityId, data, createdBy }) => {
-  const existing = await findClientByTin(entityId, data.tin);
-  if (existing) {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: `A client with TIN ${data.tin} already exists in this entity`,
-    });
-  }
-
   const now = new Date().toISOString();
   const clientRecord = {
     id: randomUUID(),
@@ -248,6 +239,14 @@ const createClient = async ({ entityId, data, createdBy }) => {
   const { error } = await supabaseAdmin.from('clients').insert(clientRecord);
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `A client with TIN ${data.tin} already exists in this entity`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',

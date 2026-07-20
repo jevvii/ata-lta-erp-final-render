@@ -112,15 +112,22 @@ const ClientsData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { clients: this._clients || [] };
     }
-    if (Array.isArray(this._clients)) {
-      const localArchived = this._clients.filter(c => c.status === 'Archived');
-      this._clients = clients;
-      localArchived.forEach(localC => {
-        const existing = this._clients.find(c => c.id === localC.id);
+    if (Array.isArray(this._clients) && this._entity === entity) {
+      const existingMap = new Map(this._clients.map(c => [c.id, c]));
+      const isSkipActive = typeof Clients !== 'undefined' && Clients._activeSkipGeneration > 0 && Clients._activeSkipGeneration === Clients._skipFetchGeneration;
+      clients.forEach(serverC => {
+        const existing = existingMap.get(serverC.id);
         if (existing) {
-          existing.status = localC.status;
+          const localNewer = existing.updatedAt && serverC.updatedAt && new Date(existing.updatedAt) > new Date(serverC.updatedAt);
+          if (isSkipActive || localNewer) {
+            const localStatus = existing.status;
+            Object.assign(existing, serverC);
+            if (localStatus !== undefined) existing.status = localStatus;
+          } else {
+            Object.assign(existing, serverC);
+          }
         } else {
-          this._clients.push(localC);
+          this._clients.push(serverC);
         }
       });
     } else {
