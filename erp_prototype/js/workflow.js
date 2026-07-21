@@ -393,6 +393,22 @@ const WorkflowData = {
   getWorkRequestsWhere(predicate) { return (this._workRequests || []).filter(predicate); },
   getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
 
+  _snapshotWorkRequest(id) {
+    const wr = this.getWorkRequestById(id);
+    return wr ? deepClone(wr) : null;
+  },
+
+  _restoreWorkRequest(id, snapshot) {
+    if (!this._workRequests) return;
+    const idx = this._workRequests.findIndex(r => r.id === id);
+    if (snapshot) {
+      if (idx >= 0) this._workRequests[idx] = snapshot;
+      else this._workRequests.push(snapshot);
+    } else if (idx >= 0) {
+      this._workRequests.splice(idx, 1);
+    }
+  },
+
   getWorkRequestSeqMap() {
     const allWrs = this.getAllWorkRequests();
     const pendingWrs = (this._pendingApprovals || [])
@@ -1057,6 +1073,140 @@ const Workflow = {
   _resetSkipGenerations() {
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
+  },
+
+  _counts: null,
+
+  _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
+    const wrs = (WorkflowData.getAllWorkRequests() || []).filter(r => {
+      const rEnt = (r.entity || '').toUpperCase();
+      if (!entity) return true;
+      if (entity === 'ALL') {
+        return (Auth.user?.entities || []).map(ae => ae.toUpperCase()).includes(rEnt);
+      }
+      return rEnt === entity.toUpperCase();
+    });
+    return {
+      active: wrs.filter(r => !r.archived && r.status !== 'Cancelled').length,
+      archived: wrs.filter(r => r.archived || r.status === 'Cancelled').length
+    };
+  },
+
+  _refreshCounts() {
+    if (!WorkflowData.hasData()) {
+      this._counts = null;
+      return;
+    }
+    this._counts = this._recalcCounts();
+  },
+
+  _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (!this._counts) {
+      this._refreshCounts();
+    }
+    if (!this._counts) return;
+    this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
+    this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+  },
+
+  async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
+    if (WorkflowData._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await WorkflowData.ensure();
+    const originalSnapshot = WorkflowData._snapshotWorkRequest(id);
+    const wasActive = originalSnapshot ? (!originalSnapshot.archived && originalSnapshot.status !== 'Cancelled') : false;
+    const wasArchived = originalSnapshot ? (originalSnapshot.archived || originalSnapshot.status === 'Cancelled') : false;
+
+    const wr = WorkflowData.getWorkRequestById(id);
+    if (wr) {
+      Object.assign(wr, patch, { updatedAt: new Date().toISOString() });
+    }
+
+    const isNowActive = wr ? (!wr.archived && wr.status !== 'Cancelled') : false;
+    const isNowArchived = wr ? (wr.archived || wr.status === 'Cancelled') : false;
+
+    const activeDelta = (isNowActive ? 1 : 0) - (wasActive ? 1 : 0);
+    const archivedDelta = (isNowArchived ? 1 : 0) - (wasArchived ? 1 : 0);
+    this._updateCounts(activeDelta, archivedDelta);
+
+    if (this.view === 'detail' && this.detailWrId === id && isNowArchived) {
+      location.hash = '#operations';
+    }
+
+    const gen = this._startSkipGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      if (res?.data) {
+        const norm = WorkflowData.normalizeWorkRequest(res.data);
+        const current = WorkflowData.getWorkRequestById(id);
+        if (current) Object.assign(current, norm);
+      }
+      this._clearSkipGenerationIfLatest(gen);
+      if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+        window.apiClient.workRequests.invalidateCounts();
+      }
+      WorkflowData.invalidateRelatedForWorkRequest(id);
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      WorkflowData._restoreWorkRequest(id, originalSnapshot);
+      this._updateCounts(-activeDelta, -archivedDelta);
+      this._clearSkipGenerationIfLatest(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  async _optimisticDelete(id, apiCall, errorTitle = 'Error') {
+    if (WorkflowData._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await WorkflowData.ensure();
+    const originalSnapshot = WorkflowData._snapshotWorkRequest(id);
+    const wasActive = originalSnapshot ? (!originalSnapshot.archived && originalSnapshot.status !== 'Cancelled') : false;
+    const wasArchived = originalSnapshot ? (originalSnapshot.archived || originalSnapshot.status === 'Cancelled') : false;
+
+    WorkflowData._restoreWorkRequest(id, null);
+    this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
+
+    if (this.view === 'detail' && this.detailWrId === id) {
+      location.hash = '#operations';
+    }
+
+    const gen = this._startSkipGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      this._clearSkipGenerationIfLatest(gen);
+      if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+        window.apiClient.workRequests.invalidateCounts();
+      }
+      WorkflowData.invalidateRelatedForWorkRequest(id);
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      WorkflowData._restoreWorkRequest(id, originalSnapshot);
+      this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
+      this._clearSkipGenerationIfLatest(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
   },
 
   _navigateToWrDetail(wrId) {
@@ -1813,9 +1963,6 @@ const Workflow = {
         const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
         let cancelledCount = 0;
 
-        const myGen = Workflow._startSkipGeneration();
-        App.handleRoute();
-
         for (const t of tasks) {
           if (t.status !== 'Completed' && t.status !== 'Cancelled') {
             await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
@@ -1823,19 +1970,20 @@ const Workflow = {
           }
         }
 
-        await WorkflowData.updateWorkRequest(wrId, {
-          status: 'Cancelled',
-          archived: true,
-          updatedAt: now
-        });
-
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-
-        this.showMessage('Work Request Cancelled',
-          `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
-          'warning'
-        );
+        try {
+          await this._optimisticUpdate(
+            wrId,
+            { status: 'Cancelled', archived: true },
+            () => window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true }),
+            'Failed to cancel Work Request'
+          );
+          this.showMessage('Work Request Cancelled',
+            `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
+            'warning'
+          );
+        } catch (e) {
+          // Handled in _optimisticUpdate
+        }
       },
       'danger'
     );
@@ -1844,48 +1992,45 @@ const Workflow = {
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || wr.archived) return;
-    const myGen = Workflow._startSkipGeneration();
-    wr.archived = true;
-    wr.updatedAt = new Date().toISOString();
-    if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
-      window.apiClient.workRequests.invalidateCounts();
-    }
-    WorkflowData.invalidateRelatedForWorkRequest(wrId);
-    WorkflowData._needsFreshFetch = true;
-    App.handleRoute();
-    (async () => {
-      try {
-        await window.apiClient.workRequests.archive(wrId);
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-        this.showMessage('Archived', 'Work Request has been archived.', 'success');
-      } catch (e) {
-        wr.archived = false;
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-        this.showMessage('Archive Failed', e.message || 'Unable to archive Work Request.', 'error');
-      }
-    })();
+    this.showConfirm('Archive Work Request',
+      `Are you sure you want to archive "${wr.title || '(untitled)'}"?`,
+      async () => {
+        try {
+          await this._optimisticUpdate(
+            wrId,
+            { archived: true },
+            () => window.apiClient.workRequests.archive(wrId),
+            'Failed to archive Work Request'
+          );
+          this.showMessage('Archived', 'Work Request has been archived.', 'success');
+        } catch (e) {
+          // Handled in _optimisticUpdate
+        }
+      },
+      'warning'
+    );
   },
 
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || !wr.archived) return;
-    const myGen = Workflow._startSkipGeneration();
-    App.handleRoute();
-    (async () => {
-      try {
-        await window.apiClient.workRequests.unarchive(wrId);
-        wr.archived = false;
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-        this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
-      } catch (e) {
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-        this.showMessage('Restore Failed', e.message || 'Unable to restore Work Request.', 'error');
-      }
-    })();
+    this.showConfirm('Restore Work Request',
+      `Are you sure you want to restore "${wr.title || '(untitled)'}"?`,
+      async () => {
+        try {
+          await this._optimisticUpdate(
+            wrId,
+            { archived: false },
+            () => window.apiClient.workRequests.unarchive(wrId),
+            'Failed to restore Work Request'
+          );
+          this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
+        } catch (e) {
+          // Handled in _optimisticUpdate
+        }
+      },
+      'warning'
+    );
   },
 
   bulkArchiveWorkRequests(ids) {
@@ -1901,13 +2046,26 @@ const Workflow = {
     this.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} completed Work Request(s)?`,
       async () => {
-        const now = new Date().toISOString();
-        const myGen = Workflow._startSkipGeneration();
-        App.handleRoute();
-        await Promise.all(eligible.map(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now })));
-        Workflow._clearSkipGenerationIfLatest(myGen);
-        App.handleRoute();
-        this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
+        let successCount = 0;
+        let failCount = 0;
+        for (const wr of eligible) {
+          try {
+            await this._optimisticUpdate(
+              wr.id,
+              { archived: true },
+              () => window.apiClient.workRequests.archive(wr.id),
+              'Failed to archive Work Request'
+            );
+            successCount++;
+          } catch (e) {
+            failCount++;
+          }
+        }
+        if (failCount > 0) {
+          this.showMessage('Error', `${failCount} Work Request(s) could not be archived.`, 'error');
+        } else {
+          this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
+        }
       },
       'warning'
     );
@@ -3500,7 +3658,7 @@ const Workflow = {
   renderTabNav() {
     const entity = Auth.activeEntity;
     const taskMap = this._tempTaskMap || buildTaskMap();
-    const wrCount = WorkflowData.getWorkRequestsWhere(wr => {
+    const wrCount = (this._counts?.active >= 0) ? this._counts.active : WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
@@ -3514,7 +3672,7 @@ const Workflow = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveWrCount = WorkflowData.getWorkRequestsWhere(wr => {
+    const archiveWrCount = (this._counts?.archived >= 0) ? this._counts.archived : WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       if (!matchesEntity || !Auth.canViewWrWithTasks(wr, taskMap)) return false;

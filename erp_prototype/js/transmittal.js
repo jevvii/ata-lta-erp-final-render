@@ -194,8 +194,144 @@ const Transmittal = {
   /**
    * Generate a stable temporary id for optimistic records.
    */
-  _generateTempId() {
-    return 'tx-temp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
+  _counts: null,
+
+  _recalcCounts(entity = this._getActiveEntity()) {
+    const items = (this._items || []).filter(t => this._entityMatches(t, entity));
+    return {
+      active: items.filter(t => !t.archived && t.status !== 'Cancelled').length,
+      archived: items.filter(t => t.archived || t.status === 'Cancelled').length
+    };
+  },
+
+  _refreshCounts() {
+    if (!this.hasData()) {
+      this._counts = null;
+      return;
+    }
+    this._counts = this._recalcCounts();
+  },
+
+  _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (!this._counts) {
+      this._refreshCounts();
+    }
+    if (!this._counts) return;
+    this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
+    this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+  },
+
+  async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
+    if (this._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await this.ensure();
+    const originalItem = (this._items || []).find(t => t.id === id);
+    const wasActive = originalItem ? (!originalItem.archived && originalItem.status !== 'Cancelled') : false;
+    const wasArchived = originalItem ? (originalItem.archived || originalItem.status === 'Cancelled') : false;
+
+    const snapshot = this._updateCachedItem(id, { ...patch, updatedAt: new Date().toISOString() });
+    const updatedItem = (this._items || []).find(t => t.id === id);
+    const isNowActive = updatedItem ? (!updatedItem.archived && updatedItem.status !== 'Cancelled') : false;
+    const isNowArchived = updatedItem ? (updatedItem.archived || updatedItem.status === 'Cancelled') : false;
+
+    const activeDelta = (isNowActive ? 1 : 0) - (wasActive ? 1 : 0);
+    const archivedDelta = (isNowArchived ? 1 : 0) - (wasArchived ? 1 : 0);
+    this._updateCounts(activeDelta, archivedDelta);
+
+    if (this.view === 'detail' && this.detailId === id && isNowArchived) {
+      location.hash = '#transmittal';
+    }
+
+    const gen = this._startSkipFetchGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      if (res?.data) {
+        const norm = this.normalizeTransmittal(res.data);
+        this._updateCachedItem(id, norm);
+      }
+      this._clearActiveSkipGeneration(gen);
+      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+        window.apiClient.transmittals.invalidateCounts();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      if (snapshot) {
+        this._updateCachedItem(id, snapshot);
+      }
+      this._updateCounts(-activeDelta, -archivedDelta);
+      this._clearActiveSkipGeneration(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  async _optimisticDelete(id, apiCall, errorTitle = 'Error') {
+    if (this._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await this.ensure();
+    const items = this._items || [];
+    const index = items.findIndex(t => t.id === id);
+    let originalItem = null;
+    if (index !== -1) {
+      originalItem = items[index];
+      this._items = [...items.slice(0, index), ...items.slice(index + 1)];
+    }
+    const wasActive = originalItem ? (!originalItem.archived && originalItem.status !== 'Cancelled') : false;
+    const wasArchived = originalItem ? (originalItem.archived || originalItem.status === 'Cancelled') : false;
+
+    this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
+
+    if (this.view === 'detail' && this.detailId === id) {
+      location.hash = '#transmittal';
+    }
+
+    const gen = this._startSkipFetchGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      this._clearActiveSkipGeneration(gen);
+      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+        window.apiClient.transmittals.invalidateCounts();
+      }
+      if (typeof Dashboard !== 'undefined') {
+        if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+        if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      if (originalItem) {
+        const rollback = [...(this._items || [])];
+        if (index >= 0 && index <= rollback.length) {
+          rollback.splice(index, 0, originalItem);
+        } else {
+          rollback.push(originalItem);
+        }
+        this._items = rollback;
+      }
+      this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
+      this._clearActiveSkipGeneration(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
   },
 
   // ============================================================
@@ -499,8 +635,8 @@ const Transmittal = {
     };
 
     const cachedItems = (this._items || []).filter(t => entFilter(t.entity));
-    const activeCount = cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
-    const archiveDbCount = cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
+    const activeCount = (this._counts?.active >= 0) ? this._counts.active : cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
+    const archiveDbCount = (this._counts?.archived >= 0) ? this._counts.archived : cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
     const rejectedCount = this._rejectedArchiveCounts?.total || 0;
     const archiveCount = archiveDbCount + rejectedCount;
 
@@ -2500,25 +2636,16 @@ const Transmittal = {
     Workflow.showConfirm('Archive Transmittal',
       `Are you sure you want to move transmittal "${item.trackingNumber || '(untitled)'}" to archive?`,
       async () => {
-        const snapshot = this._updateCachedItem(id, { archived: true, updatedAt: new Date().toISOString() });
-        const skipGen = this._startSkipFetchGeneration();
-        if (this.view === 'detail' && this.detailId === id) {
-          location.hash = '#transmittal';
-        }
-        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-          window.apiClient.transmittals.invalidateCounts();
-        }
-        App.handleRoute();
         try {
-          await window.apiClient.transmittals.archive(id);
-          this._clearActiveSkipGeneration(skipGen);
-          App.handleRoute();
+          await this._optimisticUpdate(
+            id,
+            { archived: true },
+            () => window.apiClient.transmittals.archive(id),
+            'Failed to archive transmittal'
+          );
           Workflow.showMessage('Archived', 'Transmittal has been moved to Archive.', 'success');
         } catch (e) {
-          if (snapshot) this._updateCachedItem(id, { archived: snapshot.archived, updatedAt: snapshot.updatedAt });
-          this._clearActiveSkipGeneration(skipGen);
-          App.handleRoute();
-          Workflow.showMessage('Archive Failed', e.message || 'Unable to archive transmittal.', 'error');
+          // Handled in _optimisticUpdate
         }
       },
       'warning'
@@ -2543,34 +2670,25 @@ const Transmittal = {
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} transmittal(s)?`,
       async () => {
-        const skipGen = this._startSkipFetchGeneration();
-        const snapshots = new Map();
-        eligible.forEach(t => {
-          const snap = this._updateCachedItem(t.id, { archived: true, updatedAt: new Date().toISOString() });
-          if (snap) snapshots.set(t.id, snap);
-        });
-        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-          window.apiClient.transmittals.invalidateCounts();
-        }
-        App.handleRoute();
-        const failedIds = [];
+        let successCount = 0;
+        let failCount = 0;
         for (const t of eligible) {
           try {
-            await window.apiClient.transmittals.archive(t.id);
+            await this._optimisticUpdate(
+              t.id,
+              { archived: true },
+              () => window.apiClient.transmittals.archive(t.id),
+              'Failed to archive transmittal'
+            );
+            successCount++;
           } catch (e) {
-            failedIds.push(t.id);
-            const snap = snapshots.get(t.id);
-            if (snap) this._updateCachedItem(t.id, { archived: snap.archived, updatedAt: snap.updatedAt });
+            failCount++;
           }
         }
-        this._clearActiveSkipGeneration(skipGen);
-        await App.handleRoute();
-        if (failedIds.length > 0 && failedIds.length < eligible.length) {
-          Workflow.showMessage('Partial Success', `${eligible.length - failedIds.length} transmittal(s) archived, ${failedIds.length} failed.`, 'warning');
-        } else if (failedIds.length === 0) {
-          Workflow.showMessage('Archived', `${eligible.length} transmittal(s) archived.`, 'success');
+        if (failCount > 0) {
+          Workflow.showMessage('Error', `${failCount} transmittal(s) could not be archived.`, 'error');
         } else {
-          Workflow.showMessage('Archive Failed', `Unable to archive ${failedIds.length} transmittal(s).`, 'error');
+          Workflow.showMessage('Archived', `${eligible.length} transmittal(s) archived.`, 'success');
         }
       },
       'warning'
@@ -2590,22 +2708,59 @@ const Transmittal = {
     Workflow.showConfirm('Restore Transmittal',
       `Are you sure you want to restore transmittal "${item.trackingNumber || '(untitled)'}" to active list?`,
       async () => {
-        const snapshot = this._updateCachedItem(id, { archived: false, updatedAt: new Date().toISOString() });
-        const skipGen = this._startSkipFetchGeneration();
-        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-          window.apiClient.transmittals.invalidateCounts();
-        }
-        App.handleRoute();
         try {
-          await window.apiClient.transmittals.unarchive(id);
-          this._clearActiveSkipGeneration(skipGen);
-          App.handleRoute();
+          await this._optimisticUpdate(
+            id,
+            { archived: false },
+            () => window.apiClient.transmittals.unarchive(id),
+            'Failed to restore transmittal'
+          );
           Workflow.showMessage('Restored', 'Transmittal has been restored to active list.', 'success');
         } catch (e) {
-          if (snapshot) this._updateCachedItem(id, { archived: snapshot.archived, updatedAt: snapshot.updatedAt });
-          this._clearActiveSkipGeneration(skipGen);
-          App.handleRoute();
-          Workflow.showMessage('Restore Failed', e.message || 'Unable to restore transmittal.', 'error');
+          // Handled in _optimisticUpdate
+        }
+      },
+      'warning'
+    );
+  },
+
+  async bulkUnarchiveTransmittals(ids) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Permission Denied', 'Only Admin can restore transmittals.', 'danger');
+      return;
+    }
+    await this.ensure();
+    const eligible = (ids || [])
+      .map(id => (this._items || []).find(t => t.id === id))
+      .filter(t => t && t.archived);
+
+    if (eligible.length === 0) {
+      Workflow.showMessage('No eligible records', 'No archived transmittals selected.', 'info');
+      return;
+    }
+
+    Workflow.showConfirm('Restore Transmittals',
+      `Are you sure you want to restore ${eligible.length} transmittal(s)?`,
+      async () => {
+        let successCount = 0;
+        let failCount = 0;
+        for (const t of eligible) {
+          try {
+            await this._optimisticUpdate(
+              t.id,
+              { archived: false },
+              () => window.apiClient.transmittals.unarchive(t.id),
+              'Failed to restore transmittal'
+            );
+            successCount++;
+          } catch (e) {
+            failCount++;
+          }
+        }
+        if (failCount > 0) {
+          Workflow.showMessage('Error', `${failCount} transmittal(s) could not be restored.`, 'error');
+        } else {
+          Workflow.showMessage('Restored', `${eligible.length} transmittal(s) restored.`, 'success');
         }
       },
       'warning'
@@ -2620,40 +2775,15 @@ const Transmittal = {
     Workflow.showConfirm('Delete Transmittal',
       'Are you sure you want to delete this transmittal?',
       async () => {
-        await this.ensure();
-        const items = this._items || [];
-        const index = items.findIndex(t => t.id === id);
-        let removedItem = null;
-        if (index !== -1) {
-          removedItem = items[index];
-          this._items = [...items.slice(0, index), ...items.slice(index + 1)];
-        }
-        const skipGen = this._startSkipFetchGeneration();
-        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-          window.apiClient.transmittals.invalidateCounts();
-        }
-        App.handleRoute();
         try {
-          await window.apiClient.transmittals.remove(id);
-          if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-            window.apiClient.transmittals.invalidateCounts();
-          }
-          if (typeof Dashboard !== 'undefined') {
-            if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-            if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-          }
-          this._clearActiveSkipGeneration(skipGen);
-          await App.handleRoute();
+          await this._optimisticDelete(
+            id,
+            () => window.apiClient.transmittals.remove(id),
+            'Failed to delete transmittal'
+          );
           Workflow.showMessage('Deleted', 'Transmittal has been deleted.', 'success');
         } catch (e) {
-          if (removedItem) {
-            const rollback = [...(this._items || [])];
-            rollback.splice(index >= 0 ? index : 0, 0, removedItem);
-            this._items = rollback;
-          }
-          this._clearActiveSkipGeneration(skipGen);
-          await App.handleRoute();
-          Workflow.showMessage('Delete Failed', e.message || 'Unable to delete transmittal.', 'error');
+          // Handled in _optimisticDelete
         }
       },
       'danger'
@@ -2830,7 +2960,7 @@ const Transmittal = {
           text: 'Restore Selected',
           className: 'btn btn-secondary btn-sm',
           onClick: selectedIds => {
-            selectedIds.forEach(id => self.unarchiveTransmittal(id));
+            self.bulkUnarchiveTransmittals(selectedIds);
           }
         },
         {
