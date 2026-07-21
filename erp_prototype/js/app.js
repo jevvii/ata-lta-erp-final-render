@@ -207,24 +207,33 @@ const App = {
     const entity = Auth.activeEntity;
 
     // Fetch lightweight badge counts from the API in parallel (cached for 30s by apiClient).
-    const [disbResult, opsResult] = await Promise.allSettled([
+    const [disbResult, opsResult, invResult, txResult] = await Promise.allSettled([
       window.apiClient.disbursements.counts(entity),
       window.apiClient.operationsRequests.counts(entity),
+      window.apiClient.invoices.counts(entity),
+      window.apiClient.transmittals.counts(entity),
     ]);
     const disbCounts = disbResult.status === 'fulfilled' ? disbResult.value : null;
     const opsCounts = opsResult.status === 'fulfilled' ? opsResult.value : null;
+    const invCounts = invResult.status === 'fulfilled' ? invResult.value : null;
+    const txCounts = txResult.status === 'fulfilled' ? txResult.value : null;
     if (disbResult.status === 'rejected') {
       console.error('[App.updateSidebarNotifications] disbursement counts failed', disbResult.reason);
     }
     if (opsResult.status === 'rejected') {
       console.error('[App.updateSidebarNotifications] operations request counts failed', opsResult.reason);
     }
-
-    const navLink = document.querySelector('nav a[href="#disbursement"]');
-    if (navLink) {
-      const badge = navLink.querySelector('.nav-badge');
-      if (badge) badge.remove();
+    if (invResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] invoice counts failed', invResult.reason);
     }
+    if (txResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] transmittal counts failed', txResult.reason);
+    }
+
+    // Module-level nav badges for items needing attention.
+    this._updateNavBadge('#disbursement', disbCounts?.data?.active || 0);
+    this._updateNavBadge('#billing', invCounts?.data?.active || 0);
+    this._updateNavBadge('#transmittal', txCounts?.data?.active || 0);
 
     // Admin nav badge: reflect pending approvals / pending submissions to draw attention.
     const adminNav = document.querySelector('nav a[href="#admin"]');
@@ -270,7 +279,6 @@ const App = {
       }
     }
 
-    // Pending requests are centralized on the Admin page; no module-level nav badges needed.
   },
 
   renderShell() {
@@ -909,6 +917,25 @@ const App = {
       detailToolbarHeight = detailToolbar.getBoundingClientRect().height;
     }
     container.style.setProperty('--project-detail-toolbar-height', `${detailToolbarHeight}px`);
+  },
+
+  /**
+   * Update or remove a numeric badge on a sidebar nav link.
+   */
+  _updateNavBadge(selector, count) {
+    const navLink = document.querySelector('nav a[href="' + selector + '"]');
+    if (!navLink) return;
+    let badge = navLink.querySelector('.nav-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge';
+        navLink.appendChild(badge);
+      }
+      badge.textContent = count > 99 ? '99+' : count;
+    } else if (badge) {
+      badge.remove();
+    }
   }
 };
 

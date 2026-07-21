@@ -194,6 +194,10 @@ const Transmittal = {
   /**
    * Generate a stable temporary id for optimistic records.
    */
+  _tempId(prefix = 'tx') {
+    return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  },
+
   _counts: null,
 
   _recalcCounts(entity = this._getActiveEntity()) {
@@ -1113,6 +1117,16 @@ const Transmittal = {
               return;
             }
             self._clearActiveSkipGeneration(skipGen);
+            if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+              window.apiClient.transmittals.invalidateCounts();
+            }
+            if (typeof Dashboard !== 'undefined') {
+              if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+              if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+            }
+            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+              App.updateSidebarNotifications().catch(() => {});
+            }
             App.handleRoute();
           }, 'success');
         });
@@ -1315,6 +1329,16 @@ const Transmittal = {
                 return;
               }
               self._clearActiveSkipGeneration(skipGen);
+              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                window.apiClient.transmittals.invalidateCounts();
+              }
+              if (typeof Dashboard !== 'undefined') {
+                if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+                if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+              }
+              if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+                App.updateSidebarNotifications().catch(() => {});
+              }
               App.handleRoute();
             },
             'success'
@@ -1417,6 +1441,16 @@ const Transmittal = {
               return;
             }
             self._clearActiveSkipGeneration(skipGen);
+            if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+              window.apiClient.transmittals.invalidateCounts();
+            }
+            if (typeof Dashboard !== 'undefined') {
+              if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+              if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+            }
+            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+              App.updateSidebarNotifications().catch(() => {});
+            }
             App.handleRoute();
           }, 'success');
         });
@@ -1710,9 +1744,9 @@ const Transmittal = {
       // Optimistic create: insert a local Draft record before the API.
       // ============================================================
       const now = new Date().toISOString();
-      const localId = this._generateTempId();
+      const localId = this._tempId();
       const optimisticItems = items.map((it, idx) => ({
-        id: this._generateTempId(),
+        id: this._tempId(),
         transmittal_id: localId,
         description: it.description,
         document_type: it.documentType,
@@ -1978,6 +2012,16 @@ const Transmittal = {
         return;
       }
       this._clearActiveSkipGeneration(skipGen);
+      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+        window.apiClient.transmittals.invalidateCounts();
+      }
+      if (typeof Dashboard !== 'undefined') {
+        if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+        if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
       App.handleRoute();
     });
   },

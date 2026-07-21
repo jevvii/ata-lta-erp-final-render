@@ -314,8 +314,7 @@ const Clients = {
     } catch (e) {
       console.error(errorTitle, id, e);
       if (originalSnapshot) {
-        const current = ClientsData.getClientById(id);
-        if (current) Object.assign(current, originalSnapshot);
+        ClientsData.replaceClientById(id, originalSnapshot);
       }
       this._updateCounts(-activeDelta, -archivedDelta);
       this._clearOptimisticSkipIfCurrent(gen);
@@ -363,7 +362,7 @@ const Clients = {
     } catch (e) {
       console.error(errorTitle, id, e);
       if (originalSnapshot) {
-        ClientsData.addClient(originalSnapshot);
+        ClientsData.replaceClientById(id, originalSnapshot);
       }
       this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
       this._clearOptimisticSkipIfCurrent(gen);
@@ -1542,6 +1541,12 @@ const Clients = {
           }
           window.apiClient.clientCache._loadedAt = Date.now();
         }
+        if (typeof window.apiClient?.clients?.invalidateCounts === 'function') {
+          window.apiClient.clients.invalidateCounts();
+        }
+        if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+          App.updateSidebarNotifications().catch(() => {});
+        }
         if (typeof Dashboard !== 'undefined') {
           if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
           else if (Dashboard._dataCache) Dashboard._dataCache = null;
@@ -1832,14 +1837,6 @@ const Clients = {
           Workflow.showMessage('Error', `${failCount} client(s) could not be restored.`, 'error');
         } else {
           Workflow.showMessage('Restored', `${eligible.length} client(s) restored to Active Clients.`, 'success');
-        }
-      },
-      'success'
-    );
-  },
-          Workflow.showMessage('Error', lastError?.message || `Unable to restore ${failedCount} client(s).`, 'error');
-        } else {
-          Workflow.showMessage('Restored', `${clientIds.length} client(s) restored to Active Clients.`, 'success');
         }
       },
       'success'

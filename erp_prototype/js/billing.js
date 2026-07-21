@@ -635,16 +635,20 @@ const Billing = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    // Load server counts when stale; rejected count is still loaded separately
-    // because the backend derives rejected from pending_changes + operations_requests.
-    this.loadCounts();
-    this.loadRejectedCount();
+    // Refresh server counts in the background only when stale; render from local
+    // counts immediately so tab badges do not flicker after optimistic mutations.
+    if (!this._counts || this._countsEntity !== entity) {
+      this.loadCounts(true).then(() => this.loadRejectedCount(true));
+    }
 
     const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
-    const invoiceCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
+    const cacheActiveCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
     const cacheArchiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length;
-    // Prefer the server counts if they exist, otherwise derive from the local cache.
-    const archiveCount = (this._counts?.archived >= 0 ? this._counts.archived : cacheArchiveCount) + (this._counts?.rejected || 0);
+    // Prefer the maintained _counts object (updated optimistically) and fall back to
+    // a full scan of the local cache only when counts have not been loaded yet.
+    const invoiceCount = (this._counts?.active >= 0) ? this._counts.active : cacheActiveCount;
+    const archiveDbCount = (this._counts?.archived >= 0) ? this._counts.archived : cacheArchiveCount;
+    const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
     const tabs = [
@@ -2226,10 +2230,18 @@ const Billing = {
     } else {
       try {
         if (record.status === 'Draft' || !requiresApproval) {
-          const res = await window.apiClient.invoices.update(record.id, apiPayload);
-          record.updatedAt = res.data.updated_at || res.data.updatedAt;
-          record.status = res.data.status;
-          serverRecord = record;
+          try {
+            await this._optimisticUpdate(
+              record.id,
+              record,
+              () => window.apiClient.invoices.update(record.id, apiPayload),
+              'Failed to save invoice'
+            );
+            serverRecord = this.getInvoiceById(record.id);
+          } catch (e) {
+            // Rollback, skip-generation clear, toast, and re-render are handled in _optimisticUpdate.
+            return;
+          }
         } else {
           result = await PendingChanges.submit('invoices', record, false);
           if (result.approved) {
@@ -2237,6 +2249,13 @@ const Billing = {
             record.updatedAt = res.data.updated_at || res.data.updatedAt;
             record.status = res.data.status;
             serverRecord = record;
+            if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+              window.apiClient.invoices.invalidateCounts();
+            }
+            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+              App.updateSidebarNotifications().catch(() => {});
+            }
+            App.handleRoute();
           }
         }
       } catch (e) {

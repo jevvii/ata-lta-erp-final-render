@@ -1143,7 +1143,34 @@ const Workflow = {
       if (res?.data) {
         const norm = WorkflowData.normalizeWorkRequest(res.data);
         const current = WorkflowData.getWorkRequestById(id);
-        if (current) Object.assign(current, norm);
+        if (current) {
+          // Preserve frontend-only extensions the server response may omit.
+          if ((!norm.tasks || (Array.isArray(norm.tasks) && norm.tasks.length === 0)) && current.tasks) {
+            norm.tasks = current.tasks;
+          }
+          if ((norm.priority === 'Normal' || !norm.priority) && current.priority && current.priority !== 'Normal') {
+            norm.priority = current.priority;
+          }
+          if (!norm.linkedInvoiceId && current.linkedInvoiceId) {
+            norm.linkedInvoiceId = current.linkedInvoiceId;
+          }
+          if ((!norm.linkedDisbursementIds || (Array.isArray(norm.linkedDisbursementIds) && norm.linkedDisbursementIds.length === 0)) && current.linkedDisbursementIds) {
+            norm.linkedDisbursementIds = current.linkedDisbursementIds;
+          }
+          if ((!norm.linkedTransmittalIds || (Array.isArray(norm.linkedTransmittalIds) && norm.linkedTransmittalIds.length === 0)) && current.linkedTransmittalIds) {
+            norm.linkedTransmittalIds = current.linkedTransmittalIds;
+          }
+          if ((norm.archived === false || typeof norm.archived === 'undefined') && current.archived) {
+            norm.archived = current.archived;
+          }
+          if ((norm.boardOrder === null || typeof norm.boardOrder === 'undefined') && current.boardOrder != null) {
+            norm.boardOrder = current.boardOrder;
+          }
+          if ((norm.isPendingApproval === false || typeof norm.isPendingApproval === 'undefined') && current.isPendingApproval) {
+            norm.isPendingApproval = current.isPendingApproval;
+          }
+          Object.assign(current, norm);
+        }
       }
       this._clearSkipGenerationIfLatest(gen);
       if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
@@ -1961,10 +1988,13 @@ const Workflow = {
       async () => {
         const now = new Date().toISOString();
         const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
+        // Snapshot cancellable tasks so we can roll them back if the WR update fails.
+        const taskSnapshots = [];
         let cancelledCount = 0;
 
         for (const t of tasks) {
           if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+            taskSnapshots.push({ id: t.id, status: t.status });
             await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
             cancelledCount++;
           }
@@ -1982,7 +2012,12 @@ const Workflow = {
             'warning'
           );
         } catch (e) {
-          // Handled in _optimisticUpdate
+          // Roll back the optimistically cancelled tasks if the WR update failed.
+          for (const snapshot of taskSnapshots) {
+            const task = WorkflowData.getTaskById(snapshot.id);
+            if (task) task.status = snapshot.status;
+          }
+          this.showMessage('Cancel Failed', 'Work Request could not be cancelled; task statuses have been restored.', 'error');
         }
       },
       'danger'
@@ -7096,6 +7131,22 @@ const Workflow = {
           else if (Dashboard._dataCache) Dashboard._dataCache = null;
         }
 
+        // Refresh sidebar notification badges and backend-derived counts.
+        if (window.apiClient?.workRequests?.invalidateCounts) {
+          try {
+            await window.apiClient.workRequests.invalidateCounts();
+          } catch (e) {
+            console.warn('Failed to invalidate work request counts:', e);
+          }
+        }
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) {
+          try {
+            await App.updateSidebarNotifications();
+          } catch (e) {
+            console.warn('Failed to update sidebar notifications:', e);
+          }
+        }
+
         // Re-render while the skip generation is still active so the list shows
         // the server UUID and preserved priority immediately, without waiting for
         // a background server fetch that could miss the new record.
@@ -11930,15 +11981,24 @@ const Workflow = {
       return matchesEntity && Auth.canViewWr(wr);
     };
 
+    const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
+    const skipServerFetch = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+
     let archivedWrs = [];
-    try {
-      const res = await window.apiClient.workRequests.list({ archived: true, includeTasks: true });
-      archivedWrs = (res.data || []).map(wr => WorkflowData.normalizeWorkRequest(wr));
-    } catch (e) {
-      console.error('Failed to load archived work requests', e);
+    if (!skipServerFetch) {
+      try {
+        const res = await window.apiClient.workRequests.list({ archived: true, includeTasks: true });
+        archivedWrs = (res.data || []).map(wr => WorkflowData.normalizeWorkRequest(wr));
+      } catch (e) {
+        console.error('Failed to load archived work requests', e);
+      }
     }
 
-    const localArchived = WorkflowData.getAllWorkRequests().filter(wr => wrFilter(wr) && wr.archived === true);
+    // On the first page or during an optimistic skip, merge locally archived/cancelled
+    // rows so a just-archived/cancelled WR remains visible without waiting for the server.
+    const localArchived = isFirstPageOrSkip
+      ? WorkflowData.getAllWorkRequests().filter(wr => wrFilter(wr) && (wr.archived === true || wr.status === 'Cancelled'))
+      : [];
     const wrMap = new Map();
     archivedWrs.forEach(wr => wrMap.set(wr.id, wr));
     localArchived.forEach(wr => {
