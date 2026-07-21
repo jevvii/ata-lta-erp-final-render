@@ -334,6 +334,12 @@ const WorkflowData = {
     serverTasks.forEach(serverTask => {
       const existing = existingMap.get(serverTask.id);
       if (existing) {
+        // Defensive: if the server returns an empty checklist (because the list
+        // endpoint omitted extras), preserve the local checklist rather than
+        // overwriting it with [] after a refresh or page switch.
+        if (existing.checklist?.length && !serverTask.checklist?.length) {
+          serverTask.checklist = existing.checklist;
+        }
         Object.assign(existing, serverTask);
       } else if (!this._isTempId(serverTask.id)) {
         this._tasks.push(serverTask);
@@ -3952,13 +3958,19 @@ const Workflow = {
   init() {
     this.updateStickyOffsets();
 
-    document.addEventListener('click', () => {
+    // Only register one global click handler for the module; replace the previous
+    // one so repeated route renders do not leak document listeners.
+    if (this._workflowGlobalClickListener) {
+      document.removeEventListener('click', this._workflowGlobalClickListener);
+    }
+    this._workflowGlobalClickListener = () => {
       document.querySelectorAll('.multi-select-menu.show').forEach(m => m.classList.remove('show'));
       document.querySelectorAll('.action-menu-list').forEach(m => {
         m.classList.add('hidden');
         m.classList.remove('open');
       });
-    });
+    };
+    document.addEventListener('click', this._workflowGlobalClickListener);
     if (this.view === 'detail' && this.prefilledTransmittalRequestId) {
       const reqId = this.prefilledTransmittalRequestId;
       this.prefilledTransmittalRequestId = null;
@@ -7348,7 +7360,11 @@ const Workflow = {
 
     if (result.approved) {
       if (isNew) {
+        // Avoid double-populating wr.tasks: _addOptimisticWorkRequest already
+        // copies record.tasks, and _addOptimisticTask also pushes to parentWr.tasks.
+        record.tasks = [];
         WorkflowData._addOptimisticWorkRequest(record);
+        record.tasks = taskRecords;
         this._updateCounts(1, 0);
         for (const t of taskRecords) {
           t.workRequestId = record.id;
@@ -7357,6 +7373,10 @@ const Workflow = {
         const myGen = Workflow._startSkipGeneration();
         this.editingId = null;
         closeFormPanelAndRoute(targetRoute);
+
+        // Yield to the event loop so the UI can paint the route change before
+        // the synchronous-looking cascade of network + DOM work that follows.
+        await new Promise(resolve => setTimeout(resolve, 0));
 
         let createdWr = null;
         let createdTasks = [];
@@ -7446,10 +7466,9 @@ const Workflow = {
           }
         }
 
-        // Re-render while the skip generation is still active so the list shows
-        // the server UUID and preserved priority immediately, without waiting for
-        // a background server fetch that could miss the new record.
-        await App.handleRoute();
+        // closeFormPanelAndRoute already triggered App.handleRoute() before the
+        // server sync. A second render here adds redundant DOM work while the skip
+        // generation is active; just clear the skip flag.
         Workflow._clearSkipGenerationIfLatest(myGen);
       } else {
         await WorkflowData.updateWorkRequest(this.editingId, record);

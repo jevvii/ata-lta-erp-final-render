@@ -775,12 +775,18 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   const dropdownRef = { wrapper, close };
   _ensureSearchableDropdownDocListener();
 
-  input.addEventListener('focus', () => {
+  const listeners = [];
+  const on = (target, type, fn, opts) => {
+    target.addEventListener(type, fn, opts);
+    listeners.push({ target, type, fn, opts });
+  };
+
+  on(input, 'focus', () => {
     input.select();
     open();
   });
 
-  input.addEventListener('input', () => {
+  on(input, 'input', () => {
     highlightIdx = -1;
     if (!isOpen) open();
     renderList(input.value);
@@ -788,11 +794,11 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     wrapper.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
-  input.addEventListener('blur', () => {
+  on(input, 'blur', () => {
     close();
   });
 
-  input.addEventListener('keydown', (e) => {
+  on(input, 'keydown', (e) => {
     const items = listbox.querySelectorAll('.searchable-dropdown-item');
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -818,14 +824,14 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     }
   });
 
-  clearBtn.addEventListener('mousedown', (e) => {
+  on(clearBtn, 'mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
     selectOption('', '');
     close();
   });
 
-  arrow.addEventListener('mousedown', (e) => {
+  on(arrow, 'mousedown', (e) => {
     e.preventDefault();
     if (isOpen) { close(); input.blur(); }
     else { input.focus(); if (!isOpen) open(); }
@@ -856,6 +862,10 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
 
   wrapper.destroy = () => {
     close();
+    listeners.forEach(({ target, type, fn, opts }) => {
+      target.removeEventListener(type, fn, opts);
+    });
+    listeners.length = 0;
   };
 
   // Expose addEventListener on wrapper (already works since it's a div)

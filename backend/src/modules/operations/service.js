@@ -86,6 +86,7 @@ const toApiTask = (row, { checklist = [], timeLogs = [] } = {}) => ({
     completed: c.completed,
     assigneeId: c.assignee_id || null,
     assigneeName: c.assignee_name || null,
+    dependsOn: c.depends_on || [],
   })),
   timeLogs: timeLogs.map((t) => ({
     id: t.id,
@@ -259,13 +260,27 @@ const listWorkRequests = async ({
     ? await loadTasksForWorkRequests(resultRows.map((r) => r.id))
     : new Map();
 
+  // Load checklist/time-log extras when embedding tasks so the client does not
+  // overwrite a freshly-saved checklist with [] after refresh/page switch.
+  let extras = { checklist: new Map(), timeLogs: new Map() };
+  if (withTasks) {
+    const allTaskIds = [];
+    taskMap.forEach((tasks) => allTaskIds.push(...tasks.map((t) => t.id)));
+    extras = await loadTaskExtras(allTaskIds);
+  }
+
   const result = resultRows.map((row) => {
     const code = entityCodeMap
       ? entityCodeMap.get(row.entity_id) || row.entity_id
       : singleEntityCode;
     const wr = toApiWorkRequest(row, code);
     if (withTasks) {
-      wr.tasks = (taskMap.get(row.id) || []).map((t) => toApiTask(t));
+      wr.tasks = (taskMap.get(row.id) || []).map((t) =>
+        toApiTask(t, {
+          checklist: extras.checklist.get(t.id) || [],
+          timeLogs: extras.timeLogs.get(t.id) || [],
+        })
+      );
     }
     return wr;
   });
@@ -565,6 +580,7 @@ const upsertChecklist = async (taskId, checklist) => {
     completed: item.completed ?? false,
     assignee_id: item.assigneeId || null,
     assignee_name: item.assigneeName || null,
+    depends_on: item.dependsOn || [],
   }));
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);
 };

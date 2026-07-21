@@ -11,6 +11,7 @@ const checklistItemSchema = z.object({
   completed: z.boolean().default(false),
   assigneeId: z.string().uuid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
+  dependsOn: z.array(z.string().uuid()).optional().nullable(),
 });
 
 const timeLogSchema = z.object({
