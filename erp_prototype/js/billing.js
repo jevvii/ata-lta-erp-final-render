@@ -632,6 +632,10 @@ const Billing = {
       titleBar.appendChild(el('h1', { text: 'Billing' }));
       container.appendChild(titleBar);
 
+      // Ensure cache is fresh for the active entity, then recompute tab counts
+      // synchronously from the local cache before rendering the tab nav.
+      await this.ensure();
+      this._refreshCounts();
       // Tab navigation (counts are derived from the local cache; no /counts API call).
       container.appendChild(this.renderTabNav());
     }

@@ -605,6 +605,7 @@ const Transmittal = {
 
       await this.ensure();
       await this._loadRejectedArchiveCounts();
+      this._refreshCounts();
 
       container.appendChild(this.renderTabNav());
     }
@@ -2764,10 +2765,10 @@ const Transmittal = {
     await this.ensure();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(t => t.id === id))
-      .filter(t => t && t.archived);
+      .filter(t => t && (t.archived || t.status === 'Cancelled'));
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'No archived transmittals selected.', 'info');
+      Workflow.showMessage('No eligible records', 'No archived or cancelled transmittals selected.', 'info');
       return;
     }
 
@@ -2778,12 +2779,22 @@ const Transmittal = {
         let failCount = 0;
         for (const t of eligible) {
           try {
-            await this._optimisticUpdate(
-              t.id,
-              { archived: false },
-              () => window.apiClient.transmittals.unarchive(t.id),
-              'Failed to restore transmittal'
-            );
+            if (t.status === 'Cancelled') {
+              // Cancelled items are restored back to Draft regardless of archived flag.
+              await this._optimisticUpdate(
+                t.id,
+                { status: 'Draft', archived: false },
+                () => window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false }),
+                'Failed to restore transmittal'
+              );
+            } else {
+              await this._optimisticUpdate(
+                t.id,
+                { archived: false },
+                () => window.apiClient.transmittals.unarchive(t.id),
+                'Failed to restore transmittal'
+              );
+            }
             successCount++;
           } catch (e) {
             failCount++;
@@ -2855,16 +2866,15 @@ const Transmittal = {
       return !cached || cached.archived !== false || cached.status === 'Cancelled';
     });
 
-    const acknowledged = filteredTransmittals.filter(t => {
+    const accomplished = filteredTransmittals.filter(t => {
       const cached = (this._items || []).find(i => i.id === t.id);
       const isArchived = t.archived === true || (cached && cached.archived === true);
-      const status = t.status || cached?.status;
-      return this._entityMatches(t, entity) && isArchived && status === 'Acknowledged';
+      return this._entityMatches(t, entity) && isArchived;
     });
 
     const cancelledMap = new Map();
     filteredTransmittals.concat(isFirstPageOrSkip ? (this._items || []) : []).forEach(t => {
-      if (this._entityMatches(t, entity) && t.status === 'Cancelled') cancelledMap.set(t.id, t);
+      if (this._entityMatches(t, entity) && t.status === 'Cancelled' && !t.archived) cancelledMap.set(t.id, t);
     });
     const cancelled = Array.from(cancelledMap.values());
 
@@ -2899,7 +2909,7 @@ const Transmittal = {
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
           },
-          ...(category === 'acknowledged' && isAdmin ? [{
+          ...(category === 'accomplished' && isAdmin ? [{
             label: 'Unarchive',
             icon: ArchivePage.icons.unarchive,
             className: 'primary',
@@ -2969,13 +2979,16 @@ const Transmittal = {
     const meta = this._lastArchiveMeta || {};
     const page = meta.page || this._archivePage || 1;
     const limit = meta.limit || this._archiveLimit || 20;
-    const total = meta.total || (acknowledged.length + cancelled.length + rejectedTransmittalRequests.length);
+    // When local optimistic records are merged (page 1 or active skip), use the
+    // merged visible total so pagination matches the actual rendered items.
+    const mergedTotal = accomplished.length + cancelled.length + rejectedTransmittalRequests.length;
+    const total = isFirstPageOrSkip ? Math.max(meta.total || 0, mergedTotal) : (meta.total || mergedTotal);
 
     return ArchivePage.render({
       module: 'transmittal',
-      categoryLabels: { acknowledged: 'Acknowledged', cancelled: 'Cancelled', rejected: 'Rejected' },
+      categoryLabels: { accomplished: 'Archived', cancelled: 'Cancelled', rejected: 'Rejected' },
       categories: {
-        acknowledged: acknowledged.map(t => buildItem(t, 'acknowledged')),
+        accomplished: accomplished.map(t => buildItem(t, 'accomplished')),
         cancelled: cancelled.map(t => buildItem(t, 'cancelled')),
         rejected: rejectedTransmittalRequests.map(buildRejectedItem)
       },

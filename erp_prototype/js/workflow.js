@@ -3562,6 +3562,9 @@ const Workflow = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Operations' }));
       container.appendChild(titleBar);
+      // Recompute tab counts from the freshly loaded local cache before rendering
+      // the tab navigation so badges never display stale values.
+      Workflow._refreshCounts();
       container.appendChild(this.renderTabNav());
     } else if (this.view === 'form') {
       // Full-page work-request form: breadcrumb with view switcher + save/cancel

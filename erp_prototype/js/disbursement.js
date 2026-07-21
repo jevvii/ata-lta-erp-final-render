@@ -944,6 +944,7 @@ const Disbursement = {
       // renderTabNav can derive badges from local data instead of the API.
       await this.ensure();
       await this._loadRejectedArchiveCounts();
+      this._refreshCounts();
 
       container.appendChild(this.renderTabNav());
     }
@@ -3414,10 +3415,6 @@ const Disbursement = {
           }
         }
       ]
-    });
-
-    this.backgroundRefreshTemplates().catch(err => {
-      if (!isAbortError(err)) console.warn('Disbursement template background refresh failed', err);
     });
 
     this.backgroundRefreshTemplates().catch(err => {

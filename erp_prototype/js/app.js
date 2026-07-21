@@ -230,11 +230,6 @@ const App = {
       console.error('[App.updateSidebarNotifications] transmittal counts failed', txResult.reason);
     }
 
-    // Module-level nav badges for items needing attention.
-    this._updateNavBadge('#disbursement', disbCounts?.data?.active || 0);
-    this._updateNavBadge('#billing', invCounts?.data?.active || 0);
-    this._updateNavBadge('#transmittal', txCounts?.data?.active || 0);
-
     // Admin nav badge: reflect pending approvals / pending submissions to draw attention.
     const adminNav = document.querySelector('nav a[href="#admin"]');
     if (adminNav) {

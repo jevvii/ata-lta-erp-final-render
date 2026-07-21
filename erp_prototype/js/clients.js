@@ -208,6 +208,7 @@ const Clients = {
   _counts: null,
   _countsEntity: null,
   _countsFromApi: false,
+  _rejectedArchiveCounts: null,
 
   _isTempId(id) {
     return typeof id === 'string' && id.startsWith('temp-');
@@ -393,6 +394,7 @@ const Clients = {
     this._counts = null;
     this._countsEntity = null;
     this._countsFromApi = false;
+    this._rejectedArchiveCounts = null;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
   },
@@ -492,7 +494,13 @@ const Clients = {
     const titleBar = el('div', { class: 'page-title-bar-v2' });
     titleBar.appendChild(el('h1', { text: 'Clients' }));
     container.appendChild(titleBar);
-    container.appendChild(await this.renderTabNav());
+    // Ensure cache is fresh for the active entity and load rejected counts, then
+    // recompute tab counts synchronously from the local cache before rendering the
+    // tab navigation.
+    await ClientsData.ensure();
+    await this._loadRejectedArchiveCounts();
+    this._refreshCounts();
+    container.appendChild(this.renderTabNav());
 
     // Toolbar (Sticky Container)
     const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
@@ -579,37 +587,16 @@ const Clients = {
     }
   },
 
-  async renderTabNav() {
+  async _loadRejectedArchiveCounts() {
     const entity = Auth.activeEntity;
-    const isAdmin = Auth.user?.role === 'Admin';
     const isManagerial = typeof Auth.isManagerial === 'function' ? Auth.isManagerial() : false;
-    let activeCount = 0;
-    let archivedCount = 0;
-    let rejectedCount = 0;
-
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
       if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
       return uEnt === entity.toUpperCase();
     };
-
+    let rejectedCount = 0;
     try {
-      await ClientsData.ensure();
-      if (this._counts && this._countsEntity !== this._getActiveEntity()) {
-        this._counts = null;
-        this._countsEntity = null;
-      }
-      if (this._counts) {
-        activeCount = this._counts.activeCount;
-        archivedCount = this._counts.archivedCount;
-      } else {
-        this._refreshCounts();
-        if (this._counts) {
-          activeCount = this._counts.activeCount;
-          archivedCount = this._counts.archivedCount;
-        }
-      }
-
       const [pendingRes, opRes] = await Promise.all([
         window.apiClient.admin.listPendingApprovals({ status: 'rejected', tableName: 'clients' }),
         window.apiClient.operationsRequests.list({ type: 'client', status: 'rejected' })
@@ -627,8 +614,34 @@ const Clients = {
       });
       rejectedCount = rejectedClientChanges.length + rejectedClientRequests.length;
     } catch (e) {
-      console.error('Failed to load client tab counts', e);
+      console.error('Failed to load client rejected archive counts', e);
     }
+    this._rejectedArchiveCounts = { total: rejectedCount };
+    return this._rejectedArchiveCounts;
+  },
+
+  renderTabNav() {
+    const entity = Auth.activeEntity;
+    const isAdmin = Auth.user?.role === 'Admin';
+    let activeCount = 0;
+    let archivedCount = 0;
+
+    if (this._counts && this._countsEntity !== this._getActiveEntity()) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
+    if (this._counts) {
+      activeCount = this._counts.activeCount;
+      archivedCount = this._counts.archivedCount;
+    } else {
+      this._refreshCounts();
+      if (this._counts) {
+        activeCount = this._counts.activeCount;
+        archivedCount = this._counts.archivedCount;
+      }
+    }
+
+    const rejectedCount = this._rejectedArchiveCounts?.total || 0;
     const archiveCount = archivedCount + rejectedCount;
 
     const tabs = [
