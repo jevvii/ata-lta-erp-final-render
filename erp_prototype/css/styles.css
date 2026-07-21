@@ -8721,7 +8721,14 @@ tbody tr:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
-  overflow: hidden;
+  overflow: visible; /* Prevent dropdown clipping */
+}
+
+/* Ensure corners are rounded when overflow is visible */
+.task-list .group-header:first-child,
+.task-list .table-header:first-child {
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
 }
 
 /* WR detail task list should not look like a nested card inside task-group-v2 */
@@ -8739,6 +8746,9 @@ tbody tr:hover {
   padding: var(--space-4) var(--space-5);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
 }
 
 .task-list .group-title {
@@ -8774,6 +8784,9 @@ tbody tr:hover {
   letter-spacing: 0.04em;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 50;
 }
 
 .task-list .table-header span {
@@ -9053,6 +9066,16 @@ tbody tr:hover {
 .task-list .action-menu-list.open {
   opacity: 1;
   pointer-events: auto;
+  transform: translateY(0);
+}
+
+.task-list .action-menu-list.open-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+  transform: translateY(4px);
+}
+
+.task-list .action-menu-list.open-up.open {
   transform: translateY(0);
 }
 
@@ -10586,6 +10609,57 @@ tbody tr:hover {
 .notion-popover-file-item:hover {
   border-color: var(--color-primary);
   background: color-mix(in srgb, var(--color-primary), transparent 95%);
+}
+
+/* Notion Drag and Drop Zone and Header Styles */
+.notion-popover-dropzone {
+  border: 2px dashed var(--color-border);
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--color-bg);
+  transition: all 0.2s ease;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.notion-popover-dropzone:hover, .notion-popover-dropzone.dragover {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary), transparent 97%);
+  color: var(--color-primary);
+}
+.notion-popover-dropzone svg {
+  color: var(--color-text-muted);
+  transition: color 0.2s ease;
+}
+.notion-popover-dropzone:hover svg, .notion-popover-dropzone.dragover svg {
+  color: var(--color-primary);
+}
+.notion-popover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.notion-popover-title {
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+.notion-popover-close {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+}
+.notion-popover-close:hover {
+  color: var(--color-text);
 }
 
 /* Ensure scrolled-to cards and rows remain visible below sticky headers */

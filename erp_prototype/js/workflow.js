@@ -6282,7 +6282,7 @@ const Workflow = {
         const addDocBtn = el('button', { class: 'btn btn-primary btn-xs', text: '+ Upload File' });
         addDocBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.showAddDocumentModal(task.id);
+          this.showAddDocumentModal(task.id, addDocBtn);
         });
         docHeaderActions.appendChild(addDocBtn);
       }
@@ -9194,6 +9194,13 @@ const Workflow = {
             }
           });
           if (menuList.classList.contains('hidden')) {
+            const rect = moreActionsBtn.getBoundingClientRect();
+            const spaceBelow = window.innerHeight - rect.bottom;
+            if (spaceBelow < 250) {
+              menuList.classList.add('open-up');
+            } else {
+              menuList.classList.remove('open-up');
+            }
             menuList.classList.remove('hidden');
             setTimeout(() => {
               menuList.classList.add('open');
@@ -9661,7 +9668,7 @@ const Workflow = {
         if ((canHandover || canUploadTaskDocs) && !isArchived) {
           const addDocBtn = el('button', { class: 'btn btn-primary btn-xs btn-add-inline', text: '+ Upload' });
           if (!disableIfPending(addDocBtn, wr)) {
-            addDocBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddDocumentModal(t.id); });
+            addDocBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddDocumentModal(t.id, addDocBtn); });
           }
           docsHeader.appendChild(addDocBtn);
         }
@@ -10371,7 +10378,7 @@ const Workflow = {
         const extUrl = doc.external_url;
         if (extUrl.includes('figma.com')) {
           viewer.innerHTML = `<iframe src="https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(extUrl)}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
-        } else if (extUrl.includes('drive.google.com') || extUrl === 'mock-google-drive-data-url') {
+        } else if (extUrl.includes('drive.google.com') || extUrl.includes('docs.google.com') || extUrl === 'mock-google-drive-data-url') {
           viewer.innerHTML = `<iframe src="${extUrl}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
         } else {
           viewer.appendChild(el('div', { class: 'document-preview-fallback', style: 'padding: 20px; text-align: center;' }, [
@@ -10425,39 +10432,331 @@ const Workflow = {
     }
   },
 
-  async showAddDocumentModal(taskId) {
+  async showAddDocumentModal(taskId, triggerEl) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
 
-    const form = el('form', { class: 'form-stacked' });
-    form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Select File *' }),
-      el('input', { type: 'file', name: 'docFile', required: true })
-    ]));
-    const submitBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Upload' });
-    form.appendChild(submitBtn);
+    // Remove any existing popover
+    const existing = document.querySelector('.notion-embed-popover');
+    if (existing) existing.remove();
 
-    const overlay = this.showModal('Upload Document', form, null);
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const file = form.querySelector('input[name="docFile"]').files[0];
-      if (!file) return;
+    const popover = el('div', { class: 'notion-embed-popover' });
 
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'Uploading...';
+    // Header: Title + Close button
+    const header = el('div', { class: 'notion-popover-header' });
+    header.appendChild(el('span', { class: 'notion-popover-title', text: 'Add Document' }));
+    const closeBtn = el('button', { class: 'notion-popover-close', text: '✕' });
+    closeBtn.addEventListener('click', () => popover.remove());
+    header.appendChild(closeBtn);
+    popover.appendChild(header);
 
-      try {
-        await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
-        overlay.remove();
-        this.showTaskSidePane(taskId, null);
-        App.handleRoute();
-      } catch (err) {
-        console.error('Failed to upload task document', err);
-        this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Upload';
+    // Create tabs header
+    const tabsHeader = el('div', { class: 'notion-popover-tabs' });
+    const contentArea = el('div', { class: 'notion-popover-content' });
+
+    let activeTab = 'upload'; // upload, link, gdrive
+
+    const renderContent = () => {
+      contentArea.innerHTML = '';
+
+      if (activeTab === 'upload') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        
+        // Drag-and-drop zone
+        const dropzone = el('div', { class: 'notion-popover-dropzone' });
+        dropzone.innerHTML = `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div>Drag & drop file here, or click to browse</div>
+          <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+        `;
+
+        const fileInput = el('input', { type: 'file', style: 'display: none;' });
+        panel.appendChild(fileInput);
+        panel.appendChild(dropzone);
+
+        const statusLabel = el('div', { style: 'font-size: 0.75rem; text-align: center; margin-top: 8px;' });
+        const errorLabel = el('div', { style: 'font-size: 0.75rem; text-align: center; margin-top: 8px; color: var(--color-danger); font-weight: 500;' });
+        const uploadBtn = el('button', { class: 'notion-popover-submit', text: 'Upload file', style: 'margin-top: 8px; display: none;' });
+        
+        panel.appendChild(statusLabel);
+        panel.appendChild(errorLabel);
+        panel.appendChild(uploadBtn);
+
+        let selectedFile = null;
+
+        const handleFile = (file) => {
+          errorLabel.textContent = '';
+          statusLabel.textContent = '';
+          uploadBtn.style.display = 'none';
+          selectedFile = null;
+
+          if (!file) return;
+
+          // Validate file size (50MB)
+          const limit = 50 * 1024 * 1024;
+          if (file.size > limit) {
+            errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+            fileInput.value = '';
+            return;
+          }
+
+          selectedFile = file;
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+          statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+          uploadBtn.style.display = 'flex';
+        };
+
+        dropzone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          handleFile(fileInput.files[0]);
+        });
+
+        dropzone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropzone.classList.add('dragover');
+        });
+        dropzone.addEventListener('dragleave', () => {
+          dropzone.classList.remove('dragover');
+        });
+        dropzone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropzone.classList.remove('dragover');
+          if (e.dataTransfer.files.length > 0) {
+            handleFile(e.dataTransfer.files[0]);
+          }
+        });
+
+        uploadBtn.addEventListener('click', async () => {
+          if (!selectedFile) return;
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Uploading...';
+          try {
+            await this.uploadTaskDocument(taskId, selectedFile, { category: 'OTHER' });
+            popover.remove();
+            this.showTaskSidePane(taskId, null);
+            App.handleRoute();
+          } catch (err) {
+            console.error('Failed to upload document', err);
+            errorLabel.textContent = 'Upload Failed: ' + (err.message || 'Unknown error');
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload file';
+          }
+        });
+
+        contentArea.appendChild(panel);
+      } else if (activeTab === 'link') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        const linkInput = el('input', { type: 'text', class: 'notion-popover-input', placeholder: 'Paste in link...' });
+        const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Link file' });
+        
+        submitBtn.addEventListener('click', async () => {
+          const val = linkInput.value.trim();
+          if (!val) return;
+
+          let fileName = 'Linked Document';
+          try {
+            const url = new URL(val);
+            const pathParts = url.pathname.split('/');
+            const lastPart = pathParts[pathParts.length - 1];
+            if (lastPart && lastPart.includes('.')) {
+              fileName = lastPart;
+            }
+          } catch(e) {}
+
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Linking...';
+
+          try {
+            await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
+            popover.remove();
+            this.showTaskSidePane(taskId, null);
+            App.handleRoute();
+          } catch (err) {
+            console.error('Failed to link document', err);
+            this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Link file';
+          }
+        });
+        
+        panel.appendChild(linkInput);
+        panel.appendChild(submitBtn);
+        contentArea.appendChild(panel);
+      } else if (activeTab === 'gdrive') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        
+        // Link GDrive URL
+        const linkInput = el('input', { type: 'text', class: 'notion-popover-input', placeholder: 'Paste Google Drive URL...' });
+        const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Link GDrive File' });
+        
+        submitBtn.addEventListener('click', async () => {
+          const val = linkInput.value.trim();
+          if (!val) return;
+
+          let fileName = 'GDrive Document';
+          try {
+            const url = new URL(val);
+            const pathParts = url.pathname.split('/');
+            const lastPart = pathParts[pathParts.length - 1];
+            if (lastPart && lastPart.includes('.')) {
+              fileName = lastPart;
+            }
+          } catch(e) {}
+
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Linking...';
+
+          try {
+            await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
+            popover.remove();
+            this.showTaskSidePane(taskId, null);
+            App.handleRoute();
+          } catch (err) {
+            console.error('Failed to link GDrive document', err);
+            this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Link GDrive File';
+          }
+        });
+
+        // Or choose from list divider
+        const divider = el('div', { 
+          text: 'or choose from Google Drive', 
+          style: 'font-size: 0.6875rem; color: var(--color-text-muted); text-align: center; margin: 8px 0; border-top: 1px solid var(--color-border); padding-top: 8px;' 
+        });
+
+        // Browse Google Drive panel
+        const fileList = el('div', { class: 'notion-popover-file-list' });
+        const driveFiles = [
+          { name: 'Operations_Handbook.pdf', size: '2.4 MB' },
+          { name: 'Q2_Strategy_Presentation.pdf', size: '5.1 MB' },
+          { name: 'WR_Vendor_Contracts.xlsx', size: '1.2 MB' },
+          { name: 'Client_Receipts_Archive.zip', size: '15.8 MB' }
+        ];
+        
+        driveFiles.forEach(f => {
+          const item = el('div', { class: 'notion-popover-file-item' });
+          item.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="color: #22c55e;"><path d="M2.5 17h19M4.5 14l3.5-6h8l3.5 6M9 9h6M12 3v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span style="font-weight: 500;">${f.name}</span>
+            </div>
+            <span style="font-size: 0.75rem; color: var(--color-text-muted);">${f.size}</span>
+          `;
+          item.addEventListener('click', async () => {
+            try {
+              await this.linkTaskDocument(taskId, 'https://docs.google.com/document/d/123456/preview', {
+                fileName: f.name,
+                isGoogleDrive: true,
+                category: 'OTHER'
+              });
+              popover.remove();
+              this.showTaskSidePane(taskId, null);
+              App.handleRoute();
+            } catch (err) {
+              console.error('Failed to embed GDrive document', err);
+              this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+            }
+          });
+          fileList.appendChild(item);
+        });
+
+        panel.appendChild(linkInput);
+        panel.appendChild(submitBtn);
+        panel.appendChild(divider);
+        panel.appendChild(fileList);
+        contentArea.appendChild(panel);
       }
+    };
+
+    // Build tabs
+    const tab1Btn = el('button', { class: 'notion-tab-btn active', text: 'Upload' });
+    const tab2Btn = el('button', { class: 'notion-tab-btn', text: 'Link' });
+    const tab3Btn = el('button', { class: 'notion-tab-btn', text: 'Google Drive' });
+
+    tab1Btn.addEventListener('click', () => {
+      if (activeTab === 'upload') return;
+      activeTab = 'upload';
+      tab1Btn.classList.add('active');
+      tab2Btn.classList.remove('active');
+      tab3Btn.classList.remove('active');
+      renderContent();
     });
+
+    tab2Btn.addEventListener('click', () => {
+      if (activeTab === 'link') return;
+      activeTab = 'link';
+      tab2Btn.classList.add('active');
+      tab1Btn.classList.remove('active');
+      tab3Btn.classList.remove('active');
+      renderContent();
+    });
+
+    tab3Btn.addEventListener('click', () => {
+      if (activeTab === 'gdrive') return;
+      activeTab = 'gdrive';
+      tab3Btn.classList.add('active');
+      tab1Btn.classList.remove('active');
+      tab2Btn.classList.remove('active');
+      renderContent();
+    });
+
+    tabsHeader.appendChild(tab1Btn);
+    tabsHeader.appendChild(tab2Btn);
+    tabsHeader.appendChild(tab3Btn);
+
+    popover.appendChild(tabsHeader);
+    popover.appendChild(contentArea);
+
+    document.body.appendChild(popover);
+    renderContent();
+
+    // Position popover with edge awareness
+    const position = () => {
+      const popoverWidth = 360;
+      if (!triggerEl) {
+        popover.style.position = 'fixed';
+        popover.style.left = '50%';
+        popover.style.top = '50%';
+        popover.style.transform = 'translate(-50%, -50%)';
+        return;
+      }
+      
+      const triggerRect = triggerEl.getBoundingClientRect();
+      
+      let left = triggerRect.left + window.scrollX;
+      let top = triggerRect.bottom + window.scrollY + 6;
+      
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      if (left + popoverWidth > viewportWidth - 16) {
+        left = viewportWidth - popoverWidth - 16;
+      }
+      if (left < 16) {
+        left = 16;
+      }
+      
+      const popoverHeight = popover.offsetHeight || 280;
+      if (triggerRect.bottom + popoverHeight > viewportHeight - 16) {
+        top = triggerRect.top + window.scrollY - popoverHeight - 6;
+      }
+      
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+    };
+    
+    position();
+    requestAnimationFrame(position);
+
+    // Click outside handler
+    const onMouseDown = (e) => {
+      if (!popover.contains(e.target) && (!triggerEl || !triggerEl.contains(e.target))) {
+        popover.remove();
+        document.removeEventListener('mousedown', onMouseDown);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
   },
 
   async showAttachmentPopover(taskId, triggerEl, mode) {
