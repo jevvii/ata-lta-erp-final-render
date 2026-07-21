@@ -428,13 +428,6 @@ const deleteTransmittal = async ({ entityId, id, userId }) => {
 
 const archiveTransmittal = async ({ entityId, id, userId }) => {
   const existing = await getTransmittalById({ entityId, id });
-  if (existing.status !== 'Acknowledged') {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: 'Only Acknowledged transmittals can be archived',
-    });
-  }
 
   const { data: updated, error } = await supabaseAdmin
     .from('transmittals')

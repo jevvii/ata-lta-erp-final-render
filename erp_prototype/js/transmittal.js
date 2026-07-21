@@ -244,6 +244,7 @@ const Transmittal = {
     const wasArchived = originalItem ? (originalItem.archived || originalItem.status === 'Cancelled') : false;
 
     const snapshot = this._updateCachedItem(id, { ...patch, updatedAt: new Date().toISOString() });
+    this._refreshCounts();
     const updatedItem = (this._items || []).find(t => t.id === id);
     const isNowActive = updatedItem ? (!updatedItem.archived && updatedItem.status !== 'Cancelled') : false;
     const isNowArchived = updatedItem ? (updatedItem.archived || updatedItem.status === 'Cancelled') : false;
@@ -306,6 +307,7 @@ const Transmittal = {
     if (index !== -1) {
       originalItem = items[index];
       this._items = [...items.slice(0, index), ...items.slice(index + 1)];
+      this._refreshCounts();
     }
     const wasActive = originalItem ? (!originalItem.archived && originalItem.status !== 'Cancelled') : false;
     const wasArchived = originalItem ? (originalItem.archived || originalItem.status === 'Cancelled') : false;
@@ -531,18 +533,15 @@ const Transmittal = {
         }
 
         if (Auth.user?.role === 'Admin') {
-          if (!t.archived && t.status === 'Acknowledged') {
+          if (!t.archived) {
             const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-right:8px;' });
             archiveBtn.addEventListener('click', () => { this.archiveTransmittal(t.id); });
             actions.appendChild(archiveBtn);
-          } else if (t.archived) {
+          } else {
             const unarchiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Unarchive', style: 'margin-right:8px;' });
             unarchiveBtn.addEventListener('click', () => { this.unarchiveTransmittal(t.id); });
             actions.appendChild(unarchiveBtn);
           }
-          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete', style: 'margin-right:8px;' });
-          deleteBtn.addEventListener('click', () => { this.permanentDeleteTransmittal(t.id); });
-          actions.appendChild(deleteBtn);
         }
 
         const printBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Print Transmittal', style: 'margin-right:8px;' });
@@ -647,16 +646,21 @@ const Transmittal = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    const entFilter = ent => {
-      const uEnt = (ent || '').toUpperCase();
-      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(uEnt);
-      return uEnt === entity.toUpperCase();
-    };
 
-    const cachedItems = (this._items || []).filter(t => entFilter(t.entity));
-    const countsFresh = this._counts && this._countsEntity === this._getActiveEntity();
-    const activeCount = countsFresh ? this._counts.active : cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
-    const archiveDbCount = countsFresh ? this._counts.archived : cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
+    // Derive active/archive badges synchronously from the cached _items for the current entity.
+    let activeCount;
+    let archiveDbCount;
+    if (this.hasData()) {
+      const cachedItems = (this._items || []).filter(t => this._entityMatches(t, entity));
+      activeCount = cachedItems.filter(t => !t.archived && t.status !== 'Cancelled').length;
+      archiveDbCount = cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
+    } else if (this._counts && this._countsEntity === this._getActiveEntity()) {
+      activeCount = this._counts.active || 0;
+      archiveDbCount = this._counts.archived || 0;
+    } else {
+      activeCount = 0;
+      archiveDbCount = 0;
+    }
     const rejectedCount = this._rejectedArchiveCounts?.total || 0;
     const archiveCount = archiveDbCount + rejectedCount;
 
@@ -1153,15 +1157,10 @@ const Transmittal = {
         ackBtn.addEventListener('click', (e) => { e.stopPropagation(); self.showAcknowledgeDialog(t.id); });
         wrapper.appendChild(ackBtn);
       }
-      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
+      if (!t.archived && Auth.user?.role === 'Admin') {
         const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
         archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
         wrapper.appendChild(archiveBtn);
-      }
-      if (Auth.user?.role === 'Admin') {
-        const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete', style: 'margin-left:4px;' });
-        deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); self.permanentDeleteTransmittal(t.id); });
-        wrapper.appendChild(deleteBtn);
       }
       return wrapper;
     };
@@ -1191,7 +1190,7 @@ const Transmittal = {
       bulkActions: (selectedIds) => {
         if (Auth.user?.role !== 'Admin') return [];
         const selectedItems = selectedIds.map(id => items.find(t => t.id === id)).filter(Boolean);
-        const canArchiveCount = selectedItems.filter(t => t.status === 'Acknowledged' && !t.archived).length;
+        const canArchiveCount = selectedItems.filter(t => !t.archived).length;
         const actions = [];
         if (canArchiveCount > 0) {
           actions.push({
@@ -1200,17 +1199,6 @@ const Transmittal = {
             onClick: (sel) => self.bulkArchiveTransmittals(sel)
           });
         }
-        actions.push({
-          text: `Delete (${selectedIds.length})`,
-          className: 'btn btn-danger btn-sm',
-          onClick: (sel) => {
-            Workflow.showConfirm('Bulk Delete', `Are you sure you want to delete ${sel.length} selected transmittal(s)?`, async () => {
-              for (const id of sel) {
-                await self.permanentDeleteTransmittal(id);
-              }
-            }, 'danger');
-          }
-        });
         return actions;
       },
       rowId: (t) => t.id,
@@ -1369,19 +1357,11 @@ const Transmittal = {
           onClick: () => self.showAcknowledgeDialog(t.id)
         });
       }
-      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
+      if (!t.archived && Auth.user?.role === 'Admin') {
         menu.push({
           label: 'Archive',
           icon: ArchivePage.icons.archive || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>',
           onClick: () => self.archiveTransmittal(t.id)
-        });
-      }
-      if (Auth.user?.role === 'Admin') {
-        menu.push({
-          label: 'Delete',
-          className: 'danger',
-          icon: ArchivePage.icons.delete || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => self.permanentDeleteTransmittal(t.id)
         });
       }
       return menu;
@@ -1477,15 +1457,10 @@ const Transmittal = {
         ackBtn.addEventListener('click', (e) => { e.stopPropagation(); self.showAcknowledgeDialog(t.id); });
         actionWrap.appendChild(ackBtn);
       }
-      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
+      if (!t.archived && Auth.user?.role === 'Admin') {
         const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive' });
         archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
         actionWrap.appendChild(archiveBtn);
-      }
-      if (Auth.user?.role === 'Admin') {
-        const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete' });
-        deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); self.permanentDeleteTransmittal(t.id); });
-        actionWrap.appendChild(deleteBtn);
       }
       item.appendChild(actionWrap);
       list.appendChild(item);
@@ -2690,11 +2665,6 @@ const Transmittal = {
     const item = items.find(t => t.id === id);
     if (!item || item.archived) return;
 
-    if (item.status !== 'Acknowledged') {
-      Workflow.showMessage('Not Acknowledged', 'Only Acknowledged transmittals can be archived.', 'info');
-      return;
-    }
-
     Workflow.showConfirm('Archive Transmittal',
       `Are you sure you want to move transmittal "${item.trackingNumber || '(untitled)'}" to archive?`,
       async () => {
@@ -2722,10 +2692,10 @@ const Transmittal = {
     await this.ensure();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(t => t.id === id))
-      .filter(t => t && t.status === 'Acknowledged' && !t.archived);
+      .filter(t => t && !t.archived);
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'Only Acknowledged transmittals can be archived.', 'info');
+      Workflow.showMessage('No eligible records', 'Only active transmittals can be archived.', 'info');
       return;
     }
 

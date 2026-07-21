@@ -1130,6 +1130,7 @@ const Workflow = {
     const wr = WorkflowData.getWorkRequestById(id);
     if (wr) {
       Object.assign(wr, patch, { updatedAt: new Date().toISOString() });
+      this._refreshCounts();
     }
 
     const isNowActive = wr ? (!wr.archived && wr.status !== 'Cancelled') : false;
@@ -1213,6 +1214,7 @@ const Workflow = {
     const wasArchived = originalSnapshot ? (originalSnapshot.archived || originalSnapshot.status === 'Cancelled') : false;
 
     WorkflowData._restoreWorkRequest(id, null);
+    this._refreshCounts();
     this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
 
     if (this.view === 'detail' && this.detailWrId === id) {
@@ -3721,11 +3723,11 @@ const Workflow = {
       this._countsEntity = null;
     }
     const taskMap = this._tempTaskMap || buildTaskMap();
-    const wrCount = (this._counts?.active >= 0) ? this._counts.active : WorkflowData.getWorkRequestsWhere(wr => {
+    const wrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
-    }).length;
+    }).length : (this._counts?.active >= 0 ? this._counts.active : 0);
 
     const templateCount = (this._retainerTemplates || []).filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
@@ -3735,14 +3737,14 @@ const Workflow = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveWrCount = (this._counts?.archived >= 0) ? this._counts.archived : WorkflowData.getWorkRequestsWhere(wr => {
+    const archiveWrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
       if (!matchesEntity || !Auth.canViewWrWithTasks(wr, taskMap)) return false;
       if (wr.status === 'Cancelled') return true;
       if (wr.status === 'Completed' && wr.archived) return true;
       return false;
-    }).length;
+    }).length : (this._counts?.archived >= 0 ? this._counts.archived : 0);
 
     const rejectedCount = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;

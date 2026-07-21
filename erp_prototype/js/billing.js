@@ -61,11 +61,15 @@ const Billing = {
       const loadGen = ++this._listCacheGeneration;
       await this._loadInvoices(loadGen, { merge: false });
     }
-    // Make sure tab-badge counts are available for the current entity after the
-    // data layer is fresh (or whenever the count cache has been invalidated).
+    // Load tab-badge counts asynchronously after the data layer is fresh. Counts
+    // are derived synchronously from _listCache for rendering; the server counts
+    // are only cached for fallback use.
     if (!this._counts || this._countsEntity !== Auth.activeEntity) {
-      await this.loadCounts();
-      await this.loadRejectedCount();
+      this.loadCounts().then(() => {
+        this.loadRejectedCount().catch(() => {});
+      }).catch(err => {
+        console.error('Failed to load billing counts', err);
+      });
     }
   },
 
@@ -166,10 +170,15 @@ const Billing = {
   _schedulePostMutationRefresh() {
     clearTimeout(this._postMutationTimer);
     this._postMutationTimer = setTimeout(() => {
-      this._listCacheGeneration++;
-      this.loadCounts(true).finally(() => {
-        this.backgroundRefresh().then(() => App.handleRoute());
-      });
+      if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+        window.apiClient.invoices.invalidateCounts();
+      }
+      const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+      if (!skipping) {
+        this.backgroundRefresh().catch(err => {
+          if (!isAbortError(err)) console.warn('Billing post-mutation refresh failed', err);
+        });
+      }
     }, 600);
   },
 
@@ -289,6 +298,18 @@ const Billing = {
     this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
   },
 
+  _refreshCounts() {
+    const entity = Auth.activeEntity;
+    const cached = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
+    this._counts = {
+      active: cached.filter(inv => this._isActiveInvoice(inv, entity)).length,
+      archived: cached.filter(inv => this._isArchiveInvoice(inv, entity)).length,
+      rejected: (this._counts && this._countsEntity === entity) ? (this._counts.rejected || 0) : 0,
+      templates: (this._counts && this._countsEntity === entity) ? (this._counts.templates || 0) : 0
+    };
+    this._countsEntity = entity;
+  },
+
   _isEntityFresh() {
     const entity = Auth.activeEntity;
     return this._detailCacheEntity === entity ||
@@ -330,6 +351,7 @@ const Billing = {
     const activeDelta = (isNowActive ? 1 : 0) - (wasActive ? 1 : 0);
     const archivedDelta = (isNowArchived ? 1 : 0) - (wasArchived ? 1 : 0);
 
+    this._refreshCounts();
     this._updateCounts(activeDelta, archivedDelta);
 
     if (this.view === 'detail' && this.detailId === id && isNowArchived) {
@@ -381,6 +403,7 @@ const Billing = {
     delete this._detailCache[id];
     this._removeFromListCache(id);
 
+    this._refreshCounts();
     this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
 
     if (this.view === 'detail' && this.detailId === id) {
@@ -642,17 +665,16 @@ const Billing = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    // Prefer the maintained _counts object (updated optimistically and refreshed
-    // after the data layer loads). Only fall back to scanning the local cache
-    // when counts have not been initialized yet.
+    // Derive active/archive badges synchronously from the local _listCache for the
+    // current entity. The maintained _counts object is used only as a fallback when
+    // the list cache has not been loaded for this entity yet.
 
-    const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
+    const cacheWarm = Array.isArray(this._listCache) && this._listCacheEntity === entity;
+    const cachedInvoices = cacheWarm ? this._listCache : [];
     const cacheActiveCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;
     const cacheArchiveCount = cachedInvoices.filter(inv => this._isArchiveInvoice(inv, entity)).length;
-    // Prefer the maintained _counts object (updated optimistically) and fall back to
-    // a full scan of the local cache only when counts have not been loaded yet.
-    const invoiceCount = (this._counts?.active >= 0) ? this._counts.active : cacheActiveCount;
-    const archiveDbCount = (this._counts?.archived >= 0) ? this._counts.archived : cacheArchiveCount;
+    const invoiceCount = cacheWarm ? cacheActiveCount : (this._counts?.active || 0);
+    const archiveDbCount = cacheWarm ? cacheArchiveCount : (this._counts?.archived || 0);
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
@@ -1322,9 +1344,12 @@ const Billing = {
       await refresh();
       // Background refresh: silently merge any new/updated server records into
       // the in-memory cache without replacing optimistic records.
-      this.backgroundRefresh().catch(err => {
-        if (!isAbortError(err)) console.warn('Billing background refresh failed', err);
-      });
+      const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+      if (!skipping) {
+        this.backgroundRefresh().catch(err => {
+          if (!isAbortError(err)) console.warn('Billing background refresh failed', err);
+        });
+      }
     })();
 
     return wrapper;
