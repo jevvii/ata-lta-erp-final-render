@@ -203,12 +203,29 @@ const ClientsData = {
 const Clients = {
   editingId: null,
   activeTab: 'active',
+  _archivePage: 1,
+  _archiveLimit: 20,
+  _lastArchiveMeta: null,
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
   _counts: null,
   _countsEntity: null,
   _countsFromApi: false,
   _rejectedArchiveCounts: null,
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
 
   _isTempId(id) {
     return typeof id === 'string' && id.startsWith('temp-');
@@ -553,6 +570,7 @@ const Clients = {
       if (this.activeTab === 'active') {
         this.renderList(listContainer, q);
       } else {
+        this._archivePage = 1;
         this.clearNode(archiveContainer);
         archiveContainer.appendChild(await this.renderArchive(q));
       }
@@ -650,6 +668,9 @@ const Clients = {
     ];
 
     const tabNav = renderModuleTabNav(tabs, this.activeTab, (key) => {
+      if (this.activeTab !== key && key === 'archived') {
+        this._archivePage = 1;
+      }
       this.activeTab = key;
       App.handleRoute();
     });
@@ -1642,17 +1663,32 @@ const Clients = {
     Workflow.showConfirm('Archive Client',
       'Are you sure you want to archive this client? This will cancel all related work requests and archive all associated documents.',
       async () => {
-        try {
-          await this._optimisticUpdate(
-            clientId,
-            { status: 'Archived', archived: true },
-            () => window.apiClient.clients.archive(clientId),
-            'Failed to archive client'
-          );
-          Workflow.showMessage('Archived', 'Client has been archived.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Client',
+            message: `Please wait while "${client.name || 'client'}" is being archived...`,
+            apiCall: () => window.apiClient.clients.archive(clientId),
+            successTitle: 'Archived',
+            successMessage: 'Client has been archived.',
+            errorTitle: 'Failed to Archive Client',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const normalized = this.normalizeClient(res.data);
+                ClientsData.replaceClientById(clientId, normalized);
+              } else {
+                client.status = 'Archived';
+                client.archived = true;
+                ClientsData.replaceClientById(clientId, client);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -1741,26 +1777,48 @@ const Clients = {
     Workflow.showConfirm('Archive Clients',
       `Are you sure you want to archive ${label}? This will cancel all related work requests and archive all associated documents.`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const c of eligible) {
-          try {
-            await this._optimisticUpdate(
-              c.id,
-              { status: 'Archived', archived: true },
-              () => window.apiClient.clients.archive(c.id),
-              'Failed to archive client'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} client(s) could not be archived.`, 'error');
-        } else {
-          Workflow.showMessage('Archived', `${eligible.length} client(s) archived.`, 'success');
-        }
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Clients',
+            message: `Please wait while ${eligible.length} client(s) are being archived...`,
+            apiCall: async () => {
+              for (const c of eligible) {
+                try {
+                  const res = await window.apiClient.clients.archive(c.id);
+                  if (res && res.data) {
+                    const normalized = this.normalizeClient(res.data);
+                    ClientsData.replaceClientById(c.id, normalized);
+                  } else {
+                    c.status = 'Archived';
+                    c.archived = true;
+                    ClientsData.replaceClientById(c.id, c);
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to archive client', c.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} client(s) could not be archived.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Archived',
+            successMessage: failCount > 0
+              ? `${successCount} client(s) archived, ${failCount} failed.`
+              : `${eligible.length} client(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -1825,17 +1883,32 @@ const Clients = {
     Workflow.showConfirm('Restore Client',
       `Are you sure you want to restore client "${client.name || '(untitled)'}"?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { status: 'Active', archived: false },
-            () => window.apiClient.clients.unarchive(id),
-            'Failed to restore client'
-          );
-          Workflow.showMessage('Restored', 'Client has been restored to active list.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Restoring Client',
+            message: `Please wait while "${client.name || 'client'}" is being restored...`,
+            apiCall: () => window.apiClient.clients.unarchive(id),
+            successTitle: 'Restored',
+            successMessage: 'Client has been restored to active list.',
+            errorTitle: 'Failed to Restore Client',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const normalized = this.normalizeClient(res.data);
+                ClientsData.replaceClientById(id, normalized);
+              } else {
+                client.status = 'Active';
+                client.archived = false;
+                ClientsData.replaceClientById(id, client);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -1857,26 +1930,48 @@ const Clients = {
     Workflow.showConfirm('Restore Clients',
       `Are you sure you want to restore ${label} to Active Clients?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const c of eligible) {
-          try {
-            await this._optimisticUpdate(
-              c.id,
-              { status: 'Active', archived: false },
-              () => window.apiClient.clients.unarchive(c.id),
-              'Failed to restore client'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} client(s) could not be restored.`, 'error');
-        } else {
-          Workflow.showMessage('Restored', `${eligible.length} client(s) restored to Active Clients.`, 'success');
-        }
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Restoring Clients',
+            message: `Please wait while ${eligible.length} client(s) are being restored...`,
+            apiCall: async () => {
+              for (const c of eligible) {
+                try {
+                  const res = await window.apiClient.clients.unarchive(c.id);
+                  if (res && res.data) {
+                    const normalized = this.normalizeClient(res.data);
+                    ClientsData.replaceClientById(c.id, normalized);
+                  } else {
+                    c.status = 'Active';
+                    c.archived = false;
+                    ClientsData.replaceClientById(c.id, c);
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to restore client', c.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} client(s) could not be restored.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Restored',
+            successMessage: failCount > 0
+              ? `${successCount} client(s) restored, ${failCount} failed.`
+              : `${eligible.length} client(s) restored to Active Clients.`,
+            errorTitle: 'Restore Failed',
+            onAfterConfirm: async () => {
+              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'success'
     );
@@ -1998,18 +2093,49 @@ const Clients = {
       };
     };
 
+    const accomplishedItems = archived.map(c => buildItem(c, 'accomplished'));
+    const cancelledItems = [];
+    const rejectedItems = [
+      ...rejectedClientChanges.map(buildRejectedItem),
+      ...rejectedClientRequests.map(buildRejectedItem)
+    ];
+
+    const storageKey = 'erp_archive_category_clients';
+    const selectedCategory = sessionStorage.getItem(storageKey) || 'all';
+
+    let totalFiltered = 0;
+    if (selectedCategory === 'all') {
+      totalFiltered = accomplishedItems.length + cancelledItems.length + rejectedItems.length;
+    } else if (selectedCategory === 'accomplished') {
+      totalFiltered = accomplishedItems.length;
+    } else if (selectedCategory === 'cancelled') {
+      totalFiltered = cancelledItems.length;
+    } else if (selectedCategory === 'rejected') {
+      totalFiltered = rejectedItems.length;
+    }
+
+    const page = this._archivePage || 1;
+    const limit = this._archiveLimit || 20;
+
     return ArchivePage.render({
       module: 'clients',
       categoryLabels: { accomplished: 'Archived', cancelled: 'Cancelled', rejected: 'Rejected' },
       categories: {
-        accomplished: archived.map(c => buildItem(c, 'accomplished')),
-        cancelled: [],
-        rejected: [
-          ...rejectedClientChanges.map(buildRejectedItem),
-          ...rejectedClientRequests.map(buildRejectedItem)
-        ]
+        accomplished: accomplishedItems,
+        cancelled: cancelledItems,
+        rejected: rejectedItems
       },
       emptyText: 'Archive is empty.',
+      renderCallback: () => { self.renderArchive().catch(() => {}); },
+      pagination: {
+        page,
+        limit,
+        total: totalFiltered,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      },
       bulkActions: (ids) => [
         {
           text: 'Restore Selected',

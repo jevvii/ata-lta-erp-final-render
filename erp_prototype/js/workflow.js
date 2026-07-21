@@ -674,10 +674,15 @@ const WorkflowData = {
       // the global active entity is 'ALL'.
       const entityHeader = (existing && existing.entity) || (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
       const res = await window.apiClient.workRequests.update(id, payload, entityHeader ? { headers: { 'X-Active-Entity': entityHeader } } : undefined);
-      const normalized = this.normalizeWorkRequest(res.data);
+      let normalized = this.normalizeWorkRequest(res.data);
       // Preserve frontend-only fields the backend does not return/persist.
       normalized.tasks = (existing && existing.tasks) || [];
-      normalized.archived = (existing && existing.archived) ?? normalized.archived ?? false;
+      // Only preserve the local archived flag when the server response omits it.
+      // If the server explicitly returns archived=false (e.g., after unarchive), honor it.
+      const serverHasArchived = res.data && Object.prototype.hasOwnProperty.call(res.data, 'archived');
+      if (!serverHasArchived && existing && existing.archived) {
+        normalized = { ...normalized, archived: existing.archived };
+      }
       normalized.boardOrder = (existing && existing.boardOrder) ?? normalized.boardOrder;
       normalized.priority = (existing && existing.priority) || normalized.priority || 'Normal';
       normalized.linkedInvoiceId = (existing && existing.linkedInvoiceId) || normalized.linkedInvoiceId || null;
@@ -1057,6 +1062,64 @@ const Workflow = {
   _archiveLimit: 10,
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
+
+  _applyServerRecordToCache(id, serverRecord, fallbackPatch = {}) {
+    if (serverRecord) {
+      const norm = WorkflowData.normalizeWorkRequest(serverRecord);
+      const current = WorkflowData.getWorkRequestById(id);
+      if (current) {
+        if ((!norm.tasks || (Array.isArray(norm.tasks) && norm.tasks.length === 0)) && current.tasks) {
+          norm.tasks = current.tasks;
+        }
+        if ((norm.priority === 'Normal' || !norm.priority) && current.priority && current.priority !== 'Normal') {
+          norm.priority = current.priority;
+        }
+        if (!norm.linkedInvoiceId && current.linkedInvoiceId) {
+          norm.linkedInvoiceId = current.linkedInvoiceId;
+        }
+        if ((!norm.linkedDisbursementIds || (Array.isArray(norm.linkedDisbursementIds) && norm.linkedDisbursementIds.length === 0)) && current.linkedDisbursementIds) {
+          norm.linkedDisbursementIds = current.linkedDisbursementIds;
+        }
+        if ((!norm.linkedTransmittalIds || (Array.isArray(norm.linkedTransmittalIds) && norm.linkedTransmittalIds.length === 0)) && current.linkedTransmittalIds) {
+          norm.linkedTransmittalIds = current.linkedTransmittalIds;
+        }
+        const serverHasArchived = Object.prototype.hasOwnProperty.call(serverRecord, 'archived');
+        if (!serverHasArchived && current.archived) {
+          norm.archived = current.archived;
+        }
+        if ((norm.boardOrder === null || typeof norm.boardOrder === 'undefined') && current.boardOrder != null) {
+          norm.boardOrder = current.boardOrder;
+        }
+        if ((norm.isPendingApproval === false || typeof norm.isPendingApproval === 'undefined') && current.isPendingApproval) {
+          norm.isPendingApproval = current.isPendingApproval;
+        }
+        Object.assign(current, norm);
+      }
+    } else {
+      const current = WorkflowData.getWorkRequestById(id);
+      if (current) {
+        Object.assign(current, fallbackPatch, { updatedAt: new Date().toISOString() });
+      }
+    }
+  },
+
+  _isActiveWorkRequest(wr) {
+    return !!wr && !wr.archived && wr.status !== 'Cancelled';
+  },
 
   _startSkipGeneration() {
     this._skipFetchGeneration++;
@@ -1187,6 +1250,9 @@ const Workflow = {
         window.apiClient.workRequests.invalidateCounts();
       }
       WorkflowData.invalidateRelatedForWorkRequest(id);
+      if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+        window.apiClient.workRequestCache.invalidate();
+      }
       if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
         App.updateSidebarNotifications().catch(() => {});
       }
@@ -2037,21 +2103,36 @@ const Workflow = {
 
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr || wr.archived) return;
+    if (!wr || wr.archived || wr.status === 'Completed' || wr.status === 'Cancelled') return;
     this.showConfirm('Archive Work Request',
       `Are you sure you want to archive "${wr.title || '(untitled)'}"?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            wrId,
-            { archived: true },
-            () => window.apiClient.workRequests.archive(wrId),
-            'Failed to archive Work Request'
-          );
-          this.showMessage('Archived', 'Work Request has been archived.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await this.runBlockingArchiveAction({
+            title: 'Archiving Work Request',
+            message: `Please wait while "${wr.title || 'Work Request'}" is being archived...`,
+            apiCall: () => window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true }),
+            successTitle: 'Archived',
+            successMessage: 'Work Request has been archived.',
+            errorTitle: 'Failed to Archive Work Request',
+            onSuccess: async (res) => {
+              this._applyServerRecordToCache(wrId, res?.data, { status: 'Cancelled', archived: true });
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                WorkflowData.invalidateRelatedForWorkRequest(wrId);
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              if (this.view === 'detail' && this.detailWrId === wrId) {
+                location.hash = '#operations';
+              } else {
+                App.handleRoute();
+              }
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2060,20 +2141,34 @@ const Workflow = {
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || !wr.archived) return;
+    const patch = wr.status === 'Cancelled'
+      ? { status: 'Draft', archived: false }
+      : { archived: false };
     this.showConfirm('Restore Work Request',
       `Are you sure you want to restore "${wr.title || '(untitled)'}"?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            wrId,
-            { archived: false },
-            () => window.apiClient.workRequests.unarchive(wrId),
-            'Failed to restore Work Request'
-          );
-          this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await this.runBlockingArchiveAction({
+            title: 'Restoring Work Request',
+            message: `Please wait while "${wr.title || 'Work Request'}" is being restored...`,
+            apiCall: () => window.apiClient.workRequests.update(wrId, patch),
+            successTitle: 'Restored',
+            successMessage: 'Work Request has been restored to the active list.',
+            errorTitle: 'Failed to Restore Work Request',
+            onSuccess: async (res) => {
+              this._applyServerRecordToCache(wrId, res?.data, patch);
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                WorkflowData.invalidateRelatedForWorkRequest(wrId);
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2082,36 +2177,56 @@ const Workflow = {
   bulkArchiveWorkRequests(ids) {
     const eligible = (ids || [])
       .map(id => WorkflowData.getWorkRequestById(id))
-      .filter(wr => wr && wr.status === 'Completed' && !wr.archived);
+      .filter(wr => wr && wr.status !== 'Completed' && wr.status !== 'Cancelled');
 
     if (eligible.length === 0) {
-      this.showMessage('No eligible records', 'Only Completed Work Requests can be archived.', 'info');
+      this.showMessage('No eligible records', 'Only non-terminal Work Requests can be archived.', 'info');
       return;
     }
 
     this.showConfirm('Bulk Archive',
-      `Are you sure you want to archive ${eligible.length} completed Work Request(s)?`,
+      `Are you sure you want to archive ${eligible.length} Work Request(s)?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const wr of eligible) {
-          try {
-            await this._optimisticUpdate(
-              wr.id,
-              { archived: true },
-              () => window.apiClient.workRequests.archive(wr.id),
-              'Failed to archive Work Request'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          this.showMessage('Error', `${failCount} Work Request(s) could not be archived.`, 'error');
-        } else {
-          this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
-        }
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await this.runBlockingArchiveAction({
+            title: 'Archiving Work Requests',
+            message: `Please wait while ${eligible.length} Work Request(s) are being archived...`,
+            apiCall: async () => {
+              for (const wr of eligible) {
+                try {
+                  const res = await window.apiClient.workRequests.update(wr.id, { status: 'Cancelled', archived: true });
+                  this._applyServerRecordToCache(wr.id, res?.data, { status: 'Cancelled', archived: true });
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to archive Work Request', wr.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} Work Request(s) could not be archived.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Archived',
+            successMessage: failCount > 0
+              ? `${successCount} Work Request(s) archived, ${failCount} failed.`
+              : `${eligible.length} Work Request(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              eligible.forEach(wr => {
+                if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                  WorkflowData.invalidateRelatedForWorkRequest(wr.id);
+                }
+              });
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2169,6 +2284,9 @@ const Workflow = {
 
         Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
+        if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+          window.apiClient.workRequestCache.invalidate();
+        }
 
         this.showMessage('Cancelled',
           `${eligible.length} Work Request(s) cancelled. ${cancelledTasks} task(s) also cancelled.`,
@@ -2224,6 +2342,111 @@ const Workflow = {
 
     const overlay = this.showModal(title, wrapper);
     okBtn.addEventListener('click', () => overlay.remove());
+  },
+
+  showBlockingOverlay(title, message) {
+    const overlay = el('div', { class: 'modal-overlay blocking-modal-overlay' });
+    const modal = el('div', { class: 'modal blocking-overlay-card' });
+
+    const body = el('div', { class: 'modal-body', style: 'display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 4px 8px 8px 8px; text-align: center;' });
+    
+    // Modern Dual-Orbital Spinner
+    const spinnerWrapper = el('div', { style: 'position: relative; padding: 12px 0;' });
+    const spinner = el('div', { class: 'loading-spinner blocking-spinner' });
+    spinnerWrapper.appendChild(spinner);
+    body.appendChild(spinnerWrapper);
+
+    // Title & Message with Notion/Jira Typography
+    const textContainer = el('div', { style: 'display: flex; flex-direction: column; gap: 6px; width: 100%;' });
+    const titleEl = el('h3', { class: 'blocking-loading-title', text: title, style: 'margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; color: var(--color-text);' });
+    const messageEl = el('p', { class: 'blocking-loading-message', text: message, style: 'margin: 0; font-size: 0.875rem; color: var(--color-text-muted); font-weight: 450; line-height: 1.5;' });
+    textContainer.appendChild(titleEl);
+    textContainer.appendChild(messageEl);
+    body.appendChild(textContainer);
+
+    // Jira-inspired Shimmer Progress Track
+    const shimmerBar = el('div', { class: 'loading-shimmer-bar' });
+    body.appendChild(shimmerBar);
+
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+
+    document.body.appendChild(overlay);
+    document.body.setAttribute('aria-busy', 'true');
+
+    return {
+      overlay,
+      close: () => {
+        document.body.removeAttribute('aria-busy');
+        if (overlay && overlay.parentNode) {
+          overlay.remove();
+        }
+      }
+    };
+  },
+
+  hideBlockingOverlay(overlayObj) {
+    if (overlayObj && typeof overlayObj.close === 'function') {
+      overlayObj.close();
+    } else if (overlayObj && overlayObj.remove) {
+      document.body.removeAttribute('aria-busy');
+      overlayObj.remove();
+    }
+  },
+
+  async runBlockingArchiveAction({
+    title,
+    message,
+    apiCall,
+    successTitle,
+    successMessage,
+    errorTitle,
+    onSuccess,
+    onAfterConfirm
+  }) {
+    const overlayObj = this.showBlockingOverlay(title, message);
+    try {
+      const res = await apiCall();
+      this.hideBlockingOverlay(overlayObj);
+
+      if (res && res.error) {
+        this.showMessage(errorTitle || 'Action Failed', res.error.message || String(res.error), 'error');
+        return { success: false, error: res.error };
+      }
+
+      if (onSuccess) {
+        await onSuccess(res);
+      }
+
+      await new Promise((resolve) => {
+        const wrapper = el('div', { class: 'modal-message-wrapper type-success' });
+        const icon = el('div', { class: 'modal-icon-v2', html: SignalIcons.success || '' });
+        wrapper.appendChild(icon);
+        wrapper.appendChild(el('p', { text: successMessage, class: 'modal-text' }));
+
+        const footer = el('div', { class: 'modal-footer' });
+        const okBtn = el('button', { class: 'btn btn-primary modal-btn-sure', text: 'OK' });
+        footer.appendChild(okBtn);
+        wrapper.appendChild(footer);
+
+        const modalOverlay = this.showModal(successTitle, wrapper, () => resolve());
+        okBtn.addEventListener('click', () => {
+          modalOverlay.remove();
+          resolve();
+        });
+      });
+
+      if (onAfterConfirm) {
+        await onAfterConfirm(res);
+      }
+
+      return { success: true, data: res ? res.data : null };
+    } catch (err) {
+      this.hideBlockingOverlay(overlayObj);
+      console.error('Blocking archive action failed:', err);
+      this.showMessage(errorTitle || 'Action Failed', err.message || 'An unexpected error occurred.', 'error');
+      return { success: false, error: err };
+    }
   },
 
   toggleChecklistItem(task, itemId, isCompleted) {
@@ -3729,7 +3952,7 @@ const Workflow = {
     const wrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
+      return matchesEntity && this._isActiveWorkRequest(wr) && Auth.canViewWrWithTasks(wr, taskMap);
     }).length : (this._counts?.active >= 0 ? this._counts.active : 0);
 
     const templateCount = (this._retainerTemplates || []).filter(t => {
@@ -3743,10 +3966,7 @@ const Workflow = {
     const archiveWrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      if (!matchesEntity || !Auth.canViewWrWithTasks(wr, taskMap)) return false;
-      if (wr.status === 'Cancelled') return true;
-      if (wr.status === 'Completed' && wr.archived) return true;
-      return false;
+      return matchesEntity && !this._isActiveWorkRequest(wr) && Auth.canViewWrWithTasks(wr, taskMap);
     }).length : (this._counts?.archived >= 0 ? this._counts.archived : 0);
 
     const rejectedCount = WorkflowData.getPendingApprovalsWhere(pc => {
@@ -12011,10 +12231,16 @@ const Workflow = {
     const self = this;
     const isManagerial = Auth.isManagerial();
 
+    // Build a task map that merges the local task cache with any tasks returned
+    // by the archived server fetch. This lets visibility checks use the same
+    // canViewWrWithTasks helper that tab nav uses, and avoids losing staff-level
+    // visibility when the server response carries fresh tasks.
+    const taskMap = { ...(this._tempTaskMap || buildTaskMap()) };
+
     const wrFilter = wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      return matchesEntity && Auth.canViewWr(wr);
+      return matchesEntity && Auth.canViewWrWithTasks(wr, taskMap);
     };
 
     const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
@@ -12030,6 +12256,16 @@ const Workflow = {
       }
     }
 
+    // Merge server-fetched tasks into the visibility map so staff-level checks
+    // still work for server-only archived rows. Fall back to server tasks when
+    // the local task entry is empty too, since an empty local array would block
+    // visibility even though the server returned assigned tasks.
+    archivedWrs.forEach(wr => {
+      if (wr.tasks && wr.tasks.length && (!taskMap[wr.id] || taskMap[wr.id].length === 0)) {
+        taskMap[wr.id] = wr.tasks;
+      }
+    });
+
     // On the first page or during an optimistic skip, merge locally archived/cancelled
     // rows so a just-archived/cancelled WR remains visible without waiting for the server.
     const localArchived = isFirstPageOrSkip
@@ -12042,13 +12278,18 @@ const Workflow = {
     });
     const accomplished = Array.from(wrMap.values()).filter(wr => {
       const cached = WorkflowData.getWorkRequestById(wr.id);
-      const isArchived = wr.archived === true || (cached && cached.archived === true);
-      const status = wr.status || cached?.status;
-      return wrFilter(wr) && isArchived && status === 'Completed';
+      const state = cached || wr;
+      // Exclude work requests that have been restored to an active state locally.
+      return wrFilter(state) && state.archived === true && state.status === 'Completed';
     });
     const cancelledMap = new Map();
     archivedWrs.concat(WorkflowData.getAllWorkRequests()).forEach(wr => {
-      if (wrFilter(wr) && wr.status === 'Cancelled') cancelledMap.set(wr.id, wr);
+      const cached = WorkflowData.getWorkRequestById(wr.id);
+      const state = cached || wr;
+      // A cancelled row belongs in the archive only if it is NOT currently active.
+      if (wrFilter(state) && state.status === 'Cancelled' && !Workflow._isActiveWorkRequest(state)) {
+        cancelledMap.set(state.id, state);
+      }
     });
     const cancelled = Array.from(cancelledMap.values());
 
@@ -12090,18 +12331,35 @@ const Workflow = {
               self.showConfirm('Restore Work Request',
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
                 async () => {
-                  const myGen = Workflow._startSkipGeneration();
-                  try {
-                    await WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
-                    self.showMessage('Restored', `Work request "${wr.title}" has been restored to Draft.`, 'success');
-                  } catch (e) {
-                    console.error('Failed to restore work request to draft', e);
-                    self.showMessage('Error', 'Failed to restore work request to draft.', 'danger');
-                  } finally {
-                    Workflow._clearSkipGenerationIfLatest(myGen);
-                    App.handleRoute();
-                  }
-                }, 'warning');
+                  await self._withArchiveLock(async () => {
+                    await self.runBlockingArchiveAction({
+                      title: 'Restoring Work Request',
+                      message: `Please wait while "${wr.title}" is being restored to Draft...`,
+                      apiCall: () => WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() }),
+                      successTitle: 'Restored',
+                      successMessage: `Work request "${wr.title}" has been restored to Draft.`,
+                      errorTitle: 'Failed to Restore Work Request',
+                      onSuccess: async (res) => {
+                        self._applyServerRecordToCache(wr.id, res?.data, { status: 'Draft', archived: false });
+                      },
+                      onAfterConfirm: async () => {
+                        if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+                          window.apiClient.workRequestCache.invalidate();
+                        }
+                        if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+                          window.apiClient.workRequests.invalidateCounts();
+                        }
+                        if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                          WorkflowData.invalidateRelatedForWorkRequest(wr.id);
+                        }
+                        App.updateSidebarNotifications().catch(() => {});
+                        App.handleRoute();
+                      }
+                    });
+                  });
+                },
+                'warning'
+              );
             }
           }] : [])
         ]

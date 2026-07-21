@@ -36,6 +36,24 @@
   };
 
   /**
+   * Check whether a record's entity matches the active entity.
+   * Mirrors the shared matchesEntity() helper in utils.js.
+   * @param {string|null} recordEntity
+   * @param {string|null} activeEntity
+   * @returns {boolean}
+   */
+  const entityMatches = (recordEntity, activeEntity) => {
+    const itemEnt = (recordEntity || '').toUpperCase();
+    if (!itemEnt) return true;
+    const active = (activeEntity || '').toUpperCase();
+    if (!active || active === 'ALL') {
+      const userEnts = (Auth.user?.entities || []).map(e => e.toUpperCase());
+      return userEnts.length > 0 ? userEnts.includes(itemEnt) : true;
+    }
+    return itemEnt === active;
+  };
+
+  /**
    * Combine two AbortSignals so that the resulting signal aborts when either
    * source aborts. Falls back to manual listeners if AbortSignal.any is unavailable.
    * @param {AbortSignal} callerSignal
@@ -340,6 +358,12 @@
           this._promise = null;
         });
         return this._promise;
+      },
+      isActive(wr) {
+        return !!wr && !wr.archived && wr.status !== 'Cancelled';
+      },
+      getActiveByEntity(entity) {
+        return (this._wrs || []).filter(wr => this.isActive(wr) && entityMatches(wr.entity, entity));
       },
       getById(id) {
         if (!id || !this._wrs) return null;

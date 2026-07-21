@@ -24,6 +24,20 @@ const Disbursement = {
   _archiveLimit: 20,
   _lastArchiveMeta: {},
   _rejectedArchiveCounts: null,
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
   _backgroundPromise: null,
@@ -1225,7 +1239,7 @@ const Disbursement = {
       const wrs = window.apiClient.workRequestCache._wrs || [];
       return wrs.filter(wr => {
         const wrEnt = (wr.entity || '').toUpperCase();
-        return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase()) && Auth.canViewWr(wr);
+        return (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase()) && window.apiClient.workRequestCache.isActive(wr) && Auth.canViewWr(wr);
       }).map(wr => {
         const client = window.apiClient.clientCache.getById(wr.clientId);
         return { value: wr.id, label: wr.title + ' — ' + (client?.name || '—') };
@@ -2088,8 +2102,15 @@ const Disbursement = {
     if (prefill) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    const formWrs = window.apiClient.workRequestCache._wrs || [];
-    formWrs.filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
+    const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(formWrs.map(wr => wr.id));
+    const existingWr = existing?.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId) : null;
+    if (existingWr && !activeWrIds.has(existingWr.id)) {
+      const client = window.apiClient.clientCache.getById(existingWr.clientId);
+      const inactiveSuffix = existingWr.archived ? ' [Archived]' : (existingWr.status === 'Cancelled' ? ' [Cancelled]' : '');
+      wrSel.appendChild(el('option', { value: existingWr.id, text: existingWr.title + ' — ' + (client?.name || '—') + inactiveSuffix, selected: true }));
+    }
+    formWrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       const opt = el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') });
       if (existing && existing.linkedWorkRequestId === wr.id) opt.selected = true;
@@ -2328,7 +2349,7 @@ const Disbursement = {
       return wrEnt === entity.toUpperCase();
     });
 
-    wrs = wrs.filter(wr => Auth.canViewWr(wr));
+    wrs = wrs.filter(wr => window.apiClient.workRequestCache.isActive(wr) && Auth.canViewWr(wr));
 
     let pendingRequests = [];
     try {
@@ -3520,7 +3541,15 @@ const Disbursement = {
     wrGroup.appendChild(el('label', { text: 'Linked Work Request (optional)' }));
     const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    (window.apiClient.workRequestCache._wrs || []).filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
+    const templateWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(templateWrs.map(wr => wr.id));
+    const existingWr = template?.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(template.linkedWorkRequestId) : null;
+    if (existingWr && !activeWrIds.has(existingWr.id)) {
+      const client = window.apiClient.clientCache.getById(existingWr.clientId);
+      const inactiveSuffix = existingWr.archived ? ' [Archived]' : (existingWr.status === 'Cancelled' ? ' [Cancelled]' : '');
+      wrSel.appendChild(el('option', { value: existingWr.id, text: existingWr.title + ' — ' + (client?.name || '—') + inactiveSuffix, selected: true }));
+    }
+    templateWrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       wrSel.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
     });
@@ -3675,27 +3704,70 @@ const Disbursement = {
   async archiveDisbursement(id) {
     const d = await this.loadDisbursement(id);
     if (!d || d.archived) return;
-    try {
-      await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Archive Failed');
-      Workflow.showMessage('Archived', 'Disbursement has been archived.', 'success');
-    } catch (e) {
-      // Error surfaced by _optimisticUpdate.
-    }
+    await this._withArchiveLock(async () => {
+      await Workflow.runBlockingArchiveAction({
+        title: 'Archiving Disbursement',
+        message: `Please wait while disbursement "${d.description || d.category || '(untitled)'}" is being archived...`,
+        apiCall: () => window.apiClient.disbursements.archive(id),
+        successTitle: 'Archived',
+        successMessage: 'Disbursement has been archived.',
+        errorTitle: 'Failed to Archive Disbursement',
+        onSuccess: async (res) => {
+          if (res && res.data) {
+            const norm = this.normalizeDisbursement(res.data);
+            this._updateCachedDisbursement(id, norm);
+          } else {
+            this._updateCachedDisbursement(id, { archived: true });
+          }
+        },
+        onAfterConfirm: async () => {
+          if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+            window.apiClient.disbursements.invalidateCounts();
+          }
+          App.updateSidebarNotifications().catch(() => {});
+          if (this.view === 'detail' && this.detailId === id) {
+            location.hash = '#disbursement';
+          } else {
+            App.handleRoute();
+          }
+        }
+      });
+    });
   },
 
   async trashDisbursement(id) {
     const d = await this.loadDisbursement(id);
     if (!d || d.archived) return;
     Workflow.showConfirm('Trash Expense', `Are you sure you want to move disbursement "${d.description || d.category || '(untitled)'}" to trash? It will be moved to Archive.`, async () => {
-      if (this.view === 'detail' && this.detailId === id) {
-        location.hash = '#disbursement';
-      }
-      try {
-        await this._optimisticUpdate(id, { archived: true }, () => window.apiClient.disbursements.archive(id), 'Trash Failed');
-        Workflow.showMessage('Trashed', 'Disbursement has been moved to Archive.', 'success');
-      } catch (e) {
-        // Error surfaced by _optimisticUpdate.
-      }
+      await this._withArchiveLock(async () => {
+        await Workflow.runBlockingArchiveAction({
+          title: 'Trashing Disbursement',
+          message: `Please wait while disbursement "${d.description || d.category || '(untitled)'}" is being moved to Archive...`,
+          apiCall: () => window.apiClient.disbursements.archive(id),
+          successTitle: 'Trashed',
+          successMessage: 'Disbursement has been moved to Archive.',
+          errorTitle: 'Failed to Trash Disbursement',
+          onSuccess: async (res) => {
+            if (res && res.data) {
+              const norm = this.normalizeDisbursement(res.data);
+              this._updateCachedDisbursement(id, norm);
+            } else {
+              this._updateCachedDisbursement(id, { archived: true });
+            }
+          },
+          onAfterConfirm: async () => {
+            if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+              window.apiClient.disbursements.invalidateCounts();
+            }
+            App.updateSidebarNotifications().catch(() => {});
+            if (this.view === 'detail' && this.detailId === id) {
+              location.hash = '#disbursement';
+            } else {
+              App.handleRoute();
+            }
+          }
+        });
+      });
     }, 'warning');
   },
 
@@ -3713,24 +3785,46 @@ const Disbursement = {
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} disbursement(s)?`,
       async () => {
-        let count = 0;
-        const failedIds = [];
-        for (const d of eligible) {
-          try {
-            await this._optimisticUpdate(d.id, { archived: true, updatedAt: new Date().toISOString() }, () =>
-              window.apiClient.disbursements.archive(d.id), 'Archive Failed');
-            count++;
-          } catch (e) {
-            failedIds.push(d.id);
-          }
-        }
-        if (failedIds.length > 0 && count > 0) {
-          Workflow.showMessage('Partial Success', `${count} disbursement(s) archived, ${failedIds.length} failed.`, 'warning');
-        } else if (count > 0) {
-          Workflow.showMessage('Archived', `${count} disbursement(s) archived.`, 'success');
-        } else if (failedIds.length > 0) {
-          Workflow.showMessage('Archive Failed', `Unable to archive ${failedIds.length} disbursement(s).`, 'error');
-        }
+        await this._withArchiveLock(async () => {
+          let count = 0;
+          const failedIds = [];
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Disbursements',
+            message: `Please wait while ${eligible.length} disbursement(s) are being archived...`,
+            apiCall: async () => {
+              for (const d of eligible) {
+                try {
+                  const res = await window.apiClient.disbursements.archive(d.id);
+                  if (res && res.data) {
+                    const norm = this.normalizeDisbursement(res.data);
+                    this._updateCachedDisbursement(d.id, norm);
+                  } else {
+                    this._updateCachedDisbursement(d.id, { archived: true });
+                  }
+                  count++;
+                } catch (e) {
+                  failedIds.push(d.id);
+                }
+              }
+              if (failedIds.length > 0 && count === 0) {
+                return { error: { message: `Unable to archive ${failedIds.length} disbursement(s).` } };
+              }
+              return { data: { count, failedCount: failedIds.length } };
+            },
+            successTitle: 'Archived',
+            successMessage: failedIds.length > 0
+              ? `${count} disbursement(s) archived, ${failedIds.length} failed.`
+              : `${count} disbursement(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+                window.apiClient.disbursements.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -3747,12 +3841,31 @@ const Disbursement = {
       : `Are you sure you want to unarchive disbursement "${d.description || d.category || '(untitled)'}"?`;
 
     Workflow.showConfirm(title, prompt, async () => {
-      try {
-        await this._optimisticUpdate(id, { archived: false, status: targetStatus }, () => window.apiClient.disbursements.unarchive(id), 'Unarchive Failed');
-        Workflow.showMessage('Restored', 'Disbursement has been restored to the active list.', 'success');
-      } catch (e) {
-        // Error surfaced by _optimisticUpdate.
-      }
+      await this._withArchiveLock(async () => {
+        await Workflow.runBlockingArchiveAction({
+          title: isCancelled ? 'Restoring Expense' : 'Unarchiving Expense',
+          message: `Please wait while disbursement "${d.description || d.category || '(untitled)'}" is being restored...`,
+          apiCall: () => window.apiClient.disbursements.unarchive(id),
+          successTitle: 'Restored',
+          successMessage: 'Disbursement has been restored to the active list.',
+          errorTitle: 'Failed to Restore Disbursement',
+          onSuccess: async (res) => {
+            if (res && res.data) {
+              const norm = this.normalizeDisbursement(res.data);
+              this._updateCachedDisbursement(id, norm);
+            } else {
+              this._updateCachedDisbursement(id, { archived: false, status: targetStatus });
+            }
+          },
+          onAfterConfirm: async () => {
+            if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+              window.apiClient.disbursements.invalidateCounts();
+            }
+            App.updateSidebarNotifications().catch(() => {});
+            App.handleRoute();
+          }
+        });
+      });
     }, 'success');
   },
 

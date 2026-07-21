@@ -19,6 +19,20 @@ const Transmittal = {
   _archiveLimit: 20,
   _lastArchiveMeta: {},
   _rejectedArchiveCounts: null,
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
 
   // ============================================================
   // Entity-tagged lightweight cache (mirrors WorkflowData patterns)
@@ -893,11 +907,7 @@ const Transmittal = {
     };
 
     const getWorkRequestOptions = () => {
-      const wrs = window.apiClient.workRequestCache._wrs || [];
-      return wrs.filter(wr => {
-        const wrEnt = (wr.entity || '').toUpperCase();
-        return entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase();
-      }).map(wr => ({ value: wr.id, label: wr.title }));
+      return window.apiClient.workRequestCache.getActiveByEntity(entity).map(wr => ({ value: wr.id, label: wr.title }));
     };
 
     const getClientOptions = () => {
@@ -1594,9 +1604,12 @@ const Transmittal = {
       const allWrs = window.apiClient.workRequestCache._wrs || [];
       allWrs.filter(wr => {
         if (!matchesEntity(wr.entity, entity)) return false;
-        return extraWrIds.has(wr.id) || !selectedClientId || wr.clientId === selectedClientId;
+        const isExtra = extraWrIds.has(wr.id);
+        if (!window.apiClient.workRequestCache.isActive(wr) && !isExtra) return false;
+        return isExtra || !selectedClientId || wr.clientId === selectedClientId;
       }).forEach(wr => {
-        const opt = el('option', { value: wr.id, text: wr.title });
+        const inactiveSuffix = window.apiClient.workRequestCache.isActive(wr) ? '' : (wr.archived ? ' [Archived]' : (wr.status === 'Cancelled' ? ' [Cancelled]' : ''));
+        const opt = el('option', { value: wr.id, text: wr.title + inactiveSuffix });
         if (wr.id === currentWR) { opt.selected = true; matchedCurrent = true; }
         wrSel.appendChild(opt);
       });
@@ -1858,11 +1871,7 @@ const Transmittal = {
   // ============================================================
   async showRequestTransmittalModal() {
     const entity = Auth.activeEntity;
-    const wrs = (window.apiClient.workRequestCache._wrs || []).filter(wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
-      return wrEnt === entity.toUpperCase();
-    });
+    const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
 
     const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
     const selectGroup = el('div', { class: 'form-group' });
@@ -2669,17 +2678,31 @@ const Transmittal = {
     Workflow.showConfirm('Archive Transmittal',
       `Are you sure you want to move transmittal "${item.trackingNumber || '(untitled)'}" to archive?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { archived: true },
-            () => window.apiClient.transmittals.archive(id),
-            'Failed to archive transmittal'
-          );
-          Workflow.showMessage('Archived', 'Transmittal has been moved to Archive.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Transmittal',
+            message: `Please wait while transmittal "${item.trackingNumber || '(untitled)'}" is being archived...`,
+            apiCall: () => window.apiClient.transmittals.archive(id),
+            successTitle: 'Archived',
+            successMessage: 'Transmittal has been moved to Archive.',
+            errorTitle: 'Failed to Archive Transmittal',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeTransmittal(res.data);
+                this._updateCachedItem(id, norm);
+              } else {
+                this._updateCachedItem(id, { archived: true });
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                window.apiClient.transmittals.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2703,26 +2726,47 @@ const Transmittal = {
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} transmittal(s)?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const t of eligible) {
-          try {
-            await this._optimisticUpdate(
-              t.id,
-              { archived: true },
-              () => window.apiClient.transmittals.archive(t.id),
-              'Failed to archive transmittal'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} transmittal(s) could not be archived.`, 'error');
-        } else {
-          Workflow.showMessage('Archived', `${eligible.length} transmittal(s) archived.`, 'success');
-        }
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Transmittals',
+            message: `Please wait while ${eligible.length} transmittal(s) are being archived...`,
+            apiCall: async () => {
+              for (const t of eligible) {
+                try {
+                  const res = await window.apiClient.transmittals.archive(t.id);
+                  if (res && res.data) {
+                    const norm = this.normalizeTransmittal(res.data);
+                    this._updateCachedItem(t.id, norm);
+                  } else {
+                    this._updateCachedItem(t.id, { archived: true });
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to archive transmittal', t.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} transmittal(s) could not be archived.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Archived',
+            successMessage: failCount > 0
+              ? `${successCount} transmittal(s) archived, ${failCount} failed.`
+              : `${eligible.length} transmittal(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                window.apiClient.transmittals.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2741,17 +2785,31 @@ const Transmittal = {
     Workflow.showConfirm('Restore Transmittal',
       `Are you sure you want to restore transmittal "${item.trackingNumber || '(untitled)'}" to active list?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { archived: false },
-            () => window.apiClient.transmittals.unarchive(id),
-            'Failed to restore transmittal'
-          );
-          Workflow.showMessage('Restored', 'Transmittal has been restored to active list.', 'success');
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Restoring Transmittal',
+            message: `Please wait while transmittal "${item.trackingNumber || '(untitled)'}" is being restored...`,
+            apiCall: () => window.apiClient.transmittals.unarchive(id),
+            successTitle: 'Restored',
+            successMessage: 'Transmittal has been restored to active list.',
+            errorTitle: 'Failed to Restore Transmittal',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeTransmittal(res.data);
+                this._updateCachedItem(id, norm);
+              } else {
+                this._updateCachedItem(id, { archived: false });
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                window.apiClient.transmittals.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -2775,36 +2833,52 @@ const Transmittal = {
     Workflow.showConfirm('Restore Transmittals',
       `Are you sure you want to restore ${eligible.length} transmittal(s)?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const t of eligible) {
-          try {
-            if (t.status === 'Cancelled') {
-              // Cancelled items are restored back to Draft regardless of archived flag.
-              await this._optimisticUpdate(
-                t.id,
-                { status: 'Draft', archived: false },
-                () => window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false }),
-                'Failed to restore transmittal'
-              );
-            } else {
-              await this._optimisticUpdate(
-                t.id,
-                { archived: false },
-                () => window.apiClient.transmittals.unarchive(t.id),
-                'Failed to restore transmittal'
-              );
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Restoring Transmittals',
+            message: `Please wait while ${eligible.length} transmittal(s) are being restored...`,
+            apiCall: async () => {
+              for (const t of eligible) {
+                try {
+                  let res;
+                  if (t.status === 'Cancelled') {
+                    res = await window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false });
+                  } else {
+                    res = await window.apiClient.transmittals.unarchive(t.id);
+                  }
+                  if (res && res.data) {
+                    const norm = this.normalizeTransmittal(res.data);
+                    this._updateCachedItem(t.id, norm);
+                  } else {
+                    this._updateCachedItem(t.id, { status: t.status === 'Cancelled' ? 'Draft' : t.status, archived: false });
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to restore transmittal', t.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} transmittal(s) could not be restored.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Restored',
+            successMessage: failCount > 0
+              ? `${successCount} transmittal(s) restored, ${failCount} failed.`
+              : `${eligible.length} transmittal(s) restored.`,
+            errorTitle: 'Restore Failed',
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                window.apiClient.transmittals.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
             }
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} transmittal(s) could not be restored.`, 'error');
-        } else {
-          Workflow.showMessage('Restored', `${eligible.length} transmittal(s) restored.`, 'success');
-        }
+          });
+        });
       },
       'warning'
     );
@@ -2923,26 +2997,34 @@ const Transmittal = {
               Workflow.showConfirm('Restore Transmittal',
                 `Restore "${t.trackingNumber || '(no tracking)'}" to Draft?`,
                 async () => {
-                  const skipGen = self._startSkipFetchGeneration();
-                  const snapshot = self._updateCachedItem(t.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
-                  self._updateCounts(1, -1);
-                  if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                    window.apiClient.transmittals.invalidateCounts();
-                  }
-                  App.handleRoute();
-                  try {
-                    await window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false });
-                    self._clearActiveSkipGeneration(skipGen);
-                    App.handleRoute();
-                    Workflow.showMessage('Restored', 'Transmittal restored to Draft.', 'success');
-                  } catch (e) {
-                    if (snapshot) self._updateCachedItem(t.id, { status: snapshot.status, archived: snapshot.archived, updatedAt: snapshot.updatedAt });
-                    self._updateCounts(-1, 1);
-                    self._clearActiveSkipGeneration(skipGen);
-                    App.handleRoute();
-                    Workflow.showMessage('Restore Failed', e.message || 'Unable to restore transmittal.', 'error');
-                  }
-                }, 'warning');
+                  await self._withArchiveLock(async () => {
+                    await Workflow.runBlockingArchiveAction({
+                      title: 'Restoring Transmittal',
+                      message: `Please wait while "${t.trackingNumber || '(no tracking)'}" is being restored to Draft...`,
+                      apiCall: () => window.apiClient.transmittals.update(t.id, { status: 'Draft', archived: false }),
+                      successTitle: 'Restored',
+                      successMessage: 'Transmittal restored to Draft.',
+                      errorTitle: 'Failed to Restore Transmittal',
+                      onSuccess: async (res) => {
+                        if (res && res.data) {
+                          const norm = self.normalizeTransmittal(res.data);
+                          self._updateCachedItem(t.id, norm);
+                        } else {
+                          self._updateCachedItem(t.id, { status: 'Draft', archived: false });
+                        }
+                      },
+                      onAfterConfirm: async () => {
+                        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+                          window.apiClient.transmittals.invalidateCounts();
+                        }
+                        App.updateSidebarNotifications().catch(() => {});
+                        App.handleRoute();
+                      }
+                    });
+                  });
+                },
+                'warning'
+              );
             }
           }] : []),
           ...(isAdmin ? [{

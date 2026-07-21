@@ -402,7 +402,8 @@ const archiveWorkRequest = async ({ id, entityId, user }) => {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive work request' });
   }
 
-  return { ...existing, archived: true };
+  // Return the post-update row so the frontend sees the current archived flag.
+  return getWorkRequestById({ id, entityId, user });
 };
 
 const unarchiveWorkRequest = async ({ id, entityId, user }) => {
@@ -421,7 +422,8 @@ const unarchiveWorkRequest = async ({ id, entityId, user }) => {
     throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore work request' });
   }
 
-  return { ...existing, archived: false };
+  // Return the post-update row so the frontend sees the current archived flag.
+  return getWorkRequestById({ id, entityId, user });
 };
 
 const getWorkRequestCounts = async ({ entityId }) => {

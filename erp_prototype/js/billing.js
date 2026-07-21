@@ -28,6 +28,20 @@ const Billing = {
   _templatesGeneration: 0,
   _templatesBackgroundPromise: null, // in-flight template background refresh
   _postMutationTimer: null, // debounced refresh timer after mutations
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
 
   _entityMatches(invEntity, entity) {
     const u = (invEntity || '').toUpperCase();
@@ -1101,8 +1115,7 @@ const Billing = {
     };
 
     const getWorkRequestOptions = () => {
-      const wrs = window.apiClient.workRequestCache._wrs || [];
-      return wrs.filter(wr => entMatches(wr.entity)).map(wr => ({ value: wr.id, label: wr.title }));
+      return window.apiClient.workRequestCache.getActiveByEntity(entity).map(wr => ({ value: wr.id, label: wr.title }));
     };
 
     const getClientOptions = () => {
@@ -1916,8 +1929,14 @@ const Billing = {
     if (prefill) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    const wrs = window.apiClient.workRequestCache._wrs || [];
-    wrs.filter(wr => matchesEntity(wr.entity, entity)).forEach(wr => {
+    const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(wrs.map(wr => wr.id));
+    const existingWr = inv?.workRequestId ? window.apiClient.workRequestCache.getById(inv.workRequestId) : null;
+    if (existingWr && !activeWrIds.has(existingWr.id)) {
+      const inactiveSuffix = existingWr.archived ? ' [Archived]' : (existingWr.status === 'Cancelled' ? ' [Cancelled]' : '');
+      wrSel.appendChild(el('option', { value: existingWr.id, text: existingWr.title + inactiveSuffix, selected: true }));
+    }
+    wrs.forEach(wr => {
       const opt = el('option', { value: wr.id, text: wr.title });
       if (inv && inv.workRequestId === wr.id) opt.selected = true;
       else if (!inv && prefill && prefill.workRequestId === wr.id) opt.selected = true;
@@ -2377,12 +2396,8 @@ const Billing = {
       window.apiClient.workRequestCache.ensure()
     ]);
     const entity = Auth.activeEntity;
-    const allWrs = window.apiClient.workRequestCache._wrs || [];
-    const wrs = allWrs.filter(wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
-      return wrEnt === entity.toUpperCase();
-    });
+    const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(wrs.map(wr => wr.id));
 
     let pendingBillingRequests = [];
     try {
@@ -2401,6 +2416,13 @@ const Billing = {
     wrGroup.appendChild(el('label', { text: 'Select Work Request *' }));
     const wrSelect = el('select', { name: 'workRequestId', class: 'form-select', required: true });
     wrSelect.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
+    const extraWrId = this.pendingPrefill?.workRequestId || this.prefilledWrId || null;
+    const extraWr = extraWrId ? window.apiClient.workRequestCache.getById(extraWrId) : null;
+    if (extraWr && !activeWrIds.has(extraWr.id)) {
+      const client = window.apiClient.clientCache.getById(extraWr.clientId);
+      const inactiveSuffix = extraWr.archived ? ' [Archived]' : (extraWr.status === 'Cancelled' ? ' [Cancelled]' : '');
+      wrSelect.appendChild(el('option', { value: extraWr.id, text: `${extraWr.title} — ${client?.name || '—'}${inactiveSuffix}`, selected: true }));
+    }
     wrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
       if (!pendingWrIds.has(wr.id)) {
@@ -4267,18 +4289,35 @@ const Billing = {
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to trash invoice "${inv.invoiceNumber}"? It will be moved to Archive.`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { status: 'Cancelled', archived: true },
-            () => window.apiClient.invoices.update(id, { status: 'Cancelled', archived: true }),
-            'Failed to trash invoice'
-          );
-          Workflow.showMessage('Trashed', 'Invoice has been moved to Archive.', 'success');
-          this._schedulePostMutationRefresh();
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Trashing Invoice',
+            message: `Please wait while invoice "${inv.invoiceNumber}" is being moved to Archive...`,
+            apiCall: () => window.apiClient.invoices.update(id, { status: 'Cancelled', archived: true }),
+            successTitle: 'Trashed',
+            successMessage: 'Invoice has been moved to Archive.',
+            errorTitle: 'Failed to Trash Invoice',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeInvoice(res.data);
+                this._detailCache[id] = norm;
+                this._addToListCache(norm);
+              } else {
+                inv.status = 'Cancelled';
+                inv.archived = true;
+                this._detailCache[id] = inv;
+                this._addToListCache(inv);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -4291,18 +4330,35 @@ const Billing = {
     Workflow.showConfirm('Restore Invoice',
       `Are you sure you want to restore invoice "${inv.invoiceNumber || '(untitled)'}"?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { status: 'Draft', archived: false },
-            () => window.apiClient.invoices.update(id, { status: 'Draft', archived: false }),
-            'Failed to restore invoice'
-          );
-          Workflow.showMessage('Restored', 'Invoice has been restored to the active list.', 'success');
-          this._schedulePostMutationRefresh();
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Restoring Invoice',
+            message: `Please wait while invoice "${inv.invoiceNumber || '(untitled)'}" is being restored...`,
+            apiCall: () => window.apiClient.invoices.update(id, { status: 'Draft', archived: false }),
+            successTitle: 'Restored',
+            successMessage: 'Invoice has been restored to the active list.',
+            errorTitle: 'Failed to Restore Invoice',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeInvoice(res.data);
+                this._detailCache[id] = norm;
+                this._addToListCache(norm);
+              } else {
+                inv.status = 'Draft';
+                inv.archived = false;
+                this._detailCache[id] = inv;
+                this._addToListCache(inv);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -4314,18 +4370,34 @@ const Billing = {
     Workflow.showConfirm('Archive Invoice',
       `Are you sure you want to archive invoice "${inv.invoiceNumber}"?`,
       async () => {
-        try {
-          await this._optimisticUpdate(
-            id,
-            { archived: true },
-            () => window.apiClient.invoices.archive(id),
-            'Failed to archive invoice'
-          );
-          Workflow.showMessage('Archived', 'Invoice has been archived.', 'success');
-          this._schedulePostMutationRefresh();
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+        await this._withArchiveLock(async () => {
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Invoice',
+            message: `Please wait while invoice "${inv.invoiceNumber}" is being archived...`,
+            apiCall: () => window.apiClient.invoices.archive(id),
+            successTitle: 'Archived',
+            successMessage: 'Invoice has been archived.',
+            errorTitle: 'Failed to Archive Invoice',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeInvoice(res.data);
+                this._detailCache[id] = norm;
+                this._addToListCache(norm);
+              } else {
+                inv.archived = true;
+                this._detailCache[id] = inv;
+                this._addToListCache(inv);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -4344,27 +4416,50 @@ const Billing = {
     Workflow.showConfirm('Bulk Archive',
       `Are you sure you want to archive ${eligible.length} paid invoice(s)?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const inv of eligible) {
-          try {
-            await this._optimisticUpdate(
-              inv.id,
-              { archived: true },
-              () => window.apiClient.invoices.archive(inv.id),
-              'Failed to archive invoice'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} invoice(s) could not be archived.`, 'error');
-        } else {
-          Workflow.showMessage('Archived', `${eligible.length} invoice(s) archived.`, 'success');
-        }
-        this._schedulePostMutationRefresh();
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Archiving Invoices',
+            message: `Please wait while ${eligible.length} invoice(s) are being archived...`,
+            apiCall: async () => {
+              for (const inv of eligible) {
+                try {
+                  const res = await window.apiClient.invoices.archive(inv.id);
+                  if (res && res.data) {
+                    const norm = this.normalizeInvoice(res.data);
+                    this._detailCache[inv.id] = norm;
+                    this._addToListCache(norm);
+                  } else {
+                    inv.archived = true;
+                    this._detailCache[inv.id] = inv;
+                    this._addToListCache(inv);
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to archive invoice', inv.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} invoice(s) could not be archived.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Archived',
+            successMessage: failCount > 0
+              ? `${successCount} invoice(s) archived, ${failCount} failed.`
+              : `${eligible.length} invoice(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -4388,27 +4483,51 @@ const Billing = {
     Workflow.showConfirm('Move to Trash',
       `Are you sure you want to move ${eligible.length} draft invoice(s) to trash?`,
       async () => {
-        let successCount = 0;
-        let failCount = 0;
-        for (const inv of eligible) {
-          try {
-            await this._optimisticUpdate(
-              inv.id,
-              { status: 'Cancelled', archived: true },
-              () => window.apiClient.invoices.update(inv.id, { status: 'Cancelled', archived: true }),
-              'Failed to trash invoice'
-            );
-            successCount++;
-          } catch (e) {
-            failCount++;
-          }
-        }
-        if (failCount > 0) {
-          Workflow.showMessage('Error', `${failCount} invoice(s) could not be moved to trash.`, 'error');
-        } else {
-          Workflow.showMessage('Moved to Trash', `${eligible.length} invoice(s) moved to trash.`, 'warning');
-        }
-        this._schedulePostMutationRefresh();
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Trashing Invoices',
+            message: `Please wait while ${eligible.length} invoice(s) are being moved to trash...`,
+            apiCall: async () => {
+              for (const inv of eligible) {
+                try {
+                  const res = await window.apiClient.invoices.update(inv.id, { status: 'Cancelled', archived: true });
+                  if (res && res.data) {
+                    const norm = this.normalizeInvoice(res.data);
+                    this._detailCache[inv.id] = norm;
+                    this._addToListCache(norm);
+                  } else {
+                    inv.status = 'Cancelled';
+                    inv.archived = true;
+                    this._detailCache[inv.id] = inv;
+                    this._addToListCache(inv);
+                  }
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to trash invoice', inv.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} invoice(s) could not be moved to trash.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Moved to Trash',
+            successMessage: failCount > 0
+              ? `${successCount} invoice(s) moved to trash, ${failCount} failed.`
+              : `${eligible.length} invoice(s) moved to trash.`,
+            errorTitle: 'Trash Failed',
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'danger'
     );
@@ -4421,26 +4540,43 @@ const Billing = {
     Workflow.showConfirm('Unarchive Invoice',
       `Are you sure you want to unarchive invoice "${inv.invoiceNumber || '(untitled)'}"?`,
       async () => {
-        const targetStatus = inv.status === 'Cancelled' ? 'Draft' : inv.status;
-        try {
-          await this._optimisticUpdate(
-            id,
-            { status: targetStatus, archived: false },
-            async () => {
-              const res = await window.apiClient.invoices.unarchive(id);
+        await this._withArchiveLock(async () => {
+          const targetStatus = inv.status === 'Cancelled' ? 'Draft' : inv.status;
+          await Workflow.runBlockingArchiveAction({
+            title: 'Unarchiving Invoice',
+            message: `Please wait while invoice "${inv.invoiceNumber || '(untitled)'}" is being unarchived...`,
+            apiCall: async () => {
+              let res = await window.apiClient.invoices.unarchive(id);
               if (inv.status === 'Cancelled') {
                 const updRes = await window.apiClient.invoices.update(id, { status: 'Draft', archived: false });
-                return updRes || res;
+                res = updRes || res;
               }
               return res;
             },
-            'Failed to unarchive invoice'
-          );
-          Workflow.showMessage('Unarchived', 'Invoice has been unarchived.', 'success');
-          this._schedulePostMutationRefresh();
-        } catch (e) {
-          // Handled in _optimisticUpdate
-        }
+            successTitle: 'Unarchived',
+            successMessage: 'Invoice has been unarchived.',
+            errorTitle: 'Failed to Unarchive Invoice',
+            onSuccess: async (res) => {
+              if (res && res.data) {
+                const norm = this.normalizeInvoice(res.data);
+                this._detailCache[id] = norm;
+                this._addToListCache(norm);
+              } else {
+                inv.status = targetStatus;
+                inv.archived = false;
+                this._detailCache[id] = inv;
+                this._addToListCache(inv);
+              }
+            },
+            onAfterConfirm: async () => {
+              if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                window.apiClient.invoices.invalidateCounts();
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
