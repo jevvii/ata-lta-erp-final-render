@@ -6,12 +6,13 @@
 const { z } = require('zod');
 
 const checklistItemSchema = z.object({
+  id: z.string().uuid().optional().nullable(),
   text: z.string().min(1),
   category: z.string().optional().nullable(),
   completed: z.boolean().default(false),
   assigneeId: z.string().uuid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
-  dependsOn: z.array(z.string().uuid()).optional().nullable(),
+  dependsOn: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional().nullable(),
 });
 
 const timeLogSchema = z.object({
@@ -35,8 +36,22 @@ const createWorkRequestSchema = z.object({
   priority: z.string().max(50).optional(),
 });
 
+const WR_STATUSES = [
+  'Draft',
+  'Pre-processing',
+  'In Progress',
+  'Processing',
+  'For Review',
+  'Billing',
+  'Disbursement',
+  'On Hold',
+  'Completed',
+  'Cancelled',
+];
+
 const updateWorkRequestSchema = createWorkRequestSchema.partial().extend({
   archived: z.boolean().optional(),
+  status: z.enum(WR_STATUSES).optional(),
 });
 
 const createTaskSchema = z.object({

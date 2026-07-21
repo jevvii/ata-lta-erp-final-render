@@ -132,13 +132,15 @@ const WorkflowData = {
       priority: task.priority || 'Normal',
       assignedTo: task.assignedTo || task.assigneeId || null,
       checklist: (task.checklist || []).map(item => ({
-        id: item.id || generateId('chk'),
+        id: item.id || generateUUID(),
         text: item.text || '',
         category: item.category || 'subtask',
         completed: item.completed ?? false,
         assigneeId: item.assigneeId || null,
         assigneeName: item.assigneeName || null,
-        dependsOn: item.dependsOn || null,
+        dependsOn: Array.isArray(item.dependsOn)
+          ? (item.dependsOn[0] || null)
+          : (item.dependsOn || null),
         timeLogs: item.timeLogs || []
       }))
     };
@@ -502,6 +504,12 @@ const WorkflowData = {
     const normalizedWr = this.normalizeWorkRequest(serverWr);
     if (!Array.isArray(normalizedWr.tasks)) normalizedWr.tasks = [];
 
+    // Capture optimistic tasks BEFORE we rewrite their workRequestId, so we can
+    // match server tasks back to the same in-memory object and avoid duplicates.
+    const capturedTempTasks = localId && existing
+      ? (this._tasks || []).filter(t => t.workRequestId === localId)
+      : [];
+
     // Preserve the optimistic priority when the server response lacks it.
     if (existing && existing.priority && (!normalizedWr.priority || normalizedWr.priority === 'Normal')) {
       normalizedWr.priority = existing.priority;
@@ -529,26 +537,37 @@ const WorkflowData = {
     const finalWrId = normalizedWr.id;
     const parentWr = this.getWorkRequestById(finalWrId);
     if (parentWr) {
-      parentWr.tasks = [];
       if (!Array.isArray(this._tasks)) this._tasks = [];
 
       serverTasks.forEach(t => {
         const normalizedTask = this.normalizeTask(t);
         normalizedTask.workRequestId = finalWrId;
         const existingTask = normalizedTask.id ? this.getTaskById(normalizedTask.id) : null;
-        const tempTask = localId
-          ? (this._tasks.find(tk => tk.workRequestId === localId && tk.title === normalizedTask.title) || null)
+        // Match by server id first (covers updates), then by captured optimistic
+        // task using a stable criterion (title + original temp id, falling back to title).
+        const tempTask = !existingTask && capturedTempTasks.length
+          ? (capturedTempTasks.find(tk =>
+              tk.id && normalizedTask.id && tk.id === normalizedTask.id
+            ) ||
+            capturedTempTasks.find(tk =>
+              tk.title === normalizedTask.title && !tk._adopted
+            ) ||
+            null)
           : null;
 
         if (existingTask) {
           Object.assign(existingTask, normalizedTask);
         } else if (tempTask) {
           Object.assign(tempTask, normalizedTask);
+          tempTask._adopted = true;
         } else {
           this._tasks.push(normalizedTask);
         }
-        parentWr.tasks.push(normalizedTask);
       });
+
+      // Rebuild the WR task list from the merged in-memory tasks so it contains
+      // the same object references held in _tasks, not separate server-copy objects.
+      parentWr.tasks = this._tasks.filter(t => t.workRequestId === finalWrId);
     }
 
     return normalizedWr;
@@ -1612,7 +1631,8 @@ const Workflow = {
     await this._loadGroundWorkers();
 
     // Check system users first
-    const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === trimmed.toLowerCase());
+    const user = ((window.apiClient.userCache._users || []) || [])
+      .find(u => (u.name || '').toLowerCase() === trimmed.toLowerCase());
     if (user) return { id: user.id, name: user.name };
 
     // Check ground workers next
@@ -1639,18 +1659,21 @@ const Workflow = {
     const buildOptions = () => {
       const systemUsers = (window.apiClient.userCache._users || []) || [];
       const groundWorkers = this._groundWorkers || [];
-      const systemUserNames = systemUsers.map(u => u.name);
+      const systemUserNames = systemUsers.map(u => u.name).filter(Boolean);
       const prioritySet = new Set([...(priorityNames || []), ...systemUserNames].filter(Boolean));
 
       const addedNames = new Set();
       const options = [];
 
       // Priority 1: System users allowed access to the site (created via admin)
-      const sortedSystemUsers = [...systemUsers].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedSystemUsers = [...systemUsers]
+        .filter(u => u.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
       sortedSystemUsers.forEach(u => {
-        if (!addedNames.has(u.name.toLowerCase())) {
+        const lowerName = u.name.toLowerCase();
+        if (!addedNames.has(lowerName)) {
           options.push({ value: u.id, text: u.name });
-          addedNames.add(u.name.toLowerCase());
+          addedNames.add(lowerName);
         }
       });
 
@@ -1726,7 +1749,8 @@ const Workflow = {
     // Set initial value
     if (selectedGroundWorkerName) {
       const nameLower = selectedGroundWorkerName.toLowerCase();
-      const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === nameLower);
+      const user = ((window.apiClient.userCache._users || []) || [])
+        .find(u => (u.name || '').toLowerCase() === nameLower);
       if (user) {
         dropdown.value = user.id;
       } else {
@@ -2518,7 +2542,7 @@ const Workflow = {
     if (hasUnnormalized) {
       const normalized = checklist.map(item => {
         const text = typeof item === 'string' ? item : (item.text || '');
-        const id = (typeof item === 'object' && item && item.id) ? item.id : generateId('chk');
+        const id = (typeof item === 'object' && item && item.id) ? item.id : generateUUID();
 
         return {
           id: id,
@@ -5066,7 +5090,8 @@ const Workflow = {
       if (wr.isPendingApproval && assignees.length === 0) {
         const names = [...new Set(tasks.map(t => t.assigneeName).filter(Boolean))];
         names.forEach(name => {
-          const u = (window.apiClient.userCache._users || []).filter(usr => usr.name.toLowerCase() === name.toLowerCase())[0];
+          const u = (window.apiClient.userCache._users || [])
+            .filter(usr => (usr.name || '').toLowerCase() === name.toLowerCase())[0];
           if (u) assignees.push(u);
         });
       }
@@ -6134,7 +6159,7 @@ const Workflow = {
             const val = newItemInput.value.trim();
             if (!val) return;
             const prereqId = selectedPrereqId || null;
-            normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+            normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
             WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
             this.showTaskSidePane(taskId, triggerElement);
             App.handleRoute();
@@ -8597,7 +8622,7 @@ const Workflow = {
             cardContainerStyle: { display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' },
             emptyState: { variant: 'compact', title: 'No tasks', body: '' }
           })),
-          async renderCard(t) {
+          renderCard(t) {
             const comp = getTaskChecklistCompletion(t);
             const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? window.apiClient.userCache.getById(t.assigneeId || t.assignedTo)?.name : null);
             const priorityConfig = {
@@ -9480,7 +9505,7 @@ const Workflow = {
               const val = newItemInput.value.trim();
               if (!val) return;
               const prereqId = selectedPrereqId || null;
-              normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+              normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
               WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
               newItemInput.value = '';
               selectedPrereqId = null;
@@ -10937,7 +10962,7 @@ const Workflow = {
         prereqSelect.appendChild(el('option', { value: '', text: '— None —' }));
         prereqSelect.appendChild(el('option', { value: '*', text: 'All Task (*)' }));
         checklistItems.slice(0, idx).forEach((prev, pIdx) => {
-          if (!prev.id) prev.id = generateId('chk');
+          if (!prev.id) prev.id = generateUUID();
           prereqSelect.appendChild(el('option', { value: prev.id, text: `${pIdx + 1}. ${prev.text}` }));
         });
         if (checklistItems.length <= 1) {
@@ -10976,7 +11001,7 @@ const Workflow = {
     const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
-      checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
+      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistFromTemplate = false;
       checklistInput.value = '';
       await renderChecklist();
@@ -10996,7 +11021,7 @@ const Workflow = {
         titleInput.value = tmpl.title;
         checklistItems = tmpl.defaultChecklist.map(item => {
           const isObj = typeof item === 'object' && item && item.text;
-          return { id: generateId('chk'), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] };
+          return { id: generateUUID(), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] };
         });
         coAssignees = (tmpl.coAssignees || []).slice();
         checklistFromTemplate = true;
@@ -11216,7 +11241,7 @@ const Workflow = {
         updatedAt: new Date().toISOString(),
         predecessors,
         checklist: checklistItems.map(item => ({
-          id: item.id || generateId('chk'),
+          id: item.id || generateUUID(),
           text: item.text,
           category: item.category || 'subtask',
           completed: false,
@@ -11459,7 +11484,7 @@ const Workflow = {
         prereqSelect.appendChild(el('option', { value: '', text: '— None —' }));
         prereqSelect.appendChild(el('option', { value: '*', text: 'All Task (*)' }));
         checklistItems.slice(0, idx).forEach((prev, pIdx) => {
-          if (!prev.id) prev.id = generateId('chk');
+          if (!prev.id) prev.id = generateUUID();
           prereqSelect.appendChild(el('option', { value: prev.id, text: `${pIdx + 1}. ${prev.text}` }));
         });
         if (checklistItems.length <= 1) {
@@ -11497,7 +11522,7 @@ const Workflow = {
     const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
-      checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
+      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistInput.value = '';
       await renderChecklist();
     };

@@ -86,7 +86,9 @@ const toApiTask = (row, { checklist = [], timeLogs = [] } = {}) => ({
     completed: c.completed,
     assigneeId: c.assignee_id || null,
     assigneeName: c.assignee_name || null,
-    dependsOn: c.depends_on || [],
+    dependsOn: Array.isArray(c.depends_on)
+      ? (c.depends_on[0] || null)
+      : (c.depends_on || null),
   })),
   timeLogs: timeLogs.map((t) => ({
     id: t.id,
@@ -571,17 +573,27 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
   return getTaskById({ workRequestId, taskId: id, entityId });
 };
 
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const upsertChecklist = async (taskId, checklist) => {
   await supabaseAdmin.from('task_checklists').delete().eq('task_id', taskId);
-  const rows = checklist.map((item) => ({
-    task_id: taskId,
-    text: item.text,
-    category: item.category || null,
-    completed: item.completed ?? false,
-    assignee_id: item.assigneeId || null,
-    assignee_name: item.assigneeName || null,
-    depends_on: item.dependsOn || [],
-  }));
+  const rows = checklist.map((item) => {
+    const dependsOn = Array.isArray(item.dependsOn)
+      ? item.dependsOn
+      : (item.dependsOn ? [item.dependsOn] : []);
+    return {
+      id: isValidUUID(item.id) ? item.id : undefined,
+      task_id: taskId,
+      text: item.text,
+      category: item.category || null,
+      completed: item.completed ?? false,
+      assignee_id: item.assigneeId || null,
+      assignee_name: item.assigneeName || null,
+      depends_on: dependsOn,
+    };
+  });
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);
 };
 
