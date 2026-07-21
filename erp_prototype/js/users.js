@@ -90,6 +90,225 @@ const Users = {
     };
   },
 
+  /**
+   * Formats a code-like audit action string (e.g. 'invoice.archive', 'user.created')
+   * into a descriptive, human-readable action label (e.g. 'Archived Invoice', 'Created User').
+   */
+  _formatAuditAction(l) {
+    if (!l) return 'Activity';
+    const actionRaw = (typeof l === 'string' ? l : (l.action || '')).trim();
+    if (!actionRaw) return 'Activity';
+
+    const actionLower = actionRaw.toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    // Direct mapping for known backend action strings
+    const EXACT_MAP = {
+      'user.created': 'Created User',
+      'user.updated': 'Updated User',
+      'user.disabled': 'Disabled User',
+      'user.enabled': 'Enabled User',
+      'pending.created': 'Submitted Approval Request',
+      'pending.approved': 'Approved Pending Change',
+      'pending.rejected': 'Rejected Pending Change',
+      'client.created': 'Created Client',
+      'client.updated': 'Updated Client',
+      'client.archived': 'Archived Client',
+      'client.unarchived': 'Restored Client',
+      'client.restored': 'Restored Client',
+      'invoice.create': 'Created Invoice',
+      'invoice.created': 'Created Invoice',
+      'invoice.update': 'Updated Invoice',
+      'invoice.updated': 'Updated Invoice',
+      'invoice.payment': 'Marked Invoice Paid',
+      'invoice.paid': 'Marked Invoice Paid',
+      'invoice.archive': 'Archived Invoice',
+      'invoice.archived': 'Archived Invoice',
+      'invoice.unarchive': 'Restored Invoice',
+      'invoice.restored': 'Restored Invoice',
+      'disbursement.create': 'Created Disbursement',
+      'disbursement.created': 'Created Disbursement',
+      'disbursement.update': 'Updated Disbursement',
+      'disbursement.updated': 'Updated Disbursement',
+      'disbursement.archive': 'Archived Disbursement',
+      'disbursement.archived': 'Archived Disbursement',
+      'disbursement.unarchive': 'Restored Disbursement',
+      'disbursement.restored': 'Restored Disbursement',
+      'disbursement.submit': 'Submitted Disbursement',
+      'disbursement.submitted': 'Submitted Disbursement',
+      'disbursement.approve': 'Approved Disbursement',
+      'disbursement.approved': 'Approved Disbursement',
+      'disbursement.release': 'Released Disbursement',
+      'disbursement.released': 'Released Disbursement',
+      'disbursement.fund': 'Funded Disbursement',
+      'disbursement.funded': 'Funded Disbursement',
+      'disbursement.reject': 'Rejected Disbursement',
+      'disbursement.rejected': 'Rejected Disbursement',
+      'disbursement.delete': 'Deleted Disbursement',
+      'disbursement.deleted': 'Deleted Disbursement',
+      'document.create': 'Stored Document',
+      'document.created': 'Stored Document',
+      'document.delete': 'Deleted Document',
+      'document.deleted': 'Deleted Document',
+      'document.archive': 'Archived Document',
+      'document.archived': 'Archived Document',
+      'document.unarchive': 'Restored Document',
+      'document.restored': 'Restored Document',
+      'document.lifecycle': 'Updated Document Status',
+      'transmittal.create': 'Created Transmittal',
+      'transmittal.created': 'Created Transmittal',
+      'transmittal.send': 'Sent Transmittal',
+      'transmittal.sent': 'Sent Transmittal',
+      'transmittal.acknowledge': 'Acknowledged Transmittal',
+      'transmittal.acknowledged': 'Acknowledged Transmittal',
+      'transmittal.archive': 'Archived Transmittal',
+      'transmittal.archived': 'Archived Transmittal',
+      'transmittal.unarchive': 'Restored Transmittal',
+      'transmittal.restored': 'Restored Transmittal',
+      'transmittal.delete': 'Deleted Transmittal',
+      'transmittal.deleted': 'Deleted Transmittal',
+      'work_request.created': 'Created Work Request',
+      'work_request.create': 'Created Work Request',
+      'work_request.updated': 'Updated Work Request',
+      'work_request.update': 'Updated Work Request',
+      'work_request.deleted': 'Deleted Work Request',
+      'work_request.delete': 'Deleted Work Request',
+      'work_request.archived': 'Archived Work Request',
+      'work_request.archive': 'Archived Work Request',
+      'work_request.unarchived': 'Restored Work Request',
+      'work_request.restored': 'Restored Work Request',
+      'task.created': 'Created Task',
+      'task.create': 'Created Task',
+      'task.updated': 'Updated Task',
+      'task.update': 'Updated Task',
+      'task.completed': 'Completed Task',
+      'task.complete': 'Completed Task',
+      'task.deleted': 'Deleted Task',
+      'task.delete': 'Deleted Task',
+      'retainer-template.created': 'Created Retainer Template',
+      'retainer-template.updated': 'Updated Retainer Template',
+      'retainer-template.deleted': 'Deleted Retainer Template',
+      'ground-worker.created': 'Added Ground Worker',
+      'operations_request.create': 'Submitted Operations Request',
+      'operations_request.created': 'Submitted Operations Request',
+      'operations_request.update': 'Updated Operations Request',
+      'operations_request.updated': 'Updated Operations Request',
+      'operations_request.delete': 'Deleted Operations Request',
+      'operations_request.deleted': 'Deleted Operations Request',
+      'login': 'User Logged In',
+      'logout': 'User Logged Out'
+    };
+
+    if (EXACT_MAP[actionLower]) {
+      return EXACT_MAP[actionLower];
+    }
+
+    // Pattern matching for split actions like "subject.verb" or "verb_subject"
+    let subject = '';
+    let verb = '';
+
+    if (actionLower.includes('.')) {
+      const parts = actionLower.split('.');
+      subject = parts[0];
+      verb = parts[1];
+    } else if (actionLower.includes('_')) {
+      const parts = actionLower.split('_');
+      if (['create', 'created', 'update', 'updated', 'delete', 'deleted', 'archive', 'archived', 'unarchive', 'restored'].includes(parts[parts.length - 1])) {
+        verb = parts.pop();
+        subject = parts.join('_');
+      } else if (['create', 'created', 'update', 'updated', 'delete', 'deleted', 'archive', 'archived', 'unarchive', 'restored'].includes(parts[0])) {
+        verb = parts.shift();
+        subject = parts.join('_');
+      } else {
+        verb = parts[parts.length - 1];
+        subject = parts.slice(0, parts.length - 1).join(' ');
+      }
+    } else {
+      verb = actionLower;
+    }
+
+    // Standardize verb to past tense
+    const VERB_PAST_MAP = {
+      create: 'Created',
+      created: 'Created',
+      add: 'Added',
+      added: 'Added',
+      update: 'Updated',
+      updated: 'Updated',
+      edit: 'Updated',
+      edited: 'Updated',
+      delete: 'Deleted',
+      deleted: 'Deleted',
+      remove: 'Deleted',
+      removed: 'Deleted',
+      archive: 'Archived',
+      archived: 'Archived',
+      unarchive: 'Restored',
+      unarchived: 'Restored',
+      restore: 'Restored',
+      restored: 'Restored',
+      approve: 'Approved',
+      approved: 'Approved',
+      reject: 'Rejected',
+      rejected: 'Rejected',
+      submit: 'Submitted',
+      submitted: 'Submitted',
+      release: 'Released',
+      released: 'Released',
+      fund: 'Funded',
+      funded: 'Funded',
+      send: 'Sent',
+      sent: 'Sent',
+      acknowledge: 'Acknowledged',
+      acknowledged: 'Acknowledged',
+      complete: 'Completed',
+      completed: 'Completed',
+      disable: 'Disabled',
+      disabled: 'Disabled'
+    };
+
+    const verbFormatted = VERB_PAST_MAP[verb] || (verb.charAt(0).toUpperCase() + verb.slice(1));
+
+    // Standardize subject label
+    const SUBJECT_MAP = {
+      client: 'Client',
+      clients: 'Client',
+      invoice: 'Invoice',
+      invoices: 'Invoice',
+      billing: 'Invoice',
+      disbursement: 'Disbursement',
+      disbursements: 'Disbursement',
+      transmittal: 'Transmittal',
+      transmittals: 'Transmittal',
+      work_request: 'Work Request',
+      workrequest: 'Work Request',
+      workrequests: 'Work Request',
+      task: 'Task',
+      tasks: 'Task',
+      user: 'User',
+      users: 'User',
+      document: 'Document',
+      documents: 'Document',
+      pending: 'Approval Request',
+      pending_changes: 'Approval Request',
+      operations_request: 'Operations Request'
+    };
+
+    let subjectFormatted = SUBJECT_MAP[subject];
+    if (!subjectFormatted && tableLower) {
+      subjectFormatted = SUBJECT_MAP[tableLower];
+    }
+    if (!subjectFormatted && subject) {
+      subjectFormatted = subject.split(/[\s_\-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    }
+
+    if (subjectFormatted) {
+      return `${verbFormatted} ${subjectFormatted}`;
+    }
+
+    return verbFormatted || actionRaw;
+  },
+
   _getItemIdentifier(l) {
     if (!l) return '—';
     const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
@@ -1627,10 +1846,16 @@ const Users = {
     // Text search filter
     if (searchQuery) {
       logs = logs.filter(l => {
+        const actionDisplay = this._formatAuditAction(l);
+        const itemTarget = this._getItemIdentifier(l);
+        const user = window.apiClient.userCache.getById(l.userId);
+        const userName = user ? user.name : (l.userName || l.userId || '');
         const hay = [
           l.action || '',
+          actionDisplay,
+          itemTarget,
+          userName,
           typeof l.details === 'object' ? JSON.stringify(l.details) : (l.details || ''),
-          l.userName || '',
         ].join(' ').toLowerCase();
         return hay.includes(searchQuery);
       });
@@ -1677,6 +1902,8 @@ const Users = {
       delete: 'jira-backlog-tag-action-delete',
       remove: 'jira-backlog-tag-action-delete',
       archive: 'jira-backlog-tag-action-archive',
+      unarchive: 'jira-backlog-tag-action-approve',
+      restore: 'jira-backlog-tag-action-approve',
       approve: 'jira-backlog-tag-action-approve',
       complete: 'jira-backlog-tag-action-approve',
       reject: 'jira-backlog-tag-action-reject',
@@ -1704,13 +1931,14 @@ const Users = {
 
       const seqNum = (l.id && logSequenceMap.get(l.id)) || (idx + 1);
       const itemTarget = this._getItemIdentifier(l);
+      const actionDisplay = this._formatAuditAction(l);
 
       return {
         id: l.id || idx,
         keyText: 'AUR-' + String(seqNum).padStart(3, '0'),
         iconHtml: avatarIcon,
         tags: [
-          { text: l.action || 'Activity', type: 'action', className: 'jira-backlog-tag-action ' + getActionClass(l.action) },
+          { text: actionDisplay, type: 'action', className: 'jira-backlog-tag-action ' + getActionClass(l.action || actionDisplay) },
           { text: itemTarget, type: 'item', className: 'jira-backlog-tag-item' },
           { text: l.entity || 'ATA', type: 'entity', className: 'badge badge-' + ((l.entity || 'ATA') === 'ATA' ? 'ata' : 'lta') },
           { text: userName, type: 'client' },
