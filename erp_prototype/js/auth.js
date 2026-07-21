@@ -59,7 +59,7 @@ const Auth = {
    * departments receives the union of those permission sets.
    */
   DEPARTMENT_PERMISSIONS: {
-    'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:mark','transmittal:delete','bypass_review:tasks','approve_change:tasks','users:view','users:manage','audit:view_all'],
+    'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_add','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:mark','transmittal:delete','bypass_review:tasks','approve_change:tasks','users:view','users:manage','audit:view_all'],
     'Accounting': ['clients:view','workflow:view','workflow:task_add','billing:view','billing:edit','disbursement:view','disbursement:create','disbursement:edit','dms:view','transmittal:view'],
     'Operations': ['clients:view','workflow:view','workflow:task_add','workflow:task_upload','billing:view','billing:request','disbursement:view','disbursement:request','dms:view','transmittal:view','transmittal:request'],
     'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark']

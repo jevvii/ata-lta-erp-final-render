@@ -631,6 +631,20 @@ const PaymentIcons = {
  * @param {string} [opts.maxWidth] - Optional max-width CSS value
  * @returns {HTMLElement} wrapper element with .value property
  */
+const _searchableDropdowns = new Set();
+let _searchableDropdownDocListener = false;
+function _ensureSearchableDropdownDocListener() {
+  if (_searchableDropdownDocListener) return;
+  _searchableDropdownDocListener = true;
+  document.addEventListener('mousedown', (e) => {
+    _searchableDropdowns.forEach((dropdown) => {
+      if (!dropdown.wrapper.contains(e.target)) {
+        dropdown.close();
+      }
+    });
+  });
+}
+
 function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
@@ -740,6 +754,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = true;
     highlightIdx = -1;
     wrapper.classList.add('open');
+    _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
   }
 
@@ -747,6 +762,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     if (!isOpen) return;
     isOpen = false;
     wrapper.classList.remove('open');
+    _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {
       selectedValue = input.value.trim();
@@ -755,6 +771,9 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     input.value = selectedValue ? selectedText : '';
     clearBtn.style.display = input.value ? 'flex' : 'none';
   }
+
+  const dropdownRef = { wrapper, close };
+  _ensureSearchableDropdownDocListener();
 
   input.addEventListener('focus', () => {
     input.select();
@@ -812,11 +831,6 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     else { input.focus(); if (!isOpen) open(); }
   });
 
-  // Close when clicking outside
-  document.addEventListener('mousedown', (e) => {
-    if (!wrapper.contains(e.target)) close();
-  });
-
   // Expose .value as getter/setter for drop-in compatibility with <select>
   Object.defineProperty(wrapper, 'value', {
     get() { return selectedValue; },
@@ -839,6 +853,10 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   Object.defineProperty(wrapper, 'searchText', {
     get() { return input.value; }
   });
+
+  wrapper.destroy = () => {
+    close();
+  };
 
   // Expose addEventListener on wrapper (already works since it's a div)
   return wrapper;

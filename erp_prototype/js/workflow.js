@@ -1757,6 +1757,12 @@ const Workflow = {
     });
     input.addEventListener('focus', cancelBlurCommit);
 
+    const baseDestroy = dropdown.destroy;
+    dropdown.destroy = () => {
+      cancelBlurCommit();
+      if (typeof baseDestroy === 'function') baseDestroy();
+    };
+
     return dropdown;
   },
 
@@ -6652,6 +6658,13 @@ const Workflow = {
       return el('div');
     }
 
+    // Cancel any previous form-level document listener so repeated renders
+    // (opening the panel multiple times) do not leak global listeners.
+    if (this._wrFormAbortController) {
+      this._wrFormAbortController.abort();
+    }
+    this._wrFormAbortController = new AbortController();
+
     const entity = Auth.activeEntity;
     const wr = this.editingId ? WorkflowData.getWorkRequestById(this.editingId) : null;
     if (this.editingId && (!wr || !Auth.canViewWr(wr))) {
@@ -6761,7 +6774,7 @@ const Workflow = {
         templateDropdown.appendChild(item);
       });
       templateBtn.addEventListener('click', (e) => { e.stopPropagation(); templateDropdown.classList.toggle('hidden'); });
-      document.addEventListener('click', () => { templateDropdown.classList.add('hidden'); });
+      document.addEventListener('click', () => { templateDropdown.classList.add('hidden'); }, { signal: this._wrFormAbortController.signal });
       templateDropdown.addEventListener('click', (e) => e.stopPropagation());
       templateWrapper.appendChild(templateBtn);
       templateWrapper.appendChild(templateDropdown);
@@ -6885,7 +6898,10 @@ const Workflow = {
       'data-role': 'add-task',
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add task'
     });
-    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList, null, true));
+    addTaskBtn.addEventListener('click', async () => {
+      await this.addTaskRow(tasksList, null, true);
+      this.updatePredecessorOptions(tasksList);
+    });
     tasksSection.appendChild(addTaskBtn);
     form.appendChild(tasksSection);
 
@@ -7021,13 +7037,15 @@ const Workflow = {
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
     });
     removeBtn.addEventListener('click', () => {
+      row.querySelectorAll('.searchable-dropdown').forEach(d => {
+        if (typeof d.destroy === 'function') d.destroy();
+      });
       row.remove();
       this.updatePredecessorOptions(container);
     });
     row.appendChild(removeBtn);
 
     container.appendChild(row);
-    this.updatePredecessorOptions(container);
   },
 
   updatePredecessorOptions(container) {
@@ -7230,13 +7248,13 @@ const Workflow = {
     // Collect tasks from rows
     const taskRows = form.querySelectorAll('.task-row');
     const tasks = [];
-    taskRows.forEach(row => {
+    for (const row of taskRows) {
       const title = row.querySelector('.task-title-input').value.trim();
-      if (!title) return;
+      if (!title) continue;
       const gwAutocomplete = row.querySelector('.task-assignee-groundworker');
       const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
       const predKeysStr = row.dataset.predKeys || '';
       const predecessorKeys = predKeysStr.split(',').filter(Boolean);
@@ -7248,7 +7266,7 @@ const Workflow = {
         coAssignees: row._coAssignees || [],
         predecessorKeys: predecessorKeys
       });
-    });
+    }
 
     const cycleCheck = tasks.map((t, i) => {
       let preds = [];
@@ -11163,7 +11181,7 @@ const Workflow = {
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
       const newTask = {
         id: generateId('t'),
@@ -11609,7 +11627,7 @@ const Workflow = {
         PendingChanges.editingPendingId = null;
       }
     });
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const groundWorkerName = gwDropdown.searchText.trim();
@@ -11617,9 +11635,9 @@ const Workflow = {
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
-      WorkflowData.updateTask(task.id, {
+      await WorkflowData.updateTask(task.id, {
         title: data.title.trim(),
         assigneeId: res.id,
         assigneeName: res.name,
@@ -12141,7 +12159,10 @@ const Workflow = {
     tasksSection.appendChild(tasksList);
 
     const addTaskBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Task' });
-    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList));
+    addTaskBtn.addEventListener('click', async () => {
+      await this.addTaskRow(tasksList);
+      this.updatePredecessorOptions(tasksList);
+    });
     tasksSection.appendChild(addTaskBtn);
 
     form.appendChild(tasksSection);
