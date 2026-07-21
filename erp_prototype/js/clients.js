@@ -879,6 +879,7 @@ const Clients = {
       if (clientWrs.length === 0) {
         rightSec.appendChild(el('div', { style: 'color: var(--color-text-muted); font-size: 13px;', text: 'No work requests assigned.' }));
       } else {
+        const childWrsList = el('div', { class: 'jira-details-list' });
         const wrSeqMap = window.WorkflowData ? window.WorkflowData.getWorkRequestSeqMap() : new Map();
         clientWrs.forEach((wr, wrIdx) => {
           const wrItem = el('div', { class: 'jira-details-list-item' });

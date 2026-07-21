@@ -90,6 +90,74 @@ const Users = {
     };
   },
 
+  _getItemIdentifier(l) {
+    if (!l) return '—';
+    const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
+    
+    // 1. Explicit business numbers and titles in details
+    const businessId = d.disbursementNumber || d.disbursement_number ||
+                       d.trackingNumber || d.tracking_number ||
+                       d.invoiceNumber || d.invoice_number ||
+                       d.voucherNumber || d.voucher_number ||
+                       d.workRequestTitle || d.title || d.name || d.code || d.email || d.description;
+    if (businessId) {
+      return String(businessId);
+    }
+
+    // 2. Resolve target record ID from details or root log object
+    const recId = d.recordId || d.record_id || d.id || d.parentRecordId || l.recordId || l.record_id;
+    if (!recId) return '—';
+
+    const actionLower = (l.action || '').toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    // 3. Dynamic lookup in client cache
+    if (tableLower.includes('client') || actionLower.includes('client')) {
+      const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(recId) : null;
+      if (client?.name) return client.name;
+    }
+
+    // 4. Dynamic lookup in work request cache
+    if (tableLower.includes('work') || tableLower.includes('request') || actionLower.includes('work') || actionLower.includes('request')) {
+      const wr = window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(recId) : null;
+      if (wr?.title || wr?.trackingNumber) return wr.title || wr.trackingNumber;
+    }
+
+    // 5. Dynamic lookup in user cache
+    if (tableLower.includes('user') || actionLower.includes('user')) {
+      const user = window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(recId) : null;
+      if (user?.name || user?.email) return user.name || user.email;
+    }
+
+    // 6. Dynamic lookup in transmittal cache
+    if (tableLower.includes('transmittal') || actionLower.includes('transmittal')) {
+      if (typeof Transmittal !== 'undefined' && Array.isArray(Transmittal._items)) {
+        const t = Transmittal._items.find(i => i.id === recId);
+        if (t?.trackingNumber) return t.trackingNumber;
+      }
+    }
+
+    // 7. Dynamic lookup in disbursement cache
+    if (tableLower.includes('disbursement') || actionLower.includes('disbursement')) {
+      if (typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items)) {
+        const disb = Disbursement._items.find(i => i.id === recId);
+        if (disb?.disbursementNumber) return disb.disbursementNumber;
+      }
+    }
+
+    // 8. Dynamic lookup in billing cache
+    if (tableLower.includes('billing') || tableLower.includes('invoice') || actionLower.includes('invoice') || actionLower.includes('billing')) {
+      if (typeof Billing !== 'undefined' && Array.isArray(Billing._invoices || Billing._items)) {
+        const inv = (Billing._invoices || Billing._items || []).find(i => i.id === recId);
+        if (inv?.invoiceNumber) return inv.invoiceNumber;
+      }
+    }
+
+    // 9. If recId is a standard UUID or ID string
+    const recIdStr = String(recId);
+    return recIdStr.length > 20 ? recIdStr.slice(0, 8) + '...' : recIdStr;
+  },
+
   /**
    * Map a date-bucket label to an ISO from/to range for server-side filtering.
    */
@@ -160,6 +228,9 @@ const Users = {
     const canManageUsers = Auth.can('users:view');
 
     try {
+      if (typeof window.apiClient?.admin?.invalidateAuditCount === 'function') {
+        window.apiClient.admin.invalidateAuditCount();
+      }
       const [auditRes, myRequests] = await Promise.all([
         canManageUsers ? window.apiClient.admin.auditCount() : Promise.resolve({ data: { total: 0 } }),
         this.countMyRequests(),
@@ -188,6 +259,10 @@ const Users = {
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to preload my rejected', err);
       this._cachedMyRejected = [];
+    }
+
+    if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+      App.updateSidebarNotifications().catch(() => {});
     }
   },
 
@@ -1628,12 +1703,15 @@ const Users = {
       const ts = new Date(l.timestamp);
 
       const seqNum = (l.id && logSequenceMap.get(l.id)) || (idx + 1);
+      const itemTarget = this._getItemIdentifier(l);
+
       return {
         id: l.id || idx,
         keyText: 'AUR-' + String(seqNum).padStart(3, '0'),
         iconHtml: avatarIcon,
         tags: [
           { text: l.action || 'Activity', type: 'action', className: 'jira-backlog-tag-action ' + getActionClass(l.action) },
+          { text: itemTarget, type: 'item', className: 'jira-backlog-tag-item' },
           { text: l.entity || 'ATA', type: 'entity', className: 'badge badge-' + ((l.entity || 'ATA') === 'ATA' ? 'ata' : 'lta') },
           { text: userName, type: 'client' },
           { text: formatDate(l.timestamp) + ' ' + ts.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }), type: 'schedule' }
@@ -1657,10 +1735,11 @@ const Users = {
         this.refreshAuditLog(container, activeFilters, searchQuery, sortOrder, newPage, onPageChange);
       }),
       columns: [
-        { label: 'ACTION', width: 'minmax(200px, 32%)' },
-        { label: 'ENTITY', width: 'minmax(80px, 12%)' },
-        { label: 'USER', width: 'minmax(180px, 26%)' },
-        { label: 'TIMESTAMP', width: 'minmax(180px, 30%)', align: 'right' }
+        { label: 'ACTION', width: 'minmax(160px, 22%)' },
+        { label: 'ITEM / RECORD', width: 'minmax(180px, 26%)' },
+        { label: 'ENTITY', width: 'minmax(70px, 10%)' },
+        { label: 'USER', width: 'minmax(150px, 22%)' },
+        { label: 'TIMESTAMP', width: 'minmax(160px, 20%)', align: 'right' }
       ]
     });
 

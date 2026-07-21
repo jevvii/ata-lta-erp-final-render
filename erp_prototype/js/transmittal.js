@@ -15,6 +15,11 @@ const Transmittal = {
   prefilledWrId: null,
   prefilledClientId: null,
 
+  _archivePage: 1,
+  _archiveLimit: 20,
+  _lastArchiveMeta: {},
+  _rejectedArchiveCounts: null,
+
   // ============================================================
   // Entity-tagged lightweight cache (mirrors WorkflowData patterns)
   // ============================================================
@@ -95,6 +100,12 @@ const Transmittal = {
   },
 
   async ensure() {
+    if (typeof window.apiClient?.clientCache?.ensure === 'function') {
+      window.apiClient.clientCache.ensure().catch(() => {});
+    }
+    if (typeof window.apiClient?.userCache?.ensure === 'function') {
+      window.apiClient.userCache.ensure().catch(() => {});
+    }
     const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
     if (skipping || this.hasCachedData()) return;
     const activeEntity = this._getActiveEntity();
@@ -126,20 +137,14 @@ const Transmittal = {
     }
     if (Array.isArray(this._items) && this._entity === entity) {
       const existingMap = new Map(this._items.map(t => [t.id, t]));
-      const isSkipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
       items.forEach(serverT => {
         const existing = existingMap.get(serverT.id);
         if (existing) {
-          const localNewer = existing.updatedAt && serverT.updatedAt && new Date(existing.updatedAt) > new Date(serverT.updatedAt);
-          if (isSkipActive || localNewer) {
-            const localArchived = existing.archived;
-            const localStatus = existing.status;
-            Object.assign(existing, serverT);
-            if (localArchived !== undefined) existing.archived = localArchived;
-            if (localStatus !== undefined) existing.status = localStatus;
-          } else {
-            Object.assign(existing, serverT);
-          }
+          const localArchived = existing.archived;
+          const localStatus = existing.status;
+          Object.assign(existing, serverT);
+          if (localArchived !== undefined) existing.archived = localArchived;
+          if (localStatus !== undefined && localStatus !== 'Draft') existing.status = localStatus;
         } else if (!this._isTempId(serverT.id)) {
           this._items.push(serverT);
         }
@@ -285,9 +290,18 @@ const Transmittal = {
    * Get a single transmittal by id, handling 'ALL' by trying each entity.
    */
   async _getByIdAcrossEntities(id) {
+    if (!id) return null;
+    if (this._items) {
+      const cached = this._items.find(t => t.id === id);
+      if (cached) return cached;
+    }
     if (Auth.activeEntity !== 'ALL') {
-      const res = await window.apiClient.transmittals.get(id);
-      return this.normalizeTransmittal(res.data);
+      try {
+        const res = await window.apiClient.transmittals.get(id);
+        return res.data ? this.normalizeTransmittal(res.data) : null;
+      } catch (e) {
+        return null;
+      }
     }
     const codes = (Auth.user?.entities || []).filter(c => c !== 'ALL');
     for (const code of codes) {
@@ -361,6 +375,21 @@ const Transmittal = {
           }
         }
 
+        if (Auth.user?.role === 'Admin') {
+          if (!t.archived && t.status === 'Acknowledged') {
+            const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-right:8px;' });
+            archiveBtn.addEventListener('click', () => { this.archiveTransmittal(t.id); });
+            actions.appendChild(archiveBtn);
+          } else if (t.archived) {
+            const unarchiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Unarchive', style: 'margin-right:8px;' });
+            unarchiveBtn.addEventListener('click', () => { this.unarchiveTransmittal(t.id); });
+            actions.appendChild(unarchiveBtn);
+          }
+          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete', style: 'margin-right:8px;' });
+          deleteBtn.addEventListener('click', () => { this.permanentDeleteTransmittal(t.id); });
+          actions.appendChild(deleteBtn);
+        }
+
         const printBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Print Transmittal', style: 'margin-right:8px;' });
         printBtn.addEventListener('click', () => this.openPrintLetter(t));
         actions.appendChild(printBtn);
@@ -414,12 +443,16 @@ const Transmittal = {
           ]
         }));
       }
-    } else if (this.view === 'list') {
+    } else if (['list', 'archive'].includes(this.view)) {
       container.classList.add('transmittal-tab-page');
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Transmittal' }));
       container.appendChild(titleBar);
-      container.appendChild(await this.renderTabNav());
+
+      await this.ensure();
+      await this._loadRejectedArchiveCounts();
+
+      container.appendChild(this.renderTabNav());
     }
 
     if (this.view === 'list') container.appendChild(await this.renderList());
@@ -439,7 +472,25 @@ const Transmittal = {
     App.updateStickyOffsets();
   },
 
-  async renderTabNav() {
+  async _loadRejectedArchiveCounts() {
+    const entity = this._getActiveEntity();
+    const isManagerial = Auth.isManagerial ? Auth.isManagerial() : false;
+    let requests = 0;
+    try {
+      const opReqRes = await window.apiClient.operationsRequests.list({ status: 'rejected', type: 'transmittal' });
+      requests = ((opReqRes.data || []).filter(r => {
+        if (!this._entityMatches(r, entity)) return false;
+        if (!isManagerial && r.requestedBy !== Auth.user?.id) return false;
+        return true;
+      })).length;
+    } catch (e) {
+      console.error('Failed to load rejected transmittal requests', e);
+    }
+    this._rejectedArchiveCounts = { total: requests };
+    return this._rejectedArchiveCounts;
+  },
+
+  renderTabNav() {
     const entity = Auth.activeEntity;
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -447,43 +498,14 @@ const Transmittal = {
       return uEnt === entity.toUpperCase();
     };
 
-    let count = 0;
-    let archiveCount = 0;
-    const skipActive = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
-    if (skipActive && Array.isArray(this._items)) {
-      const items = this._items;
-      count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !t.archived).length;
-      archiveCount = items.filter(t => entFilter(t.entity) && (t.archived || t.status === 'Cancelled')).length;
-    } else {
-      try {
-        const countsRes = await window.apiClient.transmittals.counts();
-        const countsData = countsRes.data || countsRes;
-        if (countsData) {
-          count = countsData.active || 0;
-          archiveCount = countsData.archived || 0;
-        }
-      } catch (e) {
-        await this.ensure();
-        const items = this._items || [];
-        count = items.filter(t => entFilter(t.entity) && t.status !== 'Cancelled' && !t.archived).length;
-        archiveCount = items.filter(t => entFilter(t.entity) && (t.archived || t.status === 'Cancelled')).length;
-      }
-    }
-
-    try {
-      const opRes = await window.apiClient.operationsRequests.list({ type: 'transmittal', status: 'rejected' });
-      const rejectedRequests = opRes.data || [];
-      archiveCount += rejectedRequests.filter(r => {
-        if (!entFilter(r.entity)) return false;
-        if (!Auth.isManagerial() && r.requestedBy !== Auth.user.id) return false;
-        return true;
-      }).length;
-    } catch (e) {
-      console.error('Failed to load rejected transmittal requests', e);
-    }
+    const cachedItems = (this._items || []).filter(t => entFilter(t.entity));
+    const activeCount = cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
+    const archiveDbCount = cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
+    const rejectedCount = this._rejectedArchiveCounts?.total || 0;
+    const archiveCount = archiveDbCount + rejectedCount;
 
     const tabs = [
-      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count },
+      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: activeCount },
       { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
     ];
 
@@ -641,17 +663,15 @@ const Transmittal = {
     return prefix + suffix;
   },
 
-  async getClientName(clientId) {
+  getClientName(clientId) {
     if (!clientId) return '—';
-    await window.apiClient.clientCache.ensure();
-    const client = window.apiClient.clientCache.getById(clientId);
+    const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(clientId) : null;
     return client?.name || '—';
   },
 
-  async getUserName(userId) {
+  getUserName(userId) {
     if (!userId) return '—';
-    await window.apiClient.userCache.ensure();
-    const user = window.apiClient.userCache.getById(userId);
+    const user = window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(userId) : null;
     return user?.name || '—';
   },
 
@@ -770,10 +790,10 @@ const Transmittal = {
     const groupOptions = [
       { key: 'none', label: 'None' },
       { key: 'client', label: 'Client', getName: t => self.getClientName(t.clientId) },
-      { key: 'employee', label: 'Employee', getName: async t => {
-        const creatorName = await self.getUserName(t.createdBy);
-        const senderName = await self.getUserName(t.sentBy);
-        return creatorName || senderName || 'Unassigned';
+      { key: 'employee', label: 'Employee', getName: t => {
+        const creatorName = self.getUserName(t.createdBy);
+        const senderName = self.getUserName(t.sentBy);
+        return creatorName !== '—' ? creatorName : (senderName !== '—' ? senderName : 'Unassigned');
       }},
       { key: 'workRequest', label: 'Work Request', getName: t => self.getWorkRequestTitle(t.workRequestId) }
     ];
@@ -937,6 +957,46 @@ const Transmittal = {
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
         wrapper.appendChild(editBtn);
       }
+      const canMark = Auth.can('transmittal:mark');
+      if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+        const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent', style: 'margin-left:4px;' });
+        sendBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
+            const now = new Date().toISOString();
+            const original = self._updateCachedItem(t.id, { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id });
+            const skipGen = self._startSkipFetchGeneration();
+            App.handleRoute();
+            try {
+              await window.apiClient.transmittals.send(t.id);
+            } catch (err) {
+              if (original) self._updateCachedItem(t.id, original);
+              self._clearActiveSkipGeneration(skipGen);
+              App.handleRoute();
+              Workflow.showMessage('Send Failed', err.message || 'Unable to send transmittal.', 'error');
+              return;
+            }
+            self._clearActiveSkipGeneration(skipGen);
+            App.handleRoute();
+          }, 'success');
+        });
+        wrapper.appendChild(sendBtn);
+      }
+      if (canMark && t.status === 'Sent') {
+        const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge', style: 'margin-left:4px;' });
+        ackBtn.addEventListener('click', (e) => { e.stopPropagation(); self.showAcknowledgeDialog(t.id); });
+        wrapper.appendChild(ackBtn);
+      }
+      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
+        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
+        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
+        wrapper.appendChild(archiveBtn);
+      }
+      if (Auth.user?.role === 'Admin') {
+        const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete', style: 'margin-left:4px;' });
+        deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); self.permanentDeleteTransmittal(t.id); });
+        wrapper.appendChild(deleteBtn);
+      }
       return wrapper;
     };
 
@@ -962,8 +1022,30 @@ const Transmittal = {
       items,
       columns,
       selectable: true,
-      bulkActions: (ids) => {
-        return [];
+      bulkActions: (selectedIds) => {
+        if (Auth.user?.role !== 'Admin') return [];
+        const selectedItems = selectedIds.map(id => items.find(t => t.id === id)).filter(Boolean);
+        const canArchiveCount = selectedItems.filter(t => t.status === 'Acknowledged' && !t.archived).length;
+        const actions = [];
+        if (canArchiveCount > 0) {
+          actions.push({
+            text: `Archive (${canArchiveCount})`,
+            className: 'btn btn-secondary btn-sm',
+            onClick: (sel) => self.bulkArchiveTransmittals(sel)
+          });
+        }
+        actions.push({
+          text: `Delete (${selectedIds.length})`,
+          className: 'btn btn-danger btn-sm',
+          onClick: (sel) => {
+            Workflow.showConfirm('Bulk Delete', `Are you sure you want to delete ${sel.length} selected transmittal(s)?`, async () => {
+              for (const id of sel) {
+                await self.permanentDeleteTransmittal(id);
+              }
+            }, 'danger');
+          }
+        });
+        return actions;
       },
       rowId: (t) => t.id,
       onRowClick: (t) => { location.hash = '#transmittal/detail/' + t.id; }
@@ -1111,11 +1193,19 @@ const Transmittal = {
           onClick: () => self.showAcknowledgeDialog(t.id)
         });
       }
-      if (!t.archived && t.status === 'Acknowledged') {
+      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
         menu.push({
           label: 'Archive',
           icon: ArchivePage.icons.archive || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>',
           onClick: () => self.archiveTransmittal(t.id)
+        });
+      }
+      if (Auth.user?.role === 'Admin') {
+        menu.push({
+          label: 'Delete',
+          className: 'danger',
+          icon: ArchivePage.icons.delete || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+          onClick: () => self.permanentDeleteTransmittal(t.id)
         });
       }
       return menu;
@@ -1153,6 +1243,8 @@ const Transmittal = {
   },
 
   renderCompactListView(container, items) {
+    const self = this;
+    const canMark = Auth.can('transmittal:mark');
     const list = el('div', { class: 'list-view' });
     items.forEach(t => {
       const item = el('div', { class: 'list-item', style: 'cursor: pointer;' });
@@ -1169,6 +1261,45 @@ const Transmittal = {
         const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
         actionWrap.appendChild(editBtn);
+      }
+      if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+        const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent' });
+        sendBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
+            const now = new Date().toISOString();
+            const original = self._updateCachedItem(t.id, { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id });
+            const skipGen = self._startSkipFetchGeneration();
+            App.handleRoute();
+            try {
+              await window.apiClient.transmittals.send(t.id);
+            } catch (err) {
+              if (original) self._updateCachedItem(t.id, original);
+              self._clearActiveSkipGeneration(skipGen);
+              App.handleRoute();
+              Workflow.showMessage('Send Failed', err.message || 'Unable to send transmittal.', 'error');
+              return;
+            }
+            self._clearActiveSkipGeneration(skipGen);
+            App.handleRoute();
+          }, 'success');
+        });
+        actionWrap.appendChild(sendBtn);
+      }
+      if (canMark && t.status === 'Sent') {
+        const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge' });
+        ackBtn.addEventListener('click', (e) => { e.stopPropagation(); self.showAcknowledgeDialog(t.id); });
+        actionWrap.appendChild(ackBtn);
+      }
+      if (!t.archived && t.status === 'Acknowledged' && Auth.user?.role === 'Admin') {
+        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive' });
+        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
+        actionWrap.appendChild(archiveBtn);
+      }
+      if (Auth.user?.role === 'Admin') {
+        const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Delete' });
+        deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); self.permanentDeleteTransmittal(t.id); });
+        actionWrap.appendChild(deleteBtn);
       }
       item.appendChild(actionWrap);
       list.appendChild(item);
@@ -2352,6 +2483,10 @@ const Transmittal = {
   },
 
   async archiveTransmittal(id) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Permission Denied', 'Only Admin can archive transmittals.', 'danger');
+      return;
+    }
     await this.ensure();
     const items = this._items || [];
     const item = items.find(t => t.id === id);
@@ -2391,6 +2526,10 @@ const Transmittal = {
   },
 
   async bulkArchiveTransmittals(ids) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Permission Denied', 'Only Admin can archive transmittals.', 'danger');
+      return;
+    }
     await this.ensure();
     const eligible = (ids || [])
       .map(id => (this._items || []).find(t => t.id === id))
@@ -2439,6 +2578,10 @@ const Transmittal = {
   },
 
   async unarchiveTransmittal(id) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Permission Denied', 'Only Admin can restore transmittals.', 'danger');
+      return;
+    }
     await this.ensure();
     const items = this._items || [];
     const item = items.find(t => t.id === id);
@@ -2470,8 +2613,8 @@ const Transmittal = {
   },
 
   permanentDeleteTransmittal(id) {
-    if (Auth.user?.role !== 'Admin' && !Auth.isManagerial() && !Auth.can('transmittal:delete')) {
-      Workflow.showMessage('Permission Denied', 'Only authorized users can delete transmittals.', 'danger');
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Permission Denied', 'Only Admin can delete transmittals.', 'danger');
       return;
     }
     Workflow.showConfirm('Delete Transmittal',
@@ -2492,7 +2635,9 @@ const Transmittal = {
         App.handleRoute();
         try {
           await window.apiClient.transmittals.remove(id);
-          this.invalidateCache();
+          if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+            window.apiClient.transmittals.invalidateCounts();
+          }
           if (typeof Dashboard !== 'undefined') {
             if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
             if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
@@ -2520,39 +2665,43 @@ const Transmittal = {
     const self = this;
     const isManagerial = Auth.isManagerial();
 
-    const tFilter = t => {
-      const tEnt = (t.entity || '').toUpperCase();
-      const matchesEntity = (entity === 'ALL'
-        ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt)
-        : tEnt === entity.toUpperCase());
-      return matchesEntity;
-    };
-
     let archivedTransmittals = [];
     try {
-      const res = await window.apiClient.transmittals.list({ archived: true });
+      const res = await window.apiClient.transmittals.list({
+        archived: true,
+        page: this._archivePage,
+        limit: this._archiveLimit
+      });
       archivedTransmittals = (res.data || []).map(t => this.normalizeTransmittal(t));
+      this._lastArchiveMeta = res.meta || {};
     } catch (e) {
       console.error('Failed to load archived transmittals', e);
+      this._lastArchiveMeta = {};
     }
 
-    const localArchived = (this._items || []).filter(t => tFilter(t) && (t.archived === true || t.status === 'Cancelled'));
+    const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
+    const localArchived = isFirstPageOrSkip ? (this._items || []).filter(t => this._entityMatches(t, entity) && (t.archived === true || t.status === 'Cancelled')) : [];
     const tMap = new Map();
     archivedTransmittals.forEach(t => tMap.set(t.id, t));
     localArchived.forEach(t => {
       if (!tMap.has(t.id)) tMap.set(t.id, t);
     });
 
-    const acknowledged = Array.from(tMap.values()).filter(t => {
+    let filteredTransmittals = Array.from(tMap.values()).filter(t => {
+      const cached = (this._items || []).find(i => i.id === t.id);
+      return !cached || cached.archived !== false;
+    });
+
+    const acknowledged = filteredTransmittals.filter(t => {
       const cached = (this._items || []).find(i => i.id === t.id);
       const isArchived = t.archived === true || (cached && cached.archived === true);
       const status = t.status || cached?.status;
-      return tFilter(t) && isArchived && status === 'Acknowledged';
+      return this._entityMatches(t, entity) && isArchived && status === 'Acknowledged';
     });
 
     const cancelledMap = new Map();
-    archivedTransmittals.concat(this._items || []).forEach(t => {
-      if (tFilter(t) && t.status === 'Cancelled') cancelledMap.set(t.id, t);
+    filteredTransmittals.concat(isFirstPageOrSkip ? (this._items || []) : []).forEach(t => {
+      if (this._entityMatches(t, entity) && t.status === 'Cancelled') cancelledMap.set(t.id, t);
     });
     const cancelled = Array.from(cancelledMap.values());
 
@@ -2568,7 +2717,7 @@ const Transmittal = {
       console.error('Failed to load rejected transmittal requests', e);
     }
 
-    const canDelete = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('transmittal:delete');
+    const isAdmin = Auth.user?.role === 'Admin';
 
     const buildItem = (t, category) => {
       const wrTitle = this.getWorkRequestTitle(t.workRequestId);
@@ -2587,13 +2736,13 @@ const Transmittal = {
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
           },
-          ...(category === 'acknowledged' ? [{
+          ...(category === 'acknowledged' && isAdmin ? [{
             label: 'Unarchive',
             icon: ArchivePage.icons.unarchive,
             className: 'primary',
             onClick: () => self.unarchiveTransmittal(t.id)
           }] : []),
-          ...(category === 'cancelled' && isManagerial ? [{
+          ...(category === 'cancelled' && isAdmin ? [{
             label: 'Restore to Draft',
             icon: ArchivePage.icons.restore,
             className: 'primary',
@@ -2620,6 +2769,12 @@ const Transmittal = {
                   }
                 }, 'warning');
             }
+          }] : []),
+          ...(isAdmin ? [{
+            label: 'Delete Permanently',
+            icon: ArchivePage.icons.delete,
+            className: 'danger',
+            onClick: () => self.permanentDeleteTransmittal(t.id)
           }] : [])
         ]
       };
@@ -2646,6 +2801,11 @@ const Transmittal = {
       };
     };
 
+    const meta = this._lastArchiveMeta || {};
+    const page = meta.page || this._archivePage || 1;
+    const limit = meta.limit || this._archiveLimit || 20;
+    const total = meta.total || (acknowledged.length + cancelled.length + rejectedTransmittalRequests.length);
+
     return ArchivePage.render({
       module: 'transmittal',
       categoryLabels: { acknowledged: 'Acknowledged', cancelled: 'Cancelled', rejected: 'Rejected' },
@@ -2656,15 +2816,24 @@ const Transmittal = {
       },
       emptyText: 'Archive is empty.',
       renderCallback: () => { self.renderArchive().catch(() => {}); },
+      pagination: {
+        page,
+        limit,
+        total,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      },
       bulkActions: ids => [
-        {
+        ...(isAdmin ? [{
           text: 'Restore Selected',
           className: 'btn btn-secondary btn-sm',
           onClick: selectedIds => {
             selectedIds.forEach(id => self.unarchiveTransmittal(id));
           }
         },
-        ...(canDelete ? [{
+        {
           text: 'Delete Selected',
           className: 'btn btn-danger btn-sm',
           onClick: selectedIds => {

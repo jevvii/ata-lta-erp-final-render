@@ -100,9 +100,9 @@ const countTransmittals = async ({ entityId }) => {
 
   const rows = data || [];
   const active = rows.filter(
-    (t) => t.status !== 'Cancelled' && !(t.status === 'Acknowledged' && t.archived)
+    (t) => t.status !== 'Cancelled' && !t.archived
   ).length;
-  const archived = rows.filter((t) => t.status === 'Acknowledged' && t.archived).length;
+  const archived = rows.filter((t) => t.archived === true || t.status === 'Cancelled').length;
 
   return { active, archived, total: count || rows.length };
 };

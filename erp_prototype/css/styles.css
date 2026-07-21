@@ -15044,7 +15044,8 @@ html.loading-active #loading-screen:not(.hidden) {
 }
 
 .jira-backlog-tag-client,
-.jira-backlog-tag-category {
+.jira-backlog-tag-category,
+.jira-backlog-tag-item {
   justify-content: flex-start !important;
   font-weight: 500;
 }
