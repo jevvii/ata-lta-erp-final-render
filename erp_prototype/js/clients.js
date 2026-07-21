@@ -277,11 +277,9 @@ const Clients = {
       this._countsFromApi = false;
       return;
     }
-    if (!this._counts) {
-      this._counts = this._recalcCounts();
-      this._countsEntity = this._getActiveEntity();
-      this._countsFromApi = false;
-    }
+    this._counts = this._recalcCounts();
+    this._countsEntity = this._getActiveEntity();
+    this._countsFromApi = false;
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -1675,16 +1673,21 @@ const Clients = {
               if (res && res.data) {
                 const normalized = this.normalizeClient(res.data);
                 ClientsData.replaceClientById(clientId, normalized);
-              } else {
-                client.status = 'Archived';
-                client.archived = true;
-                ClientsData.replaceClientById(clientId, client);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
               if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
               App.updateSidebarNotifications().catch(() => {});
+              if (this.editingId === clientId) {
+                location.hash = '#clients';
+                return;
+              }
+              if (location.hash.startsWith('#clients/form/' + clientId)) {
+                location.hash = '#clients';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -1790,10 +1793,6 @@ const Clients = {
                   if (res && res.data) {
                     const normalized = this.normalizeClient(res.data);
                     ClientsData.replaceClientById(c.id, normalized);
-                  } else {
-                    c.status = 'Archived';
-                    c.archived = true;
-                    ClientsData.replaceClientById(c.id, c);
                   }
                   successCount++;
                 } catch (e) {
@@ -1801,6 +1800,7 @@ const Clients = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} client(s) could not be archived.` } };
               }
@@ -1815,6 +1815,15 @@ const Clients = {
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
               if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
               App.updateSidebarNotifications().catch(() => {});
+              const archivedIds = new Set(eligible.map(c => c.id));
+              if (this.editingId && archivedIds.has(this.editingId)) {
+                location.hash = '#clients';
+                return;
+              }
+              if (location.hash.startsWith('#clients/form/') && archivedIds.has(location.hash.split('/').pop().split('?')[0])) {
+                location.hash = '#clients';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -1895,16 +1904,21 @@ const Clients = {
               if (res && res.data) {
                 const normalized = this.normalizeClient(res.data);
                 ClientsData.replaceClientById(id, normalized);
-              } else {
-                client.status = 'Active';
-                client.archived = false;
-                ClientsData.replaceClientById(id, client);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
               if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
               App.updateSidebarNotifications().catch(() => {});
+              if (this.editingId === id) {
+                location.hash = '#clients';
+                return;
+              }
+              if (location.hash.startsWith('#clients/form/' + id)) {
+                location.hash = '#clients';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -1943,10 +1957,6 @@ const Clients = {
                   if (res && res.data) {
                     const normalized = this.normalizeClient(res.data);
                     ClientsData.replaceClientById(c.id, normalized);
-                  } else {
-                    c.status = 'Active';
-                    c.archived = false;
-                    ClientsData.replaceClientById(c.id, c);
                   }
                   successCount++;
                 } catch (e) {
@@ -1954,6 +1964,7 @@ const Clients = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} client(s) could not be restored.` } };
               }
@@ -1968,6 +1979,15 @@ const Clients = {
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
               if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
               App.updateSidebarNotifications().catch(() => {});
+              const restoredIds = new Set(eligible.map(c => c.id));
+              if (this.editingId && restoredIds.has(this.editingId)) {
+                location.hash = '#clients';
+                return;
+              }
+              if (location.hash.startsWith('#clients/form/') && restoredIds.has(location.hash.split('/').pop().split('?')[0])) {
+                location.hash = '#clients';
+                return;
+              }
               App.handleRoute();
             }
           });

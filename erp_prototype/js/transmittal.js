@@ -2690,8 +2690,7 @@ const Transmittal = {
               if (res && res.data) {
                 const norm = this.normalizeTransmittal(res.data);
                 this._updateCachedItem(id, norm);
-              } else {
-                this._updateCachedItem(id, { archived: true });
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -2699,6 +2698,10 @@ const Transmittal = {
                 window.apiClient.transmittals.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' && this.detailId === id) || (this.view === 'form' && this.detailId === id)) {
+                location.hash = '#transmittal';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -2739,8 +2742,6 @@ const Transmittal = {
                   if (res && res.data) {
                     const norm = this.normalizeTransmittal(res.data);
                     this._updateCachedItem(t.id, norm);
-                  } else {
-                    this._updateCachedItem(t.id, { archived: true });
                   }
                   successCount++;
                 } catch (e) {
@@ -2748,6 +2749,7 @@ const Transmittal = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} transmittal(s) could not be archived.` } };
               }
@@ -2763,6 +2765,10 @@ const Transmittal = {
                 window.apiClient.transmittals.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if (ids.includes(this.detailId) && (this.view === 'detail' || this.view === 'form')) {
+                location.hash = '#transmittal';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -2797,8 +2803,7 @@ const Transmittal = {
               if (res && res.data) {
                 const norm = this.normalizeTransmittal(res.data);
                 this._updateCachedItem(id, norm);
-              } else {
-                this._updateCachedItem(id, { archived: false });
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -2806,6 +2811,10 @@ const Transmittal = {
                 window.apiClient.transmittals.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' && this.detailId === id) || (this.view === 'form' && this.detailId === id)) {
+                location.hash = '#transmittal';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -2851,8 +2860,6 @@ const Transmittal = {
                   if (res && res.data) {
                     const norm = this.normalizeTransmittal(res.data);
                     this._updateCachedItem(t.id, norm);
-                  } else {
-                    this._updateCachedItem(t.id, { status: t.status === 'Cancelled' ? 'Draft' : t.status, archived: false });
                   }
                   successCount++;
                 } catch (e) {
@@ -2860,6 +2867,7 @@ const Transmittal = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} transmittal(s) could not be restored.` } };
               }
@@ -2875,6 +2883,10 @@ const Transmittal = {
                 window.apiClient.transmittals.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if (ids.includes(this.detailId) && (this.view === 'detail' || this.view === 'form')) {
+                location.hash = '#transmittal';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -3009,8 +3021,7 @@ const Transmittal = {
                         if (res && res.data) {
                           const norm = self.normalizeTransmittal(res.data);
                           self._updateCachedItem(t.id, norm);
-                        } else {
-                          self._updateCachedItem(t.id, { status: 'Draft', archived: false });
+                          self._refreshCounts();
                         }
                       },
                       onAfterConfirm: async () => {
@@ -3018,6 +3029,10 @@ const Transmittal = {
                           window.apiClient.transmittals.invalidateCounts();
                         }
                         App.updateSidebarNotifications().catch(() => {});
+                        if ((self.view === 'detail' && self.detailId === t.id) || (self.view === 'form' && self.detailId === t.id)) {
+                          location.hash = '#transmittal';
+                          return;
+                        }
                         App.handleRoute();
                       }
                     });

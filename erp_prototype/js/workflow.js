@@ -1077,7 +1077,7 @@ const Workflow = {
     }
   },
 
-  _applyServerRecordToCache(id, serverRecord, fallbackPatch = {}) {
+  _applyServerRecordToCache(id, serverRecord) {
     if (serverRecord) {
       const norm = WorkflowData.normalizeWorkRequest(serverRecord);
       const current = WorkflowData.getWorkRequestById(id);
@@ -1108,11 +1108,6 @@ const Workflow = {
           norm.isPendingApproval = current.isPendingApproval;
         }
         Object.assign(current, norm);
-      }
-    } else {
-      const current = WorkflowData.getWorkRequestById(id);
-      if (current) {
-        Object.assign(current, fallbackPatch, { updatedAt: new Date().toISOString() });
       }
     }
   },
@@ -2103,7 +2098,7 @@ const Workflow = {
 
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr || wr.archived || wr.status === 'Completed' || wr.status === 'Cancelled') return;
+    if (!wr || wr.archived || wr.status !== 'Completed') return;
     this.showConfirm('Archive Work Request',
       `Are you sure you want to archive "${wr.title || '(untitled)'}"?`,
       async () => {
@@ -2111,12 +2106,12 @@ const Workflow = {
           await this.runBlockingArchiveAction({
             title: 'Archiving Work Request',
             message: `Please wait while "${wr.title || 'Work Request'}" is being archived...`,
-            apiCall: () => window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true }),
+            apiCall: () => window.apiClient.workRequests.archive(wrId),
             successTitle: 'Archived',
             successMessage: 'Work Request has been archived.',
             errorTitle: 'Failed to Archive Work Request',
             onSuccess: async (res) => {
-              this._applyServerRecordToCache(wrId, res?.data, { status: 'Cancelled', archived: true });
+              this._applyServerRecordToCache(wrId, res?.data);
             },
             onAfterConfirm: async () => {
               if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
@@ -2141,9 +2136,6 @@ const Workflow = {
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr || !wr.archived) return;
-    const patch = wr.status === 'Cancelled'
-      ? { status: 'Draft', archived: false }
-      : { archived: false };
     this.showConfirm('Restore Work Request',
       `Are you sure you want to restore "${wr.title || '(untitled)'}"?`,
       async () => {
@@ -2151,12 +2143,12 @@ const Workflow = {
           await this.runBlockingArchiveAction({
             title: 'Restoring Work Request',
             message: `Please wait while "${wr.title || 'Work Request'}" is being restored...`,
-            apiCall: () => window.apiClient.workRequests.update(wrId, patch),
+            apiCall: () => window.apiClient.workRequests.unarchive(wrId),
             successTitle: 'Restored',
             successMessage: 'Work Request has been restored to the active list.',
             errorTitle: 'Failed to Restore Work Request',
             onSuccess: async (res) => {
-              this._applyServerRecordToCache(wrId, res?.data, patch);
+              this._applyServerRecordToCache(wrId, res?.data);
             },
             onAfterConfirm: async () => {
               if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
@@ -2177,10 +2169,10 @@ const Workflow = {
   bulkArchiveWorkRequests(ids) {
     const eligible = (ids || [])
       .map(id => WorkflowData.getWorkRequestById(id))
-      .filter(wr => wr && wr.status !== 'Completed' && wr.status !== 'Cancelled');
+      .filter(wr => wr && wr.status === 'Completed' && !wr.archived);
 
     if (eligible.length === 0) {
-      this.showMessage('No eligible records', 'Only non-terminal Work Requests can be archived.', 'info');
+      this.showMessage('No eligible records', 'Only Completed Work Requests can be archived.', 'info');
       return;
     }
 
@@ -2196,8 +2188,8 @@ const Workflow = {
             apiCall: async () => {
               for (const wr of eligible) {
                 try {
-                  const res = await window.apiClient.workRequests.update(wr.id, { status: 'Cancelled', archived: true });
-                  this._applyServerRecordToCache(wr.id, res?.data, { status: 'Cancelled', archived: true });
+                  const res = await window.apiClient.workRequests.archive(wr.id);
+                  this._applyServerRecordToCache(wr.id, res?.data);
                   successCount++;
                 } catch (e) {
                   console.error('Failed to archive Work Request', wr.id, e);
@@ -2406,7 +2398,30 @@ const Workflow = {
   }) {
     const overlayObj = this.showBlockingOverlay(title, message);
     try {
-      const res = await apiCall();
+      let timedOut = false;
+      let timerId = null;
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('The request timed out. Please try again.'));
+        }, 30000);
+      });
+
+      const apiPromise = apiCall().then(
+        result => {
+          if (timerId) clearTimeout(timerId);
+          if (timedOut) return null;
+          return result;
+        },
+        err => {
+          if (timerId) clearTimeout(timerId);
+          if (timedOut) return null;
+          throw err;
+        }
+      );
+
+      const res = await Promise.race([apiPromise, timeoutPromise]);
       this.hideBlockingOverlay(overlayObj);
 
       if (res && res.error) {
@@ -2429,9 +2444,19 @@ const Workflow = {
         footer.appendChild(okBtn);
         wrapper.appendChild(footer);
 
-        const modalOverlay = this.showModal(successTitle, wrapper, () => resolve());
+        const overlay = el('div', { class: 'modal-overlay' });
+        const modal = el('div', { class: 'modal' });
+        const header = el('div', { class: 'modal-header' });
+        header.appendChild(el('h3', { class: 'modal-title', text: successTitle }));
+        modal.appendChild(header);
+        const body = el('div', { class: 'modal-body' });
+        body.appendChild(wrapper);
+        modal.appendChild(body);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
         okBtn.addEventListener('click', () => {
-          modalOverlay.remove();
+          overlay.remove();
           resolve();
         });
       });
@@ -5119,7 +5144,7 @@ const Workflow = {
         });
       }
 
-      if (!wr.archived) {
+      if (wr.status === 'Completed' && !wr.archived) {
         items.push({
           label: 'Archive',
           className: 'primary',
@@ -12340,7 +12365,7 @@ const Workflow = {
                       successMessage: `Work request "${wr.title}" has been restored to Draft.`,
                       errorTitle: 'Failed to Restore Work Request',
                       onSuccess: async (res) => {
-                        self._applyServerRecordToCache(wr.id, res?.data, { status: 'Draft', archived: false });
+                        self._applyServerRecordToCache(wr.id, res?.data);
                       },
                       onAfterConfirm: async () => {
                         if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {

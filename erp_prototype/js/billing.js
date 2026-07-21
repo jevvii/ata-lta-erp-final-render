@@ -4302,11 +4302,7 @@ const Billing = {
                 const norm = this.normalizeInvoice(res.data);
                 this._detailCache[id] = norm;
                 this._addToListCache(norm);
-              } else {
-                inv.status = 'Cancelled';
-                inv.archived = true;
-                this._detailCache[id] = inv;
-                this._addToListCache(inv);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -4314,6 +4310,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && this.detailId === id) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -4343,11 +4343,7 @@ const Billing = {
                 const norm = this.normalizeInvoice(res.data);
                 this._detailCache[id] = norm;
                 this._addToListCache(norm);
-              } else {
-                inv.status = 'Draft';
-                inv.archived = false;
-                this._detailCache[id] = inv;
-                this._addToListCache(inv);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -4355,6 +4351,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && this.detailId === id) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -4383,10 +4383,7 @@ const Billing = {
                 const norm = this.normalizeInvoice(res.data);
                 this._detailCache[id] = norm;
                 this._addToListCache(norm);
-              } else {
-                inv.archived = true;
-                this._detailCache[id] = inv;
-                this._addToListCache(inv);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -4394,6 +4391,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && this.detailId === id) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -4430,10 +4431,6 @@ const Billing = {
                     const norm = this.normalizeInvoice(res.data);
                     this._detailCache[inv.id] = norm;
                     this._addToListCache(norm);
-                  } else {
-                    inv.archived = true;
-                    this._detailCache[inv.id] = inv;
-                    this._addToListCache(inv);
                   }
                   successCount++;
                 } catch (e) {
@@ -4441,6 +4438,7 @@ const Billing = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} invoice(s) could not be archived.` } };
               }
@@ -4456,6 +4454,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && ids.includes(this.detailId)) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -4497,11 +4499,6 @@ const Billing = {
                     const norm = this.normalizeInvoice(res.data);
                     this._detailCache[inv.id] = norm;
                     this._addToListCache(norm);
-                  } else {
-                    inv.status = 'Cancelled';
-                    inv.archived = true;
-                    this._detailCache[inv.id] = inv;
-                    this._addToListCache(inv);
                   }
                   successCount++;
                 } catch (e) {
@@ -4509,6 +4506,7 @@ const Billing = {
                   failCount++;
                 }
               }
+              this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} invoice(s) could not be moved to trash.` } };
               }
@@ -4524,6 +4522,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && ids.includes(this.detailId)) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });
@@ -4561,11 +4563,7 @@ const Billing = {
                 const norm = this.normalizeInvoice(res.data);
                 this._detailCache[id] = norm;
                 this._addToListCache(norm);
-              } else {
-                inv.status = targetStatus;
-                inv.archived = false;
-                this._detailCache[id] = inv;
-                this._addToListCache(inv);
+                this._refreshCounts();
               }
             },
             onAfterConfirm: async () => {
@@ -4573,6 +4571,10 @@ const Billing = {
                 window.apiClient.invoices.invalidateCounts();
               }
               App.updateSidebarNotifications().catch(() => {});
+              if ((this.view === 'detail' || this.view === 'form') && this.detailId === id) {
+                location.hash = '#billing';
+                return;
+              }
               App.handleRoute();
             }
           });

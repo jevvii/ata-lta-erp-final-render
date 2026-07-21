@@ -2,9 +2,11 @@
 
 **Date:** 2026-07-21  
 **Branch:** `uat`  
-**Status:** Planning / ready for implementation  
+**Status:** Implemented / hardened on 2026-07-21  
 **Scope:** Frontend archive, restore, trash, and unarchive actions for Clients, Operations/Workflow, Billing, Disbursements, and Transmittals.  
 **Out of scope (note):** Pending-approval archive requests (e.g. `archiveClientRequest`) are approval submissions, not direct DB mutations; they are listed separately below as optional UX hardening only.
+
+> **Completion note:** The blocking flow was implemented by a parallel agent workflow, then hardened to remove local fallback patches, add detail/form routing, switch Operations to dedicated archive endpoints, add a 30 s timeout, and ensure state survives refresh and hard refresh.
 
 ---
 

@@ -490,11 +490,11 @@ const Disbursement = {
     if (this._items) {
       const idx = this._items.findIndex(d => d.id === id);
       if (idx >= 0) {
-        this._items[idx] = { ...this._items[idx], ...patch };
+        this._items[idx] = patch;
       }
     }
     if (this._detailCache[id]) {
-      this._detailCache[id] = { ...this._detailCache[id], ...patch };
+      this._detailCache[id] = patch;
     }
   },
 
@@ -3716,8 +3716,7 @@ const Disbursement = {
           if (res && res.data) {
             const norm = this.normalizeDisbursement(res.data);
             this._updateCachedDisbursement(id, norm);
-          } else {
-            this._updateCachedDisbursement(id, { archived: true });
+            this._refreshCounts();
           }
         },
         onAfterConfirm: async () => {
@@ -3751,8 +3750,7 @@ const Disbursement = {
             if (res && res.data) {
               const norm = this.normalizeDisbursement(res.data);
               this._updateCachedDisbursement(id, norm);
-            } else {
-              this._updateCachedDisbursement(id, { archived: true });
+              this._refreshCounts();
             }
           },
           onAfterConfirm: async () => {
@@ -3798,14 +3796,13 @@ const Disbursement = {
                   if (res && res.data) {
                     const norm = this.normalizeDisbursement(res.data);
                     this._updateCachedDisbursement(d.id, norm);
-                  } else {
-                    this._updateCachedDisbursement(d.id, { archived: true });
                   }
                   count++;
                 } catch (e) {
                   failedIds.push(d.id);
                 }
               }
+              this._refreshCounts();
               if (failedIds.length > 0 && count === 0) {
                 return { error: { message: `Unable to archive ${failedIds.length} disbursement(s).` } };
               }
@@ -3853,8 +3850,7 @@ const Disbursement = {
             if (res && res.data) {
               const norm = this.normalizeDisbursement(res.data);
               this._updateCachedDisbursement(id, norm);
-            } else {
-              this._updateCachedDisbursement(id, { archived: false, status: targetStatus });
+              this._refreshCounts();
             }
           },
           onAfterConfirm: async () => {
