@@ -298,6 +298,7 @@ const WorkflowData = {
     }
     this._entity = entity;
     if (freshFetch) this._needsFreshFetch = false;
+    if (typeof Workflow !== 'undefined') Workflow._refreshCounts();
     return { workRequests: this._workRequests, tasks: this._tasks, meta: res.meta || {} };
   },
 
@@ -1076,6 +1077,7 @@ const Workflow = {
   },
 
   _counts: null,
+  _countsEntity: null,
 
   _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
     const wrs = (WorkflowData.getAllWorkRequests() || []).filter(r => {
@@ -1095,12 +1097,18 @@ const Workflow = {
   _refreshCounts() {
     if (!WorkflowData.hasData()) {
       this._counts = null;
+      this._countsEntity = null;
       return;
     }
     this._counts = this._recalcCounts();
+    this._countsEntity = Auth.activeEntity;
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (this._counts && this._countsEntity !== Auth.activeEntity) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
     if (!this._counts) {
       this._refreshCounts();
     }
@@ -1160,7 +1168,8 @@ const Workflow = {
           if ((!norm.linkedTransmittalIds || (Array.isArray(norm.linkedTransmittalIds) && norm.linkedTransmittalIds.length === 0)) && current.linkedTransmittalIds) {
             norm.linkedTransmittalIds = current.linkedTransmittalIds;
           }
-          if ((norm.archived === false || typeof norm.archived === 'undefined') && current.archived) {
+          const serverHasArchived = res.data && Object.prototype.hasOwnProperty.call(res.data, 'archived');
+          if (!serverHasArchived && current.archived) {
             norm.archived = current.archived;
           }
           if ((norm.boardOrder === null || typeof norm.boardOrder === 'undefined') && current.boardOrder != null) {
@@ -2128,18 +2137,33 @@ const Workflow = {
         let cancelledTasks = 0;
 
         const myGen = Workflow._startSkipGeneration();
+        this._updateCounts(-eligible.length, eligible.length);
         App.handleRoute();
 
+        let failedCount = 0;
         await Promise.all(eligible.map(async wr => {
-          const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
-          await Promise.all(tasks.map(async t => {
-            if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-              await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
-              cancelledTasks++;
+          try {
+            const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+            await Promise.all(tasks.map(async t => {
+              if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+                await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+                cancelledTasks++;
+              }
+            }));
+            await WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
+            const updated = WorkflowData.getWorkRequestById(wr.id);
+            if (!updated || updated.status !== 'Cancelled' || !updated.archived) {
+              failedCount++;
             }
-          }));
-          await WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
+          } catch (e) {
+            failedCount++;
+            console.error('Failed to cancel work request', wr.id, e);
+          }
         }));
+
+        if (failedCount > 0) {
+          this._updateCounts(failedCount, -failedCount);
+        }
 
         Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
@@ -3692,6 +3716,10 @@ const Workflow = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
+    if (this._counts && this._countsEntity !== entity) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
     const taskMap = this._tempTaskMap || buildTaskMap();
     const wrCount = (this._counts?.active >= 0) ? this._counts.active : WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
@@ -7053,6 +7081,7 @@ const Workflow = {
     if (result.approved) {
       if (isNew) {
         WorkflowData._addOptimisticWorkRequest(record);
+        this._updateCounts(1, 0);
         for (const t of taskRecords) {
           t.workRequestId = record.id;
           WorkflowData._addOptimisticTask(t);
@@ -7076,6 +7105,7 @@ const Workflow = {
             console.error('Failed to adopt server work request', e);
             WorkflowData._removeWorkRequest(record.id);
             for (const t of taskRecords) WorkflowData._removeTask(t.id);
+            this._updateCounts(-1, 0);
             Workflow._clearSkipGenerationIfLatest(myGen);
             App.handleRoute();
             this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
@@ -7088,6 +7118,7 @@ const Workflow = {
             console.error('Failed to create work request', e);
             WorkflowData._removeWorkRequest(record.id);
             for (const t of taskRecords) WorkflowData._removeTask(t.id);
+            this._updateCounts(-1, 0);
             Workflow._clearSkipGenerationIfLatest(myGen);
             App.handleRoute();
             this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
@@ -12166,6 +12197,7 @@ const Workflow = {
 
     // Optimistic WR + tasks insert so the active list badge updates immediately.
     WorkflowData._addOptimisticWorkRequest(workRequest);
+    this._updateCounts(1, 0);
     const idMap = new Map();
     (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
     const taskRecords = [];
@@ -12198,6 +12230,7 @@ const Workflow = {
       console.error('Failed to generate work request from template', e);
       WorkflowData._removeWorkRequest(workRequest.id);
       for (const t of taskRecords) WorkflowData._removeTask(t.id);
+      this._updateCounts(-1, 0);
       Workflow._clearSkipGenerationIfLatest(myGen);
       App.handleRoute();
       this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
@@ -12256,6 +12289,7 @@ const Workflow = {
       const template = this._getRetainerTemplateById(templateId);
       if (!template) continue;
 
+      const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
       const workRequest = {
         id: generateId('wr'),
         title: `${template.name} (${titleSuffix})`,
@@ -12271,12 +12305,14 @@ const Workflow = {
       };
 
       WorkflowData._addOptimisticWorkRequest(workRequest);
+      this._updateCounts(1, 0);
       let createdWr;
       try {
         createdWr = await WorkflowData.createWorkRequest(workRequest);
       } catch (e) {
         console.error('Failed to generate work request from template', template.name, e);
         WorkflowData._removeWorkRequest(workRequest.id);
+        this._updateCounts(-1, 0);
         failedTemplates.push(template.name || templateId);
         continue;
       }

@@ -57,9 +57,16 @@ const Billing = {
 
   async ensure() {
     const skipping = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
-    if (skipping || this._isListCacheFresh()) return;
-    const loadGen = ++this._listCacheGeneration;
-    await this._loadInvoices(loadGen, { merge: false });
+    if (!skipping && !this._isListCacheFresh()) {
+      const loadGen = ++this._listCacheGeneration;
+      await this._loadInvoices(loadGen, { merge: false });
+    }
+    // Make sure tab-badge counts are available for the current entity after the
+    // data layer is fresh (or whenever the count cache has been invalidated).
+    if (!this._counts || this._countsEntity !== Auth.activeEntity) {
+      await this.loadCounts();
+      await this.loadRejectedCount();
+    }
   },
 
   async _loadInvoices(loadGen, { merge = false } = {}) {
@@ -482,7 +489,7 @@ const Billing = {
     }
 
     const changed = !this._counts || this._countsEntity !== entity || this._counts.rejected !== rejected;
-    this._counts = { ...(this._counts || {}), rejected, active: 0, archived: 0, templates: (this._counts?.templates || 0) };
+    this._counts = { ...(this._counts || {}), rejected, templates: (this._counts?.templates || 0) };
     this._countsEntity = entity;
     if (changed) App.handleRoute();
     return rejected;
@@ -635,11 +642,9 @@ const Billing = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
-    // Refresh server counts in the background only when stale; render from local
-    // counts immediately so tab badges do not flicker after optimistic mutations.
-    if (!this._counts || this._countsEntity !== entity) {
-      this.loadCounts(true).then(() => this.loadRejectedCount(true));
-    }
+    // Prefer the maintained _counts object (updated optimistically and refreshed
+    // after the data layer loads). Only fall back to scanning the local cache
+    // when counts have not been initialized yet.
 
     const cachedInvoices = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
     const cacheActiveCount = cachedInvoices.filter(inv => this._isActiveInvoice(inv, entity)).length;

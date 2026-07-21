@@ -134,6 +134,7 @@ const ClientsData = {
       this._clients = clients;
     }
     this._entity = entity;
+    if (typeof Clients !== 'undefined') Clients._refreshCounts();
     return { clients };
   },
 
@@ -204,6 +205,9 @@ const Clients = {
   activeTab: 'active',
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
+  _counts: null,
+  _countsEntity: null,
+  _countsFromApi: false,
 
   _isTempId(id) {
     return typeof id === 'string' && id.startsWith('temp-');
@@ -229,7 +233,9 @@ const Clients = {
     return typeof ClientsData !== 'undefined' && ClientsData.hasData() && ClientsData._entity === entity;
   },
 
-  _counts: null,
+  _getActiveEntity() {
+    return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
 
   _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
     const clients = (ClientsData.getAllClients() || []).filter(c => {
@@ -249,12 +255,22 @@ const Clients = {
   _refreshCounts() {
     if (!ClientsData.hasData()) {
       this._counts = null;
+      this._countsEntity = null;
+      this._countsFromApi = false;
       return;
     }
-    this._counts = this._recalcCounts();
+    if (!this._counts) {
+      this._counts = this._recalcCounts();
+      this._countsEntity = this._getActiveEntity();
+      this._countsFromApi = false;
+    }
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (this._counts && this._countsEntity !== this._getActiveEntity()) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
     if (!this._counts) {
       this._refreshCounts();
     }
@@ -375,6 +391,8 @@ const Clients = {
   invalidateCache() {
     ClientsData.invalidate();
     this._counts = null;
+    this._countsEntity = null;
+    this._countsFromApi = false;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
   },
@@ -564,7 +582,7 @@ const Clients = {
   async renderTabNav() {
     const entity = Auth.activeEntity;
     const isAdmin = Auth.user?.role === 'Admin';
-    const isManagerial = Auth.isManagerial();
+    const isManagerial = typeof Auth.isManagerial === 'function' ? Auth.isManagerial() : false;
     let activeCount = 0;
     let archivedCount = 0;
     let rejectedCount = 0;
@@ -577,13 +595,19 @@ const Clients = {
 
     try {
       await ClientsData.ensure();
+      if (this._counts && this._countsEntity !== this._getActiveEntity()) {
+        this._counts = null;
+        this._countsEntity = null;
+      }
       if (this._counts) {
         activeCount = this._counts.activeCount;
         archivedCount = this._counts.archivedCount;
       } else {
-        const counts = await this.getClientCounts();
-        activeCount = counts.activeCount;
-        archivedCount = counts.archivedCount;
+        this._refreshCounts();
+        if (this._counts) {
+          activeCount = this._counts.activeCount;
+          archivedCount = this._counts.archivedCount;
+        }
       }
 
       const [pendingRes, opRes] = await Promise.all([
@@ -1522,6 +1546,7 @@ const Clients = {
 
       const createGeneration = this._startOptimisticSkip();
       ClientsData.addClient(optimisticClient);
+      this._updateCounts(1, 0);
       this.editingId = null;
       closeFormPanelAndRoute('#clients');
 
@@ -1557,6 +1582,7 @@ const Clients = {
       } catch (e) {
         console.error('Failed to create client', e);
         ClientsData._removeFromCache(optimisticId);
+        this._updateCounts(-1, 0);
         this._clearOptimisticSkipIfCurrent(createGeneration);
         await App.handleRoute();
         Workflow.showMessage('Error', e.message || 'Unable to create client.', 'error');
@@ -1857,7 +1883,7 @@ const Clients = {
   async renderArchive(query = '') {
     const entity = Auth.activeEntity;
     const self = this;
-    const isManagerial = Auth.isManagerial();
+    const isManagerial = typeof Auth.isManagerial === 'function' ? Auth.isManagerial() : false;
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),

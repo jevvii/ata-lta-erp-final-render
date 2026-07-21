@@ -69,6 +69,8 @@ const Transmittal = {
     this._loadGeneration++;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
+    this._counts = null;
+    this._countsEntity = null;
   },
 
   /**
@@ -153,6 +155,7 @@ const Transmittal = {
       this._items = items;
     }
     this._entity = entity;
+    this._refreshCounts();
     return items;
   },
 
@@ -199,6 +202,7 @@ const Transmittal = {
   },
 
   _counts: null,
+  _countsEntity: null,
 
   _recalcCounts(entity = this._getActiveEntity()) {
     const items = (this._items || []).filter(t => this._entityMatches(t, entity));
@@ -211,16 +215,20 @@ const Transmittal = {
   _refreshCounts() {
     if (!this.hasData()) {
       this._counts = null;
+      this._countsEntity = null;
       return;
     }
     this._counts = this._recalcCounts();
+    this._countsEntity = this._getActiveEntity();
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
-    if (!this._counts) {
+    const wasMissing = !this._counts || this._countsEntity !== this._getActiveEntity();
+    if (wasMissing) {
       this._refreshCounts();
     }
     if (!this._counts) return;
+    if (wasMissing) return; // fresh recount already reflects the current state
     this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
     this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
   },
@@ -254,7 +262,14 @@ const Transmittal = {
     try {
       const res = await apiCall();
       if (res?.data) {
+        const serverHasArchived = Object.prototype.hasOwnProperty.call(res.data, 'archived');
         const norm = this.normalizeTransmittal(res.data);
+        const existing = (this._items || []).find(t => t.id === id);
+        // Preserve the local archived flag only when the server response omits it.
+        // Do NOT override an explicit archived=false from a real unarchive response.
+        if (existing && !serverHasArchived) {
+          norm.archived = existing.archived;
+        }
         this._updateCachedItem(id, norm);
       }
       this._clearActiveSkipGeneration(gen);
@@ -639,8 +654,9 @@ const Transmittal = {
     };
 
     const cachedItems = (this._items || []).filter(t => entFilter(t.entity));
-    const activeCount = (this._counts?.active >= 0) ? this._counts.active : cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
-    const archiveDbCount = (this._counts?.archived >= 0) ? this._counts.archived : cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
+    const countsFresh = this._counts && this._countsEntity === this._getActiveEntity();
+    const activeCount = countsFresh ? this._counts.active : cachedItems.filter(t => t.status !== 'Cancelled' && !t.archived).length;
+    const archiveDbCount = countsFresh ? this._counts.archived : cachedItems.filter(t => t.archived || t.status === 'Cancelled').length;
     const rejectedCount = this._rejectedArchiveCounts?.total || 0;
     const archiveCount = archiveDbCount + rejectedCount;
 
@@ -1775,6 +1791,7 @@ const Transmittal = {
         this._items = [optimisticT];
         this._entity = this._getActiveEntity();
       }
+      this._updateCounts(1, 0);
       const skipGen = this._startSkipFetchGeneration();
 
       const targetRoute = isResubmitting ? '#admin' : '#transmittal';
@@ -1799,6 +1816,7 @@ const Transmittal = {
       } catch (e) {
         console.error('Failed to create transmittal', e);
         this._removeFromCache(localId);
+        this._updateCounts(-1, 0);
         this._clearActiveSkipGeneration(skipGen);
         App.handleRoute();
         Workflow.showMessage('Error', e.message || 'Unable to create transmittal.', 'error');
@@ -2837,7 +2855,7 @@ const Transmittal = {
   async renderArchive() {
     const entity = Auth.activeEntity;
     const self = this;
-    const isManagerial = Auth.isManagerial();
+    const isManagerial = typeof Auth.isManagerial === 'function' ? Auth.isManagerial() : false;
 
     let archivedTransmittals = [];
     try {
@@ -2858,12 +2876,13 @@ const Transmittal = {
     const tMap = new Map();
     archivedTransmittals.forEach(t => tMap.set(t.id, t));
     localArchived.forEach(t => {
-      if (!tMap.has(t.id)) tMap.set(t.id, t);
+      // Local optimistic record wins over a stale server row.
+      tMap.set(t.id, t);
     });
 
     let filteredTransmittals = Array.from(tMap.values()).filter(t => {
       const cached = (this._items || []).find(i => i.id === t.id);
-      return !cached || cached.archived !== false;
+      return !cached || cached.archived !== false || cached.status === 'Cancelled';
     });
 
     const acknowledged = filteredTransmittals.filter(t => {
@@ -2926,6 +2945,7 @@ const Transmittal = {
                 async () => {
                   const skipGen = self._startSkipFetchGeneration();
                   const snapshot = self._updateCachedItem(t.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
+                  self._updateCounts(1, -1);
                   if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
                     window.apiClient.transmittals.invalidateCounts();
                   }
@@ -2937,6 +2957,7 @@ const Transmittal = {
                     Workflow.showMessage('Restored', 'Transmittal restored to Draft.', 'success');
                   } catch (e) {
                     if (snapshot) self._updateCachedItem(t.id, { status: snapshot.status, archived: snapshot.archived, updatedAt: snapshot.updatedAt });
+                    self._updateCounts(-1, 1);
                     self._clearActiveSkipGeneration(skipGen);
                     App.handleRoute();
                     Workflow.showMessage('Restore Failed', e.message || 'Unable to restore transmittal.', 'error');
