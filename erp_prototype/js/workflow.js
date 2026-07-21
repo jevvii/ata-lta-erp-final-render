@@ -129,7 +129,10 @@ const WorkflowData = {
       ...task,
       // Preserve frontend-only extensions that the backend strips.
       comments: task.comments || [],
-      taskDocuments: task.taskDocuments || [],
+      taskDocuments: (task.taskDocuments || []).map(d => ({
+        ...d,
+        documentId: d.documentId || null
+      })),
       coAssignees: task.coAssignees || [],
       priority: task.priority || 'Normal',
       assignedTo: task.assignedTo || task.assigneeId || null,
@@ -6306,36 +6309,45 @@ const Workflow = {
               <span>${fName}</span>
             `;
             leftSide.appendChild(figmaLink);
-          } else if (d.isGoogleDrive) {
-            const driveLink = el('span', {
-              style: 'color: #22c55e; font-weight:600; font-size: 0.8125rem; display: flex; align-items: center; gap: 6px;'
-            });
-            driveLink.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #22c55e;"><path d="M2.5 17h19M4.5 14l3.5-6h8l3.5 6M9 9h6M12 3v3"></path></svg>
-              <span>${fName} (Google Drive)</span>
-            `;
-            leftSide.appendChild(driveLink);
           } else {
-            if (canEditDms) {
-              const dmsDoc = wrDocs.find(doc => (doc.fileName === fName) && doc.workRequestId === (wr ? wr.id : ''));
-              if (dmsDoc && dmsDoc.dataUrl) {
+            const canViewDms = Auth.can('dms:view');
+            if (canViewDms) {
+              let dmsDoc = null;
+              if (d.documentId) {
+                dmsDoc = wrDocs.find(doc => doc.id === d.documentId);
+              } else {
+                const matches = wrDocs.filter(doc => doc.original_name === fName || doc.file_name === fName || doc.fileName === fName);
+                if (matches.length === 1) {
+                  dmsDoc = matches[0];
+                  d.documentId = dmsDoc.id;
+                }
+              }
+
+              if (dmsDoc) {
                 const link = el('a', {
                   href: '#',
-                  text: '📎 ' + fName,
-                  style: 'color:var(--color-primary); font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;'
+                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
+                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--color-primary)'}; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;`
                 });
                 link.addEventListener('click', (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  const win = window.open();
-                  if (win) win.document.write('<iframe src="' + dmsDoc.dataUrl + '" frameborder="0" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;" allowfullscreen></iframe>');
+                  this.showDocumentPreview(dmsDoc.id);
+                });
+                leftSide.appendChild(link);
+              } else if (d.linkUrl) {
+                const link = el('a', {
+                  href: d.linkUrl,
+                  target: '_blank',
+                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
+                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--color-primary)'}; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;`
                 });
                 leftSide.appendChild(link);
               } else {
-                leftSide.appendChild(el('span', { text: '📎 ' + fName, style: 'font-size: 0.8125rem; font-weight: 500;' }));
+                leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''), style: 'font-size: 0.8125rem; font-weight: 500;' }));
               }
             } else {
-              leftSide.appendChild(el('span', { text: '📎 ' + fName, style: 'font-size: 0.8125rem; font-weight: 500;' }));
+              leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''), style: 'font-size: 0.8125rem; font-weight: 500;' }));
             }
           }
           leftSide.appendChild(el('span', { text: `Uploaded: ${formatDate(d.uploadDate)}`, style: 'font-size: 10px; color: var(--color-text-muted);' }));
@@ -9664,29 +9676,44 @@ const Workflow = {
             const leftSide = el('div', { style: 'display:flex; flex-direction:column;' });
             const fName = d.fileName || d.filename;
 
-            // Only Admin can click to view actual file
-            if (canEditDms) {
-              const dmsDoc = wrDocs.find(doc =>
-                (doc.fileName === fName) && doc.workRequestId === wr.id
-              );
-              if (dmsDoc && dmsDoc.dataUrl) {
+            const canViewDms = Auth.can('dms:view');
+            if (canViewDms) {
+              let dmsDoc = null;
+              if (d.documentId) {
+                dmsDoc = wrDocs.find(doc => doc.id === d.documentId);
+              } else {
+                const matches = wrDocs.filter(doc => doc.original_name === fName || doc.file_name === fName || doc.fileName === fName);
+                if (matches.length === 1) {
+                  dmsDoc = matches[0];
+                  d.documentId = dmsDoc.id;
+                }
+              }
+
+              if (dmsDoc) {
                 const link = el('a', {
                   href: '#',
-                  text: fName,
-                  style: 'color:var(--accent); font-weight:600; text-decoration:underline; cursor:pointer;'
+                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
+                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
                 });
                 link.addEventListener('click', (e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  const win = window.open();
-                  if (win) win.document.write('<iframe src="' + dmsDoc.dataUrl + '" frameborder="0" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;" allowfullscreen></iframe>');
+                  this.showDocumentPreview(dmsDoc.id);
+                });
+                leftSide.appendChild(link);
+              } else if (d.linkUrl) {
+                const link = el('a', {
+                  href: d.linkUrl,
+                  target: '_blank',
+                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
+                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
                 });
                 leftSide.appendChild(link);
               } else {
-                leftSide.appendChild(el('span', { text: fName }));
+                leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : '') }));
               }
             } else {
-              leftSide.appendChild(el('span', { text: fName }));
+              leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : '') }));
             }
             leftSide.appendChild(el('span', { class: 'kpi-label', text: formatDate(d.uploadDate) }));
             item.appendChild(leftSide);
@@ -10206,10 +10233,195 @@ const Workflow = {
     });
   },
 
+  async uploadTaskDocument(taskId, file, options = {}) {
+    if (file.size > 50 * 1024 * 1024) {
+      this.showMessage('File Too Large', 'Files must be 50 MB or smaller.', 'warning');
+      throw new Error('File size exceeds 50 MB limit');
+    }
+
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) throw new Error('Task not found');
+
+    const metadata = {
+      fileName: file.name,
+      originalName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+      documentType: options.documentType || 'original_scan',
+      category: options.category || 'OTHER',
+      description: options.description || `Uploaded via task: ${task.title}`,
+      workRequestId: task.workRequestId,
+      linkedTaskId: taskId,
+    };
+
+    const createRes = await window.apiClient.documents.create(metadata);
+    const { document: dmsDoc, uploadUrl } = createRes.data;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': metadata.contentType },
+      body: file,
+    });
+    if (!uploadRes.ok) {
+      throw new Error(`Storage upload failed: ${uploadRes.status}`);
+    }
+
+    await window.apiClient.documents.confirmUpload(dmsDoc.id);
+
+    const entry = {
+      documentId: dmsDoc.id,
+      fileName: file.name,
+      uploadDate: new Date().toISOString().slice(0, 10),
+      uploaderId: Auth.user.id,
+    };
+    const updatedDocs = [...(task.taskDocuments || []), entry];
+    await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
+
+    WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    return dmsDoc;
+  },
+
+  async linkTaskDocument(taskId, linkUrl, options = {}) {
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) throw new Error('Task not found');
+
+    let fileName = options.fileName || 'Linked Document';
+    if (options.isGoogleDrive) {
+      fileName = options.fileName || 'GDrive Document';
+    }
+
+    const metadata = {
+      fileName: fileName,
+      originalName: fileName,
+      documentType: options.documentType || 'original_scan',
+      category: options.category || 'OTHER',
+      description: options.description || `${options.isGoogleDrive ? 'GDrive link' : 'Linked'} via task: ${task.title}`,
+      workRequestId: task.workRequestId,
+      linkedTaskId: taskId,
+      externalUrl: linkUrl
+    };
+
+    const createRes = await window.apiClient.documents.create(metadata);
+    const dmsDoc = createRes.data.document;
+
+    const entry = {
+      documentId: dmsDoc.id,
+      fileName: fileName,
+      uploadDate: new Date().toISOString().slice(0, 10),
+      uploaderId: Auth.user.id,
+      linkUrl: linkUrl
+    };
+    if (options.isGoogleDrive) {
+      entry.isGoogleDrive = true;
+    }
+    const updatedDocs = [...(task.taskDocuments || []), entry];
+    await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
+
+    WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    return dmsDoc;
+  },
+
+  async showDocumentPreview(documentId) {
+    try {
+      const docRes = await window.apiClient.documents.get(documentId);
+      const doc = docRes.data;
+
+      let url = '';
+      let fileName = doc.original_name || doc.file_name || 'Document';
+
+      if (!doc.external_url) {
+        const urlRes = await window.apiClient.documents.downloadUrl(documentId);
+        url = urlRes.data.url;
+        fileName = urlRes.data.fileName || fileName;
+      }
+
+      const overlay = el('div', { class: 'document-preview-overlay' });
+      const pane = el('div', { class: 'document-preview-pane' });
+      const header = el('div', { class: 'document-preview-header' });
+
+      const titleSpan = el('h3', { text: fileName, class: 'document-preview-title' });
+      header.appendChild(titleSpan);
+
+      if (!doc.external_url) {
+        const downloadBtn = el('a', {
+          href: url,
+          download: fileName,
+          class: 'btn btn-primary btn-sm',
+          text: 'Download',
+          target: '_blank',
+          style: 'margin-right: 8px;'
+        });
+        header.appendChild(downloadBtn);
+      }
+
+      const closeBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Close' });
+      closeBtn.addEventListener('click', () => overlay.remove());
+      header.appendChild(closeBtn);
+
+      const viewer = el('div', { class: 'document-preview-viewer' });
+      const contentType = doc.content_type || '';
+
+      if (doc.external_url) {
+        const extUrl = doc.external_url;
+        if (extUrl.includes('figma.com')) {
+          viewer.innerHTML = `<iframe src="https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(extUrl)}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+        } else if (extUrl.includes('drive.google.com') || extUrl === 'mock-google-drive-data-url') {
+          viewer.innerHTML = `<iframe src="${extUrl}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+        } else {
+          viewer.appendChild(el('div', { class: 'document-preview-fallback', style: 'padding: 20px; text-align: center;' }, [
+            el('p', { text: 'This is a linked document.', style: 'margin-bottom: 12px;' }),
+            el('a', { href: extUrl, target: '_blank', text: 'Open Link', class: 'btn btn-primary' })
+          ]));
+        }
+      } else if (contentType.startsWith('image/')) {
+        viewer.appendChild(el('img', { src: url, alt: fileName, style: 'max-width:100%; max-height:100%; object-fit:contain;' }));
+      } else if (contentType === 'application/pdf') {
+        viewer.innerHTML = `<iframe src="${url}" frameborder="0" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+      } else {
+        viewer.appendChild(el('div', { class: 'document-preview-fallback', style: 'padding: 20px; text-align: center;' }, [
+          el('p', { text: 'Preview not available for this file type.', style: 'margin-bottom: 12px;' }),
+          el('a', { href: url, download: fileName, text: 'Download to View', class: 'btn btn-primary', target: '_blank' })
+        ]));
+      }
+
+      function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      }
+
+      const meta = el('div', { class: 'document-preview-meta' });
+      if (!doc.external_url) {
+        meta.appendChild(el('span', { text: `Type: ${contentType || 'unknown'}` }));
+        meta.appendChild(el('span', { text: `Size: ${formatBytes(doc.file_size || 0)}` }));
+      } else {
+        meta.appendChild(el('span', { text: `Type: Link Attachment` }));
+      }
+      meta.appendChild(el('span', { text: `Uploaded: ${formatDate(doc.created_at)}` }));
+
+      pane.appendChild(header);
+      pane.appendChild(viewer);
+      pane.appendChild(meta);
+      overlay.appendChild(pane);
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.remove();
+        }
+      });
+
+      document.body.appendChild(overlay);
+    } catch (err) {
+      console.error('Failed to load document preview', err);
+      this.showMessage('Preview Error', 'Failed to load preview: ' + (err.message || 'Unknown error'), 'danger');
+    }
+  },
+
   async showAddDocumentModal(taskId) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
 
     const form = el('form', { class: 'form-stacked' });
     form.appendChild(el('div', { class: 'form-group' }, [
@@ -10225,52 +10437,20 @@ const Workflow = {
       const file = form.querySelector('input[name="docFile"]').files[0];
       if (!file) return;
 
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        const dataUrl = ev.target.result;
-        const now = new Date().toISOString();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Uploading...';
 
-        // 1. Update taskDocuments metadata
-        const entry = {
-          fileName: file.name,
-          uploadDate: now.slice(0, 10),
-          uploaderId: Auth.user.id
-        };
-        const updatedDocs = [...(task.taskDocuments || []), entry];
-        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-
-        // 2. Also create a record in DMS documents table so it is viewable
-        const dmsRecord = {
-          fileName: file.name,
-          workRequestId: task.workRequestId,
-          document_type: 'original_scan',
-          category: 'Requirement Docs',
-          uploader: Auth.user.id,
-          uploadDate: now,
-          description: `Uploaded via task: ${task.title}`,
-          handover_log: [],
-          entity: wr?.entity || Auth.activeEntity,
-          dataUrl: dataUrl,
-          versions: [],
-          comments: [],
-          documentLifecycle: 'collected',
-          scannedBy: '',
-          envelopeId: '',
-          storedLocation: ''
-        };
-        try {
-          await window.apiClient.documents.create(dmsRecord);
-          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
-        } catch (err) {
-          console.error('Failed to create DMS document', err);
-          this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
-          return;
-        }
-
+      try {
+        await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
         overlay.remove();
+        this.showTaskSidePane(taskId, null);
         App.handleRoute();
-      };
-      reader.readAsDataURL(file);
+      } catch (err) {
+        console.error('Failed to upload task document', err);
+        this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Upload';
+      }
     });
   },
 
@@ -10304,51 +10484,21 @@ const Workflow = {
           fileInput.addEventListener('change', async () => {
             const file = fileInput.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-              const dataUrl = ev.target.result;
-              const now = new Date().toISOString();
 
-              const entry = {
-                fileName: file.name,
-                uploadDate: now.slice(0, 10),
-                uploaderId: Auth.user.id
-              };
-              const updatedDocs = [...(task.taskDocuments || []), entry];
-              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            chooseBtn.disabled = true;
+            chooseBtn.textContent = 'Uploading...';
 
-              const dmsRecord = {
-                fileName: file.name,
-                workRequestId: task.workRequestId,
-                document_type: 'original_scan',
-                category: 'Requirement Docs',
-                uploader: Auth.user.id,
-                uploadDate: now,
-                description: `Uploaded via task: ${task.title}`,
-                handover_log: [],
-                entity: wr?.entity || Auth.activeEntity,
-                dataUrl: dataUrl,
-                versions: [],
-                comments: [],
-                documentLifecycle: 'collected',
-                scannedBy: '',
-                envelopeId: '',
-                storedLocation: ''
-              };
-              try {
-                await window.apiClient.documents.create(dmsRecord);
-                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
-              } catch (err) {
-                console.error('Failed to create DMS document', err);
-                this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
-                return;
-              }
-
+            try {
+              await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
               popover.remove();
-              this.showTaskSidePane(taskId, null); // Refresh side pane!
+              this.showTaskSidePane(taskId, null);
               App.handleRoute();
-            };
-            reader.readAsDataURL(file);
+            } catch (err) {
+              console.error('Failed to upload document', err);
+              this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
+              chooseBtn.disabled = false;
+              chooseBtn.textContent = 'Choose a file';
+            }
           });
           
           panel.appendChild(fileInput);
@@ -10374,46 +10524,20 @@ const Workflow = {
               }
             } catch(e) {}
 
-            const now = new Date().toISOString();
-            const entry = {
-              fileName: fileName,
-              uploadDate: now.slice(0, 10),
-              uploaderId: Auth.user.id,
-              linkUrl: val
-            };
-            const updatedDocs = [...(task.taskDocuments || []), entry];
-            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Linking...';
 
-            const dmsRecord = {
-              fileName: fileName,
-              workRequestId: task.workRequestId,
-              document_type: 'original_scan',
-              category: 'Requirement Docs',
-              uploader: Auth.user.id,
-              uploadDate: now,
-              description: `Linked via task: ${task.title}`,
-              handover_log: [],
-              entity: wr?.entity || Auth.activeEntity,
-              dataUrl: val,
-              versions: [],
-              comments: [],
-              documentLifecycle: 'collected',
-              scannedBy: '',
-              envelopeId: '',
-              storedLocation: ''
-            };
             try {
-              await window.apiClient.documents.create(dmsRecord);
-              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
+              popover.remove();
+              this.showTaskSidePane(taskId, null);
+              App.handleRoute();
             } catch (err) {
-              console.error('Failed to create DMS document', err);
-              this.showMessage('Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
-              return;
+              console.error('Failed to link document', err);
+              this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Link file';
             }
-
-            popover.remove();
-            this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           });
           
           panel.appendChild(linkInput);
@@ -10443,47 +10567,20 @@ const Workflow = {
               }
             } catch(e) {}
 
-            const now = new Date().toISOString();
-            const entry = {
-              fileName: fileName,
-              uploadDate: now.slice(0, 10),
-              uploaderId: Auth.user.id,
-              isGoogleDrive: true,
-              linkUrl: val
-            };
-            const updatedDocs = [...(task.taskDocuments || []), entry];
-            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Linking...';
 
-            const dmsRecord = {
-              fileName: fileName,
-              workRequestId: task.workRequestId,
-              document_type: 'original_scan',
-              category: 'Requirement Docs',
-              uploader: Auth.user.id,
-              uploadDate: now,
-              description: `GDrive link via task: ${task.title}`,
-              handover_log: [],
-              entity: wr?.entity || Auth.activeEntity,
-              dataUrl: val,
-              versions: [],
-              comments: [],
-              documentLifecycle: 'collected',
-              scannedBy: '',
-              envelopeId: '',
-              storedLocation: ''
-            };
             try {
-              await window.apiClient.documents.create(dmsRecord);
-              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
+              popover.remove();
+              this.showTaskSidePane(taskId, null);
+              App.handleRoute();
             } catch (err) {
-              console.error('Failed to create DMS document', err);
-              this.showMessage('Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-              return;
+              console.error('Failed to link GDrive document', err);
+              this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Embed Google Drive file';
             }
-
-            popover.remove();
-            this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           });
           
           panel.appendChild(linkInput);
@@ -10512,46 +10609,19 @@ const Workflow = {
               <span style="font-size: 0.75rem; color: var(--color-text-muted);">${f.size}</span>
             `;
             item.addEventListener('click', async () => {
-              const now = new Date().toISOString();
-              const entry = {
-                fileName: f.name,
-                uploadDate: now.slice(0, 10),
-                uploaderId: Auth.user.id,
-                isGoogleDrive: true
-              };
-              const updatedDocs = [...(task.taskDocuments || []), entry];
-              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-
-              const dmsRecord = {
-                fileName: f.name,
-                workRequestId: task.workRequestId,
-                document_type: 'original_scan',
-                category: 'Requirement Docs',
-                uploader: Auth.user.id,
-                uploadDate: now,
-                description: `Embedded via Google Drive: ${f.name}`,
-                handover_log: [],
-                entity: wr?.entity || Auth.activeEntity,
-                dataUrl: 'mock-google-drive-data-url',
-                versions: [],
-                comments: [],
-                documentLifecycle: 'collected',
-                scannedBy: '',
-                envelopeId: '',
-                storedLocation: ''
-              };
               try {
-                await window.apiClient.documents.create(dmsRecord);
-                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+                await this.linkTaskDocument(taskId, 'mock-google-drive-data-url', {
+                  fileName: f.name,
+                  isGoogleDrive: true,
+                  category: 'OTHER'
+                });
+                popover.remove();
+                this.showTaskSidePane(taskId, null);
+                App.handleRoute();
               } catch (err) {
-                console.error('Failed to create DMS document', err);
-                this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-                return;
+                console.error('Failed to embed GDrive document', err);
+                this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
               }
-
-              popover.remove();
-              this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             });
             fileList.appendChild(item);
           });
@@ -10670,46 +10740,19 @@ const Workflow = {
       item.appendChild(el('span', { text: f.size, style: 'font-size: 0.75rem; color: var(--color-text-muted);' }));
       
       item.addEventListener('click', async () => {
-        const now = new Date().toISOString();
-        const entry = {
-          fileName: f.name,
-          uploadDate: now.slice(0, 10),
-          uploaderId: Auth.user.id,
-          isGoogleDrive: true
-        };
-        const updatedDocs = [...(task.taskDocuments || []), entry];
-        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-
-        const dmsRecord = {
-          fileName: f.name,
-          workRequestId: task.workRequestId,
-          document_type: 'original_scan',
-          category: 'Requirement Docs',
-          uploader: Auth.user.id,
-          uploadDate: now,
-          description: `Embedded via Google Drive: ${f.name}`,
-          handover_log: [],
-          entity: Auth.activeEntity,
-          dataUrl: 'mock-google-drive-data-url',
-          versions: [],
-          comments: [],
-          documentLifecycle: 'collected',
-          scannedBy: '',
-          envelopeId: '',
-          storedLocation: ''
-        };
         try {
-          await window.apiClient.documents.create(dmsRecord);
-          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+          await this.linkTaskDocument(taskId, 'mock-google-drive-data-url', {
+            fileName: f.name,
+            isGoogleDrive: true,
+            category: 'OTHER'
+          });
+          overlay.remove();
+          this.showTaskSidePane(taskId, null);
+          App.handleRoute();
         } catch (err) {
-          console.error('Failed to create DMS document', err);
-          this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-          return;
+          console.error('Failed to embed GDrive document', err);
+          this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
         }
-
-        overlay.remove();
-        this.showTaskSidePane(taskId, null);
-        App.handleRoute();
       });
       list.appendChild(item);
     });

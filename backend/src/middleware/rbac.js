@@ -21,7 +21,7 @@ const computePermissions = (user) => {
  * @param {string} action
  * @returns {Function}
  */
-const requirePermission = (action) => {
+const requirePermission = (actionOrActions) => {
   return async (req, res, next) => {
     try {
       if (!req.user) {
@@ -35,11 +35,14 @@ const requirePermission = (action) => {
       const permissions = computePermissions(req.user);
       req.userPermissions = permissions;
 
-      if (!hasPermission(permissions, action)) {
+      const actions = Array.isArray(actionOrActions) ? actionOrActions : [actionOrActions];
+      const hasAny = actions.some((action) => hasPermission(permissions, action));
+
+      if (!hasAny) {
         throw new AppError({
           statusCode: 403,
           title: 'Forbidden',
-          detail: `Permission '${action}' is required`,
+          detail: `One of permissions [${actions.join(', ')}] is required`,
         });
       }
 

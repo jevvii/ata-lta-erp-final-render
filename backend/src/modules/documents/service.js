@@ -130,15 +130,42 @@ const listDocuments = async ({ entityId, filters = {} }) => {
  * @returns {Promise<{ document: object, uploadUrl: string }>}
  */
 const createDocument = async ({ entityId, entityCode, userId, data }) => {
+  // Validate linkedTaskId if provided
+  if (data.linkedTaskId) {
+    const { data: task, error: taskError } = await supabaseAdmin
+      .from('tasks')
+      .select('id, work_request_id')
+      .eq('id', data.linkedTaskId)
+      .single();
+
+    if (taskError || !task) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: `Linked task ${data.linkedTaskId} does not exist`,
+      });
+    }
+
+    if (data.workRequestId && task.work_request_id !== data.workRequestId) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: `Linked task ${data.linkedTaskId} does not belong to work request ${data.workRequestId}`,
+      });
+    }
+  }
+
   const documentId = randomUUID();
 
-  const storagePath = generateStoragePath({
-    entityCode: entityCode || entityId,
-    clientId: data.clientId || null,
-    workRequestId: data.workRequestId || null,
-    documentId,
-    fileName: data.fileName,
-  });
+  const storagePath = data.externalUrl
+    ? null
+    : generateStoragePath({
+        entityCode: entityCode || entityId,
+        clientId: data.clientId || null,
+        workRequestId: data.workRequestId || null,
+        documentId,
+        fileName: data.fileName,
+      });
 
   const row = {
     id: documentId,
@@ -152,12 +179,13 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     uploader_id: userId,
     description: data.description || null,
     entity_id: entityId,
-    status: 'pending_upload',
+    status: data.externalUrl ? 'active' : 'pending_upload',
     document_lifecycle: 'collected',
     archived: false,
-    file_size: data.fileSize,
-    content_type: data.contentType,
+    file_size: data.fileSize || null,
+    content_type: data.contentType || null,
     storage_path: storagePath,
+    external_url: data.externalUrl || null,
     comments: data.comments || [],
     versions: data.versions || [],
     created_by: userId,
@@ -178,11 +206,13 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     });
   }
 
-  const uploadUrl = await getSignedUploadUrl({
-    path: storagePath,
-    contentType: data.contentType,
-    expiresInSeconds: 300,
-  });
+  const uploadUrl = data.externalUrl
+    ? null
+    : await getSignedUploadUrl({
+        path: storagePath,
+        contentType: data.contentType,
+        expiresInSeconds: 300,
+      });
 
   await auditService.log({
     action: 'document.create',
@@ -245,6 +275,7 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
   if (data.category !== undefined) updates.category = data.category;
   if (data.description !== undefined) updates.description = data.description;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
+  if (data.externalUrl !== undefined) updates.external_url = data.externalUrl;
   if (data.scannedBy !== undefined) updates.scanned_by = data.scannedBy;
   if (data.envelopeId !== undefined) updates.envelope_id = data.envelopeId;
   if (data.storedLocation !== undefined) updates.stored_location = data.storedLocation;

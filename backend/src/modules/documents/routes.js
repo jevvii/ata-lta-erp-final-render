@@ -24,7 +24,7 @@ router.get('/', requirePermission('dms:view'), documentsController.listDocuments
 // Create document metadata + get upload URL
 router.post(
   '/',
-  requirePermission('dms:edit'),
+  requirePermission(['dms:edit', 'workflow:task_upload']),
   audit('document.create', { table: 'documents' }),
   documentsController.createDocument
 );
@@ -67,7 +67,7 @@ router.delete(
 // Confirm storage upload completed
 router.post(
   '/:id/confirm-upload',
-  requirePermission('dms:edit'),
+  requirePermission(['dms:edit', 'workflow:task_upload']),
   audit('document.confirm-upload', { table: 'documents' }),
   documentsController.confirmUpload
 );
