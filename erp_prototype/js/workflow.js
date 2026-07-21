@@ -6361,10 +6361,10 @@ const Workflow = {
                 this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
                   const updatedTaskDocs = task.taskDocuments.filter((_, i) => i !== dIdx);
                   WorkflowData.updateTask(task.id, { taskDocuments: updatedTaskDocs });
-                  const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
-                  if (dmsMatch) {
+                  const docIdToDelete = d.documentId || (wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id) || {}).id;
+                  if (docIdToDelete) {
                     try {
-                      await window.apiClient.documents.delete(dmsMatch.id);
+                      await window.apiClient.documents.remove(docIdToDelete);
                     } catch (err) {
                       console.error('Failed to delete DMS document', err);
                     }
@@ -9732,10 +9732,10 @@ const Workflow = {
                   this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
                     const updatedTaskDocs = t.taskDocuments.filter((_, i) => i !== dIdx);
                     WorkflowData.updateTask(t.id, { taskDocuments: updatedTaskDocs });
-                    const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
-                    if (dmsMatch) {
+                    const docIdToDelete = d.documentId || (wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id) || {}).id;
+                    if (docIdToDelete) {
                       try {
-                        await window.apiClient.documents.delete(dmsMatch.id);
+                        await window.apiClient.documents.remove(docIdToDelete);
                       } catch (err) {
                         console.error('Failed to delete DMS document', err);
                       }
@@ -10288,6 +10288,8 @@ const Workflow = {
     let fileName = options.fileName || 'Linked Document';
     if (options.isGoogleDrive) {
       fileName = options.fileName || 'GDrive Document';
+    } else if (options.isFigma) {
+      fileName = options.fileName || 'Figma Design File';
     }
 
     const metadata = {
@@ -10295,7 +10297,7 @@ const Workflow = {
       originalName: fileName,
       documentType: options.documentType || 'original_scan',
       category: options.category || 'OTHER',
-      description: options.description || `${options.isGoogleDrive ? 'GDrive link' : 'Linked'} via task: ${task.title}`,
+      description: options.description || `${options.isGoogleDrive ? 'GDrive link' : options.isFigma ? 'Figma link' : 'Linked'} via task: ${task.title}`,
       workRequestId: task.workRequestId,
       linkedTaskId: taskId,
       externalUrl: linkUrl
@@ -10313,6 +10315,10 @@ const Workflow = {
     };
     if (options.isGoogleDrive) {
       entry.isGoogleDrive = true;
+    }
+    if (options.isFigma) {
+      entry.isFigma = true;
+      entry.figmaUrl = linkUrl;
     }
     const updatedDocs = [...(task.taskDocuments || []), entry];
     await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
@@ -10784,25 +10790,28 @@ const Workflow = {
     const overlay = this.showModal('Embed Figma File', container, null);
     
     cancelBtn.addEventListener('click', () => overlay.remove());
-    submitBtn.addEventListener('click', () => {
+    submitBtn.addEventListener('click', async () => {
       const url = input.value.trim();
       if (!url) return;
-      
-      const now = new Date().toISOString();
-      const entry = {
-        fileName: url.startsWith('http') ? 'Figma Design File' : url,
-        uploadDate: now.slice(0, 10),
-        uploaderId: Auth.user.id,
-        isFigma: true,
-        figmaUrl: url
-      };
-      
-      const updatedDocs = [...(task.taskDocuments || []), entry];
-      WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-      
-      overlay.remove();
-      this.showTaskSidePane(taskId, null);
-      App.handleRoute();
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Linking...';
+
+      try {
+        await this.linkTaskDocument(taskId, url, {
+          fileName: url.startsWith('http') ? 'Figma Design File' : url,
+          isFigma: true,
+          category: 'OTHER'
+        });
+        overlay.remove();
+        this.showTaskSidePane(taskId, null);
+        App.handleRoute();
+      } catch (err) {
+        console.error('Failed to link Figma design', err);
+        this.showMessage('Link Error', 'Failed to link Figma design: ' + (err.message || 'Unknown error'), 'danger');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Embed';
+      }
     });
   },
 
