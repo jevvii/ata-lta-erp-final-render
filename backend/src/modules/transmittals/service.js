@@ -46,7 +46,10 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
   }
 
   const offset = (page - 1) * limit;
-  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+  query = query
+    .order('board_order', { ascending: true })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
 
@@ -122,6 +125,7 @@ const createTransmittal = async ({ entityId, userId, data }) => {
     client_id: data.clientId,
     work_request_id: data.workRequestId || null,
     status: 'Draft',
+    board_order: data.boardOrder ?? 0,
     notes: data.notes || null,
     recipient_name: data.recipientName || null,
     recipient_details: data.recipientDetails || null,
@@ -227,7 +231,19 @@ const getTransmittalById = async ({ entityId, id }) => {
 const updateTransmittal = async ({ entityId, id, userId, data }) => {
   const existing = await getTransmittalById({ entityId, id });
 
-  if (existing.status !== 'Draft') {
+  // Board-order reordering is allowed for any status so the kanban board can
+  // persist drag-and-drop order in Sent/Acknowledged columns. All other edits
+  // remain restricted to Draft transmittals.
+  const hasNonOrderEdit =
+    data.clientId !== undefined ||
+    data.workRequestId !== undefined ||
+    data.trackingNumber !== undefined ||
+    data.notes !== undefined ||
+    data.recipientName !== undefined ||
+    data.recipientDetails !== undefined ||
+    data.items !== undefined;
+
+  if (existing.status !== 'Draft' && hasNonOrderEdit) {
     throw new AppError({
       statusCode: 409,
       title: 'Conflict',
@@ -246,6 +262,7 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.recipientName !== undefined) updates.recipient_name = data.recipientName;
   if (data.recipientDetails !== undefined) updates.recipient_details = data.recipientDetails;
+  if (data.boardOrder !== undefined) updates.board_order = data.boardOrder;
 
   // Replace items if provided
   if (data.items) {
@@ -289,7 +306,7 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
  * @param {string} params.userId
  * @returns {Promise<object>}
  */
-const sendTransmittal = async ({ entityId, id, userId }) => {
+const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
   const existing = await getTransmittalById({ entityId, id });
 
   if (existing.status !== 'Draft') {
@@ -300,15 +317,18 @@ const sendTransmittal = async ({ entityId, id, userId }) => {
     });
   }
 
+  const updates = {
+    status: 'Sent',
+    sent_at: new Date().toISOString(),
+    sent_by: userId,
+    updated_by: userId,
+    updated_at: new Date().toISOString(),
+  };
+  if (boardOrder !== undefined) updates.board_order = boardOrder;
+
   const { data: updated, error } = await supabaseAdmin
     .from('transmittals')
-    .update({
-      status: 'Sent',
-      sent_at: new Date().toISOString(),
-      sent_by: userId,
-      updated_by: userId,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq('id', id)
     .eq('entity_id', entityId)
     .select()
@@ -342,7 +362,7 @@ const sendTransmittal = async ({ entityId, id, userId }) => {
  * @param {string} params.userId
  * @returns {Promise<object>}
  */
-const acknowledgeTransmittal = async ({ entityId, id, userId }) => {
+const acknowledgeTransmittal = async ({ entityId, id, userId, boardOrder }) => {
   const existing = await getTransmittalById({ entityId, id });
 
   if (existing.status !== 'Sent') {
@@ -353,15 +373,18 @@ const acknowledgeTransmittal = async ({ entityId, id, userId }) => {
     });
   }
 
+  const updates = {
+    status: 'Acknowledged',
+    acknowledged_at: new Date().toISOString(),
+    acknowledged_by: userId,
+    updated_by: userId,
+    updated_at: new Date().toISOString(),
+  };
+  if (boardOrder !== undefined) updates.board_order = boardOrder;
+
   const { data: updated, error } = await supabaseAdmin
     .from('transmittals')
-    .update({
-      status: 'Acknowledged',
-      acknowledged_at: new Date().toISOString(),
-      acknowledged_by: userId,
-      updated_by: userId,
-      updated_at: new Date().toISOString(),
-    })
+    .update(updates)
     .eq('id', id)
     .eq('entity_id', entityId)
     .select()

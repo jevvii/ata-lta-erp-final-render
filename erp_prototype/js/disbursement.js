@@ -42,6 +42,11 @@ const Disbursement = {
   _activeSkipGeneration: 0,
   _backgroundPromise: null,
 
+  // Force the next list fetch to bypass browser/service-worker cache. Initialized
+  // to true so fresh logins, page revisits, and new sessions fetch the latest
+  // server state instead of a stale cached response.
+  _needsFreshFetch: true,
+
   // API-backed disbursement template cache
   _templates: [],
   _templatesPromise: null,
@@ -308,8 +313,11 @@ const Disbursement = {
 
   async _load(loadGen, options = {}) {
     const entity = this._getActiveEntity();
+    const freshFetch = this._needsFreshFetch;
     try {
-      const res = await window.apiClient.disbursements.list(options);
+      const query = { ...options };
+      if (freshFetch) query._t = Date.now();
+      const res = await window.apiClient.disbursements.list(query);
       const items = (res.data || []).map(d => this.normalizeDisbursement(d));
       if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
         return this._items || [];
@@ -325,6 +333,7 @@ const Disbursement = {
       }
       this._entity = entity;
       this._refreshCounts();
+      if (freshFetch) this._needsFreshFetch = false;
       return this._items;
     } catch (err) {
       if (isAbortError(err)) {
@@ -415,6 +424,7 @@ const Disbursement = {
     this._templatesGeneration++;
     this._templatesPromise = null;
     this._templatesBackgroundPromise = null;
+    this._needsFreshFetch = true;
   },
 
   async loadDisbursement(id) {
@@ -471,6 +481,39 @@ const Disbursement = {
   _invalidateDashboardCache() {
     if (typeof Dashboard !== 'undefined' && Dashboard._dataCache) {
       Dashboard._dataCache = null;
+    }
+  },
+
+  /**
+   * Sync a confirmed server disbursement record into the module caches without a
+   * full cache wipe.
+   */
+  _syncDisbursementToCaches(d) {
+    if (!d) return;
+    const normalized = this.normalizeDisbursement(d);
+    if (Array.isArray(this._items)) {
+      const idx = this._items.findIndex(item => item.id === normalized.id);
+      if (idx >= 0) {
+        this._items[idx] = normalized;
+      } else if (!this._isTempId(normalized.id)) {
+        this._items.push(normalized);
+      }
+    }
+    this._detailCache[normalized.id] = normalized;
+    this._needsFreshFetch = true;
+  },
+
+  /**
+   * Invalidate backend-derived counts and refresh sidebar notification badges
+   * after a confirmed mutation.
+   */
+  _invalidateCountsAndSidebar() {
+    if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
+      window.apiClient.disbursements.invalidateCounts();
+    }
+    this._invalidateDashboardCache();
+    if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+      App.updateSidebarNotifications().catch(() => {});
     }
   },
 
@@ -1805,13 +1848,6 @@ const Disbursement = {
           Workflow.showMessage('Saving...', 'Please wait for the disbursement to finish saving before moving it.', 'info');
           return;
         }
-        if (fromStatus === targetStatus) {
-          window.apiClient.disbursements.update(item.id, { boardOrder: newOrder }).then(() => App.handleRoute()).catch(e => {
-            console.error('Failed to update board order', e);
-            Workflow.showMessage('Update Failed', e.message || 'Unable to move disbursement.', 'error');
-          });
-          return;
-        }
 
         // Permission gate: Approved requires disbursement:approve
         if (targetStatus === 'Approved' && !Auth.can('disbursement:approve')) {
@@ -1837,31 +1873,74 @@ const Disbursement = {
           return;
         }
 
+        // Same status: reorder only
+        if (fromStatus === targetStatus) {
+          const snapshot = self._getCachedItem(item.id);
+          Workflow.runBlockingArchiveAction({
+            title: 'Updating Disbursement Order',
+            message: `Please wait while "${item.category}" is being reordered...`,
+            apiCall: async () => {
+              self._updateCachedDisbursement(item.id, { ...item, boardOrder: newOrder });
+              const res = await window.apiClient.disbursements.update(item.id, { boardOrder: newOrder });
+              self._syncDisbursementToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Order Updated',
+            successMessage: `Disbursement order has been updated.`,
+            errorTitle: 'Update Failed'
+          }).then(runResult => {
+            if (runResult.success) {
+              self._invalidateCountsAndSidebar();
+            } else if (snapshot) {
+              self._updateCachedDisbursement(item.id, snapshot);
+            }
+            App.handleRoute();
+          });
+          return;
+        }
+
         const label = item.category + ' — ' + formatPHP(item.amount);
+
+        // Released opens the release dialog (existing behavior)
+        if (targetStatus === 'Released') {
+          self.showReleaseDialog(item.id);
+          return;
+        }
+
         const applyMove = async () => {
-          if (targetStatus === 'Released') {
-            self.showReleaseDialog(item.id);
-            return;
-          }
+          const snapshot = self._getCachedItem(item.id);
           const patch = targetStatus === 'Pending' ? { status: 'Pending' }
             : targetStatus === 'Approved' ? { status: 'Approved' }
             : targetStatus === 'Funded' ? { status: 'Funded' }
             : { status: targetStatus, boardOrder: newOrder };
-          try {
-            await self._optimisticUpdate(item.id, patch, () => {
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: 'Routing Disbursement',
+            message: `Please wait while "${label}" is being moved to ${targetStatus}...`,
+            apiCall: async () => {
+              self._updateCachedDisbursement(item.id, { ...item, ...patch, updatedAt: new Date().toISOString() });
+              let res;
               if (targetStatus === 'Pending') {
-                return window.apiClient.disbursements.submit(item.id);
+                res = await window.apiClient.disbursements.submit(item.id);
               } else if (targetStatus === 'Approved') {
-                return window.apiClient.disbursements.approve(item.id);
+                res = await window.apiClient.disbursements.approve(item.id);
               } else if (targetStatus === 'Funded') {
-                return window.apiClient.disbursements.fund(item.id);
+                res = await window.apiClient.disbursements.fund(item.id);
               } else {
-                return window.apiClient.disbursements.update(item.id, { boardOrder: newOrder, status: targetStatus });
+                res = await window.apiClient.disbursements.update(item.id, { ...patch, boardOrder: newOrder });
               }
-            }, 'Update Failed');
-          } catch (e) {
-            // Error surfaced by _optimisticUpdate.
+              self._syncDisbursementToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Disbursement Updated',
+            successMessage: `Disbursement has been moved to ${targetStatus}.`,
+            errorTitle: 'Update Failed'
+          });
+          if (runResult.success) {
+            self._invalidateCountsAndSidebar();
+          } else if (snapshot) {
+            self._updateCachedDisbursement(item.id, snapshot);
           }
+          App.handleRoute();
         };
 
         // Confirm critical transitions
@@ -2620,12 +2699,28 @@ const Disbursement = {
       const fundBtn = el('button', { class: 'btn btn-success', text: 'Mark as Funded' });
       fundBtn.addEventListener('click', () => {
         Workflow.showConfirm('Mark as Funded', `Confirm that funds for "${d.category}" have been credited?`, async () => {
-          try {
-            await this._optimisticUpdate(d.id, { status: 'Funded' }, () => window.apiClient.disbursements.fund(d.id), 'Fund Failed');
-            Workflow.showMessage('Funded', 'Disbursement marked as funded.', 'success');
-          } catch (e) {
-            // Error surfaced by _optimisticUpdate.
+          const snapshot = this._getCachedItem(d.id);
+          const originalDetail = this._copyItem(this._detailCache[d.id] || null);
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: 'Marking as Funded',
+            message: `Please wait while "${d.category}" is being marked as funded...`,
+            apiCall: async () => {
+              this._updateCachedDisbursement(d.id, { ...d, status: 'Funded', updatedAt: new Date().toISOString() });
+              const res = await window.apiClient.disbursements.fund(d.id);
+              this._syncDisbursementToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Funded',
+            successMessage: 'Disbursement marked as funded.',
+            errorTitle: 'Fund Failed'
+          });
+          if (runResult.success) {
+            this._invalidateCountsAndSidebar();
+          } else {
+            if (snapshot) this._updateCachedDisbursement(d.id, snapshot);
+            if (originalDetail) this._detailCache[d.id] = originalDetail;
           }
+          App.handleRoute();
         }, 'success');
       });
       actions.appendChild(fundBtn);
@@ -2654,11 +2749,28 @@ const Disbursement = {
     }
 
     Workflow.showConfirm('Approve Expense', `Approve disbursement "${d.category}" (${formatPHP(d.amount)})?`, async () => {
-      try {
-        await this._optimisticUpdate(id, { status: 'Approved' }, () => window.apiClient.disbursements.approve(id), 'Approval Failed');
-      } catch (e) {
-        // Error surfaced by _optimisticUpdate.
+      const snapshot = this._getCachedItem(id);
+      const originalDetail = this._copyItem(this._detailCache[id] || null);
+      const runResult = await Workflow.runBlockingArchiveAction({
+        title: 'Approving Expense',
+        message: `Please wait while "${d.category}" is being approved...`,
+        apiCall: async () => {
+          this._updateCachedDisbursement(id, { ...d, status: 'Approved', updatedAt: new Date().toISOString() });
+          const res = await window.apiClient.disbursements.approve(id);
+          this._syncDisbursementToCaches(res.data);
+          return { data: res.data };
+        },
+        successTitle: 'Expense Approved',
+        successMessage: `Disbursement "${d.category}" has been approved.`,
+        errorTitle: 'Approval Failed'
+      });
+      if (runResult.success) {
+        this._invalidateCountsAndSidebar();
+      } else {
+        if (snapshot) this._updateCachedDisbursement(id, snapshot);
+        if (originalDetail) this._detailCache[id] = originalDetail;
       }
+      App.handleRoute();
     }, 'success');
   },
 
@@ -2724,7 +2836,6 @@ const Disbursement = {
           filename: file?.name || 'Authorized_Release.pdf'
         });
         overlay.remove();
-        Workflow.showMessage('Released', 'Disbursement has been released.', 'success');
       } catch (e) {
         // error surfaced by release()
       }
@@ -2732,6 +2843,9 @@ const Disbursement = {
   },
 
   async release(id, pd) {
+    const d = await this.loadDisbursement(id);
+    const snapshot = this._getCachedItem(id);
+    const originalDetail = this._copyItem(this._detailCache[id] || null);
     const patch = {
       status: 'Released',
       releasedBy: Auth.user?.id || null,
@@ -2746,12 +2860,32 @@ const Disbursement = {
       },
       releaseFilename: pd.filename || null
     };
-    return this._optimisticUpdate(id, patch, () => window.apiClient.disbursements.release(id, {
-      method: pd.method,
-      reference: pd.reference,
-      bank: pd.bank,
-      date: pd.date
-    }), 'Release Failed');
+    const runResult = await Workflow.runBlockingArchiveAction({
+      title: 'Releasing Funds',
+      message: `Please wait while "${d?.category || 'this disbursement'}" is being released...`,
+      apiCall: async () => {
+        this._updateCachedDisbursement(id, { ...d, ...patch, updatedAt: new Date().toISOString() });
+        const res = await window.apiClient.disbursements.release(id, {
+          method: pd.method,
+          reference: pd.reference,
+          bank: pd.bank,
+          date: pd.date
+        });
+        this._syncDisbursementToCaches(res.data);
+        return { data: res.data };
+      },
+      successTitle: 'Funds Released',
+      successMessage: 'Disbursement has been released.',
+      errorTitle: 'Release Failed'
+    });
+    if (runResult.success) {
+      this._invalidateCountsAndSidebar();
+    } else {
+      if (snapshot) this._updateCachedDisbursement(id, snapshot);
+      if (originalDetail) this._detailCache[id] = originalDetail;
+      throw new Error('Release failed');
+    }
+    return runResult.data;
   },
 
   async reject(id, reason) {

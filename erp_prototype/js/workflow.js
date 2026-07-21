@@ -103,7 +103,9 @@ const WorkflowData = {
   // Force the next list fetch to bypass browser/service-worker cache. Set by
   // invalidate() and any mutation so navigation after creation sees the new
   // record immediately instead of a stale pre-creation cached response.
-  _needsFreshFetch: false,
+  // Initialized to true so every fresh app load (after login, refresh, or new
+  // tab) fetches the latest server state rather than a stale browser cache.
+  _needsFreshFetch: true,
 
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
@@ -1137,6 +1139,77 @@ const Workflow = {
     }
   },
 
+  /**
+   * Update both the module in-memory cache and the shared work-request cache
+   * (used by billing/disbursement selectors) from a confirmed server record.
+   * This keeps cross-module dropdowns and the operations list consistent without
+   * requiring a manual refresh.
+   */
+  _syncWorkRequestToCaches(wr) {
+    if (!wr) return;
+    const existing = WorkflowData.getWorkRequestById(wr.id);
+    if (existing) {
+      Object.assign(existing, wr);
+    }
+    if (window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (!Array.isArray(cache._wrs)) cache._wrs = [];
+      const normalized = { ...wr, tasks: wr.tasks || [] };
+      const idx = cache._wrs.findIndex(r => r.id === normalized.id);
+      if (idx >= 0) cache._wrs[idx] = normalized;
+      else cache._wrs.push(normalized);
+      cache._loadedAt = Date.now();
+    }
+    WorkflowData._needsFreshFetch = true;
+  },
+
+  /**
+   * Update both the module in-memory task cache and the cached copy inside the
+   * shared work-request cache so detail/board views and cross-module selectors
+   * see the new task state immediately.
+   */
+  _syncTaskToCaches(task) {
+    if (!task) return;
+    const existing = WorkflowData.getTaskById(task.id);
+    if (existing) {
+      Object.assign(existing, task);
+    }
+    const parentWr = WorkflowData.getWorkRequestById(task.workRequestId);
+    if (parentWr && Array.isArray(parentWr.tasks)) {
+      const idx = parentWr.tasks.findIndex(t => t.id === task.id);
+      if (idx >= 0) parentWr.tasks[idx] = task;
+      else parentWr.tasks.push(task);
+    }
+    if (window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (Array.isArray(cache._wrs)) {
+        const wr = cache._wrs.find(r => r.id === task.workRequestId);
+        if (wr) {
+          if (!Array.isArray(wr.tasks)) wr.tasks = [];
+          const idx = wr.tasks.findIndex(t => t.id === task.id);
+          if (idx >= 0) wr.tasks[idx] = task;
+          else wr.tasks.push(task);
+          cache._loadedAt = Date.now();
+        }
+      }
+    }
+    WorkflowData._needsFreshFetch = true;
+  },
+
+  /**
+   * Invalidate backend-derived counts and refresh sidebar notification badges
+   * after a confirmed mutation. Avoids full module cache wipes that can reintroduce
+   * stale records on the next render.
+   */
+  _invalidateCountsAndSidebar() {
+    if (window.apiClient?.workRequests?.invalidateCounts) {
+      window.apiClient.workRequests.invalidateCounts();
+    }
+    if (typeof App !== 'undefined' && App.updateSidebarNotifications) {
+      App.updateSidebarNotifications().catch(() => {});
+    }
+  },
+
   _isActiveWorkRequest(wr) {
     return !!wr && !wr.archived && wr.status !== 'Cancelled';
   },
@@ -2057,12 +2130,26 @@ const Workflow = {
       return;
     }
 
-    if (Auth.can('workflow:approve')) {
-      this.showConfirm('Confirm Routing', `Are you sure you want to transition this Work Request to ${status.nextPhase}?`, () => {
-        WorkflowData.updateWorkRequest(wrId, {
-          status: status.nextPhase,
-          updatedAt: new Date().toISOString()
+    const canRouteDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('workflow:approve');
+    if (canRouteDirectly) {
+      this.showConfirm('Confirm Routing', `Are you sure you want to transition this Work Request to ${status.nextPhase}?`, async () => {
+        const wr = WorkflowData.getWorkRequestById(wrId);
+        await this.runBlockingArchiveAction({
+          title: 'Routing Work Request',
+          message: `Please wait while "${wr?.title || 'the Work Request'}" is being routed to ${status.nextPhase}...`,
+          apiCall: async () => {
+            const res = await WorkflowData.updateWorkRequest(wrId, {
+              status: status.nextPhase,
+              updatedAt: new Date().toISOString()
+            });
+            this._syncWorkRequestToCaches(res);
+            return { data: res };
+          },
+          successTitle: 'Routed',
+          successMessage: `Work Request has been routed to ${status.nextPhase}.`,
+          errorTitle: 'Routing Failed'
         });
+        this._invalidateCountsAndSidebar();
         App.handleRoute();
       }, 'success');
       return;
@@ -7385,131 +7472,98 @@ const Workflow = {
 
     if (result.approved) {
       if (isNew) {
-        // Avoid double-populating wr.tasks: _addOptimisticWorkRequest already
-        // copies record.tasks, and _addOptimisticTask also pushes to parentWr.tasks.
-        record.tasks = [];
-        WorkflowData._addOptimisticWorkRequest(record);
-        record.tasks = taskRecords;
-        this._updateCounts(1, 0);
-        for (const t of taskRecords) {
-          t.workRequestId = record.id;
-          WorkflowData._addOptimisticTask(t);
-        }
-        const myGen = Workflow._startSkipGeneration();
         this.editingId = null;
-        closeFormPanelAndRoute(targetRoute);
-
-        // Yield to the event loop so the UI can paint the route change before
-        // the synchronous-looking cascade of network + DOM work that follows.
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        let createdWr = null;
-        let createdTasks = [];
-        let failedTaskTitles = [];
-
-        if (result.record && result.record.wr) {
-          // Admin bypass already created the WR and tasks on the server.
-          // Just adopt the server record into the optimistic in-memory state.
-          createdWr = result.record.wr;
-          createdTasks = result.record.tasks || [];
-          try {
-            await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
-          } catch (e) {
-            console.error('Failed to adopt server work request', e);
-            WorkflowData._removeWorkRequest(record.id);
-            for (const t of taskRecords) WorkflowData._removeTask(t.id);
-            this._updateCounts(-1, 0);
-            Workflow._clearSkipGenerationIfLatest(myGen);
-            App.handleRoute();
-            this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
-            return;
-          }
-        } else {
-          try {
-            createdWr = await WorkflowData.createWorkRequest(record);
-          } catch (e) {
-            console.error('Failed to create work request', e);
-            WorkflowData._removeWorkRequest(record.id);
-            for (const t of taskRecords) WorkflowData._removeTask(t.id);
-            this._updateCounts(-1, 0);
-            Workflow._clearSkipGenerationIfLatest(myGen);
-            App.handleRoute();
-            this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
-            return;
-          }
-
-          apiWrId = createdWr ? createdWr.id : record.id;
-          for (const t of taskRecords) {
-            t.workRequestId = apiWrId;
-            try {
-              createdTasks.push(await WorkflowData.createTask(t));
-            } catch (e) {
-              console.error('Failed to create task', t.title, e);
-              WorkflowData._removeTask(t.id);
-              failedTaskTitles.push(t.title);
+        const failedTaskTitles = [];
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Creating Work Request',
+          message: `Please wait while "${record.title || 'the Work Request'}" is being saved...`,
+          apiCall: async () => {
+            // Optimistic insert so counts and the list under the overlay update immediately.
+            record.tasks = [];
+            WorkflowData._addOptimisticWorkRequest(record);
+            record.tasks = taskRecords;
+            this._updateCounts(1, 0);
+            for (const t of taskRecords) {
+              t.workRequestId = record.id;
+              WorkflowData._addOptimisticTask(t);
             }
-          }
-        }
 
-        if (failedTaskTitles.length > 0) {
-          this.showMessage('Warning', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
-        } else {
-          this.showMessage('Work Request Created', 'Work Request has been successfully created.', 'success');
-        }
-
-        // Sync the new work request to the shared cache so billing/disbursement
-        // forms can select it without a manual refresh.
-        if (createdWr && window.apiClient?.workRequestCache) {
-          const cache = window.apiClient.workRequestCache;
-          if (!Array.isArray(cache._wrs)) cache._wrs = [];
-          const idx = cache._wrs.findIndex(wr => wr.id === createdWr.id);
-          const normalizedForCache = { ...createdWr, tasks: createdWr.tasks || [] };
-          if (idx >= 0) cache._wrs[idx] = normalizedForCache;
-          else cache._wrs.push(normalizedForCache);
-          cache._loadedAt = Date.now();
-        }
-
-        // Invalidate dashboard counts/cards so they reflect the new work request.
-        if (typeof Dashboard !== 'undefined') {
-          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-          else if (Dashboard._dataCache) Dashboard._dataCache = null;
-        }
-
-        // Refresh sidebar notification badges and backend-derived counts.
-        if (window.apiClient?.workRequests?.invalidateCounts) {
-          try {
-            await window.apiClient.workRequests.invalidateCounts();
-          } catch (e) {
-            console.warn('Failed to invalidate work request counts:', e);
-          }
-        }
-        if (typeof App !== 'undefined' && App.updateSidebarNotifications) {
-          try {
-            await App.updateSidebarNotifications();
-          } catch (e) {
-            console.warn('Failed to update sidebar notifications:', e);
-          }
-        }
-
-        // closeFormPanelAndRoute already triggered App.handleRoute() before the
-        // server sync. A second render here adds redundant DOM work while the skip
-        // generation is active; just clear the skip flag.
-        Workflow._clearSkipGenerationIfLatest(myGen);
-      } else {
-        await WorkflowData.updateWorkRequest(this.editingId, record);
-        const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
-        for (const t of existing) await WorkflowData.deleteTask(t.id);
-        for (const t of taskRecords) {
-          t.workRequestId = this.editingId;
-          await WorkflowData.createTask(t);
-        }
-        apiWrId = this.editingId;
-        this.editingId = null;
-        closeFormPanelAndRoute(targetRoute, {
-          title: 'Work Request Saved',
-          message: 'Work Request has been successfully updated.',
-          type: 'success'
+            try {
+              let createdWr = null;
+              let createdTasks = [];
+              if (result.record && result.record.wr) {
+                // Admin bypass already created the WR and tasks on the server.
+                createdWr = result.record.wr;
+                createdTasks = result.record.tasks || [];
+                await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
+              } else {
+                createdWr = await WorkflowData.createWorkRequest(record);
+                for (const t of taskRecords) {
+                  t.workRequestId = createdWr.id;
+                  try {
+                    createdTasks.push(await WorkflowData.createTask(t));
+                  } catch (e) {
+                    console.error('Failed to create task', t.title, e);
+                    WorkflowData._removeTask(t.id);
+                    failedTaskTitles.push(t.title);
+                  }
+                }
+              }
+              this._syncWorkRequestToCaches({ ...createdWr, tasks: createdTasks });
+              return { data: createdWr };
+            } catch (e) {
+              // Roll back the optimistic records if the server mutation failed.
+              console.error('Failed to create work request', e);
+              WorkflowData._removeWorkRequest(record.id);
+              for (const t of taskRecords) WorkflowData._removeTask(t.id);
+              this._updateCounts(-1, 0);
+              throw e;
+            }
+          },
+          successTitle: 'Work Request Created',
+          successMessage: failedTaskTitles.length
+            ? `Work request created, but some tasks failed: ${failedTaskTitles.join(', ')}`
+            : 'Work Request has been successfully created.',
+          errorTitle: 'Failed to Create Work Request'
         });
+
+        if (runResult.success) {
+          if (typeof Dashboard !== 'undefined') {
+            if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+            else if (Dashboard._dataCache) Dashboard._dataCache = null;
+          }
+          this._invalidateCountsAndSidebar();
+          closeFormPanelAndRoute(targetRoute);
+        } else {
+          App.handleRoute();
+        }
+        return;
+      } else {
+        this.editingId = null;
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Saving Work Request',
+          message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
+          apiCall: async () => {
+            await WorkflowData.updateWorkRequest(this.editingId, record);
+            const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
+            for (const t of existing) await WorkflowData.deleteTask(t.id);
+            for (const t of taskRecords) {
+              t.workRequestId = this.editingId;
+              await WorkflowData.createTask(t);
+            }
+            const updated = WorkflowData.getWorkRequestById(this.editingId);
+            this._syncWorkRequestToCaches(updated);
+            return { data: updated };
+          },
+          successTitle: 'Work Request Saved',
+          successMessage: 'Work Request has been successfully updated.',
+          errorTitle: 'Failed to Save Work Request'
+        });
+
+        if (runResult.success) {
+          this._invalidateCountsAndSidebar();
+        }
+        closeFormPanelAndRoute(targetRoute);
         return;
       }
     }
@@ -11256,43 +11310,43 @@ const Workflow = {
       };
       const result = await PendingChanges.submit('tasks', newTask, true);
       if (result.approved) {
-        // Optimistic task insert so the WR detail/board task count updates immediately.
-        WorkflowData._addOptimisticTask(newTask);
-        const myGen = Workflow._startSkipGeneration();
-        App.handleRoute();
-        try {
-          if (result.record) {
-            // Admin/manager bypass already created the task on the server.
-            const serverTask = WorkflowData.normalizeTask(result.record);
-            serverTask.workRequestId = newTask.workRequestId;
-            const existing = WorkflowData.getTaskById(newTask.id);
-            if (existing) Object.assign(existing, serverTask);
-            const parentWr = WorkflowData.getWorkRequestById(newTask.workRequestId);
-            if (parentWr) {
-              const idx = parentWr.tasks.findIndex(t => t.id === newTask.id);
-              if (idx >= 0) parentWr.tasks[idx] = serverTask;
-              else parentWr.tasks.push(serverTask);
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Adding Task',
+          message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
+          apiCall: async () => {
+            // Optimistic insert so counts update immediately under the overlay.
+            WorkflowData._addOptimisticTask(newTask);
+            try {
+              if (result.record) {
+                const serverTask = WorkflowData.normalizeTask(result.record);
+                serverTask.workRequestId = newTask.workRequestId;
+                this._syncTaskToCaches(serverTask);
+                return { data: serverTask };
+              }
+              const created = await WorkflowData.createTask(newTask);
+              this._syncTaskToCaches(created);
+              return { data: created };
+            } catch (e) {
+              console.error('Failed to add task', e);
+              WorkflowData._removeTask(newTask.id);
+              throw e;
             }
-            WorkflowData._needsFreshFetch = true;
-          } else {
-            await WorkflowData.createTask(newTask);
-          }
+          },
+          successTitle: 'Task Added',
+          successMessage: 'Task has been added to the work request.',
+          errorTitle: 'Failed to Add Task'
+        });
+        if (runResult.success) {
           if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-          this.showMessage('Task Added', 'Task has been added to the work request.', 'success');
-        } catch (e) {
-          console.error('Failed to add task', e);
-          WorkflowData._removeTask(newTask.id);
-          Workflow._clearSkipGenerationIfLatest(myGen);
+          this._invalidateCountsAndSidebar();
+          closeFormPanelAndRoute('#operations/detail/' + wrId);
+        } else {
           App.handleRoute();
-          this.showMessage('Error', e.message || 'Unable to add task.', 'error');
-          return;
         }
-        Workflow._clearSkipGenerationIfLatest(myGen);
       } else {
         this.showMessage('Task Added', 'Task addition has been submitted for Manager approval.', 'success');
+        closeFormPanelAndRoute('#operations/detail/' + wrId);
       }
-      closeFormPanelAndRoute('#operations/detail/' + wrId);
     });
 
     return form;
@@ -11681,18 +11735,33 @@ const Workflow = {
 
       const res = await this.resolveAssignee(groundWorkerName);
 
-      await WorkflowData.updateTask(task.id, {
-        title: data.title.trim(),
-        assigneeId: res.id,
-        assigneeName: res.name,
-        coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
-        priority: data.priority || 'Priority',
-        dueDate: data.dueDate || '',
-        predecessors: predecessors,
-        checklist: checklistItems,
-        updatedAt: new Date().toISOString()
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Saving Task',
+        message: `Please wait while "${task.title || 'the task'}" is being updated...`,
+        apiCall: async () => {
+          await WorkflowData.updateTask(task.id, {
+            title: data.title.trim(),
+            assigneeId: res.id,
+            assigneeName: res.name,
+            coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
+            priority: data.priority || 'Priority',
+            dueDate: data.dueDate || '',
+            predecessors: predecessors,
+            checklist: checklistItems,
+            updatedAt: new Date().toISOString()
+          });
+          const updated = WorkflowData.getTaskById(task.id);
+          this._syncTaskToCaches(updated);
+          return { data: updated };
+        },
+        successTitle: 'Task Saved',
+        successMessage: 'Task has been successfully updated.',
+        errorTitle: 'Failed to Save Task'
       });
 
+      if (runResult.success) {
+        this._invalidateCountsAndSidebar();
+      }
       overlay.remove();
       if (onSaved) onSaved();
     });

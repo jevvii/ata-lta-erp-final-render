@@ -30,6 +30,11 @@ const Billing = {
   _postMutationTimer: null, // debounced refresh timer after mutations
   _archiveRestoreLock: false,
 
+  // Force the next list fetch to bypass browser/service-worker cache. Initialized
+  // to true so fresh logins, page revisits, and new sessions fetch the latest
+  // server state instead of a stale cached response.
+  _needsFreshFetch: true,
+
   async _withArchiveLock(fn) {
     if (this._archiveRestoreLock) {
       Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
@@ -89,8 +94,11 @@ const Billing = {
 
   async _loadInvoices(loadGen, { merge = false } = {}) {
     const entity = Auth.activeEntity;
+    const freshFetch = this._needsFreshFetch;
     try {
-      const res = await window.apiClient.invoices.list({ limit: 10000 });
+      const query = { limit: 10000 };
+      if (freshFetch) query._t = Date.now();
+      const res = await window.apiClient.invoices.list(query);
       if (loadGen !== this._listCacheGeneration || entity !== Auth.activeEntity) return;
       if (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration) return;
       const invoices = (res.data || []).map(inv => this.normalizeInvoice(inv));
@@ -134,6 +142,7 @@ const Billing = {
         });
       }
       this._listCacheEntity = entity;
+      if (freshFetch) this._needsFreshFetch = false;
     } catch (e) {
       if (!isAbortError(e)) console.error('Failed to load invoices', e);
     }
@@ -166,6 +175,7 @@ const Billing = {
     this._templatesGeneration++;
     this._templatesPromise = null;
     this._templatesBackgroundPromise = null;
+    this._needsFreshFetch = true;
   },
 
   _beginSkipGeneration() {
@@ -303,6 +313,79 @@ const Billing = {
     if (typeof Dashboard !== 'undefined') {
       if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
       else if (Dashboard._dataCache) Dashboard._dataCache = null;
+    }
+  },
+
+  /**
+   * Sync a confirmed server invoice record into the module caches without a full
+   * cache wipe. This keeps the rendered board/list/detail state up to date after
+   * blocking-flow mutations.
+   */
+  _syncInvoiceToCaches(inv) {
+    if (!inv) return;
+    const normalized = this.normalizeInvoice(inv);
+    // Update detail cache.
+    this._detailCache[normalized.id] = normalized;
+    // Update list cache if present.
+    if (Array.isArray(this._listCache)) {
+      const idx = this._listCache.findIndex(i => i.id === normalized.id);
+      if (idx >= 0) {
+        this._listCache[idx] = normalized;
+      } else if (!this._isTempId(normalized.id)) {
+        this._listCache.push(normalized);
+      }
+    }
+    this._needsFreshFetch = true;
+  },
+
+  /**
+   * Apply a partial update to a cached invoice in both the detail and list caches,
+   * returning a snapshot of the original state for rollback.
+   */
+  _updateCachedItem(id, updates) {
+    if (!id) return null;
+    const snapshot = {};
+    if (this._detailCache[id]) {
+      snapshot.detail = deepClone(this._detailCache[id]);
+      this._detailCache[id] = { ...this._detailCache[id], ...updates };
+    }
+    if (Array.isArray(this._listCache)) {
+      const idx = this._listCache.findIndex(i => i.id === id);
+      if (idx >= 0) {
+        snapshot.list = deepClone(this._listCache[idx]);
+        this._listCache[idx] = { ...this._listCache[idx], ...updates };
+      }
+    }
+    if (!snapshot.detail && !snapshot.list) return null;
+    return snapshot;
+  },
+
+  /**
+   * Restore a cached invoice from a snapshot produced by _updateCachedItem.
+   */
+  _rollbackCachedItem(id, snapshot) {
+    if (!id || !snapshot) return;
+    if (snapshot.detail) this._detailCache[id] = snapshot.detail;
+    if (snapshot.list && Array.isArray(this._listCache)) {
+      const idx = this._listCache.findIndex(i => i.id === id);
+      if (idx >= 0) this._listCache[idx] = snapshot.list;
+    }
+  },
+
+  /**
+   * Invalidate backend-derived counts and refresh sidebar notification badges
+   * after a confirmed mutation.
+   */
+  _invalidateCountsAndSidebar() {
+    if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+      window.apiClient.invoices.invalidateCounts();
+    }
+    if (typeof Dashboard !== 'undefined') {
+      if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+      else if (Dashboard._dataCache) Dashboard._dataCache = null;
+    }
+    if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+      App.updateSidebarNotifications().catch(() => {});
     }
   },
 
@@ -1710,10 +1793,37 @@ const Billing = {
         }
       },
       onDrop({ item, targetStatus, newOrder, fromStatus }) {
+        if (this._isTempId(item.id)) {
+          Workflow.showMessage('Saving...', 'Please wait for the invoice to finish saving before moving it.', 'info');
+          return;
+        }
+
+        const isRelease = targetStatus === 'Sent';
+        const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
+        const nextStatus = (isRelease && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
+
+        // Same status: reorder only
         if (fromStatus === targetStatus) {
-          window.apiClient.invoices.update(item.id, { boardOrder: newOrder }).then(() => App.handleRoute()).catch(e => {
-            console.error('Failed to update board order', e);
-            Workflow.showMessage('Update Failed', e.message || 'Unable to move invoice.', 'error');
+          const snapshot = this._updateCachedItem(item.id, {});
+          Workflow.runBlockingArchiveAction({
+            title: 'Updating Invoice Order',
+            message: `Please wait while "${item.invoiceNumber}" is being reordered...`,
+            apiCall: async () => {
+              this._updateCachedItem(item.id, { boardOrder: newOrder });
+              const res = await window.apiClient.invoices.update(item.id, { boardOrder: newOrder });
+              this._syncInvoiceToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Order Updated',
+            successMessage: `Invoice "${item.invoiceNumber}" order has been updated.`,
+            errorTitle: 'Update Failed'
+          }).then(runResult => {
+            if (runResult.success) {
+              this._invalidateCountsAndSidebar();
+            } else if (snapshot) {
+              this._rollbackCachedItem(item.id, snapshot);
+            }
+            App.handleRoute();
           });
           return;
         }
@@ -1740,22 +1850,30 @@ const Billing = {
         }
 
         const applyMove = async () => {
-          const isRelease = targetStatus === 'Sent';
-          const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
-          const nextStatus = (isRelease && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
-          try {
-            await window.apiClient.invoices.update(item.id, { boardOrder: newOrder, status: nextStatus });
-            App.handleRoute();
-          } catch (e) {
-            console.error('Failed to move invoice', e);
-            Workflow.showMessage('Update Failed', e.message || 'Unable to move invoice.', 'error');
+          const snapshot = this._updateCachedItem(item.id, {});
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: nextStatus === 'Release Pending Approval' ? 'Submitting for Release Approval' : 'Routing Invoice',
+            message: `Please wait while "${item.invoiceNumber}" is being moved to ${nextStatus}...`,
+            apiCall: async () => {
+              this._updateCachedItem(item.id, { status: nextStatus, boardOrder: newOrder });
+              const res = await window.apiClient.invoices.update(item.id, { boardOrder: newOrder, status: nextStatus });
+              this._syncInvoiceToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Invoice Updated',
+            successMessage: `Invoice "${item.invoiceNumber}" has been moved to ${nextStatus}.`,
+            errorTitle: 'Update Failed'
+          });
+          if (runResult.success) {
+            this._invalidateCountsAndSidebar();
+          } else if (snapshot) {
+            this._rollbackCachedItem(item.id, snapshot);
           }
+          App.handleRoute();
         };
 
         // Confirm critical transitions
         if (['Approved', 'Sent', 'Paid'].includes(targetStatus)) {
-          const isRelease = targetStatus === 'Sent';
-          const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
           const labels = {
             'Approved': { msg: `Approve invoice "${item.invoiceNumber}" (${formatPHP(item.total)})?`, type: 'success' },
             'Sent': { msg: canReleaseDirectly ? `Release invoice "${item.invoiceNumber}" to client?` : `Submit invoice "${item.invoiceNumber}" for release approval?`, type: 'success' },
@@ -2907,13 +3025,24 @@ const Billing = {
       if (canApprove) {
         const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve' });
         approveBtn.addEventListener('click', async () => {
-          try {
-            const res = await window.apiClient.invoices.update(inv.id, { status: 'Approved' });
-            this._detailCache[inv.id] = this.normalizeInvoice(res.data);
-          } catch (e) {
-            console.error('Failed to approve invoice', e);
-            Workflow.showMessage('Approval Failed', e.message || 'Unable to approve invoice.', 'error');
-            return;
+          const snapshot = this._updateCachedItem(inv.id, {});
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: 'Approving Invoice',
+            message: `Please wait while "${inv.invoiceNumber}" is being approved...`,
+            apiCall: async () => {
+              this._updateCachedItem(inv.id, { status: 'Approved' });
+              const res = await window.apiClient.invoices.update(inv.id, { status: 'Approved' });
+              this._syncInvoiceToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Invoice Approved',
+            successMessage: `Invoice "${inv.invoiceNumber}" has been approved.`,
+            errorTitle: 'Approval Failed'
+          });
+          if (runResult.success) {
+            this._invalidateCountsAndSidebar();
+          } else if (snapshot) {
+            this._rollbackCachedItem(inv.id, snapshot);
           }
           App.handleRoute();
         });
@@ -2922,16 +3051,26 @@ const Billing = {
         // Send for Approval — billing:edit without billing:approve (Accounting)
         const sendBtn = el('button', { class: 'btn btn-primary', text: 'Send for Approval' });
         sendBtn.addEventListener('click', async () => {
-          try {
-            const res = await window.apiClient.invoices.update(inv.id, { status: 'Pending' });
-            this._detailCache[inv.id] = this.normalizeInvoice(res.data);
+          const snapshot = this._updateCachedItem(inv.id, {});
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: 'Submitting for Approval',
+            message: `Please wait while "${inv.invoiceNumber}" is being submitted for approval...`,
+            apiCall: async () => {
+              this._updateCachedItem(inv.id, { status: 'Pending' });
+              const res = await window.apiClient.invoices.update(inv.id, { status: 'Pending' });
+              this._syncInvoiceToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Submitted',
+            successMessage: 'Invoice has been sent for administrative approval.',
+            errorTitle: 'Submit Failed'
+          });
+          if (runResult.success) {
             PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
-          } catch (e) {
-            console.error('Failed to submit invoice for approval', e);
-            Workflow.showMessage('Submit Failed', e.message || 'Unable to submit invoice.', 'error');
-            return;
+            this._invalidateCountsAndSidebar();
+          } else if (snapshot) {
+            this._rollbackCachedItem(inv.id, snapshot);
           }
-          Workflow.showMessage('Submitted', 'Invoice has been sent for administrative approval.', 'success');
           App.handleRoute();
         });
         actions.appendChild(sendBtn);
@@ -2941,15 +3080,28 @@ const Billing = {
       const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
       const sentBtn = el('button', { class: 'btn btn-primary', text: canReleaseDirectly ? 'Release Invoice' : 'Submit for Release' });
       sentBtn.addEventListener('click', async () => {
-        try {
-          const targetStatus = isAdmin ? 'Sent' : 'Release Pending Approval';
-          const res = await window.apiClient.invoices.update(inv.id, { status: targetStatus });
-          this._detailCache[inv.id] = this.normalizeInvoice(res.data);
-          if (!isAdmin) Workflow.showMessage('Submitted', 'Invoice release has been submitted for administrative approval.', 'success');
-        } catch (e) {
-          console.error('Failed to update invoice status', e);
-          Workflow.showMessage('Update Failed', e.message || 'Unable to update invoice status.', 'error');
-          return;
+        const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
+        const targetStatus = canReleaseDirectly ? 'Sent' : 'Release Pending Approval';
+        const snapshot = this._updateCachedItem(inv.id, {});
+        const runResult = await Workflow.runBlockingArchiveAction({
+          title: targetStatus === 'Sent' ? 'Releasing Invoice' : 'Submitting for Release Approval',
+          message: `Please wait while "${inv.invoiceNumber}" is being ${targetStatus === 'Sent' ? 'released' : 'submitted for release approval'}...`,
+          apiCall: async () => {
+            this._updateCachedItem(inv.id, { status: targetStatus });
+            const res = await window.apiClient.invoices.update(inv.id, { status: targetStatus });
+            this._syncInvoiceToCaches(res.data);
+            return { data: res.data };
+          },
+          successTitle: targetStatus === 'Sent' ? 'Invoice Released' : 'Submitted',
+          successMessage: targetStatus === 'Sent'
+            ? `Invoice "${inv.invoiceNumber}" has been released to the client.`
+            : 'Invoice release has been submitted for administrative approval.',
+          errorTitle: 'Update Failed'
+        });
+        if (runResult.success) {
+          this._invalidateCountsAndSidebar();
+        } else if (snapshot) {
+          this._rollbackCachedItem(inv.id, snapshot);
         }
         App.handleRoute();
       });

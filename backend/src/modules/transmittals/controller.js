@@ -105,6 +105,7 @@ const sendTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
   } catch (err) {
@@ -119,6 +120,7 @@ const acknowledgeTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
   } catch (err) {

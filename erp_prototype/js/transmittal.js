@@ -45,6 +45,11 @@ const Transmittal = {
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
 
+  // Force the next list fetch to bypass browser/service-worker cache. Initialized
+  // to true so fresh logins, page revisits, and new sessions fetch the latest
+  // server state instead of a stale cached response.
+  _needsFreshFetch: true,
+
   _getActiveEntity() {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
   },
@@ -85,6 +90,7 @@ const Transmittal = {
     this._activeSkipGeneration = 0;
     this._counts = null;
     this._countsEntity = null;
+    this._needsFreshFetch = true;
   },
 
   /**
@@ -142,7 +148,9 @@ const Transmittal = {
 
   async _load(loadGen) {
     const entity = this._getActiveEntity();
-    const res = await window.apiClient.transmittals.list();
+    const freshFetch = this._needsFreshFetch;
+    const query = freshFetch ? { _t: Date.now() } : {};
+    const res = await window.apiClient.transmittals.list(query);
     const items = (res.data || []).map(t => this.normalizeTransmittal(t));
     // Discard stale results from a prior entity or invalidated generation.
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
@@ -170,6 +178,7 @@ const Transmittal = {
     }
     this._entity = entity;
     this._refreshCounts();
+    if (freshFetch) this._needsFreshFetch = false;
     return items;
   },
 
@@ -245,6 +254,100 @@ const Transmittal = {
     if (wasMissing) return; // fresh recount already reflects the current state
     this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
     this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+  },
+
+  /**
+   * Sync a confirmed server transmittal record into the module cache without a
+   * full cache wipe.
+   */
+  _syncTransmittalToCaches(t) {
+    if (!t) return;
+    const normalized = this.normalizeTransmittal(t);
+    if (Array.isArray(this._items)) {
+      const idx = this._items.findIndex(item => item.id === normalized.id);
+      if (idx >= 0) {
+        this._items[idx] = normalized;
+      } else if (!this._isTempId(normalized.id)) {
+        this._items.push(normalized);
+      }
+    }
+    this._needsFreshFetch = true;
+  },
+
+  /**
+   * Invalidate backend-derived counts and refresh sidebar notification badges
+   * after a confirmed mutation.
+   */
+  _invalidateCountsAndSidebar() {
+    if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
+      window.apiClient.transmittals.invalidateCounts();
+    }
+    if (typeof Dashboard !== 'undefined') {
+      if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
+      if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+    }
+    if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+      App.updateSidebarNotifications().catch(() => {});
+    }
+  },
+
+  /**
+   * Send a transmittal using the blocking archive/restore-style flow. Rolls back
+   * the local cache and rerenders on failure.
+   */
+  async _sendTransmittal(id) {
+    const t = (this._items || []).find(item => item.id === id) || (this._detailCache[id] ? this.normalizeTransmittal(this._detailCache[id]) : null);
+    if (!t) return;
+    const snapshot = this._updateCachedItem(id, {});
+    const now = new Date().toISOString();
+    const runResult = await Workflow.runBlockingArchiveAction({
+      title: 'Sending Transmittal',
+      message: `Please wait while "${t.trackingNumber}" is being sent...`,
+      apiCall: async () => {
+        this._updateCachedItem(id, { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id });
+        const res = await window.apiClient.transmittals.send(id);
+        this._syncTransmittalToCaches(res.data);
+        return { data: res.data };
+      },
+      successTitle: 'Transmittal Sent',
+      successMessage: `Transmittal "${t.trackingNumber}" has been sent.`,
+      errorTitle: 'Send Failed'
+    });
+    if (runResult.success) {
+      this._invalidateCountsAndSidebar();
+    } else if (snapshot) {
+      this._updateCachedItem(id, snapshot);
+    }
+    App.handleRoute();
+  },
+
+  /**
+   * Acknowledge a transmittal using the blocking archive/restore-style flow.
+   */
+  async _acknowledgeTransmittal(id, receivedByName) {
+    const t = (this._items || []).find(item => item.id === id) || (this._detailCache[id] ? this.normalizeTransmittal(this._detailCache[id]) : null);
+    if (!t) return;
+    const snapshot = this._updateCachedItem(id, {});
+    const now = new Date().toISOString();
+    const runResult = await Workflow.runBlockingArchiveAction({
+      title: 'Acknowledging Transmittal',
+      message: `Please wait while "${t.trackingNumber}" is being acknowledged...`,
+      apiCall: async () => {
+        this._updateCachedItem(id, { status: 'Acknowledged', acknowledgedAt: now, acknowledgedBy: Auth.user?.id, receivedByName, updatedAt: now, updatedBy: Auth.user?.id });
+        const res = await window.apiClient.transmittals.acknowledge(id);
+        this._syncTransmittalToCaches(res.data);
+        return { data: res.data };
+      },
+      successTitle: 'Transmittal Acknowledged',
+      successMessage: `Transmittal "${t.trackingNumber}" has been acknowledged.`,
+      errorTitle: 'Acknowledge Failed'
+    });
+    if (runResult.success) {
+      this._invalidateCountsAndSidebar();
+    } else if (snapshot) {
+      this._updateCachedItem(id, snapshot);
+    }
+    App.handleRoute();
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
@@ -512,28 +615,8 @@ const Transmittal = {
             }
             const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
             sendBtn.addEventListener('click', () => {
-              Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
-                const now = new Date().toISOString();
-                const original = this._updateCachedItem(t.id, {
-                  status: 'Sent',
-                  sentAt: now,
-                  sentBy: Auth.user?.id,
-                  updatedAt: now,
-                  updatedBy: Auth.user?.id
-                });
-                const skipGen = this._startSkipFetchGeneration();
-                App.handleRoute();
-                try {
-                  await window.apiClient.transmittals.send(t.id);
-                } catch (e) {
-                  if (original) this._updateCachedItem(t.id, original);
-                  this._clearActiveSkipGeneration(skipGen);
-                  App.handleRoute();
-                  Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
-                  return;
-                }
-                this._clearActiveSkipGeneration(skipGen);
-                App.handleRoute();
+              Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
+                this._sendTransmittal(t.id);
               }, 'success');
             });
             actions.appendChild(sendBtn);
@@ -1133,32 +1216,8 @@ const Transmittal = {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent', style: 'margin-left:4px;' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
-            const now = new Date().toISOString();
-            const original = self._updateCachedItem(t.id, { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id });
-            const skipGen = self._startSkipFetchGeneration();
-            App.handleRoute();
-            try {
-              await window.apiClient.transmittals.send(t.id);
-            } catch (err) {
-              if (original) self._updateCachedItem(t.id, original);
-              self._clearActiveSkipGeneration(skipGen);
-              App.handleRoute();
-              Workflow.showMessage('Send Failed', err.message || 'Unable to send transmittal.', 'error');
-              return;
-            }
-            self._clearActiveSkipGeneration(skipGen);
-            if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-              window.apiClient.transmittals.invalidateCounts();
-            }
-            if (typeof Dashboard !== 'undefined') {
-              if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-              if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-            }
-            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-              App.updateSidebarNotifications().catch(() => {});
-            }
-            App.handleRoute();
+          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
+            self._sendTransmittal(t.id);
           }, 'success');
         });
         wrapper.appendChild(sendBtn);
@@ -1323,39 +1382,7 @@ const Transmittal = {
           onClick: () => Workflow.showConfirm(
             'Confirm Sent',
             'Are you sure you want to mark this transmittal as sent?',
-            async () => {
-              const now = new Date().toISOString();
-              const original = self._updateCachedItem(t.id, {
-                status: 'Sent',
-                sentAt: now,
-                sentBy: Auth.user?.id,
-                updatedAt: now,
-                updatedBy: Auth.user?.id
-              });
-              const skipGen = self._startSkipFetchGeneration();
-              App.handleRoute();
-              try {
-                await window.apiClient.transmittals.send(t.id);
-              } catch (e) {
-                if (original) self._updateCachedItem(t.id, original);
-                self._clearActiveSkipGeneration(skipGen);
-                App.handleRoute();
-                Workflow.showMessage('Send Failed', e.message || 'Unable to send transmittal.', 'error');
-                return;
-              }
-              self._clearActiveSkipGeneration(skipGen);
-              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                window.apiClient.transmittals.invalidateCounts();
-              }
-              if (typeof Dashboard !== 'undefined') {
-                if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-                if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-              }
-              if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-                App.updateSidebarNotifications().catch(() => {});
-              }
-              App.handleRoute();
-            },
+            () => { self._sendTransmittal(t.id); },
             'success'
           )
         });
@@ -1378,9 +1405,113 @@ const Transmittal = {
       return menu;
     };
 
-    // Backend has no boardOrder column, so drag-and-drop ordering cannot persist.
-    // Drag is disabled to avoid a UI change that looks saved but is lost on refresh.
-    const boardDrag = { enabled: false };
+    const boardDrag = {
+      enabled: true,
+      canDrag: t => {
+        if (self._isTempId(t.id)) return false;
+        if (t.pendingChangeId) return false;
+        if (canMark) return true;
+        if (t.status === 'Draft' && (canEdit || canCreate)) return true;
+        return false;
+      },
+      canDrop: ({ item, targetStatus }) => {
+        if (item.status === targetStatus) return true;
+        const flow = ['Draft', 'Sent', 'Acknowledged'];
+        const currentIdx = flow.indexOf(item.status);
+        const targetIdx = flow.indexOf(targetStatus);
+        if (currentIdx === -1 || targetIdx === -1) return false;
+        return targetIdx > currentIdx;
+      },
+      orderField: 'boardOrder',
+      onDrop({ item, targetStatus, newOrder, fromStatus }) {
+        if (self._isTempId(item.id)) {
+          Workflow.showMessage('Saving...', 'Please wait for the transmittal to finish saving before moving it.', 'info');
+          return;
+        }
+        if (item.pendingChangeId) {
+          Workflow.showMessage('Pending Approval', `Transmittal "${item.trackingNumber}" is pending administrative approval and cannot be moved.`, 'warning');
+          return;
+        }
+
+        // Same status: reorder only
+        if (fromStatus === targetStatus) {
+          const snapshot = self._updateCachedItem(item.id, {});
+          Workflow.runBlockingArchiveAction({
+            title: 'Updating Transmittal Order',
+            message: `Please wait while "${item.trackingNumber}" is being reordered...`,
+            apiCall: async () => {
+              self._updateCachedItem(item.id, { boardOrder: newOrder });
+              const res = await window.apiClient.transmittals.update(item.id, { boardOrder: newOrder });
+              self._syncTransmittalToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: 'Order Updated',
+            successMessage: `Transmittal order has been updated.`,
+            errorTitle: 'Update Failed'
+          }).then(runResult => {
+            if (runResult.success) {
+              self._invalidateCountsAndSidebar();
+            } else if (snapshot) {
+              self._updateCachedItem(item.id, snapshot);
+            }
+            App.handleRoute();
+          });
+          return;
+        }
+
+        const isSend = item.status === 'Draft' && targetStatus === 'Sent';
+        const isAck = item.status === 'Sent' && targetStatus === 'Acknowledged';
+        if (!isSend && !isAck) {
+          Workflow.showMessage('Invalid Move', `Cannot move transmittal from ${item.status} to ${targetStatus}.`, 'warning');
+          return;
+        }
+        if (!canMark) {
+          Workflow.showMessage('Permission Denied', 'You do not have permission to send or acknowledge transmittals.', 'danger');
+          return;
+        }
+
+        const applyMove = async () => {
+          const snapshot = self._updateCachedItem(item.id, {});
+          const runResult = await Workflow.runBlockingArchiveAction({
+            title: isSend ? 'Sending Transmittal' : 'Acknowledging Transmittal',
+            message: `Please wait while "${item.trackingNumber}" is being ${isSend ? 'sent' : 'acknowledged'}...`,
+            apiCall: async () => {
+              const now = new Date().toISOString();
+              const patch = isSend
+                ? { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id, boardOrder: newOrder }
+                : { status: 'Acknowledged', acknowledgedAt: now, acknowledgedBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id, boardOrder: newOrder };
+              self._updateCachedItem(item.id, patch);
+              let res;
+              if (isSend) {
+                res = await window.apiClient.transmittals.send(item.id, { boardOrder: newOrder });
+              } else {
+                res = await window.apiClient.transmittals.acknowledge(item.id, { boardOrder: newOrder });
+              }
+              self._syncTransmittalToCaches(res.data);
+              return { data: res.data };
+            },
+            successTitle: isSend ? 'Transmittal Sent' : 'Transmittal Acknowledged',
+            successMessage: isSend
+              ? `Transmittal "${item.trackingNumber}" has been sent.`
+              : `Transmittal "${item.trackingNumber}" has been acknowledged.`,
+            errorTitle: isSend ? 'Send Failed' : 'Acknowledge Failed'
+          });
+          if (runResult.success) {
+            self._invalidateCountsAndSidebar();
+          } else if (snapshot) {
+            self._updateCachedItem(item.id, snapshot);
+          }
+          App.handleRoute();
+        };
+
+        const confirmLabels = {
+          'Sent': { title: 'Confirm Sent', msg: `Are you sure you want to mark transmittal "${item.trackingNumber}" as sent?` },
+          'Acknowledged': { title: 'Confirm Acknowledge', msg: `Are you sure you want to acknowledge transmittal "${item.trackingNumber}"?` }
+        };
+        const cfg = confirmLabels[targetStatus];
+        Workflow.showConfirm(cfg.title, cfg.msg, applyMove, 'success');
+      }
+    };
 
     if (groupBy !== 'none') {
       toolbarContainer?.classList.add('grouped-board-active');
@@ -1433,32 +1564,8 @@ const Transmittal = {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', async () => {
-            const now = new Date().toISOString();
-            const original = self._updateCachedItem(t.id, { status: 'Sent', sentAt: now, sentBy: Auth.user?.id, updatedAt: now, updatedBy: Auth.user?.id });
-            const skipGen = self._startSkipFetchGeneration();
-            App.handleRoute();
-            try {
-              await window.apiClient.transmittals.send(t.id);
-            } catch (err) {
-              if (original) self._updateCachedItem(t.id, original);
-              self._clearActiveSkipGeneration(skipGen);
-              App.handleRoute();
-              Workflow.showMessage('Send Failed', err.message || 'Unable to send transmittal.', 'error');
-              return;
-            }
-            self._clearActiveSkipGeneration(skipGen);
-            if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-              window.apiClient.transmittals.invalidateCounts();
-            }
-            if (typeof Dashboard !== 'undefined') {
-              if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-              if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-            }
-            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-              App.updateSidebarNotifications().catch(() => {});
-            }
-            App.handleRoute();
+          Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
+            self._sendTransmittal(t.id);
           }, 'success');
         });
         actionWrap.appendChild(sendBtn);
@@ -1991,41 +2098,8 @@ const Transmittal = {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const receivedByName = form.querySelector('[name="receivedBy"]')?.value.trim();
-      const now = new Date().toISOString();
-      const original = this._updateCachedItem(id, {
-        status: 'Acknowledged',
-        acknowledgedAt: now,
-        acknowledgedBy: Auth.user?.id,
-        receivedByName,
-        updatedAt: now,
-        updatedBy: Auth.user?.id
-      });
       overlay.remove();
-      const skipGen = this._startSkipFetchGeneration();
-      App.handleRoute();
-      try {
-        // Backend acknowledge endpoint does not persist receivedByName or a custom
-        // receivedDate; it records the current server timestamp and current user.
-        await window.apiClient.transmittals.acknowledge(id);
-      } catch (err) {
-        if (original) this._updateCachedItem(id, original);
-        this._clearActiveSkipGeneration(skipGen);
-        App.handleRoute();
-        Workflow.showMessage('Acknowledge Failed', err.message || 'Unable to acknowledge transmittal.', 'error');
-        return;
-      }
-      this._clearActiveSkipGeneration(skipGen);
-      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-        window.apiClient.transmittals.invalidateCounts();
-      }
-      if (typeof Dashboard !== 'undefined') {
-        if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-        if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-      }
-      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-        App.updateSidebarNotifications().catch(() => {});
-      }
-      App.handleRoute();
+      await this._acknowledgeTransmittal(id, receivedByName);
     });
   },
 
