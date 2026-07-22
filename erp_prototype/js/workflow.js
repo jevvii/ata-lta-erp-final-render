@@ -7562,51 +7562,51 @@ const Workflow = {
     }
 
     // Existing record Update
-    const result = await PendingChanges.submit('workRequests', record, isNew);
+    const wrId = this.editingId;
+    let submitResult = null;
 
-    if (result.approved) {
-      this.editingId = null;
-      const runResult = await this.runBlockingArchiveAction({
-        title: 'Saving Work Request',
-        message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
-        apiCall: async () => {
-          await WorkflowData.updateWorkRequest(this.editingId, record);
-          const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
+    const runResult = await this.runBlockingArchiveAction({
+      title: 'Saving Work Request',
+      message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
+      apiCall: async () => {
+        submitResult = await PendingChanges.submit('workRequests', record, isNew);
+        if (submitResult.approved) {
+          await WorkflowData.updateWorkRequest(wrId, record);
+          const existing = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
           for (const t of existing) await WorkflowData.deleteTask(t.id);
           for (const t of taskRecords) {
-            t.workRequestId = this.editingId;
+            t.workRequestId = wrId;
             await WorkflowData.createTask(t);
           }
-          const updated = WorkflowData.getWorkRequestById(this.editingId);
+          const updated = WorkflowData.getWorkRequestById(wrId);
           this._syncWorkRequestToCaches(updated);
           return { data: updated };
-        },
-        successTitle: 'Work Request Saved',
-        successMessage: 'Work Request has been successfully updated.',
-        errorTitle: 'Failed to Save Work Request'
-      });
+        } else {
+          return { data: submitResult };
+        }
+      },
+      successTitle: 'Work Request Saved',
+      successMessage: 'Work Request has been successfully updated.',
+      errorTitle: 'Failed to Save Work Request'
+    });
 
-      if (runResult.success) {
-        this._invalidateCountsAndSidebar();
-      }
-      closeFormPanelAndRoute(targetRoute);
-      return;
-    }
-
-    if (result.approved) {
+    if (runResult.success) {
+      this.editingId = null;
       if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+      this._invalidateCountsAndSidebar();
       if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-    }
 
-    this.editingId = null;
-    const msgConfig = {
-      title: 'Work Request Saved',
-      message: result.approved
-        ? 'Work Request has been successfully updated.'
-        : `Work Request update request has been submitted for Admin approval.`,
-      type: 'success'
-    };
-    closeFormPanelAndRoute(targetRoute, msgConfig);
+      const msgConfig = {
+        title: 'Work Request Saved',
+        message: submitResult && submitResult.approved
+          ? 'Work Request has been successfully updated.'
+          : 'Work Request update request has been submitted for Admin approval.',
+        type: 'success'
+      };
+      closeFormPanelAndRoute(targetRoute, msgConfig);
+    } else {
+      App.handleRoute();
+    }
   },
 
   /**
