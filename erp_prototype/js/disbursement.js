@@ -2574,25 +2574,37 @@ const Disbursement = {
     overlay.querySelector('#btn-cancel-disb-opreq').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', async () => {
       const wrId = wrSelect.value;
-      if (!wrId) { alert('Please select a work request.'); return; }
+      if (!wrId) {
+        Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+        return;
+      }
       const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#disb-opreq-notes').value.trim();
       const record = {
         type: 'disbursement',
         workRequestId: wrId,
         clientId: wr?.clientId || null,
+        linkedTaskId: null,
         amount: null,
         notes
       };
-      try {
-        await window.apiClient.operationsRequests.create(record);
-        overlay.remove();
-        Workflow.showMessage('Request Submitted', 'Your disbursement request has been submitted to Accounting for review.', 'success');
-        App.handleRoute();
-      } catch (err) {
-        console.error('Failed to create disbursement request', err);
-        Workflow.showMessage('Request Failed', err.message || 'Unable to submit disbursement request.', 'error');
-      }
+
+      Workflow.runBlockingArchiveAction({
+        title: 'Submitting Disbursement Request',
+        message: 'Please wait while your disbursement request is being submitted...',
+        apiCall: async () => {
+          return await window.apiClient.operationsRequests.create(record);
+        },
+        successTitle: 'Request Submitted',
+        successMessage: 'Your disbursement request has been submitted to Accounting for review.',
+        errorTitle: 'Request Failed',
+        onSuccess: async (res) => {
+          overlay.remove();
+        },
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
     });
   },
 

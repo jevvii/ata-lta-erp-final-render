@@ -2046,26 +2046,38 @@ const Transmittal = {
     overlay.querySelector('#btn-cancel-trans-opreq').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', async () => {
       const wrId = wrSelect.value;
-      if (!wrId) { alert('Please select a work request.'); return; }
+      if (!wrId) {
+        Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+        return;
+      }
       const wr = window.apiClient.workRequestCache.getById(wrId);
       const notes = overlay.querySelector('#trans-opreq-notes').value.trim();
       const record = {
         type: 'transmittal',
         workRequestId: wrId,
-        clientId: wr?.clientId,
+        clientId: wr?.clientId || null,
+        linkedTaskId: null,
         requestedBy: Auth.user.id,
         status: 'pending',
         notes
       };
-      try {
-        await window.apiClient.operationsRequests.create(record);
-      } catch (e) {
-        Workflow.showMessage('Request Failed', e.message || 'Unable to submit transmittal request.', 'error');
-        return;
-      }
-      overlay.remove();
-      Workflow.showMessage('Request Submitted', 'Your transmittal request has been submitted to Documentation for review.', 'success');
-      App.handleRoute();
+
+      Workflow.runBlockingArchiveAction({
+        title: 'Submitting Transmittal Request',
+        message: 'Please wait while your transmittal request is being submitted...',
+        apiCall: async () => {
+          return await window.apiClient.operationsRequests.create(record);
+        },
+        successTitle: 'Request Submitted',
+        successMessage: 'Your transmittal request has been submitted to Documentation for review.',
+        errorTitle: 'Request Failed',
+        onSuccess: async (res) => {
+          overlay.remove();
+        },
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
     });
   },
 
