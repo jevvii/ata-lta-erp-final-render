@@ -9888,7 +9888,88 @@ const Workflow = {
         const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': t.id });
         timeSection.appendChild(timeList);
         rightPane.appendChild(timeSection);
-        this.refreshTaskTimeLogsList(t.id);
+
+        timeList.appendChild(renderEmptyState('Loading logs...'));
+        (async () => {
+          if (t.id && WorkflowData._isTempId(t.id)) {
+            timeList.innerHTML = '';
+            timeList.appendChild(renderEmptyState('No logs recorded'));
+            return;
+          }
+          try {
+            // Fetch task details from backend to get fresh logs
+            const res = await window.apiClient.workRequests.getTask(wr.id, t.id);
+            const serverTask = res?.data;
+            let currentTask = t;
+            if (serverTask) {
+              const normalized = WorkflowData.normalizeTask(serverTask);
+              const existing = WorkflowData.getTaskById(t.id);
+              if (existing) {
+                const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+                normalized.checklist = (normalized.checklist || []).map(c => {
+                  const ec = existingClById.get(c.id);
+                  return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+                });
+                Object.assign(existing, normalized);
+                currentTask = existing;
+              } else {
+                currentTask = normalized;
+              }
+            }
+
+            timeList.innerHTML = '';
+            const logs = currentTask.timeLogs || [];
+            const checklistLogGroups = [];
+            (currentTask.checklist || []).forEach(item => {
+              if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
+            });
+
+            if (logs.length === 0 && checklistLogGroups.length === 0) {
+              timeList.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
+            } else {
+              const buildTimeLogEntry = (l, subtaskName = null) => {
+                const [y, m, d] = l.date.split('-').map(Number);
+                const logDate = new Date(y, m - 1, d);
+                const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+                const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
+                const noteText = l.note ? ` — ${l.note}` : '';
+                const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
+
+                return el('div', { 
+                  class: 'history-item', 
+                  style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
+                }, [
+                  el('div', {}, [
+                    el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
+                    el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
+                    el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
+                    el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
+                  ]),
+                  el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
+                ]);
+              };
+
+              const taskLevelLogs = logs.filter(l => !l.checklistItemId);
+              if (taskLevelLogs.length > 0) {
+                const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+                sorted.forEach(l => {
+                  timeList.appendChild(buildTimeLogEntry(l));
+                });
+              }
+
+              checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
+                const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+                sorted.forEach(l => {
+                  timeList.appendChild(buildTimeLogEntry(l, item.text));
+                });
+              });
+            }
+          } catch (err) {
+            console.error('Failed to load task details for time logs in detail view', err);
+            timeList.innerHTML = '';
+            timeList.appendChild(renderEmptyState('Failed to load logs'));
+          }
+        })();
 
         // Dependency map section
         const depSection = el('div', { class: 'detail-block' });
