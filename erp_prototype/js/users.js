@@ -817,7 +817,7 @@ const Users = {
       container.appendChild(this.renderUsersSection());
     } else if (this.view === 'audit' && canManageUsers) {
       container.appendChild(await this.renderAuditSection());
-    } else if (this.view === 'pending' && (canManageUsers || isManager)) {
+    } else if (this.view === 'pending' && (canManageUsers || isManager || hasAccounting)) {
       container.appendChild(await this.renderPendingSection());
     } else if (this.view === 'myPending' && !canManageUsers) {
       container.appendChild(this.renderMyPendingSection());
@@ -826,7 +826,7 @@ const Users = {
     } else if (!canManageUsers) {
       if (this.view === 'myRequests') {
         container.appendChild(this.renderMyRequestsSection());
-      } else if (this.view === 'pending' && isManager) {
+      } else if (this.view === 'pending' && (isManager || hasAccounting)) {
         container.appendChild(await this.renderPendingSection());
       } else {
         container.appendChild(this.renderMyPendingSection());
@@ -2263,6 +2263,8 @@ const Users = {
 
     (this._cachedPendingOpRequests || []).forEach(opReq => {
       const normReq = this._normalizeOperationsRequest(opReq);
+      if (normReq.requestedBy === Auth.user?.id) return;
+
       let itemEntity = normReq.entity;
       if (!itemEntity || itemEntity === 'ALL') {
         itemEntity = (entity === 'ALL') ? (Auth.user.entities[0] || 'ATA') : entity;
