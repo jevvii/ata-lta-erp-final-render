@@ -750,7 +750,7 @@ const Billing = {
     }
     else if (this.view === 'templates') container.appendChild(await this.renderTemplates());
     else if (this.view === 'archive') container.appendChild(await this.renderArchive());
-    else if (this.view === 'templateForm') container.appendChild(this.renderTemplateForm({ hideHeader: true, template }));
+    else if (this.view === 'templateForm') container.appendChild(await this.renderTemplateForm({ hideHeader: true, template }));
 
     setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
@@ -2211,7 +2211,7 @@ const Billing = {
   },
 
   recalcTotals(form) {
-    const rows = form.querySelectorAll('.line-item-row');
+    const rows = form.querySelectorAll('.notion-line-item-row');
     let subtotal = 0;
     rows.forEach(row => {
       const amt = parseFloat(row.querySelector('.item-amt').value) || 0;
@@ -2235,7 +2235,7 @@ const Billing = {
     const prefix = entity + '-SI-' + year + '-';
     try {
       // Scan only the current/most-recent page for the latest sequential number.
-      const list = await this.fetchInvoices({ page, limit: 1, sortBy: 'createdAt', sortOrder: 'desc' });
+      const list = await this.fetchInvoices({ page, limit: 1, sortBy: 'createdAt', sortOrder: 'desc', includeDeleted: true });
       const maxNum = list
         .filter(inv => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix))
         .reduce((max, inv) => {
@@ -4212,7 +4212,10 @@ const Billing = {
     while (container.firstChild) container.removeChild(container.firstChild);
   },
 
-  renderTemplateForm(opts = {}) {
+  async renderTemplateForm(opts = {}) {
+    await Promise.all([
+      window.apiClient.clientCache.ensure()
+    ]);
     const { hideHeader = false, template = null } = opts;
     const entity = Auth.activeEntity;
     const container = el('div', { class: 'page' });
@@ -4382,10 +4385,11 @@ const Billing = {
     this.templateEditingId = existing ? existing.id : null;
     const fullPageRoute = this.templateEditingId ? `#billing/templateForm/${this.templateEditingId}` : '#billing/templateForm/new';
     const template = this.templateEditingId ? await this.getTemplateById(this.templateEditingId) : null;
+    const formContent = await this.renderTemplateForm({ template });
     openFormPanel({
       icon: '📋',
       title: template?.name ? `Edit ${template.name}` : 'New Billing Template',
-      formContent: this.renderTemplateForm({ template }),
+      formContent,
       formId: 'billing-tpl-form',
       mode,
       viewContext: 'billing-template-form',

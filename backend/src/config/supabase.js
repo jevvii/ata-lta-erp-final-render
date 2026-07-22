@@ -24,24 +24,10 @@ if (!env.supabase.url || !env.supabase.serviceKey) {
     },
   };
 } else {
-  // Enable HTTP Keep-Alive so the Supabase PostgREST HTTP client reuses
-  // TCP/TLS connections instead of opening a new one for every query.
-  const https = require('https');
-  const http = require('http');
-  const keepAliveHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 25 });
-  const keepAliveHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 25 });
-
   supabaseAdmin = createClient(env.supabase.url, env.supabase.serviceKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
-    },
-    global: {
-      fetch: (url, options = {}) => {
-        const parsedUrl = typeof url === 'string' ? new URL(url) : url;
-        const agent = parsedUrl.protocol === 'https:' ? keepAliveHttpsAgent : keepAliveHttpAgent;
-        return fetch(url, { ...options, agent });
-      },
     },
   });
 }

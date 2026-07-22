@@ -6868,6 +6868,11 @@ const Workflow = {
       return el('div');
     }
 
+    await Promise.all([
+      window.apiClient.userCache.ensure(),
+      window.apiClient.clientCache.ensure()
+    ]);
+
     // Cancel any previous form-level document listener so repeated renders
     // (opening the panel multiple times) do not leak global listeners.
     if (this._wrFormAbortController) {
@@ -13221,6 +13226,11 @@ const Workflow = {
       App.handleRoute();
       return el('div');
     }
+
+    await Promise.all([
+      window.apiClient.clientCache.ensure(),
+      this.ensureRetainerTemplates()
+    ]);
 
     const { hideHeader = false } = opts || {};
     const entity = Auth.activeEntity;

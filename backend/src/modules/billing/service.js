@@ -25,13 +25,16 @@ const { resolveEntityCode } = require('../../lib/entityResolver');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {} }) => {
-  const { status, clientId, linkedTaskId, search, archived, page = 1, limit = 50 } = filters;
+  const { status, clientId, linkedTaskId, search, archived, includeDeleted, page = 1, limit = 50 } = filters;
   const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients(name)', { count: 'exact' })
-    .is('deleted_at', null);
+    .select('*, clients(name)', { count: 'exact' });
+
+  if (includeDeleted !== true && includeDeleted !== 'true') {
+    query = query.is('deleted_at', null);
+  }
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
