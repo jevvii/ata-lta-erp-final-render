@@ -111,8 +111,9 @@ const PendingChanges = {
       } else {
         const res = await api.workRequests.update(record.id, cleanRecord);
         wr = res?.data || null;
-        const existing = await api.workRequests.listTasks(record.id);
-        for (const t of existing || []) {
+        const existingRes = await api.workRequests.listTasks(record.id);
+        const existing = existingRes?.data || [];
+        for (const t of existing) {
           await api.workRequests.removeTask(record.id, t.id);
         }
       }
