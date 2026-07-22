@@ -45,6 +45,7 @@ const listInvoices = async (req, res, next) => {
       linkedTaskId: req.query.linkedTaskId,
       search: req.query.search,
       archived: req.query.archived,
+      includeDeleted: req.query.includeDeleted,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
