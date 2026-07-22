@@ -298,7 +298,7 @@ const WorkflowData = {
     const cacheWarm = Array.isArray(this._workRequests) && this._entity === entity;
     if (cacheWarm) {
       this._mergeWorkRequests(wrs);
-      this._mergeTasks(tasks);
+      this._mergeTasks(tasks, wrs.map(w => w.id));
     } else {
       this._workRequests = wrs;
       this._tasks = tasks;
@@ -335,8 +335,24 @@ const WorkflowData = {
     });
   },
 
-  _mergeTasks(serverTasks) {
+  _mergeTasks(serverTasks, fetchedWrIds = []) {
     if (!Array.isArray(this._tasks)) this._tasks = [];
+
+    // Remove stale tasks for the fetched work requests.
+    // A task is stale if it belongs to one of the fetched work requests (fetchedWrIds)
+    // but is not present in serverTasks and is not a temporary task.
+    if (fetchedWrIds.length > 0) {
+      const fetchedWrIdsSet = new Set(fetchedWrIds);
+      const serverTaskIds = new Set(serverTasks.map(t => t.id));
+      this._tasks = this._tasks.filter(t => {
+        const belongsToFetched = t.workRequestId && fetchedWrIdsSet.has(t.workRequestId);
+        if (belongsToFetched && !serverTaskIds.has(t.id) && !this._isTempId(t.id)) {
+          return false; // Remove stale task
+        }
+        return true;
+      });
+    }
+
     const existingMap = new Map(this._tasks.map(t => [t.id, t]));
     serverTasks.forEach(serverTask => {
       const existing = existingMap.get(serverTask.id);
@@ -7623,8 +7639,9 @@ const Workflow = {
                 const results = await Promise.all(taskPromises);
                 createdTasks = results.filter(Boolean);
               }
-              this._syncWorkRequestToCaches({ ...createdWr, tasks: createdTasks });
-              return { data: createdWr };
+              const finalWr = WorkflowData.getWorkRequestById(createdWr.id || record.id);
+              this._syncWorkRequestToCaches(finalWr || { ...createdWr, tasks: createdTasks });
+              return { data: finalWr || createdWr };
             } catch (e) {
               // Roll back the optimistic records if the server mutation failed.
               console.error('Failed to create work request', e);
@@ -7676,7 +7693,7 @@ const Workflow = {
             const createdTasks = submitResult.record.tasks || [];
             await WorkflowData._adoptServerWorkRequest(wrId, createdWr, createdTasks);
             const updated = WorkflowData.getWorkRequestById(wrId);
-            this._syncWorkRequestToCaches({ ...updated, tasks: createdTasks });
+            this._syncWorkRequestToCaches(updated);
             return { data: updated };
           } else {
             await WorkflowData.updateWorkRequest(wrId, record);
