@@ -2248,7 +2248,33 @@ const Disbursement = {
     receiptGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Receipt' }));
     receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt', class: 'notion-file-input' }));
     if (existing && existing.receiptFilename) {
-      receiptGroup.appendChild(el('p', { text: 'Current: ' + existing.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+      const currentWrap = el('p', { text: 'Current: ', style: 'font-size:0.75rem;color:var(--color-text-muted);' });
+      const viewLink = el('a', {
+        href: 'javascript:void(0)',
+        text: existing.receiptFilename,
+        style: 'color:var(--color-primary);font-weight:500;text-decoration:none;cursor:pointer;'
+      });
+      viewLink.addEventListener('click', async () => {
+        try {
+          if (existing.receiptS3Key) {
+            const urlRes = await window.apiClient.documents.downloadUrl(existing.receiptS3Key);
+            if (urlRes.data && urlRes.data.url) {
+              window.open(urlRes.data.url, '_blank');
+            } else {
+              throw new Error('Download URL not found in response');
+            }
+          } else {
+            Workflow.showMessage('Error', 'Receipt file key is missing.', 'danger');
+          }
+        } catch (err) {
+          console.error('Failed to get download URL', err);
+          Workflow.showMessage('Download Failed', 'Failed to retrieve download link: ' + (err.message || 'Unknown error'), 'danger');
+        }
+      });
+      viewLink.addEventListener('mouseenter', () => { viewLink.style.textDecoration = 'underline'; });
+      viewLink.addEventListener('mouseleave', () => { viewLink.style.textDecoration = 'none'; });
+      currentWrap.appendChild(viewLink);
+      receiptGroup.appendChild(currentWrap);
     } else if (!existing && opReq && opReq.receiptFilename) {
       receiptGroup.appendChild(el('p', { text: 'Requested receipt: ' + opReq.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
     }
