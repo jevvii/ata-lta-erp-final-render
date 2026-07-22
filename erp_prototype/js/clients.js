@@ -1566,60 +1566,49 @@ const Clients = {
     const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
 
     if (isNew) {
-      const optimisticId = 'temp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
-      const now = new Date().toISOString();
-      const optimisticClient = this.normalizeClient({
-        ...record,
-        id: optimisticId,
-        status: 'Active',
-        createdAt: now,
-        updatedAt: now
-      });
+      await Workflow.runBlockingArchiveAction({
+        title: 'Creating Client',
+        message: `Please wait while client "${record.name}" is being created...`,
+        apiCall: () => window.apiClient.clients.create(record),
+        successTitle: 'Client Created',
+        successMessage: `Client "${record.name}" has been successfully created.`,
+        errorTitle: 'Failed to Create Client',
+        onSuccess: async (res) => {
+          if (res && res.data) {
+            const serverClient = this.normalizeClient(res.data);
+            ClientsData.addClient(serverClient);
+            this._updateCounts(1, 0);
 
-      const createGeneration = this._startOptimisticSkip();
-      ClientsData.addClient(optimisticClient);
-      this._updateCounts(1, 0);
-      this.editingId = null;
-      closeFormPanelAndRoute('#clients');
-
-      let serverClient = null;
-      try {
-        const res = await window.apiClient.clients.create(record);
-        serverClient = this.normalizeClient(res.data);
-        ClientsData.replaceClientById(optimisticId, serverClient);
-        // Add/update the shared client cache so pickers/dropdowns stay usable.
-        if (window.apiClient?.clientCache) {
-          if (!Array.isArray(window.apiClient.clientCache._clients)) {
-            window.apiClient.clientCache._clients = [serverClient];
-          } else {
-            const idx = window.apiClient.clientCache._clients.findIndex(c => c.id === serverClient.id);
-            if (idx >= 0) window.apiClient.clientCache._clients[idx] = serverClient;
-            else window.apiClient.clientCache._clients.push(serverClient);
+            // Add/update the shared client cache so pickers/dropdowns stay usable.
+            if (window.apiClient?.clientCache) {
+              if (!Array.isArray(window.apiClient.clientCache._clients)) {
+                window.apiClient.clientCache._clients = [serverClient];
+              } else {
+                const idx = window.apiClient.clientCache._clients.findIndex(c => c.id === serverClient.id);
+                if (idx >= 0) window.apiClient.clientCache._clients[idx] = serverClient;
+                else window.apiClient.clientCache._clients.push(serverClient);
+              }
+              window.apiClient.clientCache._loadedAt = Date.now();
+            }
+            if (typeof window.apiClient?.clients?.invalidateCounts === 'function') {
+              window.apiClient.clients.invalidateCounts();
+            }
+            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+              App.updateSidebarNotifications().catch(() => {});
+            }
+            if (typeof Dashboard !== 'undefined') {
+              if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+              else if (Dashboard._dataCache) Dashboard._dataCache = null;
+            }
           }
-          window.apiClient.clientCache._loadedAt = Date.now();
+        },
+        onAfterConfirm: async () => {
+          this.editingId = null;
+          const targetRoute = isResubmitting ? '#admin' : '#clients';
+          closeFormPanelAndRoute(targetRoute);
+          App.handleRoute();
         }
-        if (typeof window.apiClient?.clients?.invalidateCounts === 'function') {
-          window.apiClient.clients.invalidateCounts();
-        }
-        if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-          App.updateSidebarNotifications().catch(() => {});
-        }
-        if (typeof Dashboard !== 'undefined') {
-          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-          else if (Dashboard._dataCache) Dashboard._dataCache = null;
-        }
-        this._clearOptimisticSkipIfCurrent(createGeneration);
-        await App.handleRoute();
-        Workflow.showMessage('Client Created', `Client ${serverClient.name || record.name} has been successfully created.`, 'success');
-      } catch (e) {
-        console.error('Failed to create client', e);
-        ClientsData._removeFromCache(optimisticId);
-        this._updateCounts(-1, 0);
-        this._clearOptimisticSkipIfCurrent(createGeneration);
-        await App.handleRoute();
-        Workflow.showMessage('Error', e.message || 'Unable to create client.', 'error');
-        return;
-      }
+      });
       return;
     }
 
