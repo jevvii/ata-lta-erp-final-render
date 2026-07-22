@@ -1436,7 +1436,7 @@ tbody tr:hover {
   border-bottom: 1px solid #d1d5db;
   margin-bottom: 12px;
   position: sticky;
-  z-index: 25;
+  z-index: 110;
   background: var(--color-bg, #f4f6fb);
   padding-top: 8px;
   margin-top: -8px;
@@ -3266,7 +3266,7 @@ tbody tr:hover {
   margin-bottom: 12px;
   position: sticky;
   top: 76px;
-  z-index: 25;
+  z-index: 100;
   background: var(--color-bg, #f4f6fb);
   padding: 8px 0;
 }
@@ -4674,7 +4674,7 @@ tbody tr:hover {
   padding: 20px 0 8px;
   margin-bottom: 0;
   background: var(--color-bg);
-  z-index: 30;
+  z-index: 120;
 }
 
 .breadcrumb-h1,
@@ -7993,7 +7993,7 @@ tbody tr:hover {
   margin-bottom: 20px;
   position: sticky;
   top: 76px;
-  z-index: 25;
+  z-index: 100;
   flex-wrap: wrap;
 }
 
@@ -8244,7 +8244,7 @@ tbody tr:hover {
   bottom: 20px;
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: 100;
   display: none;
   align-items: center;
   justify-content: space-between;
@@ -9857,7 +9857,7 @@ tbody tr:hover {
   border-bottom-color: var(--border);
   position: sticky;
   top: var(--project-detail-title-bar-height, 48px);
-  z-index: 25;
+  z-index: 100;
 }
 
 .project-detail-v2 .card-compact {
