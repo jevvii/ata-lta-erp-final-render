@@ -165,6 +165,8 @@ describe('/v1/invoices', () => {
       .send(validInvoice)
       .expect(201);
 
+    mockTables.invoices.get(created.body.data.id).status = 'Sent';
+
     const res = await request(app)
       .post(`/v1/invoices/${created.body.data.id}/payments`)
       .set('Authorization', `Bearer ${admin}`)
@@ -183,6 +185,52 @@ describe('/v1/invoices', () => {
     expect(invoice.body.data.amount_paid).toBe(5000);
     expect(invoice.body.data.balance).toBe(5000);
     expect(invoice.body.data.status).toBe('Partially Paid');
+  });
+
+  it('rejects recording payment on a Draft invoice', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validInvoice, invoiceNumber: 'ATA-SI-DRAFT-PAY' })
+      .expect(201);
+
+    await request(app)
+      .post(`/v1/invoices/${created.body.data.id}/payments`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ amount: 5000, method: 'Bank Transfer', reference: 'REF-1', date: '2026-07-15' })
+      .expect(400);
+  });
+
+  it('rejects direct transition from Draft to Paid via API without recorded payments', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validInvoice, invoiceNumber: 'ATA-SI-DRAFT-PAID' })
+      .expect(201);
+
+    await request(app)
+      .put(`/v1/invoices/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ status: 'Paid' })
+      .expect(400);
   });
 
   it('soft deletes an invoice', async () => {
@@ -316,8 +364,13 @@ describe('/v1/invoices', () => {
     expect(counts.body.data.archived).toBe(0);
     expect(counts.body.data.rejected).toBe(0);
 
+    const invId = created.body.data.id;
+    mockTables.invoices.get(invId).status = 'Sent';
+    mockTables.invoices.get(invId).amount_paid = 10000;
+    mockTables.invoices.get(invId).balance = 0;
+
     await request(app)
-      .put(`/v1/invoices/${created.body.data.id}`)
+      .put(`/v1/invoices/${invId}`)
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .send({ status: 'Paid', archived: true })
