@@ -5,16 +5,6 @@
 
 const { z } = require('zod');
 
-const checklistItemSchema = z.object({
-  id: z.string().uuid().optional().nullable(),
-  text: z.string().min(1),
-  category: z.string().optional().nullable(),
-  completed: z.boolean().default(false),
-  assigneeId: z.string().uuid().optional().nullable(),
-  assigneeName: z.string().optional().nullable(),
-  dependsOn: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional().nullable(),
-});
-
 const timeLogSchema = z.object({
   startTime: z.string().optional().nullable(),
   endTime: z.string().optional().nullable(),
@@ -24,6 +14,17 @@ const timeLogSchema = z.object({
   note: z.string().optional().nullable(),
   workerName: z.string().optional().nullable(),
   checklistItemId: z.string().uuid().optional().nullable(),
+});
+
+const checklistItemSchema = z.object({
+  id: z.string().uuid().optional().nullable(),
+  text: z.string().min(1),
+  category: z.string().optional().nullable(),
+  completed: z.boolean().default(false),
+  assigneeId: z.string().uuid().optional().nullable(),
+  assigneeName: z.string().optional().nullable(),
+  dependsOn: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional().nullable(),
+  timeLogs: z.array(timeLogSchema).optional(),
 });
 
 const createWorkRequestSchema = z.object({
