@@ -9948,6 +9948,8 @@ const Workflow = {
                 Object.assign(existing, normalized);
                 currentTask = existing;
               } else {
+                if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+                WorkflowData._tasks.push(normalized);
                 currentTask = normalized;
               }
             }
@@ -11674,7 +11676,16 @@ const Workflow = {
   },
 
   showAddTimeLogModal(taskId, checklistItemId = null) {
-    const task = WorkflowData.getTaskById(taskId);
+    let task = WorkflowData.getTaskById(taskId);
+    if (!task) {
+      const activeWrId = window.SidePaneInstance?.recordId || Workflow.detailWrId;
+      if (activeWrId) {
+        const wr = WorkflowData.getWorkRequestById(activeWrId);
+        if (wr && wr.tasks) {
+          task = wr.tasks.find(tk => tk.id === taskId);
+        }
+      }
+    }
     let defaultWorkerName = '';
     if (checklistItemId) {
       const item = (task?.checklist || []).find(c => c.id === checklistItemId);
@@ -11793,12 +11804,12 @@ const Workflow = {
       }
 
       const currentTask = WorkflowData.getTaskById(taskId);
-      const checklist = currentTask.checklist || [];
+      const checklist = currentTask ? (currentTask.checklist || []) : [];
       const item = checklistItemId ? checklist.find(c => c.id === checklistItemId) : null;
 
       // Guard: prevent the same worker from logging twice on the same day for the same scope.
       // Scope is either a checklist item or the task itself.
-      const scopeLogs = item ? (item.timeLogs || []) : (currentTask.timeLogs || []);
+      const scopeLogs = item ? (item.timeLogs || []) : (currentTask ? (currentTask.timeLogs || []) : []);
       const alreadyLogged = entries.some(entry => scopeLogs.some(l =>
         l.date === entry.date &&
         (l.workerName || '') === workerName
@@ -11820,12 +11831,18 @@ const Workflow = {
         checklistItemId: checklistItemId || null
       }));
 
+      const wrId = currentTask?.workRequestId || window.SidePaneInstance?.recordId || Workflow.detailWrId;
+      if (!wrId) {
+        this.showMessage('Error', 'Could not resolve Work Request ID for this task.', 'danger');
+        return;
+      }
+
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving...';
 
       (async () => {
         try {
-          const res = await window.apiClient.workRequests.addTimeLogs(currentTask.workRequestId, taskId, { logs: newEntries });
+          const res = await window.apiClient.workRequests.addTimeLogs(wrId, taskId, { logs: newEntries });
           const normalized = WorkflowData.normalizeTask(res.data);
           const existing = WorkflowData.getTaskById(taskId);
           if (existing) {
@@ -11839,7 +11856,7 @@ const Workflow = {
             if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
             WorkflowData._tasks.push(normalized);
           }
-          WorkflowData.invalidateRelatedForWorkRequest(currentTask.workRequestId);
+          WorkflowData.invalidateRelatedForWorkRequest(wrId);
           WorkflowData.invalidateRelatedForTask(taskId);
 
           overlay.remove();
