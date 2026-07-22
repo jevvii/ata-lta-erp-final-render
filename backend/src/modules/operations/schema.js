@@ -67,11 +67,13 @@ const createTaskSchema = z.object({
 
 const updateTaskSchema = createTaskSchema.partial();
 
+const nullableUuid = z.preprocess(val => (val === '' || val === undefined) ? null : val, z.string().uuid().nullable().optional());
+
 const taskTemplateSchema = z.object({
   id: z.string().optional().nullable(),
   title: z.string().min(1).max(255),
   description: z.string().max(2000).optional().nullable(),
-  assigneeId: z.string().uuid().optional().nullable(),
+  assigneeId: nullableUuid,
   assigneeName: z.string().optional().nullable(),
   coAssignees: z.array(z.string().uuid()).optional().nullable(),
   predecessors: z.array(z.string()).optional().nullable(),
@@ -81,10 +83,10 @@ const retainerTemplateSchema = z.object({
   title: z.string().min(1).max(255).optional(),
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),
-  clientId: z.string().uuid().optional().nullable(),
+  clientId: nullableUuid,
   schedule: z.string().max(50).optional().nullable(),
   priority: z.string().max(50).optional().nullable(),
-  assignedTo: z.string().uuid().optional().nullable(),
+  assignedTo: nullableUuid,
   pfAmount: z.number().nonnegative().optional().nullable(),
   tasks: z.array(taskTemplateSchema).optional(),
 });

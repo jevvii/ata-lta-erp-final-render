@@ -12897,9 +12897,9 @@ const Workflow = {
       title: data.title.trim(),
       name: data.title.trim(),
       description: data.description?.trim() || '',
-      clientId: data.clientId,
+      clientId: data.clientId || null,
       entity: Auth.activeEntity,
-      schedule: data.schedule,
+      schedule: data.schedule || null,
       priority: data.priority || 'Normal',
       assignedTo: data.assignedTo || null,
       pfAmount: 0,
@@ -12907,17 +12907,57 @@ const Workflow = {
       updatedAt: now
     };
 
-    if (this.templateEditingId) {
-      record.createdAt = this._getRetainerTemplateById(this.templateEditingId)?.createdAt || now;
-      this._updateRetainerTemplate(this.templateEditingId, record);
-    } else {
-      record.createdAt = now;
-      await this._addRetainerTemplate(record);
-    }
+    const isEdit = !!this.templateEditingId;
 
-    this.view = 'templates';
-    this.templateEditingId = null;
-    closeFormPanelAndRoute('#operations');
+    const runResult = await this.runBlockingArchiveAction({
+      title: isEdit ? 'Updating Template' : 'Creating Template',
+      message: isEdit
+        ? `Please wait while template "${record.title}" is being updated...`
+        : `Please wait while template "${record.title}" is being created...`,
+      apiCall: async () => {
+        if (isEdit) {
+          record.createdAt = this._getRetainerTemplateById(this.templateEditingId)?.createdAt || now;
+          const res = await window.apiClient.operations.updateTemplate(this.templateEditingId, record);
+          const updated = this._normalizeRetainerTemplate(res.data);
+          if (!updated.entity) updated.entity = record.entity;
+          
+          if (!this._retainerTemplates) this._retainerTemplates = [];
+          const idx = this._retainerTemplates.findIndex(t => t.id === this.templateEditingId);
+          if (idx >= 0) this._retainerTemplates[idx] = updated;
+          else this._retainerTemplates.push(updated);
+          
+          return { data: updated };
+        } else {
+          record.createdAt = now;
+          const res = await window.apiClient.operations.createTemplate(record);
+          const created = this._normalizeRetainerTemplate(res.data);
+          if (!created.entity) created.entity = record.entity;
+          
+          if (!this._retainerTemplates) this._retainerTemplates = [];
+          const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
+          if (idx >= 0) this._retainerTemplates[idx] = created;
+          else this._retainerTemplates.push(created);
+          
+          return { data: created };
+        }
+      },
+      successTitle: isEdit ? 'Template Updated' : 'Template Created',
+      successMessage: isEdit
+        ? 'Retainer template has been successfully updated.'
+        : 'Retainer template has been successfully created.',
+      errorTitle: isEdit ? 'Failed to Update Template' : 'Failed to Create Template'
+    });
+
+    if (runResult.success) {
+      this.view = 'templates';
+      this.templateEditingId = null;
+      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+      this._invalidateCountsAndSidebar();
+      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+      closeFormPanelAndRoute('#operations');
+    } else {
+      App.handleRoute();
+    }
   },
 
   async renderArchive() {
