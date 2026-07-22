@@ -5790,7 +5790,7 @@ const Workflow = {
     // so attachments survive refresh unlike the legacy taskDocuments array.
     let taskDocs = [];
     try {
-      const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id });
+      const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id, _t: Date.now() });
       taskDocs = docsRes?.data || [];
     } catch (e) {
       if (!isAbortError(e)) {
@@ -6303,7 +6303,10 @@ const Workflow = {
             wr,
             isArchived,
             showComments: true,
-            onDelete: () => this.showTaskSidePane(taskId, triggerElement)
+            onDelete: async () => {
+              this.showTaskSidePane(taskId, triggerElement);
+              await this.refreshTaskDocumentsList(taskId);
+            }
           }));
         });
       }
@@ -9628,7 +9631,7 @@ const Workflow = {
         }
         docsSection.appendChild(docsHeader);
 
-        const docsList = el('div', { class: 'details-content-list' });
+        const docsList = el('div', { class: 'details-content-list task-docs-list', 'data-task-id': t.id });
         docsList.appendChild(renderEmptyState('Loading documents...'));
         docsSection.appendChild(docsList);
         rightPane.appendChild(docsSection);
@@ -9642,7 +9645,17 @@ const Workflow = {
               docsList.appendChild(renderEmptyState('No documents attached'));
             } else {
               taskDocs.forEach((dmsDoc) => {
-                docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, { wr, isArchived, showComments: true }));
+                docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+                  wr,
+                  isArchived,
+                  showComments: true,
+                  onDelete: async () => {
+                    if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === t.id) {
+                      this.showTaskSidePane(t.id, null);
+                    }
+                    await this.refreshTaskDocumentsList(t.id);
+                  }
+                }));
               });
             }
           } catch (err) {
@@ -10041,7 +10054,7 @@ const Workflow = {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const res = await window.apiClient.documents.list({ linkedTaskId: taskId });
+        const res = await window.apiClient.documents.list({ linkedTaskId: taskId, _t: Date.now() });
         const docs = res?.data || [];
         if (docs.some(d => d.id === documentId)) {
           return docs.find(d => d.id === documentId);
@@ -10494,6 +10507,49 @@ const Workflow = {
     return wrapper;
   },
 
+  async refreshTaskDocumentsList(taskId) {
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) return;
+    const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
+    const isArchived = wr?.status === 'Cancelled';
+
+    const listContainers = document.querySelectorAll(`.task-docs-list[data-task-id="${taskId}"]`);
+    if (listContainers.length === 0) return;
+
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      container.appendChild(renderEmptyState('Loading documents...'));
+      try {
+        const docsRes = await window.apiClient.documents.list({ linkedTaskId: taskId, _t: Date.now() });
+        const taskDocs = docsRes?.data || [];
+        container.innerHTML = '';
+        if (taskDocs.length === 0) {
+          container.appendChild(renderEmptyState('No documents attached'));
+        } else {
+          taskDocs.forEach((dmsDoc) => {
+            container.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+              wr,
+              isArchived,
+              showComments: true,
+              onDelete: async () => {
+                if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                  this.showTaskSidePane(taskId, null);
+                }
+                await this.refreshTaskDocumentsList(taskId);
+              }
+            }));
+          });
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.error('Failed to load task documents in detail view update', err);
+          container.innerHTML = '';
+          container.appendChild(renderEmptyState('Failed to load documents'));
+        }
+      }
+    }
+  },
+
   async showAddDocumentModal(taskId, triggerEl) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
@@ -10595,7 +10651,10 @@ const Workflow = {
           try {
             await this.uploadTaskDocument(taskId, selectedFile, { category: 'OTHER' });
             popover.remove();
-            this.showTaskSidePane(taskId, null);
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
           } catch (err) {
             console.error('Failed to upload document', err);
             errorLabel.textContent = 'Upload Failed: ' + (err.message || 'Unknown error');
@@ -10630,7 +10689,10 @@ const Workflow = {
           try {
             await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
             popover.remove();
-            this.showTaskSidePane(taskId, null);
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
           } catch (err) {
             console.error('Failed to link document', err);
             this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10669,7 +10731,10 @@ const Workflow = {
           try {
             await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
             popover.remove();
-            this.showTaskSidePane(taskId, null);
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
           } catch (err) {
             console.error('Failed to link GDrive document', err);
             this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10710,7 +10775,10 @@ const Workflow = {
                 category: 'OTHER'
               });
               popover.remove();
-              this.showTaskSidePane(taskId, null);
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
               console.error('Failed to embed GDrive document', err);
               this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10854,7 +10922,10 @@ const Workflow = {
             try {
               await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
               popover.remove();
-              this.showTaskSidePane(taskId, null);
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
               console.error('Failed to upload document', err);
               this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10892,7 +10963,10 @@ const Workflow = {
             try {
               await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
               popover.remove();
-              this.showTaskSidePane(taskId, null);
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
               console.error('Failed to link document', err);
               this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10934,7 +11008,10 @@ const Workflow = {
             try {
               await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
               popover.remove();
-              this.showTaskSidePane(taskId, null);
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
               console.error('Failed to link GDrive document', err);
               this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10976,7 +11053,10 @@ const Workflow = {
                   category: 'OTHER'
                 });
                 popover.remove();
-                this.showTaskSidePane(taskId, null);
+                if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                  this.showTaskSidePane(taskId, null);
+                }
+                await this.refreshTaskDocumentsList(taskId);
               } catch (err) {
                 console.error('Failed to embed GDrive document', err);
                 this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -11106,7 +11186,10 @@ const Workflow = {
             category: 'OTHER'
           });
           overlay.remove();
-          this.showTaskSidePane(taskId, null);
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+            this.showTaskSidePane(taskId, null);
+          }
+          await this.refreshTaskDocumentsList(taskId);
         } catch (err) {
           console.error('Failed to embed GDrive document', err);
           this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -11156,7 +11239,10 @@ const Workflow = {
           category: 'OTHER'
         });
         overlay.remove();
-        this.showTaskSidePane(taskId, null);
+        if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+          this.showTaskSidePane(taskId, null);
+        }
+        await this.refreshTaskDocumentsList(taskId);
       } catch (err) {
         console.error('Failed to link Figma design', err);
         this.showMessage('Link Error', 'Failed to link Figma design: ' + (err.message || 'Unknown error'), 'danger');
