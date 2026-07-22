@@ -1852,74 +1852,101 @@ const Transmittal = {
     let savedTransmittal = null;
 
     if (isNew) {
-      // ============================================================
-      // Optimistic create: insert a local Draft record before the API.
-      // ============================================================
       const now = new Date().toISOString();
       const localId = this._tempId();
-      const optimisticItems = items.map((it, idx) => ({
-        id: this._tempId(),
-        transmittal_id: localId,
-        description: it.description,
-        document_type: it.documentType,
-        quantity: 1,
-        sort_order: idx
-      }));
-      const optimisticT = this.normalizeTransmittal({
-        id: localId,
-        work_request_id: data.workRequestId,
-        client_id: data.clientId,
-        tracking_number: payload.trackingNumber,
-        status: 'Draft',
-        notes: payload.notes,
-        items: optimisticItems,
-        created_at: now,
-        updated_at: now,
-        created_by: Auth.user?.id,
-        updated_by: Auth.user?.id,
-        entity_code: recordEntity,
-        archived: false
-      }, recordEntity);
-
-      if (this._items) {
-        this._items = [optimisticT, ...this._items];
-      } else {
-        this._items = [optimisticT];
-        this._entity = this._getActiveEntity();
-      }
-      this._updateCounts(1, 0);
-      const skipGen = this._startSkipFetchGeneration();
-
       const targetRoute = isResubmitting ? '#admin' : '#transmittal';
-      closeFormPanelAndRoute(targetRoute, {
-        title: 'Transmittal Created',
-        message: 'Transmittal has been created successfully.',
-        type: 'success'
+      let skipGen = 0;
+
+      const runResult = await Workflow.runBlockingArchiveAction({
+        title: 'Creating Transmittal',
+        message: 'Please wait while the transmittal is being saved...',
+        apiCall: async () => {
+          const optimisticItems = items.map((it, idx) => ({
+            id: this._tempId(),
+            transmittal_id: localId,
+            description: it.description,
+            document_type: it.documentType,
+            quantity: 1,
+            sort_order: idx
+          }));
+          const optimisticT = this.normalizeTransmittal({
+            id: localId,
+            work_request_id: data.workRequestId,
+            client_id: data.clientId,
+            tracking_number: payload.trackingNumber,
+            status: 'Draft',
+            notes: payload.notes,
+            items: optimisticItems,
+            created_at: now,
+            updated_at: now,
+            created_by: Auth.user?.id,
+            updated_by: Auth.user?.id,
+            entity_code: recordEntity,
+            archived: false
+          }, recordEntity);
+
+          if (this._items) {
+            this._items = [optimisticT, ...this._items];
+          } else {
+            this._items = [optimisticT];
+            this._entity = this._getActiveEntity();
+          }
+          this._updateCounts(1, 0);
+          skipGen = this._startSkipFetchGeneration();
+
+          try {
+            const res = await window.apiClient.transmittals.create(payload);
+            savedTransmittal = this.normalizeTransmittal(res?.data);
+            if (savedTransmittal) {
+              this._replaceInCache(localId, savedTransmittal);
+            }
+            if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+              Dashboard.invalidateCache();
+            }
+            if (savedTransmittal?.workRequestId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+              WorkflowData.invalidateRelatedForWorkRequest(savedTransmittal.workRequestId);
+            }
+
+            // Fulfill pending operations request if any.
+            try {
+              const reqId = this.prefilledRequestId || (payload.workRequestId
+                ? (await window.apiClient.operationsRequests.list({ workRequestId: payload.workRequestId, type: 'transmittal', status: 'pending' })).data?.[0]?.id
+                : null);
+              if (reqId) {
+                await window.apiClient.operationsRequests.update(reqId, {
+                  status: 'fulfilled',
+                  fulfilledBy: Auth.user?.id,
+                  fulfilledAt: new Date().toISOString()
+                });
+              }
+            } catch (e) {
+              console.error('Failed to fulfill transmittal request', e);
+            }
+            this.prefilledRequestId = null;
+            this.prefilledWrId = null;
+            this.prefilledClientId = null;
+
+            this._clearActiveSkipGeneration(skipGen);
+            return { data: savedTransmittal };
+          } catch (e) {
+            console.error('Failed to create transmittal', e);
+            this._removeFromCache(localId);
+            this._updateCounts(-1, 0);
+            this._clearActiveSkipGeneration(skipGen);
+            throw e;
+          }
+        },
+        successTitle: 'Transmittal Created',
+        successMessage: 'Transmittal has been created successfully.',
+        errorTitle: 'Failed to Create Transmittal'
       });
 
-      try {
-        const res = await window.apiClient.transmittals.create(payload);
-        savedTransmittal = this.normalizeTransmittal(res?.data);
-        if (savedTransmittal) {
-          this._replaceInCache(localId, savedTransmittal);
-        }
-        if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
-          Dashboard.invalidateCache();
-        }
-        if (savedTransmittal?.workRequestId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
-          WorkflowData.invalidateRelatedForWorkRequest(savedTransmittal.workRequestId);
-        }
-      } catch (e) {
-        console.error('Failed to create transmittal', e);
-        this._removeFromCache(localId);
-        this._updateCounts(-1, 0);
-        this._clearActiveSkipGeneration(skipGen);
+      if (runResult.success) {
+        await closeFormPanelAndRoute(targetRoute);
+      } else {
         App.handleRoute();
-        Workflow.showMessage('Error', e.message || 'Unable to create transmittal.', 'error');
-        return;
       }
-      this._clearActiveSkipGeneration(skipGen);
-      App.handleRoute();
+      return;
     } else {
       try {
         const res = await window.apiClient.transmittals.update(this.detailId, payload);
