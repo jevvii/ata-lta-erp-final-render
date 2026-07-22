@@ -467,7 +467,7 @@ const Disbursement = {
   },
 
   _activeBadgeFilter(d) {
-    return !d.archived && d.status !== 'Cancelled';
+    return !d.archived && d.status !== 'Cancelled' && ['Released', 'Funded', 'Rejected'].includes(d.status);
   },
 
   _archiveBadgeFilter(d) {
@@ -1071,8 +1071,6 @@ const Disbursement = {
 
     const tabs = [
       { key: 'list', label: 'Disbursements', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: dbCount },
-      { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
-      { key: 'report', label: 'Summary Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
       { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
     ];
 
@@ -1194,7 +1192,7 @@ const Disbursement = {
       'Under Review': 'badge-warning',
       'Pending': 'badge-warning',
       'Approved': 'badge-info',
-      'Released': 'badge-success',
+      'Released': 'badge-info',
       'Funded': 'badge-success',
       'Rejected': 'badge-danger',
       'Cancelled': 'badge-danger'
@@ -1334,9 +1332,6 @@ const Disbursement = {
     ];
 
     const getStatusOptions = () => [
-      { value: 'Draft', label: 'Draft' },
-      { value: 'Pending', label: 'Pending' },
-      { value: 'Approved', label: 'Approved' },
       { value: 'Released', label: 'Released' },
       { value: 'Funded', label: 'Funded' },
       { value: 'Rejected', label: 'Rejected' }
@@ -1609,34 +1604,8 @@ const Disbursement = {
    * - Others: Released | Funded | Rejected
    */
   getBoardColumns() {
-    const departments = Auth.user?.departments || [];
-    const role = Auth.user?.role;
-    const isAdmin = role === 'Admin';
-    const isAccounting = departments.includes('Accounting');
-    const isOperations = departments.includes('Operations');
-
-    if (isAdmin || isAccounting) {
-      return [
-        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
-        { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
-        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
-        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
-        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
-      ];
-    }
-
-    if (isOperations) {
-      return [
-        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
-        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
-        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
-      ];
-    }
-
     return [
-      { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
-      { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
-      { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
+      { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
       { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
       { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
     ];
@@ -1674,7 +1643,7 @@ const Disbursement = {
       'Under Review': '#f59e0b',
       'Pending': '#f59e0b',
       'Approved': '#3b82f6',
-      'Released': '#10b981',
+      'Released': '#3b82f6',
       'Funded': '#059669',
       'Rejected': '#ef4444'
     };
@@ -4251,25 +4220,7 @@ const Disbursement = {
             label: 'View',
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
-          },
-          ...(category === 'accomplished' ? [{
-            label: 'Unarchive',
-            icon: ArchivePage.icons.unarchive,
-            className: 'primary',
-            onClick: () => self.unarchiveDisbursement(d.id)
-          }] : []),
-          ...(category === 'cancelled' ? [{
-            label: 'Restore to Draft',
-            icon: ArchivePage.icons.restore,
-            className: 'primary',
-            onClick: () => self.unarchiveDisbursement(d.id)
-          }] : []),
-          ...(isManagerial || Auth.can('disbursement:delete') ? [{
-            label: 'Delete Permanently',
-            icon: ArchivePage.icons.delete,
-            className: 'danger',
-            onClick: () => self.permanentDeleteDisbursement(d.id)
-          }] : [])
+          }
         ]
       };
     };

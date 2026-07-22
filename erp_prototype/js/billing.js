@@ -59,9 +59,11 @@ const Billing = {
 
   _isActiveInvoice(inv, entity) {
     const e = inv?.entity || inv?.entityCode || inv?.entity_code;
+    const allowedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue'];
     return this._entityMatches(e, entity) &&
       inv?.status !== 'Cancelled' &&
-      !inv?.archived;
+      !inv?.archived &&
+      allowedStatuses.includes(inv?.status);
   },
 
   _isArchiveInvoice(inv, entity) {
@@ -1242,14 +1244,11 @@ const Billing = {
     };
 
     const getStatusOptions = () => [
-      { value: 'Draft', label: 'Draft' },
-      { value: 'Pending', label: 'Pending' },
       { value: 'Approved', label: 'Approved' },
       { value: 'Sent', label: 'Sent' },
       { value: 'Partially Paid', label: 'Partially Paid' },
       { value: 'Paid', label: 'Paid' },
-      { value: 'Overdue', label: 'Overdue' },
-      { value: 'Cancelled', label: 'Cancelled' }
+      { value: 'Overdue', label: 'Overdue' }
     ];
 
     const getDueDateOptions = () => [
@@ -1324,8 +1323,9 @@ const Billing = {
         }
       }
 
+      const allowedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue'];
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
-      let invoices = [...baseInvoices, ...pendingInvs];
+      let invoices = [...baseInvoices, ...pendingInvs].filter(inv => allowedStatuses.includes(inv.status));
 
       if (activeFilters.workRequest.size > 0) {
         invoices = invoices.filter(inv => activeFilters.workRequest.has(inv.workRequestId));
