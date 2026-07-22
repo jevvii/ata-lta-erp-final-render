@@ -723,8 +723,8 @@ const Billing = {
         ]
       }));
     } else {
-      const isOperations = Auth.user?.departments?.includes('Operations');
-      if (isOperations && ['templates', 'aging', 'templateForm'].includes(this.view)) {
+      const isLimitedView = Auth.user?.departments?.includes('Operations') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
+      if (isLimitedView && ['templates', 'aging', 'templateForm'].includes(this.view)) {
         this.view = 'list';
         location.hash = '#billing';
       }
@@ -784,11 +784,11 @@ const Billing = {
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
-    const isOperations = Auth.user?.departments?.includes('Operations');
+    const isLimitedView = Auth.user?.departments?.includes('Operations') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
     const tabs = [
       { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount }
     ];
-    if (!isOperations) {
+    if (!isLimitedView) {
       tabs.push(
         { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
         { key: 'aging', label: 'Aging Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' }
@@ -1792,6 +1792,7 @@ const Billing = {
           return isReleased && paid > 0 && paid < item.total;
         }
         if (targetStatus === 'Paid') {
+          if (Auth.isManagerial()) return true;
           return isReleased && item.total > 0 && paid >= item.total;
         }
         return true;
@@ -1808,7 +1809,7 @@ const Billing = {
         const paid = self.getPaidAmount(item);
         const isReleased = ['Sent', 'Approved', 'Partially Paid', 'Overdue'].includes(item.status);
 
-        if (!isReleased) {
+        if (!isReleased && !Auth.isManagerial()) {
           Workflow.showMessage('Invoice Not Released', `Invoice "${item.invoiceNumber}" is in ${item.status} status and has not been released yet. Payments can only be recorded after an invoice is approved and released to the client.`, 'warning');
           return;
         }
@@ -1819,7 +1820,7 @@ const Billing = {
           } else if (paid >= item.total) {
             Workflow.showMessage('Already Fully Paid', `Invoice "${item.invoiceNumber}" has payments totaling ${formatPHP(paid)}. Use the Paid status instead.`, 'warning');
           }
-        } else if (targetStatus === 'Paid') {
+        } else if (targetStatus === 'Paid' && !Auth.isManagerial()) {
           if (item.total <= 0) {
             Workflow.showMessage('Invalid Invoice', `Invoice "${item.invoiceNumber}" has no billable amount and cannot be marked Paid.`, 'warning');
           } else if (paid <= 0) {
@@ -1869,6 +1870,43 @@ const Billing = {
         // Permission gate: only billing:approve can move to Approved
         if (targetStatus === 'Approved' && !Auth.can('billing:approve')) {
           Workflow.showMessage('Permission Denied', 'Only users with approval rights can approve invoices.', 'danger');
+          return;
+        }
+
+        // Handle Manager routing to Paid phase requiring Admin approval
+        if (targetStatus === 'Paid' && Auth.user?.role !== 'Admin' && Auth.isManagerial()) {
+          Workflow.showConfirm('Request Paid Phase Routing', `Submit request to route invoice "${item.invoiceNumber}" (${formatPHP(item.total)}) to Paid phase for Admin approval?`, () => {
+            Workflow.runBlockingArchiveAction({
+              title: 'Submitting Paid Routing Request',
+              message: `Please wait while routing request for "${item.invoiceNumber}" is being submitted...`,
+              apiCall: async () => {
+                const record = {
+                  type: 'billing',
+                  workRequestId: item.workRequestId || null,
+                  clientId: item.clientId || null,
+                  linkedTaskId: item.linkedTaskId || null,
+                  amount: item.total || 0,
+                  notes: `Request to route Invoice ${item.invoiceNumber} to Paid phase (Invoice ID: ${item.id})`,
+                  invoiceId: item.id,
+                  invoiceNumber: item.invoiceNumber,
+                  requestedRouting: 'Paid'
+                };
+                return await window.apiClient.operationsRequests.create(record);
+              },
+              successTitle: 'Routing Request Submitted',
+              successMessage: `Routing request for invoice "${item.invoiceNumber}" to Paid phase has been submitted for Admin approval. It is centralized in My Submissions -> My Requests.`,
+              errorTitle: 'Request Failed',
+              onAfterConfirm: async () => {
+                if (typeof Users !== 'undefined' && typeof Users.invalidateMyRequestsCount === 'function') {
+                  Users.invalidateMyRequestsCount();
+                }
+                if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+                  window.apiClient.operationsRequests.invalidateCounts();
+                }
+                App.handleRoute();
+              }
+            });
+          }, 'success');
           return;
         }
 
@@ -3183,6 +3221,46 @@ const Billing = {
       archiveBtn.addEventListener('click', () => this.archiveInvoice(inv.id));
       actions.appendChild(archiveBtn);
     }
+
+    if (Auth.isManagerial() && Auth.user?.role !== 'Admin' && inv.status !== 'Paid' && !inv.pendingChangeId) {
+      const routePaidBtn = el('button', { class: 'btn btn-success', text: 'Route to Paid Phase (Request Approval)', style: 'margin-right:8px;' });
+      routePaidBtn.addEventListener('click', () => {
+        Workflow.showConfirm('Request Paid Phase Routing', `Submit request to route invoice "${inv.invoiceNumber}" (${formatPHP(inv.total)}) to Paid phase for Admin approval?`, () => {
+          Workflow.runBlockingArchiveAction({
+            title: 'Submitting Paid Routing Request',
+            message: `Please wait while routing request for "${inv.invoiceNumber}" is being submitted...`,
+            apiCall: async () => {
+              const record = {
+                type: 'billing',
+                workRequestId: inv.workRequestId || null,
+                clientId: inv.clientId || null,
+                linkedTaskId: inv.linkedTaskId || null,
+                amount: inv.total || 0,
+                notes: `Request to route Invoice ${inv.invoiceNumber} to Paid phase (Invoice ID: ${inv.id})`,
+                invoiceId: inv.id,
+                invoiceNumber: inv.invoiceNumber,
+                requestedRouting: 'Paid'
+              };
+              return await window.apiClient.operationsRequests.create(record);
+            },
+            successTitle: 'Routing Request Submitted',
+            successMessage: `Routing request for invoice "${inv.invoiceNumber}" to Paid phase has been submitted for Admin approval. It is centralized in My Submissions -> My Requests.`,
+            errorTitle: 'Request Failed',
+            onAfterConfirm: async () => {
+              if (typeof Users !== 'undefined' && typeof Users.invalidateMyRequestsCount === 'function') {
+                Users.invalidateMyRequestsCount();
+              }
+              if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+                window.apiClient.operationsRequests.invalidateCounts();
+              }
+              App.handleRoute();
+            }
+          });
+        }, 'success');
+      });
+      actions.appendChild(routePaidBtn);
+    }
+
     container.appendChild(actions);
 
     return container;
