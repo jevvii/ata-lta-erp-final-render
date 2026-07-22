@@ -2522,6 +2522,10 @@ const Disbursement = {
   },
 
   async showRequestDisbursementModal() {
+    if (window.apiClient) {
+      if (window.apiClient.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+      if (window.apiClient.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+    }
     await Promise.all([
       window.apiClient.clientCache.ensure(),
       window.apiClient.workRequestCache.ensure()
