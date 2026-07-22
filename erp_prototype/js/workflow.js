@@ -9173,8 +9173,8 @@ const Workflow = {
           this.showAddTimeLogModal(t.id);
         });
 
-        // More Actions button and its native select overlay
-        const actionMenu = el('div', { class: 'action-menu', style: 'position: relative; display: inline-block;' });
+        // More Actions button and its custom dropdown
+        const actionMenu = el('div', { class: 'action-menu' });
 
         const moreActionsBtn = el('button', {
           class: 'action-icon action-menu-toggle',
@@ -9182,77 +9182,164 @@ const Workflow = {
           html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>`
         });
 
-        const selectEl = el('select', {
-          class: 'action-menu-select',
-          style: 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 2;'
-        });
+        moreActionsBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
 
-        // Add empty placeholder option
-        const placeholderOpt = el('option', { value: '', text: '', disabled: true, selected: true, hidden: true });
-        selectEl.appendChild(placeholderOpt);
-
-        const actionMap = {};
-
-        // Log Time
-        const optLogTime = el('option', { value: 'log-time', text: 'Log Time' });
-        selectEl.appendChild(optLogTime);
-        actionMap['log-time'] = () => this.showAddTimeLogModal(t.id);
-
-        // Request Log
-        if (t.assigneeName && !t.assigneeId) {
-          const optReqLog = el('option', { value: 'request-log', text: 'Request Log' });
-          selectEl.appendChild(optReqLog);
-          actionMap['request-log'] = () => {
-            const text = `Subject: Time Log Request: ${t.title}\n\nHi ${t.assigneeName},\n\nPlease reply with your time log for today for the task: ${t.title} (Work Request: ${wr.title}).\n\nPlease include:\n- Start Time:\n- End Time:\n- Brief description of what you accomplished:\n\nThank you!`;
-            navigator.clipboard.writeText(text).then(() => {
-              this.showMessage('Copied', `Time log request copied for ${t.assigneeName}.`, 'success');
-            }).catch(() => {
-              this.showMessage('Error', 'Could not copy to clipboard.', 'danger');
-            });
-          };
-        }
-
-        // Link Record
-        const optLinkRecord = el('option', { value: 'link-record', text: 'Link Record' });
-        selectEl.appendChild(optLinkRecord);
-        actionMap['link-record'] = () => this.showLinkFinancialModal(t.id);
-
-        // Edit Task
-        const optEditTask = el('option', { value: 'edit-task', text: 'Edit Task' });
-        selectEl.appendChild(optEditTask);
-        actionMap['edit-task'] = () => this.showEditTaskModal(t.id, () => App.handleRoute());
-
-        // Financial Actions
-        finActions.forEach((act, index) => {
-          const valueKey = `fin-action-${index}`;
-          const opt = el('option', { value: valueKey, text: act.title });
-          selectEl.appendChild(opt);
-          actionMap[valueKey] = act.handler;
-        });
-
-        // Delete Task
-        const optDelete = el('option', { value: 'delete', text: 'Delete' });
-        selectEl.appendChild(optDelete);
-        actionMap['delete'] = () => {
-          this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', async () => {
-            const myGen = Workflow._startSkipGeneration();
-            App.handleRoute();
-            await WorkflowData.deleteTask(t.id);
-            Workflow._clearSkipGenerationIfLatest(myGen);
-            App.handleRoute();
-          }, 'danger');
-        };
-
-        selectEl.addEventListener('change', () => {
-          const val = selectEl.value;
-          if (val && actionMap[val]) {
-            actionMap[val]();
+          // Remove any existing active menus
+          const existing = document.querySelector('.workflow-action-menu-wrapper');
+          if (existing) {
+            existing.remove();
           }
-          selectEl.value = '';
+
+          // Create outer wrapper to inherit scoped CSS theme variables and selectors
+          const wrapper = el('div', { 
+            class: 'project-detail-v2 task-list workflow-action-menu-wrapper',
+            style: 'position: absolute; z-index: 1050; border: none !important; background: transparent !important; box-shadow: none !important; padding: 0 !important; width: auto !important; height: auto !important;'
+          });
+
+          // Create the menuList
+          const menuList = el('div', { 
+            class: 'action-menu-list workflow-action-menu-list',
+            style: 'position: relative; top: auto; right: auto; bottom: auto; left: auto; margin: 0; pointer-events: auto;'
+          });
+          wrapper.appendChild(menuList);
+
+          // Helper to close menu
+          const closeMenu = () => {
+            menuList.classList.remove('open');
+            setTimeout(() => wrapper.remove(), 150);
+            document.removeEventListener('mousedown', onMouseDownOutside);
+            window.removeEventListener('scroll', closeMenu, true);
+          };
+
+          const onMouseDownOutside = (evt) => {
+            if (!menuList.contains(evt.target) && !moreActionsBtn.contains(evt.target)) {
+              closeMenu();
+            }
+          };
+
+          // Append items to menuList
+          // 1. Log Time item
+          const logTimeMenuItem = el('button', {
+            class: 'action-menu-item',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Log Time`
+          });
+          logTimeMenuItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showAddTimeLogModal(t.id);
+          });
+          menuList.appendChild(logTimeMenuItem);
+
+          // 2. Request Log item
+          if (t.assigneeName && !t.assigneeId) {
+            const reqLogItem = el('button', {
+              class: 'action-menu-item',
+              html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Request Log`
+            });
+            reqLogItem.addEventListener('click', (evt) => {
+              evt.stopPropagation();
+              closeMenu();
+              const text = `Subject: Time Log Request: ${t.title}\n\nHi ${t.assigneeName},\n\nPlease reply with your time log for today for the task: ${t.title} (Work Request: ${wr.title}).\n\nPlease include:\n- Start Time:\n- End Time:\n- Brief description of what you accomplished:\n\nThank you!`;
+              navigator.clipboard.writeText(text).then(() => {
+                this.showMessage('Copied', `Time log request copied for ${t.assigneeName}.`, 'success');
+              }).catch(() => {
+                this.showMessage('Error', 'Could not copy to clipboard.', 'danger');
+              });
+            });
+            menuList.appendChild(reqLogItem);
+          }
+
+          // 3. Link Record item
+          const linkRecordItem = el('button', {
+            class: 'action-menu-item',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Link Record`
+          });
+          linkRecordItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showLinkFinancialModal(t.id);
+          });
+          menuList.appendChild(linkRecordItem);
+
+          // 4. Edit Task item
+          const editTaskItem = el('button', {
+            class: 'action-menu-item',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Task`
+          });
+          editTaskItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showEditTaskModal(t.id, () => App.handleRoute());
+          });
+          menuList.appendChild(editTaskItem);
+
+          // 5. Financial Actions
+          finActions.forEach(act => {
+            const item = el('button', {
+              class: 'action-menu-item',
+              html: `${act.menuIconHtml} ${act.title}`
+            });
+            item.addEventListener('click', (evt) => {
+              evt.stopPropagation();
+              closeMenu();
+              act.handler();
+            });
+            menuList.appendChild(item);
+          });
+
+          // 6. Delete Task
+          const deleteItem = el('button', {
+            class: 'action-menu-item danger',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete`
+          });
+          deleteItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', async () => {
+              const myGen = Workflow._startSkipGeneration();
+              App.handleRoute();
+              await WorkflowData.deleteTask(t.id);
+              Workflow._clearSkipGenerationIfLatest(myGen);
+              App.handleRoute();
+            }, 'danger');
+          });
+          menuList.appendChild(deleteItem);
+
+          // Append temporarily to measure height
+          wrapper.style.visibility = 'hidden';
+          wrapper.style.display = 'block';
+          document.body.appendChild(wrapper);
+
+          const menuHeight = menuList.offsetHeight;
+          const triggerRect = moreActionsBtn.getBoundingClientRect();
+          const popoverWidth = Math.max(160, menuList.offsetWidth);
+          
+          let left = triggerRect.right + window.scrollX - popoverWidth;
+          let top = triggerRect.bottom + window.scrollY + 4;
+          
+          const spaceBelow = window.innerHeight - triggerRect.bottom;
+          if (spaceBelow < menuHeight + 20) {
+            top = triggerRect.top + window.scrollY - menuHeight - 4;
+            menuList.classList.add('open-up');
+          } else {
+            menuList.classList.remove('open-up');
+          }
+
+          wrapper.style.left = `${left}px`;
+          wrapper.style.top = `${top}px`;
+          wrapper.style.visibility = 'visible';
+
+          // Show transitions
+          setTimeout(() => {
+            menuList.classList.add('open');
+          }, 10);
+
+          document.addEventListener('mousedown', onMouseDownOutside);
+          window.addEventListener('scroll', closeMenu, true);
         });
 
         actionMenu.appendChild(moreActionsBtn);
-        actionMenu.appendChild(selectEl);
 
         cellActions.appendChild(logTimeBtn);
         cellActions.appendChild(actionMenu);
