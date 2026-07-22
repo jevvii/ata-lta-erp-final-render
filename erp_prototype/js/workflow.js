@@ -239,7 +239,7 @@ const WorkflowData = {
   },
 
   async ensure() {
-    if (this.hasData()) return;
+    if (this.hasData() && !this._needsFreshFetch) return;
     const activeEntity = this._getActiveEntity();
     // If a load is already in flight for the current entity, share it.
     if (this._loadingPromise && this._loadingEntity === activeEntity) return this._loadingPromise;
@@ -7601,16 +7601,25 @@ const Workflow = {
       apiCall: async () => {
         submitResult = await PendingChanges.submit('workRequests', record, isNew);
         if (submitResult.approved) {
-          await WorkflowData.updateWorkRequest(wrId, record);
-          const existing = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
-          for (const t of existing) await WorkflowData.deleteTask(t.id);
-          for (const t of taskRecords) {
-            t.workRequestId = wrId;
-            await WorkflowData.createTask(t);
+          if (submitResult.record && submitResult.record.wr) {
+            const createdWr = submitResult.record.wr;
+            const createdTasks = submitResult.record.tasks || [];
+            await WorkflowData._adoptServerWorkRequest(wrId, createdWr, createdTasks);
+            const updated = WorkflowData.getWorkRequestById(wrId);
+            this._syncWorkRequestToCaches({ ...updated, tasks: createdTasks });
+            return { data: updated };
+          } else {
+            await WorkflowData.updateWorkRequest(wrId, record);
+            const existing = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
+            for (const t of existing) await WorkflowData.deleteTask(t.id);
+            for (const t of taskRecords) {
+              t.workRequestId = wrId;
+              await WorkflowData.createTask(t);
+            }
+            const updated = WorkflowData.getWorkRequestById(wrId);
+            this._syncWorkRequestToCaches(updated);
+            return { data: updated };
           }
-          const updated = WorkflowData.getWorkRequestById(wrId);
-          this._syncWorkRequestToCaches(updated);
-          return { data: updated };
         } else {
           return { data: submitResult };
         }
@@ -8519,6 +8528,12 @@ const Workflow = {
             successMessage: () => `Successfully logged time for ${saved} task(s). ${skipped} task(s) were skipped because they were already logged.`,
             errorTitle: 'Failed to Bulk Log Time'
           }).then(() => {
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+              const activeTaskId = window.SidePaneInstance.recordId;
+              if (selected.some(t => t.id === activeTaskId)) {
+                this.showTaskSidePane(activeTaskId, null);
+              }
+            }
             App.handleRoute();
           });
         });
@@ -11535,6 +11550,9 @@ const Workflow = {
         successMessage: 'Your time log has been successfully saved.',
         errorTitle: 'Failed to Log Time'
       }).then(() => {
+        if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+          this.showTaskSidePane(taskId, null);
+        }
         App.handleRoute();
       });
     });
