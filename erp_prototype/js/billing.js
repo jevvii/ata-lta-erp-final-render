@@ -1537,11 +1537,12 @@ const Billing = {
       { key: 'actions', label: 'Actions', render: (inv) => buildActions(inv), class: 'dt-actions-col', width: '180px' }
     ];
 
+    const isOperations = Auth.user?.departments?.includes('Operations');
     const tableView = DataTable.render({
       items: invoices,
       columns,
-      selectable: true,
-      bulkActions: (ids) => {
+      selectable: !isOperations,
+      bulkActions: isOperations ? null : (ids) => {
         const rows = ids.map(id => invoices.find(inv => inv.id === id)).filter(Boolean);
         const canArchive = rows.filter(inv => inv.status === 'Paid' && !inv.archived).length;
         const canTrash = rows.filter(inv => inv.status === 'Draft' && Auth.can('billing:edit')).length;
