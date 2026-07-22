@@ -534,11 +534,11 @@
     },
 
     invoices: {
-      list: (query = {}) => {
+      list: (query = {}, options = {}) => {
         const qs = new URLSearchParams();
         Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
         const q = qs.toString();
-        return get(`/invoices${q ? '?' + q : ''}`);
+        return get(`/invoices${q ? '?' + q : ''}`, options);
       },
       aging: () => get('/invoices/aging'),
       counts: (entityId) => cachedCount(

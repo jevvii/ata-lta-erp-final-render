@@ -235,7 +235,7 @@ async function nextInvoiceNumber(entity) {
   const prefix = entity + '-SI-' + year + '-';
   try {
     const api = (typeof window !== 'undefined' && window.apiClient) || null;
-    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }) : null;
+    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }, { headers: { 'X-Active-Entity': entity } }) : null;
     const list = res?.data || [];
     const maxNum = list.reduce((max, inv) => {
       const numStr = inv.invoice_number || inv.invoiceNumber || '';

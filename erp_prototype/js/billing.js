@@ -2348,7 +2348,7 @@ const Billing = {
       const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
       const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
 
-      const runResult = await Workflow.runBlockingArchiveAction({
+      await Workflow.runBlockingArchiveAction({
         title: 'Creating Invoice',
         message: `Please wait while Invoice "${record.invoiceNumber || ''}" is being saved...`,
         apiCall: async () => {
@@ -2395,100 +2395,121 @@ const Billing = {
         },
         successTitle: 'Invoice Created',
         successMessage: 'Invoice ' + (record.invoiceNumber || '') + ' has been created successfully.' + linkMsg,
-        errorTitle: 'Failed to Create Invoice'
-      });
-
-      if (runResult.success) {
-        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) {
-          Dashboard.invalidateCache();
-        }
-        await closeFormPanelAndRoute(targetRoute);
-      } else {
-        App.handleRoute();
-      }
-      return;
-    } else {
-      try {
-        if (record.status === 'Draft' || !requiresApproval) {
+        errorTitle: 'Failed to Create Invoice',
+        onSuccess: async (res) => {
+          if (serverRecord) {
+            this._detailCache[serverRecord.id] = serverRecord;
+            this._detailCacheEntity = activeEntity;
+            this._addToListCache(serverRecord);
+            this._invalidateRelatedCaches(serverRecord);
+          }
+          // Fulfill pending operations request if any
           try {
-            await this._optimisticUpdate(
-              record.id,
-              record,
-              () => window.apiClient.invoices.update(record.id, apiPayload),
-              'Failed to save invoice'
-            );
-            serverRecord = this.getInvoiceById(record.id);
+            let reqId = this.prefilledRequestId || null;
+            if (!reqId && data.workRequestId) {
+              const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'billing', workRequestId: data.workRequestId, limit: 1 });
+              reqId = (opReqRes.data || [])[0]?.id || null;
+            }
+            if (reqId) {
+              await window.apiClient.operationsRequests.update(reqId, {
+                status: 'fulfilled',
+                fulfilledBy: Auth.user.id,
+                fulfilledAt: new Date().toISOString(),
+                linkedRecordId: serverRecord ? serverRecord.id : null
+              });
+            }
           } catch (e) {
-            // Rollback, skip-generation clear, toast, and re-render are handled in _optimisticUpdate.
-            return;
+            console.error('Failed to fulfill billing operations request', e);
           }
-        } else {
-          result = await PendingChanges.submit('invoices', record, false);
-          if (result.approved) {
-            const res = await window.apiClient.invoices.update(record.id, apiPayload);
-            record.updatedAt = res.data.updated_at || res.data.updatedAt;
-            record.status = res.data.status;
-            serverRecord = record;
-            if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
-              window.apiClient.invoices.invalidateCounts();
-            }
-            if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-              App.updateSidebarNotifications().catch(() => {});
-            }
-            App.handleRoute();
+          this.prefilledRequestId = null;
+          this.prefilledWrId = null;
+          this.prefilledClientId = null;
+        },
+        onAfterConfirm: async () => {
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) {
+            Dashboard.invalidateCache();
           }
+          this._endSkipGeneration(skipGeneration);
+          await closeFormPanelAndRoute(targetRoute);
         }
-      } catch (e) {
-        console.error('Failed to save invoice', e);
-        Workflow.showMessage('Save Failed', e.message || 'Unable to save invoice.', 'error');
-        return;
-      }
-
-      if (serverRecord) {
-        this._detailCache[serverRecord.id] = serverRecord;
-        this._detailCacheEntity = activeEntity;
-        this._addToListCache(serverRecord);
-      }
-    }
-
-    // Fulfill pending operations request if any
-    try {
-      let reqId = this.prefilledRequestId || null;
-      if (!reqId && data.workRequestId) {
-        const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'billing', workRequestId: data.workRequestId, limit: 1 });
-        reqId = (opReqRes.data || [])[0]?.id || null;
-      }
-      if (reqId) {
-        await window.apiClient.operationsRequests.update(reqId, {
-          status: 'fulfilled',
-          fulfilledBy: Auth.user.id,
-          fulfilledAt: new Date().toISOString(),
-          linkedRecordId: serverRecord ? serverRecord.id : null
-        });
-      }
-    } catch (e) {
-      console.error('Failed to fulfill billing operations request', e);
-    }
-    this.prefilledRequestId = null;
-    this.prefilledWrId = null;
-    this.prefilledClientId = null;
-
-    if (isNew) {
-      this._invalidateRelatedCaches(serverRecord);
-      this._endSkipGeneration(skipGeneration);
-      App.handleRoute();
+      });
     } else {
-      const isApproved = result ? result.approved : true;
       const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
       const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
-      const msgConfig = {
-        title: 'Invoice ' + (isNew ? 'Created' : 'Updated'),
-        message: isApproved
-          ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been ' + (isNew ? 'created' : 'updated') + ' successfully.' + linkMsg
-          : 'Invoice ' + record.invoiceNumber + ' ' + (isNew ? 'creation' : 'update') + ' request has been submitted for Admin approval.',
-        type: 'success'
-      };
-      closeFormPanelAndRoute(targetRoute, msgConfig);
+
+      await Workflow.runBlockingArchiveAction({
+        title: 'Saving Invoice',
+        message: `Please wait while Invoice "${record.invoiceNumber || ''}" is being saved...`,
+        apiCall: async () => {
+          if (record.status === 'Draft' || !requiresApproval) {
+            const res = await window.apiClient.invoices.update(record.id, apiPayload);
+            serverRecord = this.normalizeInvoice(res.data);
+            return { data: serverRecord };
+          } else {
+            result = await PendingChanges.submit('invoices', record, false);
+            if (result.approved) {
+              const res = await window.apiClient.invoices.update(record.id, apiPayload);
+              serverRecord = this.normalizeInvoice(res.data);
+              return { data: serverRecord };
+            } else {
+              return { data: result };
+            }
+          }
+        },
+        successTitle: 'Invoice Saved',
+        successMessage: () => {
+          const isApproved = result ? result.approved : true;
+          return isApproved
+            ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been updated successfully.' + linkMsg
+            : 'Invoice ' + record.invoiceNumber + ' update request has been submitted for Admin approval.';
+        },
+        errorTitle: 'Failed to Save Invoice',
+        onSuccess: async (res) => {
+          if (serverRecord) {
+            this._detailCache[serverRecord.id] = serverRecord;
+            this._detailCacheEntity = activeEntity;
+            this._addToListCache(serverRecord);
+          }
+          if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+            window.apiClient.invoices.invalidateCounts();
+          }
+          if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+            App.updateSidebarNotifications().catch(() => {});
+          }
+          // Fulfill pending operations request if any
+          try {
+            let reqId = this.prefilledRequestId || null;
+            if (!reqId && data.workRequestId) {
+              const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'billing', workRequestId: data.workRequestId, limit: 1 });
+              reqId = (opReqRes.data || [])[0]?.id || null;
+            }
+            if (reqId) {
+              await window.apiClient.operationsRequests.update(reqId, {
+                status: 'fulfilled',
+                fulfilledBy: Auth.user.id,
+                fulfilledAt: new Date().toISOString(),
+                linkedRecordId: serverRecord ? serverRecord.id : null
+              });
+            }
+          } catch (e) {
+            console.error('Failed to fulfill billing operations request', e);
+          }
+          this.prefilledRequestId = null;
+          this.prefilledWrId = null;
+          this.prefilledClientId = null;
+        },
+        onAfterConfirm: async () => {
+          const isApproved = result ? result.approved : true;
+          const msgConfig = {
+            title: 'Invoice Updated',
+            message: isApproved
+              ? 'Invoice ' + (serverRecord?.invoiceNumber || record.invoiceNumber) + ' has been updated successfully.' + linkMsg
+              : 'Invoice ' + record.invoiceNumber + ' update request has been submitted for Admin approval.',
+            type: 'success'
+          };
+          await closeFormPanelAndRoute(targetRoute, msgConfig);
+        }
+      });
     }
   },
 
