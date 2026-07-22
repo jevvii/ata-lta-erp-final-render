@@ -5889,6 +5889,33 @@ const Workflow = {
       }
     }
 
+    // Load task details from the backend so time logs survive refresh and page switch.
+    if (task.id && !WorkflowData._isTempId(task.id) && task.workRequestId) {
+      try {
+        const res = await window.apiClient.workRequests.getTask(task.workRequestId, task.id);
+        const serverTask = res?.data;
+        if (serverTask) {
+          const normalized = WorkflowData.normalizeTask(serverTask);
+          const existing = WorkflowData.getTaskById(task.id);
+          if (existing) {
+            const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+            normalized.checklist = (normalized.checklist || []).map(c => {
+              const ec = existingClById.get(c.id);
+              return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+            });
+            Object.assign(existing, normalized);
+            task = existing;
+          } else {
+            task = normalized;
+          }
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.error('Failed to load task details for side pane', err);
+        }
+      }
+    }
+
     const assignedUser = task.assignedTo || task.assigneeId ? window.apiClient.userCache.getById(task.assignedTo || task.assigneeId) : null;
 
     const paneContent = el('div');
@@ -6443,7 +6470,9 @@ const Workflow = {
     paneContent.appendChild(docsContentToggle);
 
     // 4. Time Log History Collapsible Section
-    const [timeHeaderToggle, timeContentToggle] = createCollapsibleSection('Time Log History', false, (cont) => {
+    const hasLogs = (task.timeLogs && task.timeLogs.length > 0) || 
+                    (task.checklist && task.checklist.some(item => item.timeLogs && item.timeLogs.length > 0));
+    const [timeHeaderToggle, timeContentToggle] = createCollapsibleSection('Time Log History', hasLogs, (cont) => {
       const timeHeaderActions = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;' });
       const totalHours = getTaskTotalHours(task);
       timeHeaderActions.appendChild(el('span', {
@@ -6466,6 +6495,52 @@ const Workflow = {
 
       const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': task.id });
       cont.appendChild(timeList);
+
+      // Render logs synchronously from loaded data to avoid spinner flash
+      const logs = task.timeLogs || [];
+      const checklistLogGroups = [];
+      (task.checklist || []).forEach(item => {
+        if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
+      });
+
+      if (logs.length > 0 || checklistLogGroups.length > 0) {
+        const buildTimeLogEntry = (l, subtaskName = null) => {
+          const [y, m, d] = l.date.split('-').map(Number);
+          const logDate = new Date(y, m - 1, d);
+          const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+          const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
+          const noteText = l.note ? ` — ${l.note}` : '';
+          const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
+
+          return el('div', { 
+            class: 'history-item', 
+            style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
+          }, [
+            el('div', {}, [
+              el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
+              el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
+              el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
+              el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
+            ]),
+            el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
+          ]);
+        };
+
+        const taskLevelLogs = logs.filter(l => !l.checklistItemId);
+        if (taskLevelLogs.length > 0) {
+          const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            timeList.appendChild(buildTimeLogEntry(l));
+          });
+        }
+
+        checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
+          const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            timeList.appendChild(buildTimeLogEntry(l, item.text));
+          });
+        });
+      }
 
       this.refreshTaskTimeLogsList(task.id);
     });
@@ -10671,8 +10746,10 @@ const Workflow = {
 
     // Show a loading indicator inside each list container (exactly like document loading)
     listContainers.forEach(container => {
-      container.innerHTML = '';
-      container.appendChild(renderEmptyState('Loading logs...'));
+      if (container.children.length === 0) {
+        container.innerHTML = '';
+        container.appendChild(renderEmptyState('Loading logs...'));
+      }
     });
 
     try {
