@@ -198,21 +198,108 @@ const PendingChanges = {
     const api = this._api();
     if (!api) return [];
     const res = await api.pendingApprovals.list({ status: 'pending', submittedBy: userId });
-    return (res?.data || []).map(pc => this._normalize(pc));
+    const pending = (res?.data || []).map(pc => this._normalize(pc));
+
+    try {
+      if (api.disbursements) {
+        const disbRes = await api.disbursements.list({});
+        const items = disbRes?.data || [];
+        const pendingStatuses = ['Pending', 'Submitted', 'Under Review'];
+        const userDisbs = items.filter(d => 
+          pendingStatuses.includes(d.status) &&
+          (!userId || d.employeeId === userId || d.employee_id === userId || d.createdBy === userId || d.created_by === userId)
+        );
+        userDisbs.forEach(d => {
+          if (!pending.some(pc => pc.table === 'disbursements' && (pc.parentRecordId === d.id || pc.proposedData?.id === d.id))) {
+            pending.push({
+              id: d.id,
+              table: 'disbursements',
+              tableName: 'disbursements',
+              parentRecordId: d.id,
+              status: 'pending',
+              submittedBy: d.employeeId || d.employee_id || d.createdBy || d.created_by || userId,
+              submittedAt: d.createdAt || d.created_at || d.updatedAt || new Date().toISOString(),
+              proposedData: d
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to query disbursements in getPendingForUser', e);
+    }
+
+    return pending;
   },
 
   async getRejectedForUser(userId) {
     const api = this._api();
     if (!api) return [];
     const res = await api.pendingApprovals.list({ status: 'rejected', submittedBy: userId });
-    return (res?.data || []).map(pc => this._normalize(pc));
+    const rejected = (res?.data || []).map(pc => this._normalize(pc));
+
+    try {
+      if (api.disbursements) {
+        const disbRes = await api.disbursements.list({});
+        const items = disbRes?.data || [];
+        const userDisbs = items.filter(d => 
+          d.status === 'Rejected' &&
+          (!userId || d.employeeId === userId || d.employee_id === userId || d.createdBy === userId || d.created_by === userId)
+        );
+        userDisbs.forEach(d => {
+          if (!rejected.some(pc => pc.table === 'disbursements' && (pc.parentRecordId === d.id || pc.proposedData?.id === d.id))) {
+            rejected.push({
+              id: d.id,
+              table: 'disbursements',
+              tableName: 'disbursements',
+              parentRecordId: d.id,
+              status: 'rejected',
+              rejectionReason: d.rejectionReason || d.rejection_reason || 'Expense rejected',
+              submittedBy: d.employeeId || d.employee_id || d.createdBy || d.created_by || userId,
+              submittedAt: d.createdAt || d.created_at || d.updatedAt || new Date().toISOString(),
+              proposedData: d
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to query disbursements in getRejectedForUser', e);
+    }
+
+    return rejected;
   },
 
   async getById(id) {
     const api = this._api();
     if (!api || !id) return null;
-    const res = await api.pendingApprovals.get(id);
-    return res?.data ? this._normalize(res.data) : null;
+    try {
+      const res = await api.pendingApprovals.get(id);
+      if (res?.data) return this._normalize(res.data);
+    } catch (err) {
+      // Fallback: check if id is a direct disbursement record
+    }
+    if (api && api.disbursements) {
+      try {
+        const disbRes = await api.disbursements.get(id);
+        const d = disbRes?.data;
+        if (d) {
+          const isRejected = d.status === 'Rejected';
+          return {
+            id: d.id,
+            table: 'disbursements',
+            tableName: 'disbursements',
+            parentRecordId: d.id,
+            status: isRejected ? 'rejected' : 'pending',
+            rejectionReason: d.rejectionReason || d.rejection_reason || null,
+            submittedBy: d.employeeId || d.employee_id || d.createdBy || d.created_by || (typeof Auth !== 'undefined' ? Auth.user?.id : null),
+            submittedAt: d.createdAt || d.created_at || d.updatedAt || new Date().toISOString(),
+            proposedData: d
+          };
+        }
+      } catch (e) {
+        // ignore fallback errors
+      }
+    }
+    return null;
   },
 
   /**
