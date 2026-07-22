@@ -8467,6 +8467,8 @@ const Workflow = {
 
           let skipped = 0;
           let saved = 0;
+          const updatePromises = [];
+
           selected.forEach(t => {
             const taskLogs = t.timeLogs || [];
             const alreadyLogged = entries.some(entry => taskLogs.some(l => l.date === entry.date && (l.workerName || '') === workerName));
@@ -8485,15 +8487,40 @@ const Workflow = {
               hours: entry.hours,
               checklistItemId: null
             }));
-            WorkflowData.updateTask(t.id, {
-              timeLogs: [...taskLogs, ...newEntries],
-              updatedAt: new Date().toISOString()
-            });
-            saved++;
+            
+            updatePromises.push(
+              WorkflowData.updateTask(t.id, {
+                timeLogs: [...taskLogs, ...newEntries],
+                updatedAt: new Date().toISOString()
+              }).then(() => {
+                WorkflowData.invalidateRelatedForWorkRequest(t.workRequestId);
+                WorkflowData.invalidateRelatedForTask(t.id);
+                saved++;
+              })
+            );
           });
+
           overlay.remove();
-          this.showMessage('Bulk Log Time', `${saved} log${saved === 1 ? '' : 's'} saved, ${skipped} skipped (already logged).`, 'success');
-          App.handleRoute();
+
+          if (updatePromises.length === 0) {
+            this.showMessage('Bulk Log Time', `0 logs saved, ${skipped} skipped (already logged).`, 'warning');
+            App.handleRoute();
+            return;
+          }
+
+          this.runBlockingArchiveAction({
+            title: 'Logging Time',
+            message: `Please wait while logging time for ${updatePromises.length} task(s)...`,
+            apiCall: async () => {
+              await Promise.all(updatePromises);
+              return { success: true };
+            },
+            successTitle: 'Bulk Time Logged',
+            successMessage: () => `Successfully logged time for ${saved} task(s). ${skipped} task(s) were skipped because they were already logged.`,
+            errorTitle: 'Failed to Bulk Log Time'
+          }).then(() => {
+            App.handleRoute();
+          });
         });
       });
       bulkBar.appendChild(logTimeBtn);
@@ -11493,19 +11520,23 @@ const Workflow = {
       } else {
         updates.timeLogs = [...(currentTask.timeLogs || []), ...newEntries];
       }
-      WorkflowData.updateTask(taskId, updates)
-        .then(() => {
+      overlay.remove();
+
+      this.runBlockingArchiveAction({
+        title: 'Logging Time',
+        message: 'Please wait while saving your time log...',
+        apiCall: async () => {
+          await WorkflowData.updateTask(taskId, updates);
           WorkflowData.invalidateRelatedForWorkRequest(currentTask.workRequestId);
           WorkflowData.invalidateRelatedForTask(taskId);
-          overlay.remove();
-          App.handleRoute();
-        })
-        .catch(err => {
-          console.error('Failed to update task time logs', err);
-          overlay.remove();
-          this.showMessage('Error', err.message || 'Failed to log time.', 'error');
-          App.handleRoute();
-        });
+          return { success: true };
+        },
+        successTitle: 'Time Logged',
+        successMessage: 'Your time log has been successfully saved.',
+        errorTitle: 'Failed to Log Time'
+      }).then(() => {
+        App.handleRoute();
+      });
     });
   },
 
