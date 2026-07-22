@@ -2783,7 +2783,6 @@ const Users = {
     const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
 
     let searchQuery = '';
-    const isPowerUser = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
     const toolbarConfig = {
       moduleName: 'myPending',
       searchConfig: {
@@ -2795,17 +2794,15 @@ const Users = {
       onFilterChange: () => {
         saveCurrentFilters();
         updateFilters();
-      }
-    };
-    if (isPowerUser) {
-      toolbarConfig.viewMode = this.myPendingViewMode || 'table';
-      toolbarConfig.onViewModeChange = (newMode) => {
+      },
+      viewMode: this.myPendingViewMode || 'table',
+      onViewModeChange: (newMode) => {
         self.myPendingViewMode = newMode;
         App.setPreferredViewMode('myPending', newMode);
         saveCurrentFilters();
         updateFilters();
-      };
-    }
+      }
+    };
     const toolbarContainer = createJiraFilterToolbar(toolbarConfig);
 
     stickyContainer.appendChild(toolbarContainer);
@@ -2814,7 +2811,7 @@ const Users = {
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const updateFilters = () => self.refreshMyPendingList(listContainer, activeFilters, isPowerUser ? (self.myPendingViewMode || 'table') : 'table', searchQuery);
+    const updateFilters = () => self.refreshMyPendingList(listContainer, activeFilters, self.myPendingViewMode || 'table', searchQuery);
     updateFilters();
 
     return wrapper;
@@ -3031,13 +3028,40 @@ const Users = {
     const renderCard = (pc) => {
       const statusPriorityClass = pc.status === 'pending' ? 'card-v2-priority-medium' : 'card-v2-priority-critical';
       const progress = pc.status === 'pending' ? 50 : 0;
-      return buildCompactBoardCard({
+      const data = pc.proposedData || {};
+      const catLabel = self._pendingCategoryLabel(pc.table);
+
+      let itemTitle = catLabel;
+      let itemSub = pc.parentRecordId ? 'Edit Record' : 'New Record';
+      let amount = null;
+
+      if (pc.table === 'invoices') {
+        itemTitle = `Invoice #${data.invoiceNumber || pc.parentRecordId || ''}`.trim();
+        amount = data.total || data.subtotal || null;
+      } else if (pc.table === 'disbursements') {
+        itemTitle = `Disbursement: ${data.payee || data.category || 'Expense'}`;
+        amount = data.amount || null;
+      } else if (pc.table === 'tasks') {
+        itemTitle = `Task: ${data.title || 'Untitled'}`;
+        if (data.workRequestId) {
+          const wr = window.apiClient.workRequestCache.getById(data.workRequestId);
+          if (wr) itemSub = `For WR: ${wr.title}`;
+        }
+      } else if (pc.table === 'workRequests') {
+        itemTitle = `Work Request: ${data.title || 'Untitled'}`;
+      } else if (pc.table === 'clients') {
+        itemTitle = `Client: ${data.name || 'Profile'}`;
+      } else if (pc.table === 'transmittals') {
+        itemTitle = `Transmittal: #${data.transmittalNumber || ''}`.trim();
+      }
+
+      const card = buildCompactBoardCard({
         key: 'SUB-' + cardNumber++,
         progress,
         statusColor: statusColors[pc.status] || '#cbd5e1',
-        title: self._pendingCategoryLabel(pc.table),
-        description: pc.parentRecordId ? 'Edit existing record' : 'New record submission',
-        detail: (pc.status === 'rejected' && pc.rejectionReason) ? pc.rejectionReason : '',
+        title: itemTitle,
+        description: `${catLabel} • ${itemSub}`,
+        detail: (pc.status === 'rejected' && pc.rejectionReason) ? `Reason: ${pc.rejectionReason}` : '',
         date: pc.submittedAt ? formatDate(pc.submittedAt) : '',
         priority: pc.status.charAt(0).toUpperCase() + pc.status.slice(1),
         priorityClass: statusPriorityClass,
@@ -3046,6 +3070,19 @@ const Users = {
           App.handleRoute();
         }
       });
+
+      if (amount !== null && amount !== undefined) {
+        const footerRight = card.querySelector('.card-v2-footer-right');
+        if (footerRight) {
+          footerRight.appendChild(el('div', { 
+            class: 'card-v2-footer-item', 
+            text: formatPHP(amount), 
+            style: 'font-weight:700;color:var(--color-text);' 
+          }));
+        }
+      }
+
+      return card;
     };
 
     const cardMenuItems = (pc) => {
