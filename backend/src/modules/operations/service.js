@@ -230,7 +230,6 @@ const canViewWorkRequest = (wr, user, taskMap) => {
   if (!user) return false;
   if (user.role === 'Admin') return true;
   if (isBackOffice(user)) return true;
-  if (wr.assigned_to === user.id || wr.requested_by === user.id) return true;
   const tasks = taskMap.get(wr.id) || [];
   return tasks.some((t) => {
     if (t.assignee_id === user.id || t.assignee_name === user.name) return true;
@@ -294,15 +293,18 @@ const listWorkRequests = async ({
   }
 
   // For Admin users, skip the expensive visibility filter entirely.
-  // For other users, pre-filter using WR-level assignment (which doesn't need tasks).
-  // Task-level assignment check happens after pagination to avoid loading all tasks.
+  // For other users, filter by task-level assignment (where the user is assigned to at least one task).
   let visibleRows;
+  let allTaskMap = null;
   if (isBackOffice(user)) {
     visibleRows = data || [];
   } else {
-    visibleRows = (data || []).filter(
-      (row) => row.assigned_to === user.id || row.requested_by === user.id
-    );
+    const allWrIds = (data || []).map(r => r.id);
+    allTaskMap = await loadTasksForWorkRequests(allWrIds);
+    visibleRows = (data || []).filter((row) => {
+      const tasks = allTaskMap.get(row.id) || [];
+      return tasks.some(t => t.assignee_id === user.id || t.assignee_name === user.name);
+    });
   }
 
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
@@ -333,7 +335,7 @@ const listWorkRequests = async ({
 
   // Only load tasks for the paginated subset (not ALL work requests)
   const taskMap = withTasks
-    ? await loadTasksForWorkRequests(resultRows.map((r) => r.id))
+    ? (allTaskMap || await loadTasksForWorkRequests(resultRows.map((r) => r.id)))
     : new Map();
 
   // Load checklist/time-log extras when embedding tasks so the client does not
