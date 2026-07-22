@@ -84,7 +84,7 @@ const createRequest = async ({ entityId, userId, data }) => {
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
-      detail: 'Failed to create operations request',
+      detail: `Failed to create operations request: ${error.message || String(error)}`,
     });
   }
 
