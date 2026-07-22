@@ -1301,23 +1301,8 @@ const Clients = {
 
     const pocProp = el('div', { class: 'notion-prop' });
     pocProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Point of Contact' }));
-    const pocInput = el('input', { type: 'text', name: 'pointOfContactInput', class: 'notion-prop-input', list: 'staff-list', placeholder: '— Select or type Staff —' });
-    const datalist = el('datalist', { id: 'staff-list' });
-    const staffUsers = window.apiClient.userCache._users || [];
-    staffUsers.filter(u => {
-      const userEntities = (u.entities || []).map(e => e.toUpperCase());
-      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(Auth.activeEntity.toUpperCase());
-    }).forEach(u => { datalist.appendChild(el('option', { value: u.name + ' (' + u.role + ')' })); });
-    if (client) {
-      if (client.contactUserId) {
-        const u = window.apiClient.userCache.getById(client.contactUserId);
-        if (u) pocInput.value = u.name + ' (' + u.role + ')';
-      } else if (client.contactPerson) {
-        pocInput.value = client.contactPerson;
-      }
-    }
+    const pocInput = el('input', { type: 'text', name: 'contactPerson', class: 'notion-prop-input', placeholder: 'Enter name of client POC', value: client ? (client.contactPerson || '') : '' });
     pocProp.appendChild(pocInput);
-    pocProp.appendChild(datalist);
     propsGrid.appendChild(pocProp);
 
     const retainerProp = el('div', { class: 'notion-prop notion-prop-checkbox' });
@@ -1546,18 +1531,7 @@ const Clients = {
       });
     }
 
-    const pocInputValue = (data.pointOfContactInput || '').trim();
-    let contactUserId = null;
-    let contactPerson = null;
-
-    if (pocInputValue) {
-      const matchedUser = window.apiClient.userCache._users?.find(u => (u.name + ' (' + u.role + ')') === pocInputValue);
-      if (matchedUser) {
-        contactUserId = matchedUser.id;
-      } else {
-        contactPerson = pocInputValue;
-      }
-    }
+    const contactPerson = (data.contactPerson || '').trim();
 
     const record = {
       name: data.name.trim(),
@@ -1569,8 +1543,8 @@ const Clients = {
       retainer: !!form.querySelector('input[name="retainer"]:checked'),
       contactDetails,
       relatedCompanies: this.toApiRelatedCompanies(relatedCompanies),
-      contactUserId,
-      contactPerson
+      contactUserId: null,
+      contactPerson: contactPerson || null
     };
 
     const isNew = !this.editingId || this.editingId === 'new';
