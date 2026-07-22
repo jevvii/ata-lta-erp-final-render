@@ -7407,20 +7407,19 @@ const Workflow = {
     }
 
     record.tasks = taskRecords;
-    const result = await PendingChanges.submit('workRequests', record, isNew);
-
-    // Sync to the backend when the request is approved (admin/managerial save).
     const targetRoute = isResubmitting ? '#admin' : '#operations';
-    let apiWrId = this.editingId;
 
-    if (result.approved) {
-      if (isNew) {
-        this.editingId = null;
-        const failedTaskTitles = [];
-        const runResult = await this.runBlockingArchiveAction({
-          title: 'Creating Work Request',
-          message: `Please wait while "${record.title || 'the Work Request'}" is being saved...`,
-          apiCall: async () => {
+    if (isNew) {
+      this.editingId = null;
+      const failedTaskTitles = [];
+      let submitResult = null;
+
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Creating Work Request',
+        message: 'Please wait while the Work Request is being saved...',
+        apiCall: async () => {
+          submitResult = await PendingChanges.submit('workRequests', record, isNew);
+          if (submitResult.approved) {
             // Optimistic insert so counts and the list under the overlay update immediately.
             record.tasks = [];
             WorkflowData._addOptimisticWorkRequest(record);
@@ -7434,10 +7433,10 @@ const Workflow = {
             try {
               let createdWr = null;
               let createdTasks = [];
-              if (result.record && result.record.wr) {
+              if (submitResult.record && submitResult.record.wr) {
                 // Admin bypass already created the WR and tasks on the server.
-                createdWr = result.record.wr;
-                createdTasks = result.record.tasks || [];
+                createdWr = submitResult.record.wr;
+                createdTasks = submitResult.record.tasks || [];
                 await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
               } else {
                 createdWr = await WorkflowData.createWorkRequest(record);
@@ -7462,81 +7461,96 @@ const Workflow = {
               this._updateCounts(-1, 0);
               throw e;
             }
-          },
-          successTitle: 'Work Request Created',
-          successMessage: failedTaskTitles.length
-            ? `Work request created, but some tasks failed: ${failedTaskTitles.join(', ')}`
-            : 'Work Request has been successfully created.',
-          errorTitle: 'Failed to Create Work Request'
-        });
+          } else {
+            // Non-approved creation (staged as pending change)
+            return { data: submitResult };
+          }
+        },
+        successTitle: 'Work Request Created',
+        successMessage: failedTaskTitles.length
+          ? `Work request created, but some tasks failed: ${failedTaskTitles.join(', ')}`
+          : (submitResult && submitResult.approved
+              ? 'Work Request has been successfully created.'
+              : 'Work Request creation request has been submitted for Admin approval.'),
+        errorTitle: 'Failed to Create Work Request'
+      });
 
-        if (runResult.success) {
+      if (runResult.success) {
+        if (submitResult && submitResult.approved) {
           if (typeof Dashboard !== 'undefined') {
             if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
             else if (Dashboard._dataCache) Dashboard._dataCache = null;
           }
           this._invalidateCountsAndSidebar();
-          closeFormPanelAndRoute(targetRoute);
-        } else {
-          App.handleRoute();
-        }
-        return;
-      } else {
-        this.editingId = null;
-        const runResult = await this.runBlockingArchiveAction({
-          title: 'Saving Work Request',
-          message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
-          apiCall: async () => {
-            await WorkflowData.updateWorkRequest(this.editingId, record);
-            const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
-            for (const t of existing) await WorkflowData.deleteTask(t.id);
-            for (const t of taskRecords) {
-              t.workRequestId = this.editingId;
-              await WorkflowData.createTask(t);
-            }
-            const updated = WorkflowData.getWorkRequestById(this.editingId);
-            this._syncWorkRequestToCaches(updated);
-            return { data: updated };
-          },
-          successTitle: 'Work Request Saved',
-          successMessage: 'Work Request has been successfully updated.',
-          errorTitle: 'Failed to Save Work Request'
-        });
 
-        if (runResult.success) {
-          this._invalidateCountsAndSidebar();
+          if (data.isRetainer) {
+            const tmplId = generateId('rt');
+            const tmplMap = new Map();
+            tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
+            const tmplTasks = tasks.map(t => {
+              const predId = t.predecessorKey ? tmplMap.get(t.predecessorKey) : null;
+              return {
+                id: tmplMap.get(t.key),
+                title: t.title,
+                assigneeId: t.assigneeId || null,
+                assigneeName: t.assigneeName || null,
+                predecessors: predId ? [predId] : []
+              };
+            });
+            await this._addRetainerTemplate({
+              id: tmplId,
+              name: record.title + ' Template',
+              description: record.description,
+              clientId: record.clientId,
+              entity: record.entity,
+              schedule: data.schedule || 'monthly',
+              pfAmount: parseFloat(data.templateAmount) || 0,
+              tasks: tmplTasks,
+              createdAt: now,
+              updatedAt: now
+            }).catch(err => console.error('Failed to create retainer template', err));
+          }
+
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
         }
         closeFormPanelAndRoute(targetRoute);
-        return;
+      } else {
+        App.handleRoute();
       }
+      return;
     }
 
-    if (data.isRetainer && result.approved) {
-      const tmplId = generateId('rt');
-      const tmplMap = new Map();
-      tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
-      const tmplTasks = tasks.map(t => {
-        const predId = t.predecessorKey ? tmplMap.get(t.predecessorKey) : null;
-        return {
-          id: tmplMap.get(t.key),
-          title: t.title,
-          assigneeId: t.assigneeId || null,
-          assigneeName: t.assigneeName || null,
-          predecessors: predId ? [predId] : []
-        };
+    // Existing record Update
+    const result = await PendingChanges.submit('workRequests', record, isNew);
+
+    if (result.approved) {
+      this.editingId = null;
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Saving Work Request',
+        message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
+        apiCall: async () => {
+          await WorkflowData.updateWorkRequest(this.editingId, record);
+          const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
+          for (const t of existing) await WorkflowData.deleteTask(t.id);
+          for (const t of taskRecords) {
+            t.workRequestId = this.editingId;
+            await WorkflowData.createTask(t);
+          }
+          const updated = WorkflowData.getWorkRequestById(this.editingId);
+          this._syncWorkRequestToCaches(updated);
+          return { data: updated };
+        },
+        successTitle: 'Work Request Saved',
+        successMessage: 'Work Request has been successfully updated.',
+        errorTitle: 'Failed to Save Work Request'
       });
-      await this._addRetainerTemplate({
-        id: tmplId,
-        name: record.title + ' Template',
-        description: record.description,
-        clientId: record.clientId,
-        entity: record.entity,
-        schedule: data.schedule || 'monthly',
-        pfAmount: parseFloat(data.templateAmount) || 0,
-        tasks: tmplTasks,
-        createdAt: now,
-        updatedAt: now
-      });
+
+      if (runResult.success) {
+        this._invalidateCountsAndSidebar();
+      }
+      closeFormPanelAndRoute(targetRoute);
+      return;
     }
 
     if (result.approved) {
@@ -7544,18 +7558,12 @@ const Workflow = {
       if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
     }
 
-    if (isNew && result.approved) {
-      // Create branch already closed the panel and showed its message.
-      return;
-    }
-
-    // Non-approved create or approved update: close with the standard message.
     this.editingId = null;
     const msgConfig = {
-      title: isNew ? 'Work Request Created' : 'Work Request Saved',
+      title: 'Work Request Saved',
       message: result.approved
-        ? (isNew ? 'Work Request has been successfully created.' : 'Work Request has been successfully updated.')
-        : `Work Request ${isNew ? 'creation' : 'update'} request has been submitted for Admin approval.`,
+        ? 'Work Request has been successfully updated.'
+        : `Work Request update request has been submitted for Admin approval.`,
       type: 'success'
     };
     closeFormPanelAndRoute(targetRoute, msgConfig);
