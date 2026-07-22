@@ -11482,9 +11482,19 @@ const Workflow = {
       } else {
         updates.timeLogs = [...(currentTask.timeLogs || []), ...newEntries];
       }
-      WorkflowData.updateTask(taskId, updates);
-      overlay.remove();
-      App.handleRoute();
+      WorkflowData.updateTask(taskId, updates)
+        .then(() => {
+          WorkflowData.invalidateRelatedForWorkRequest(currentTask.workRequestId);
+          WorkflowData.invalidateRelatedForTask(taskId);
+          overlay.remove();
+          App.handleRoute();
+        })
+        .catch(err => {
+          console.error('Failed to update task time logs', err);
+          overlay.remove();
+          this.showMessage('Error', err.message || 'Failed to log time.', 'error');
+          App.handleRoute();
+        });
     });
   },
 

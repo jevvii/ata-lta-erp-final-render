@@ -16,12 +16,14 @@ const checklistItemSchema = z.object({
 });
 
 const timeLogSchema = z.object({
-  startTime: z.string(),
-  endTime: z.string(),
+  startTime: z.string().optional().nullable(),
+  endTime: z.string().optional().nullable(),
   date: z.string(),
   hours: z.number().nonnegative(),
-  userId: z.string().uuid().optional(),
-  note: z.string().optional(),
+  userId: z.string().uuid().optional().nullable(),
+  note: z.string().optional().nullable(),
+  workerName: z.string().optional().nullable(),
+  checklistItemId: z.string().uuid().optional().nullable(),
 });
 
 const createWorkRequestSchema = z.object({
@@ -63,6 +65,9 @@ const createTaskSchema = z.object({
   predecessors: z.array(z.string().uuid()).optional(),
   dueDate: z.string().optional().nullable(),
   checklist: z.array(checklistItemSchema).optional(),
+  timeLogs: z.array(timeLogSchema).optional(),
+  coAssignees: z.array(z.string().uuid()).optional().nullable(),
+  taskDocuments: z.array(z.any()).optional().nullable(),
 });
 
 const updateTaskSchema = createTaskSchema.partial();

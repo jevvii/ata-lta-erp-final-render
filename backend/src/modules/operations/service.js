@@ -68,40 +68,66 @@ const toApiWorkRequest = (row, entityCode) => ({
   updatedAt: row.updated_at,
 });
 
-const toApiTask = (row, { checklist = [], timeLogs = [] } = {}) => ({
-  id: row.id,
-  workRequestId: row.work_request_id,
-  title: row.title,
-  description: row.description || null,
-  status: row.status,
-  assigneeId: row.assignee_id || null,
-  assigneeName: row.assignee_name || null,
-  predecessors: row.predecessors || [],
-  dueDate: row.due_date || null,
-  displayOrder: row.display_order,
-  checklist: checklist.map((c) => ({
-    id: c.id,
-    text: c.text,
-    category: c.category || null,
-    completed: c.completed,
-    assigneeId: c.assignee_id || null,
-    assigneeName: c.assignee_name || null,
-    dependsOn: Array.isArray(c.depends_on)
-      ? (c.depends_on[0] || null)
-      : (c.depends_on || null),
-  })),
-  timeLogs: timeLogs.map((t) => ({
-    id: t.id,
-    startTime: t.start_time || null,
-    endTime: t.end_time || null,
-    date: t.date || null,
-    hours: Number(t.hours),
-    userId: t.user_id || null,
-    note: t.note || null,
-  })),
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
+const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = {}) => {
+  const taskLevelLogs = timeLogs.filter(t => !t.checklist_item_id);
+
+  return {
+    id: row.id,
+    workRequestId: row.work_request_id,
+    title: row.title,
+    description: row.description || null,
+    status: row.status,
+    assigneeId: row.assignee_id || null,
+    assigneeName: row.assignee_name || null,
+    predecessors: row.predecessors || [],
+    dueDate: row.due_date || null,
+    displayOrder: row.display_order,
+    checklist: checklist.map((c) => {
+      const itemLogs = timeLogs.filter(t => t.checklist_item_id === c.id);
+      return {
+        id: c.id,
+        text: c.text,
+        category: c.category || null,
+        completed: c.completed,
+        assigneeId: c.assignee_id || null,
+        assigneeName: c.assignee_name || null,
+        dependsOn: Array.isArray(c.depends_on)
+          ? (c.depends_on[0] || null)
+          : (c.depends_on || null),
+        timeLogs: itemLogs.map((t) => ({
+          id: t.id,
+          startTime: t.start_time || null,
+          endTime: t.end_time || null,
+          date: t.date || null,
+          hours: Number(t.hours),
+          userId: t.user_id || null,
+          note: t.note || null,
+          workerName: t.worker_name || null,
+          checklistItemId: t.checklist_item_id || null,
+        })),
+      };
+    }),
+    timeLogs: taskLevelLogs.map((t) => ({
+      id: t.id,
+      startTime: t.start_time || null,
+      endTime: t.end_time || null,
+      date: t.date || null,
+      hours: Number(t.hours),
+      userId: t.user_id || null,
+      note: t.note || null,
+      workerName: t.worker_name || null,
+      checklistItemId: null,
+    })),
+    taskDocuments: taskDocuments.map((d) => ({
+      documentId: d.id,
+      fileName: d.file_name,
+      uploadDate: d.upload_date ? new Date(d.upload_date).toISOString().slice(0, 10) : null,
+      uploaderId: d.uploader_id,
+    })),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+};
 
 const isManagerial = (user) =>
   user.role === 'Admin' ||
@@ -140,10 +166,12 @@ const loadTasksForWorkRequests = async (wrIds) => {
 const loadTaskExtras = async (taskIds) => {
   const checklist = new Map();
   const timeLogs = new Map();
-  if (!taskIds.length) return { checklist, timeLogs };
-  const [{ data: clRows }, { data: tlRows }] = await Promise.all([
+  const taskDocuments = new Map();
+  if (!taskIds.length) return { checklist, timeLogs, taskDocuments };
+  const [{ data: clRows }, { data: tlRows }, { data: docRows }] = await Promise.all([
     supabaseAdmin.from('task_checklists').select('*').in('task_id', taskIds),
     supabaseAdmin.from('task_time_logs').select('*').in('task_id', taskIds),
+    supabaseAdmin.from('documents').select('*').in('linked_task_id', taskIds).is('deleted_at', null),
   ]);
   (clRows || []).forEach((r) => {
     if (!checklist.has(r.task_id)) checklist.set(r.task_id, []);
@@ -153,7 +181,11 @@ const loadTaskExtras = async (taskIds) => {
     if (!timeLogs.has(r.task_id)) timeLogs.set(r.task_id, []);
     timeLogs.get(r.task_id).push(r);
   });
-  return { checklist, timeLogs };
+  (docRows || []).forEach((r) => {
+    if (!taskDocuments.has(r.linked_task_id)) taskDocuments.set(r.linked_task_id, []);
+    taskDocuments.get(r.linked_task_id).push(r);
+  });
+  return { checklist, timeLogs, taskDocuments };
 };
 
 const canViewWorkRequest = (wr, user, taskMap) => {
@@ -264,7 +296,7 @@ const listWorkRequests = async ({
 
   // Load checklist/time-log extras when embedding tasks so the client does not
   // overwrite a freshly-saved checklist with [] after refresh/page switch.
-  let extras = { checklist: new Map(), timeLogs: new Map() };
+  let extras = { checklist: new Map(), timeLogs: new Map(), taskDocuments: new Map() };
   if (withTasks) {
     const allTaskIds = [];
     taskMap.forEach((tasks) => allTaskIds.push(...tasks.map((t) => t.id)));
@@ -281,6 +313,7 @@ const listWorkRequests = async ({
         toApiTask(t, {
           checklist: extras.checklist.get(t.id) || [],
           timeLogs: extras.timeLogs.get(t.id) || [],
+          taskDocuments: extras.taskDocuments.get(t.id) || [],
         })
       );
     }
@@ -507,6 +540,7 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
     toApiTask(t, {
       checklist: extras.checklist.get(t.id) || [],
       timeLogs: extras.timeLogs.get(t.id) || [],
+      taskDocuments: extras.taskDocuments.get(t.id) || [],
     })
   );
 };
@@ -533,6 +567,7 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
   return toApiTask(data, {
     checklist: extras.checklist.get(taskId) || [],
     timeLogs: extras.timeLogs.get(taskId) || [],
+    taskDocuments: extras.taskDocuments.get(taskId) || [],
   });
 };
 
@@ -565,9 +600,23 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
 
   if (data.checklist?.length) {
     await upsertChecklist(id, data.checklist);
+    const checklistTimeLogs = [];
+    data.checklist.forEach(item => {
+      if (Array.isArray(item.timeLogs)) {
+        item.timeLogs.forEach(log => {
+          checklistTimeLogs.push({
+            ...log,
+            checklistItemId: item.id
+          });
+        });
+      }
+    });
+    if (checklistTimeLogs.length) {
+      await upsertTimeLogs(id, checklistTimeLogs, false);
+    }
   }
   if (data.timeLogs?.length) {
-    await upsertTimeLogs(id, data.timeLogs);
+    await upsertTimeLogs(id, data.timeLogs, true);
   }
 
   return getTaskById({ workRequestId, taskId: id, entityId });
@@ -597,8 +646,10 @@ const upsertChecklist = async (taskId, checklist) => {
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);
 };
 
-const upsertTimeLogs = async (taskId, timeLogs) => {
-  await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId);
+const upsertTimeLogs = async (taskId, timeLogs, deleteExisting = true) => {
+  if (deleteExisting) {
+    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).is('checklist_item_id', null);
+  }
   const rows = timeLogs.map((log) => ({
     task_id: taskId,
     start_time: log.startTime || null,
@@ -607,6 +658,8 @@ const upsertTimeLogs = async (taskId, timeLogs) => {
     hours: log.hours ?? 0,
     user_id: log.userId || null,
     note: log.note || null,
+    worker_name: log.workerName || null,
+    checklist_item_id: log.checklistItemId || null,
   }));
   if (rows.length) await supabaseAdmin.from('task_time_logs').insert(rows);
 };
@@ -642,8 +695,27 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     });
   }
 
-  if (data.checklist !== undefined) await upsertChecklist(taskId, data.checklist);
-  if (data.timeLogs !== undefined) await upsertTimeLogs(taskId, data.timeLogs);
+  if (data.checklist !== undefined) {
+    await upsertChecklist(taskId, data.checklist);
+    const checklistTimeLogs = [];
+    data.checklist.forEach(item => {
+      if (Array.isArray(item.timeLogs)) {
+        item.timeLogs.forEach(log => {
+          checklistTimeLogs.push({
+            ...log,
+            checklistItemId: item.id
+          });
+        });
+      }
+    });
+    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).not('checklist_item_id', 'is', null);
+    if (checklistTimeLogs.length) {
+      await upsertTimeLogs(taskId, checklistTimeLogs, false);
+    }
+  }
+  if (data.timeLogs !== undefined) {
+    await upsertTimeLogs(taskId, data.timeLogs, true);
+  }
 
   return getTaskById({ workRequestId, taskId, entityId });
 };
