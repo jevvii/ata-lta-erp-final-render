@@ -3066,8 +3066,7 @@ const Users = {
         priority: pc.status.charAt(0).toUpperCase() + pc.status.slice(1),
         priorityClass: statusPriorityClass,
         onClick: () => {
-          self.pendingDetailId = pc.id;
-          App.handleRoute();
+          location.hash = `#admin/myPending/${pc.id}`;
         }
       });
 
@@ -3089,7 +3088,7 @@ const Users = {
       const menu = [{
         label: 'Review',
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-        onClick: () => { self.pendingDetailId = pc.id; App.handleRoute(); }
+        onClick: () => { location.hash = `#admin/myPending/${pc.id}`; }
       }];
       if (pc.status === 'pending') {
         menu.push({
@@ -3159,7 +3158,7 @@ const Users = {
       item.appendChild(left);
       const rightActions = el('div', { style: 'display:flex;gap:4px;align-items:center;' });
       const reviewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Review' });
-      reviewBtn.addEventListener('click', () => { self.pendingDetailId = pc.id; App.handleRoute(); });
+      reviewBtn.addEventListener('click', () => { location.hash = `#admin/myPending/${pc.id}`; });
       rightActions.appendChild(reviewBtn);
       if (pc.status === 'pending') {
         const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Withdraw' });
