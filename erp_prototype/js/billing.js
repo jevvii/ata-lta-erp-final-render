@@ -900,12 +900,25 @@ const Billing = {
 
   normalizeInvoice(doc, entityCodeHint) {
     if (!doc) return doc;
-    const entity = entityCodeHint
+    let entity = entityCodeHint
       || doc.entityCode
       || doc.entity_code
       || (typeof doc.entity === 'string' && ['ATA', 'LTA'].includes(doc.entity.toUpperCase()) ? doc.entity : null)
       || this._entityCodeFromId(doc.entity_id || doc.entityId)
       || Auth.activeEntity;
+
+    if ((!entity || entity === 'ALL') && (doc.client_id || doc.clientId)) {
+      const client = window.apiClient.clientCache.getById(doc.client_id || doc.clientId);
+      if (client?.entity) {
+        entity = client.entity;
+      }
+    }
+    if ((!entity || entity === 'ALL') && (doc.work_request_id || doc.workRequestId)) {
+      const wr = window.apiClient.workRequestCache.getById(doc.work_request_id || doc.workRequestId);
+      if (wr?.entity) {
+        entity = wr.entity;
+      }
+    }
     const normLineItem = item => ({
       id: item.id,
       invoiceId: item.invoice_id || item.invoiceId,
@@ -1313,10 +1326,6 @@ const Billing = {
 
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
       let invoices = [...baseInvoices, ...pendingInvs];
-
-      if (Auth.user?.departments?.includes('Operations')) {
-        invoices = invoices.filter(inv => !['Draft', 'Pending', 'Approved'].includes(inv.status));
-      }
 
       if (activeFilters.workRequest.size > 0) {
         invoices = invoices.filter(inv => activeFilters.workRequest.has(inv.workRequestId));
