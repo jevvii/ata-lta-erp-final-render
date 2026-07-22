@@ -16,12 +16,12 @@
   const inFlight = new Map();
 
   /**
-   * Read the active JWT from sessionStorage.
+   * Read the active JWT from localStorage.
    * @returns {string|null}
    */
   const getToken = () => {
     try {
-      return sessionStorage.getItem('erp_access_token');
+      return localStorage.getItem('erp_access_token');
     } catch (e) {
       return null;
     }
@@ -118,7 +118,7 @@
     });
 
     if (res.status === 401 && !path.startsWith('/auth/')) {
-      const rToken = sessionStorage.getItem('erp_refresh_token');
+      const rToken = localStorage.getItem('erp_refresh_token');
       if (rToken) {
         try {
           const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh`, {
@@ -129,9 +129,9 @@
           if (refreshRes.ok) {
             const refreshData = await refreshRes.json();
             const { accessToken, refreshToken: newRefreshToken } = refreshData.data;
-            sessionStorage.setItem('erp_access_token', accessToken);
+            localStorage.setItem('erp_access_token', accessToken);
             if (newRefreshToken) {
-              sessionStorage.setItem('erp_refresh_token', newRefreshToken);
+              localStorage.setItem('erp_refresh_token', newRefreshToken);
             }
             headers.Authorization = `Bearer ${accessToken}`;
             const retryRes = await fetch(url, {
@@ -153,8 +153,8 @@
 
       // Clear stale session and redirect to login.
       try {
-        sessionStorage.removeItem('erp_access_token');
-        sessionStorage.removeItem('erp_refresh_token');
+        localStorage.removeItem('erp_access_token');
+        localStorage.removeItem('erp_refresh_token');
       } catch (e) {
         // ignore
       }
