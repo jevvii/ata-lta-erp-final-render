@@ -8,6 +8,9 @@ const AppError = require('../../lib/AppError');
 const { randomUUID } = require('crypto');
 const clientsService = require('../clients/service');
 const operationsService = require('../operations/service');
+const billingService = require('../billing/service');
+const disbursementsService = require('../disbursements/service');
+const transmittalsService = require('../transmittals/service');
 const { computePermissions } = require('../../middleware/rbac');
 const { hasPermission } = require('../../lib/permissions');
 
@@ -56,6 +59,17 @@ const resolveEntityId = async (code) => {
     throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Unknown entity ${code}` });
   }
   return data.id;
+};
+
+const getEntityCodeById = async (entityId) => {
+  if (!entityId || entityId === 'ALL') return null;
+  const { data, error } = await supabaseAdmin
+    .from('entities')
+    .select('code')
+    .eq('id', entityId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data.code;
 };
 
 const setDepartments = async (userId, departmentNames) => {
@@ -370,6 +384,11 @@ const applyPendingChange = async (change, user) => {
     work_requests: 'work_requests',
     clients: 'clients',
     tasks: 'tasks',
+    workRequestPhaseRouting: 'work_request_phase_routing',
+    work_request_phase_routing: 'work_request_phase_routing',
+    invoices: 'invoices',
+    disbursements: 'disbursements',
+    transmittals: 'transmittals',
   };
   const tableName = TABLE_NAME_MAP[change.table_name] || change.table_name;
 
@@ -464,6 +483,73 @@ const applyPendingChange = async (change, user) => {
         entityId: change.entity_id,
         data: proposed,
         user,
+      });
+    }
+    return;
+  }
+
+  if (tableName === 'work_request_phase_routing') {
+    const wrId = change.parent_record_id || proposed.id;
+    await operationsService.updateWorkRequest({
+      id: wrId,
+      entityId: change.entity_id,
+      data: { status: proposed.status },
+      user,
+    });
+    return;
+  }
+
+  if (tableName === 'invoices') {
+    if (change.parent_record_id) {
+      await billingService.updateInvoice({
+        entityId: change.entity_id,
+        id: change.parent_record_id,
+        userId: user.id,
+        data: proposed,
+      });
+    } else {
+      await billingService.createInvoice({
+        entityId: change.entity_id,
+        userId: user.id,
+        data: proposed,
+      });
+    }
+    return;
+  }
+
+  if (tableName === 'disbursements') {
+    if (change.parent_record_id) {
+      await disbursementsService.updateDisbursement({
+        entityId: change.entity_id,
+        id: change.parent_record_id,
+        userId: user.id,
+        data: proposed,
+      });
+    } else {
+      const entityCode = await getEntityCodeById(change.entity_id);
+      await disbursementsService.createDisbursement({
+        entityId: change.entity_id,
+        entityCode: entityCode || 'ATA',
+        userId: user.id,
+        data: proposed,
+      });
+    }
+    return;
+  }
+
+  if (tableName === 'transmittals') {
+    if (change.parent_record_id) {
+      await transmittalsService.updateTransmittal({
+        entityId: change.entity_id,
+        id: change.parent_record_id,
+        userId: user.id,
+        data: proposed,
+      });
+    } else {
+      await transmittalsService.createTransmittal({
+        entityId: change.entity_id,
+        userId: user.id,
+        data: proposed,
       });
     }
     return;

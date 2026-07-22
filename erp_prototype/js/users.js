@@ -686,14 +686,22 @@ const Users = {
               text: 'Approve Change',
               class: 'btn btn-success btn-sm',
               onClick: () => {
-                Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', async () => {
-                  try {
-                    await PendingChanges.approve(pc.id);
-                  } catch (e) {
-                    Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
-                    return;
-                  }
-                  location.hash = '#admin';
+                Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
+                  Workflow.runBlockingArchiveAction({
+                    title: 'Approving Change',
+                    message: `Please wait while "${pc.title || 'the change'}" is being approved...`,
+                    apiCall: async () => {
+                      return await PendingChanges.approve(pc.id);
+                    },
+                    successTitle: 'Approval Successful',
+                    successMessage: `"${pc.title || 'The change'}" has been approved successfully.`,
+                    onAfterConfirm: async () => {
+                      if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+                        window.SidePaneInstance.close({ silent: true });
+                      }
+                      location.hash = '#admin';
+                    }
+                  });
                 }, 'success');
               }
             });
@@ -703,14 +711,22 @@ const Users = {
               onClick: () => {
                 const reason = prompt('Enter rejection reason:');
                 if (reason !== null) {
-                  Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', async () => {
-                    try {
-                      await PendingChanges.reject(pc.id, reason);
-                    } catch (e) {
-                      Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
-                      return;
-                    }
-                    location.hash = '#admin';
+                  Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+                    Workflow.runBlockingArchiveAction({
+                      title: 'Rejecting Change',
+                      message: `Please wait while "${pc.title || 'the change'}" is being rejected...`,
+                      apiCall: async () => {
+                        return await PendingChanges.reject(pc.id, reason);
+                      },
+                      successTitle: 'Rejection Successful',
+                      successMessage: `"${pc.title || 'The change'}" has been rejected.`,
+                      onAfterConfirm: async () => {
+                        if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+                          window.SidePaneInstance.close({ silent: true });
+                        }
+                        location.hash = '#admin';
+                      }
+                    });
                   }, 'danger');
                 }
               }
@@ -2318,48 +2334,48 @@ const Users = {
   },
 
   approvePendingItem(item) {
-    if (item.kind === 'wrPhaseRouting') {
-      Workflow.showConfirm('Confirm Routing', `Approve routing for ${item.title} to ${item.raw?.proposedData?.status || 'next phase'}?`, async () => {
-        const nextPhase = item.raw?.proposedData?.status;
-        if (nextPhase) {
-          try {
-            await window.apiClient.workRequests.update(item.recordId, { status: nextPhase });
-          } catch (e) {
-            Workflow.showMessage('Approve Routing', e.message || 'Unable to update work request status.', 'error');
-            return;
-          }
+    const isRouting = item.kind === 'wrPhaseRouting';
+    const confirmTitle = isRouting ? 'Confirm Routing' : 'Confirm Approval';
+    const confirmMsg = isRouting 
+      ? `Approve routing for ${item.title} to ${item.raw?.proposedData?.status || 'next phase'}?`
+      : `Approve ${item.title}?`;
+
+    Workflow.showConfirm(confirmTitle, confirmMsg, () => {
+      Workflow.runBlockingArchiveAction({
+        title: isRouting ? 'Routing Work Request' : 'Approving Change',
+        message: `Please wait while "${item.title}" is being processed...`,
+        apiCall: async () => {
+          return await PendingChanges.approve(item.id);
+        },
+        successTitle: isRouting ? 'Routing Approved' : 'Approval Successful',
+        successMessage: isRouting 
+          ? `Work Request "${item.title}" has been successfully routed to ${item.raw?.proposedData?.status || 'next phase'}.`
+          : `"${item.title}" has been approved successfully.`,
+        onAfterConfirm: async () => {
+          App.handleRoute();
         }
-        try {
-          await PendingChanges.delete(item.id);
-        } catch (e) {
-          console.error('[Users.approvePendingItem] failed to withdraw routing pending change', e);
-        }
-        App.handleRoute();
-      }, 'success');
-      return;
-    }
-    if (item.type === 'change') {
-      Workflow.showConfirm('Confirm Approval', `Approve ${item.title}?`, async () => {
-        try {
-          await PendingChanges.approve(item.id);
-        } catch (e) {
-          Workflow.showMessage('Approve Change', e.message || 'Unable to approve change.', 'error');
-          return;
-        }
-        App.handleRoute();
-      }, 'success');
-    }
+      });
+    }, 'success');
   },
 
   rejectPendingItem(item) {
     const reason = prompt('Enter rejection reason:');
     if (reason === null) return;
 
-    if (item.type === 'change') {
-      PendingChanges.reject(item.id, reason).catch(e => {
-        Workflow.showMessage('Reject Change', e.message || 'Unable to reject change.', 'error');
-      }).finally(() => App.handleRoute());
-    }
+    Workflow.showConfirm('Confirm Rejection', `Are you sure you want to reject ${item.title}?`, () => {
+      Workflow.runBlockingArchiveAction({
+        title: 'Rejecting Change',
+        message: `Please wait while "${item.title}" is being rejected...`,
+        apiCall: async () => {
+          return await PendingChanges.reject(item.id, reason);
+        },
+        successTitle: 'Rejection Successful',
+        successMessage: `"${item.title}" has been rejected.`,
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
+    }, 'danger');
   },
 
   approveAll(categoryKey) {
@@ -2367,22 +2383,28 @@ const Users = {
     const items = categories[categoryKey] || [];
     if (items.length === 0) return;
 
-    let processed = 0;
-    items.forEach(item => {
-      if (item.type === 'change') {
-        PendingChanges.approve(item.id).catch(e => {
-          console.error('[Users.approveAll] approve failed', e);
-        });
-        processed++;
-      }
-    });
-
-    if (processed > 0) {
-      // Give the async approvals a moment to fire before re-rendering.
-      setTimeout(() => App.handleRoute(), 150);
-    } else {
-      Workflow.showMessage('Approve All', 'Some items require individual review and cannot be bulk-approved.', 'warning');
-    }
+    Workflow.showConfirm('Confirm Bulk Approval', `Are you sure you want to approve all ${items.length} items in this category?`, () => {
+      Workflow.runBlockingArchiveAction({
+        title: 'Bulk Approving Changes',
+        message: `Please wait while ${items.length} changes are being approved...`,
+        apiCall: async () => {
+          const promises = items.map(item => {
+            if (item.type === 'change') {
+              return PendingChanges.approve(item.id).catch(e => {
+                console.error('[Users.approveAll] approve failed', e);
+                throw e;
+              });
+            }
+          }).filter(Boolean);
+          return await Promise.all(promises);
+        },
+        successTitle: 'Bulk Approval Complete',
+        successMessage: `Successfully processed approvals.`,
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
+    }, 'success');
   },
 
   // Legacy board/table/list views kept for possible future toggles / backwards compatibility
@@ -3447,8 +3469,18 @@ const Users = {
       const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Change' });
       approveBtn.addEventListener('click', () => {
         Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
-          PendingChanges.approve(pc.id);
-          handleCloseAndRoute();
+          Workflow.runBlockingArchiveAction({
+            title: 'Approving Change',
+            message: `Please wait while "${pc.title || 'the change'}" is being approved...`,
+            apiCall: async () => {
+              return await PendingChanges.approve(pc.id);
+            },
+            successTitle: 'Approval Successful',
+            successMessage: `"${pc.title || 'The change'}" has been approved successfully.`,
+            onAfterConfirm: async () => {
+              handleCloseAndRoute();
+            }
+          });
         }, 'success');
       });
       actions.appendChild(approveBtn);
@@ -3457,8 +3489,20 @@ const Users = {
       rejectBtn.addEventListener('click', () => {
         const reason = prompt('Enter rejection reason:');
         if (reason !== null) {
-          PendingChanges.reject(pc.id, reason);
-          handleCloseAndRoute();
+          Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+            Workflow.runBlockingArchiveAction({
+              title: 'Rejecting Change',
+              message: `Please wait while "${pc.title || 'the change'}" is being rejected...`,
+              apiCall: async () => {
+                return await PendingChanges.reject(pc.id, reason);
+              },
+              successTitle: 'Rejection Successful',
+              successMessage: `"${pc.title || 'The change'}" has been rejected.`,
+              onAfterConfirm: async () => {
+                handleCloseAndRoute();
+              }
+            });
+          }, 'danger');
         }
       });
       actions.appendChild(rejectBtn);

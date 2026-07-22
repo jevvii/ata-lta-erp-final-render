@@ -8357,15 +8357,39 @@ const Workflow = {
           const btnRow = el('div', { style: 'display: flex; gap: 8px;' });
           const approveBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Approve' });
           approveBtn.addEventListener('click', () => {
-            PendingChanges.approve(pc.id);
-            App.handleRoute();
+            Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
+              Workflow.runBlockingArchiveAction({
+                title: 'Approving Change',
+                message: `Please wait while the change is being approved...`,
+                apiCall: async () => {
+                  return await PendingChanges.approve(pc.id);
+                },
+                successTitle: 'Approval Successful',
+                successMessage: 'The change has been approved successfully.',
+                onAfterConfirm: async () => {
+                  App.handleRoute();
+                }
+              });
+            }, 'success');
           });
           const rejectBtn = el('button', { class: 'btn btn-danger btn-xs', text: 'Reject' });
           rejectBtn.addEventListener('click', () => {
-            const reason = prompt('Rejection reason (optional):');
+            const reason = prompt('Enter rejection reason (optional):');
             if (reason !== null) {
-              PendingChanges.reject(pc.id, reason || '');
-              App.handleRoute();
+              Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+                Workflow.runBlockingArchiveAction({
+                  title: 'Rejecting Change',
+                  message: `Please wait while the change is being rejected...`,
+                  apiCall: async () => {
+                    return await PendingChanges.reject(pc.id, reason || '');
+                  },
+                  successTitle: 'Rejection Successful',
+                  successMessage: 'The change has been rejected.',
+                  onAfterConfirm: async () => {
+                    App.handleRoute();
+                  }
+                });
+              }, 'danger');
             }
           });
           btnRow.appendChild(approveBtn);
