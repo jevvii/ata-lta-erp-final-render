@@ -271,13 +271,10 @@ const PendingChanges = {
   async getById(id) {
     const api = this._api();
     if (!api || !id) return null;
-    try {
-      const res = await api.pendingApprovals.get(id);
-      if (res?.data) return this._normalize(res.data);
-    } catch (err) {
-      // Fallback: check if id is a direct disbursement record
-    }
-    if (api && api.disbursements) {
+
+    // Fast-path lookup for direct disbursement records to eliminate 404 delay from pending-approvals endpoint
+    const isDisbId = String(id).startsWith('disb-') || String(id).includes('disbursement');
+    if (isDisbId && api.disbursements) {
       try {
         const disbRes = await api.disbursements.get(id);
         const d = disbRes?.data;
@@ -296,7 +293,36 @@ const PendingChanges = {
           };
         }
       } catch (e) {
-        // ignore fallback errors
+        // ignore fast-path failure and fallback to pendingApprovals
+      }
+    }
+
+    try {
+      const res = await api.pendingApprovals.get(id);
+      if (res?.data) return this._normalize(res.data);
+    } catch (err) {
+      // Fallback if ID is a disbursement but did not match isDisbId prefix
+      if (api && api.disbursements && !isDisbId) {
+        try {
+          const disbRes = await api.disbursements.get(id);
+          const d = disbRes?.data;
+          if (d) {
+            const isRejected = d.status === 'Rejected';
+            return {
+              id: d.id,
+              table: 'disbursements',
+              tableName: 'disbursements',
+              parentRecordId: d.id,
+              status: isRejected ? 'rejected' : 'pending',
+              rejectionReason: d.rejectionReason || d.rejection_reason || null,
+              submittedBy: d.employeeId || d.employee_id || d.createdBy || d.created_by || (typeof Auth !== 'undefined' ? Auth.user?.id : null),
+              submittedAt: d.createdAt || d.created_at || d.updatedAt || new Date().toISOString(),
+              proposedData: d
+            };
+          }
+        } catch (e) {
+          // ignore fallback errors
+        }
       }
     }
     return null;
