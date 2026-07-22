@@ -9299,7 +9299,8 @@ const Workflow = {
 
         // 8. Time cell
         const cellTime = el('div', {
-          class: 'cell time-cell font-mono',
+          class: 'cell time-cell font-mono task-time-cell',
+          'data-task-id': t.id,
           text: hours > 0 ? `${hours}h` : 'N/A'
         });
         rowEl.appendChild(cellTime);
@@ -10879,6 +10880,11 @@ const Workflow = {
     const totalLabels = document.querySelectorAll(`.task-total-hours-label[data-task-id="${taskId}"]`);
     totalLabels.forEach(lbl => {
       lbl.textContent = `Total: ${totalHours} hrs`;
+    });
+
+    const timeCells = document.querySelectorAll(`.task-time-cell[data-task-id="${taskId}"]`);
+    timeCells.forEach(cell => {
+      cell.textContent = totalHours > 0 ? `${totalHours}h` : 'N/A';
     });
 
     for (const container of listContainers) {
