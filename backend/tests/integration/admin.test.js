@@ -51,6 +51,42 @@ describe('/v1/admin', () => {
     expect(list.body.data.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('updates a user successfully', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    // Create the user profile row in the mock db first
+    mockTables.users.set('user-to-update-id', {
+      id: 'user-to-update-id',
+      auth_user_id: 'auth-user-to-update',
+      email: 'user-to-update@ata-lta.ph',
+      name: 'User To Update',
+      role: 'Accounting',
+      entities: ['ATA'],
+      is_active: true,
+    });
+
+    const res = await request(app)
+      .put('/v1/admin/users/user-to-update-id')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        email: 'updated-email@ata-lta.ph',
+        name: 'Updated Name',
+        role: 'Operations',
+        entities: ['ATA', 'LTA'],
+        departments: ['Operations'],
+      })
+      .expect(200);
+
+    expect(res.body.data.name).toBe('Updated Name');
+    expect(res.body.data.email).toBe('updated-email@ata-lta.ph');
+  });
+
   it('rejects invalid department assignments', async () => {
     const admin = registerUser({
       email: 'admin@ata-lta.ph',

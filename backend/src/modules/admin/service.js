@@ -224,8 +224,45 @@ const updateUser = async ({ id, data, updatedBy: _updatedBy }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'User not found' });
   }
 
+  const { data: userRow } = await supabaseAdmin
+    .from('users')
+    .select('auth_user_id')
+    .eq('id', id)
+    .maybeSingle();
+
+  const authUserId = userRow?.auth_user_id;
+
+  if (authUserId) {
+    if (data.email && data.email !== existing.email) {
+      const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+        email: data.email,
+      });
+      if (authError) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Auth Error',
+          detail: authError.message || 'Unable to update email in Supabase Auth',
+        });
+      }
+    }
+
+    if (data.password) {
+      const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+        password: data.password,
+      });
+      if (authError) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Auth Error',
+          detail: authError.message || 'Unable to update password in Supabase Auth',
+        });
+      }
+    }
+  }
+
   const updates = {
     name: data.name ?? existing.name,
+    email: data.email ?? existing.email,
     role: data.role ?? existing.role,
     entities: data.entities ?? existing.entities,
     is_active: data.isActive ?? existing.isActive,
