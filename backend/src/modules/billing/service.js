@@ -25,12 +25,19 @@ const { resolveEntityCode } = require('../../lib/entityResolver');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {} }) => {
-  const { status, clientId, linkedTaskId, search, archived, includeDeleted, page = 1, limit = 50 } = filters;
+  const {
+    status,
+    clientId,
+    linkedTaskId,
+    search,
+    archived,
+    includeDeleted,
+    page = 1,
+    limit = 50,
+  } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin
-    .from('invoices')
-    .select('*, clients(name)', { count: 'exact' });
+  let query = supabaseAdmin.from('invoices').select('*, clients(name)', { count: 'exact' });
 
   if (includeDeleted !== true && includeDeleted !== 'true') {
     query = query.is('deleted_at', null);
@@ -217,7 +224,12 @@ const getInvoiceById = async ({ entityId, id }) => {
     .order('payment_date', { ascending: false });
 
   const entityCode = await resolveEntityCode(invoice.entity_id);
-  return { ...invoice, entity_code: entityCode, line_items: lineItems || [], payments: payments || [] };
+  return {
+    ...invoice,
+    entity_code: entityCode,
+    line_items: lineItems || [],
+    payments: payments || [],
+  };
 };
 
 /**
@@ -276,7 +288,8 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
         throw new AppError({
           statusCode: 400,
           title: 'Bad Request',
-          detail: 'Invoice can only be marked Overdue if the due date has passed and balance remains unpaid.',
+          detail:
+            'Invoice can only be marked Overdue if the due date has passed and balance remains unpaid.',
         });
       }
     }
@@ -410,13 +423,13 @@ const deleteInvoice = async ({ entityId, id, userId }) => {
  */
 const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
   const invoice = await getInvoiceById({ entityId, id: invoiceId });
-  const releasedStatuses = ['Sent', 'Partially Paid', 'Overdue'];
+  const releasedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Overdue'];
 
   if (!releasedStatuses.includes(invoice.status)) {
     throw new AppError({
       statusCode: 400,
       title: 'Bad Request',
-      detail: `Cannot record payment on invoice in "${invoice.status}" status. Payments can only be recorded once the invoice is released (Sent, Partially Paid, or Overdue).`,
+      detail: `Cannot record payment on invoice in "${invoice.status}" status. Payments can only be recorded once the invoice is released (Approved, Sent, Partially Paid, or Overdue).`,
     });
   }
 
@@ -993,7 +1006,11 @@ const archiveInvoice = async ({ entityId, id, userId }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive invoice' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to archive invoice',
+    });
   }
 
   await auditService.log({
@@ -1023,7 +1040,11 @@ const unarchiveInvoice = async ({ entityId, id, userId }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive invoice' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to unarchive invoice',
+    });
   }
 
   await auditService.log({
