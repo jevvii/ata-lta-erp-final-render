@@ -723,6 +723,11 @@ const Billing = {
         ]
       }));
     } else {
+      const isOperations = Auth.user?.departments?.includes('Operations');
+      if (isOperations && ['templates', 'aging', 'templateForm'].includes(this.view)) {
+        this.view = 'list';
+        location.hash = '#billing';
+      }
       container.classList.add('billing-tab-page');
       // Tab views: list, templates, aging, archive
       const titleBar = el('div', { class: 'page-title-bar-v2' });
@@ -779,12 +784,19 @@ const Billing = {
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
+    const isOperations = Auth.user?.departments?.includes('Operations');
     const tabs = [
-      { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount },
-      { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
-      { key: 'aging', label: 'Aging Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' },
-      { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
+      { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount }
     ];
+    if (!isOperations) {
+      tabs.push(
+        { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
+        { key: 'aging', label: 'Aging Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' }
+      );
+    }
+    tabs.push(
+      { key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount }
+    );
 
     const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
       this.view = key;
@@ -1480,7 +1492,7 @@ const Billing = {
         wrapper.appendChild(trashBtn);
       }
 
-      if (inv.status === 'Paid' && !inv.archived) {
+      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
         const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
         archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveInvoice(inv.id); });
         wrapper.appendChild(archiveBtn);
@@ -1746,7 +1758,7 @@ const Billing = {
         });
       }
 
-      if (inv.status === 'Paid' && !inv.archived) {
+      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
         items.push({
           label: 'Archive',
           className: 'primary',
@@ -3156,7 +3168,7 @@ const Billing = {
         App.handleRoute();
       });
       actions.appendChild(sentBtn);
-    } else if (inv.status === 'Paid' && !inv.archived) {
+    } else if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
       const archiveBtn = el('button', { class: 'btn btn-primary', text: 'Archive Invoice', style: 'margin-right:8px;' });
       archiveBtn.addEventListener('click', () => this.archiveInvoice(inv.id));
       actions.appendChild(archiveBtn);
@@ -4894,13 +4906,13 @@ const Billing = {
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#billing/detail/' + inv.id; }
           },
-          ...(category === 'accomplished' ? [{
+          ...(category === 'accomplished' && !Auth.user?.departments?.includes('Operations') ? [{
             label: 'Unarchive',
             icon: ArchivePage.icons.unarchive,
             className: 'primary',
             onClick: () => self.unarchiveInvoice(inv.id)
           }] : []),
-          ...(category === 'cancelled' ? [{
+          ...(category === 'cancelled' && !Auth.user?.departments?.includes('Operations') ? [{
             label: 'Restore to Draft',
             icon: ArchivePage.icons.restore,
             className: 'primary',
