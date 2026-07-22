@@ -418,6 +418,16 @@ const PendingChanges = {
    */
   canApproveChange(pc) {
     if (!pc) return false;
+    if (Auth.user?.role === 'Admin') return true;
+    if (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management')) {
+      const submitter = (typeof window !== 'undefined' && window.apiClient?.userCache)
+        ? window.apiClient.userCache.getById(pc.submittedBy)
+        : null;
+      const submitterRole = pc.submittedByRole || pc.submitter?.role || (submitter ? submitter.role : null);
+      if (submitterRole === 'Admin') {
+        return false;
+      }
+    }
     return Auth.canApproveChange(pc.table || pc.tableName);
   },
 
