@@ -453,6 +453,9 @@ const Users = {
     const now = Date.now();
 
     try {
+      if (typeof window.apiClient?.userCache?.ensure === 'function') {
+        await window.apiClient.userCache.ensure();
+      }
       if (typeof window.apiClient?.admin?.invalidateAuditCount === 'function') {
         window.apiClient.admin.invalidateAuditCount();
       }
@@ -2107,7 +2110,16 @@ const Users = {
 
   getPendingCategories() {
     const entity = Auth.activeEntity;
-    const allPendingChanges = (this._cachedAllPending || []).filter(pc => PendingChanges.canApproveChange(pc));
+    const isManagerNotAdmin = Auth.user?.role !== 'Admin' && (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management'));
+
+    const allPendingChanges = (this._cachedAllPending || []).filter(pc => {
+      if (isManagerNotAdmin) {
+        const submitter = window.apiClient?.userCache?.getById(pc.submittedBy);
+        const submitterRole = pc.submittedByRole || pc.submitter?.role || (submitter ? submitter.role : null);
+        if (submitterRole === 'Admin') return false;
+      }
+      return PendingChanges.canApproveChange(pc);
+    });
 
     const entFilter = ent => {
       const uEnt = (ent || '').toUpperCase();
@@ -2244,7 +2256,9 @@ const Users = {
       }
       if (!entFilter(itemEntity)) return;
 
-      const submitter = window.apiClient.userCache.getById(normReq.requestedBy);
+      const submitter = window.apiClient?.userCache?.getById(normReq.requestedBy);
+      const submitterRole = normReq.requestedByRole || (submitter ? submitter.role : null);
+      if (isManagerNotAdmin && submitterRole === 'Admin') return;
       if (normReq.type === 'billing') {
         const invNum = normReq.invoiceNumber ? ` (${normReq.invoiceNumber})` : '';
         billingToRelease.push({
@@ -2678,6 +2692,15 @@ const Users = {
     }
 
     let pendingChanges = (this._cachedAllPending || []);
+    const isManagerNotAdmin = Auth.user?.role !== 'Admin' && (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management'));
+    if (isManagerNotAdmin) {
+      pendingChanges = pendingChanges.filter(pc => {
+        const submitter = window.apiClient?.userCache?.getById(pc.submittedBy);
+        const submitterRole = pc.submittedByRole || pc.submitter?.role || (submitter ? submitter.role : null);
+        if (submitterRole === 'Admin') return false;
+        return true;
+      });
+    }
     pendingChanges = pendingChanges.filter(pc => PendingChanges.canApproveChange(pc));
 
     if (pendingChanges.length === 0) {
