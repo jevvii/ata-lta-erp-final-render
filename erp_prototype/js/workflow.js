@@ -1538,7 +1538,7 @@ const Workflow = {
     serverTemplates.forEach(serverT => {
       const existing = existingMap.get(serverT.id);
       if (existing) Object.assign(existing, serverT);
-      else if (!this._isTempId(serverT.id)) this._retainerTemplates.push(serverT);
+      else if (!WorkflowData._isTempId(serverT.id)) this._retainerTemplates.push(serverT);
     });
   },
 
@@ -7417,6 +7417,47 @@ const Workflow = {
         message: 'Please wait while the Work Request is being saved...',
         apiCall: async () => {
           submitResult = await PendingChanges.submit('workRequests', record, isNew);
+
+          if (data.isRetainer) {
+            const tmplId = generateId('rt');
+            const tmplMap = new Map();
+            tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
+            const tmplTasks = tasks.map((t, i) => {
+              const preds = t.predecessorKeys.includes('*')
+                ? tasks.slice(0, i).map(pt => tmplMap.get(pt.key)).filter(Boolean)
+                : t.predecessorKeys.map(k => tmplMap.get(k)).filter(Boolean);
+              return {
+                id: tmplMap.get(t.key),
+                title: t.title,
+                assigneeId: t.assigneeId || null,
+                assigneeName: t.assigneeName || null,
+                coAssignees: t.coAssignees || [],
+                predecessors: preds
+              };
+            });
+            try {
+              const tmplRes = await window.apiClient.operations.createTemplate({
+                id: tmplId,
+                name: record.title,
+                title: record.title,
+                description: record.description,
+                clientId: record.clientId,
+                entity: record.entity,
+                schedule: data.schedule || 'monthly',
+                priority: record.priority || 'Normal',
+                assignedTo: record.assignedTo || null,
+                pfAmount: 0,
+                tasks: tmplTasks
+              });
+              const createdTmpl = this._normalizeRetainerTemplate(tmplRes.data);
+              if (!this._retainerTemplates) this._retainerTemplates = [];
+              this._retainerTemplates.push(createdTmpl);
+            } catch (err) {
+              console.error('Failed to create retainer template', err);
+              throw err;
+            }
+          }
+
           if (submitResult.approved) {
             // Optimistic insert so counts and the list under the overlay update immediately.
             record.tasks = [];
@@ -7474,50 +7515,12 @@ const Workflow = {
       });
 
       if (runResult.success) {
-        if (submitResult && submitResult.approved) {
-          if (typeof Dashboard !== 'undefined') {
-            if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-            else if (Dashboard._dataCache) Dashboard._dataCache = null;
-          }
-          this._invalidateCountsAndSidebar();
-
-          if (data.isRetainer) {
-            const tmplId = generateId('rt');
-            const tmplMap = new Map();
-            tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
-            const tmplTasks = tasks.map((t, i) => {
-              const preds = t.predecessorKeys.includes('*')
-                ? tasks.slice(0, i).map(pt => tmplMap.get(pt.key)).filter(Boolean)
-                : t.predecessorKeys.map(k => tmplMap.get(k)).filter(Boolean);
-              return {
-                id: tmplMap.get(t.key),
-                title: t.title,
-                assigneeId: t.assigneeId || null,
-                assigneeName: t.assigneeName || null,
-                coAssignees: t.coAssignees || [],
-                predecessors: preds
-              };
-            });
-            await this._addRetainerTemplate({
-              id: tmplId,
-              name: record.title,
-              title: record.title,
-              description: record.description,
-              clientId: record.clientId,
-              entity: record.entity,
-              schedule: data.schedule || 'monthly',
-              priority: record.priority || 'Normal',
-              assignedTo: record.assignedTo || null,
-              pfAmount: 0,
-              tasks: tmplTasks,
-              createdAt: now,
-              updatedAt: now
-            }).catch(err => console.error('Failed to create retainer template', err));
-          }
-
-          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        if (typeof Dashboard !== 'undefined') {
+          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+          else if (Dashboard._dataCache) Dashboard._dataCache = null;
         }
+        this._invalidateCountsAndSidebar();
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
         closeFormPanelAndRoute(targetRoute);
       } else {
         App.handleRoute();
