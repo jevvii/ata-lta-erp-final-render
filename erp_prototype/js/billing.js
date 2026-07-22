@@ -1784,13 +1784,14 @@ const Billing = {
         if (currentIdx === -1 || targetIdx === -1) return false;
         if (targetIdx <= currentIdx) return false;
 
-        // Payment status transitions require recorded payments that match the target.
+        // Payment status transitions require recorded payments that match the target AND invoice must be released.
         const paid = self.getPaidAmount(item);
+        const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(item.status);
         if (targetStatus === 'Partially Paid') {
-          return paid > 0 && paid < item.total;
+          return isReleased && paid > 0 && paid < item.total;
         }
         if (targetStatus === 'Paid') {
-          return item.total > 0 && paid >= item.total;
+          return isReleased && item.total > 0 && paid >= item.total;
         }
         return true;
       },
@@ -1804,6 +1805,13 @@ const Billing = {
 
         if (targetStatus !== 'Partially Paid' && targetStatus !== 'Paid') return;
         const paid = self.getPaidAmount(item);
+        const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(item.status);
+
+        if (!isReleased) {
+          Workflow.showMessage('Invoice Not Released', `Invoice "${item.invoiceNumber}" is in ${item.status} status and has not been released yet. Payments can only be recorded after an invoice is approved and released to the client.`, 'warning');
+          return;
+        }
+
         if (targetStatus === 'Partially Paid') {
           if (paid <= 0) {
             Workflow.showMessage('Payment Required', `Invoice "${item.invoiceNumber}" cannot be marked Partially Paid — no payments have been recorded.`, 'warning');
@@ -2892,7 +2900,8 @@ const Billing = {
 
     // Payment recording — billing:edit (Accounting/Admin) or billing:mark_paid (Manager)
     const canRecordPayment = Auth.can('billing:edit') || Auth.can('billing:mark_paid');
-    if (canRecordPayment && inv.status !== 'Paid' && inv.status !== 'Cancelled' && inv.status !== 'Pending') {
+    const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(inv.status);
+    if (canRecordPayment && isReleased) {
       const paySection = el('div', { class: 'form-section' });
       paySection.appendChild(el('h3', { text: 'Record Payment' }));
       const payForm = el('form', { class: 'form-stacked' });
