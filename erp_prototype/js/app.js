@@ -233,7 +233,7 @@ const App = {
     // Admin nav badge: reflect pending approvals / pending submissions to draw attention.
     const adminNav = document.querySelector('nav a[href="#admin"]');
     if (adminNav) {
-      const canManageUsers = Auth.can('users:view');
+      const canManageUsers = Auth.user?.role === 'Admin';
       let adminCount = 0;
       if (canManageUsers) {
         // For admins/managers-with-user-access: count all pending approvals.
@@ -292,7 +292,7 @@ const App = {
     this.renderEntitySwitcher();
 
     const adminNav = document.querySelector('nav a[href="#admin"]');
-    const canManageUsers = Auth.can('users:view');
+    const canManageUsers = Auth.user?.role === 'Admin';
     if (adminNav) {
       const labelEl = adminNav.querySelector('.nav-link-text');
       if (Auth.user.role === 'Admin') {
@@ -460,7 +460,7 @@ const App = {
           '#billing': () => { if (typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; } },
           '#disbursement': () => { if (typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; } },
           '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } },
-          '#admin': () => { if (typeof Users !== 'undefined') { Users.view = 'users'; Users.editingId = null; Users.pendingDetailId = null; } }
+          '#admin': () => { if (typeof Users !== 'undefined') { Users.view = Auth.user?.role === 'Admin' ? 'users' : 'myPending'; Users.editingId = null; Users.pendingDetailId = null; } }
         };
         if (moduleViewMap[href]) moduleViewMap[href]();
         if (location.hash === href) {

@@ -444,7 +444,7 @@ const Users = {
    * Pre-fetch tab-badge counts so renderTabNav can read them synchronously.
    */
   async loadCounts() {
-    const canManageUsers = Auth.can('users:view');
+    const canManageUsers = Auth.user?.role === 'Admin';
 
     try {
       if (typeof window.apiClient?.admin?.invalidateAuditCount === 'function') {
@@ -489,7 +489,7 @@ const Users = {
     const container = el('div', { class: 'page admin-tab-page' });
 
     const isAdmin = Auth.user.role === 'Admin';
-    const canManageUsers = Auth.can('users:view');
+    const canManageUsers = isAdmin;
     const departments = Auth.user?.departments || [];
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
@@ -508,14 +508,14 @@ const Users = {
           this.view = 'users';
         }
       } else {
-        const defaultToRequests = hasOperations || hasManagement;
+        const showRequestsTab = hasOperations || hasManagement;
         const validViews = ['myPending'];
-        if (defaultToRequests) validViews.push('myRequests');
+        if (showRequestsTab) validViews.push('myRequests');
         if (hasManagement) validViews.push('pending');
         if (urlAdminView && validViews.includes(urlAdminView)) {
           this.view = urlAdminView;
         } else {
-          this.view = defaultToRequests ? 'myRequests' : 'myPending';
+          this.view = 'myPending';
         }
       }
       this.filters = { category: '', status: '', dateFrom: '', dateTo: '' };
@@ -536,7 +536,7 @@ const Users = {
       if (isManager) validViews.push('pending');
 
       if (!validViews.includes(this.view)) {
-        this.view = showRequestsTab ? 'myRequests' : 'myPending';
+        this.view = 'myPending';
       }
     }
 
@@ -809,7 +809,7 @@ const Users = {
   },
 
   renderTabNav() {
-    const canManageUsers = Auth.can('users:view');
+    const canManageUsers = Auth.user?.role === 'Admin';
 
     const changeTab = (key) => {
       this.view = key;

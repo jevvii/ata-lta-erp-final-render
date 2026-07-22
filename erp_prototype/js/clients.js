@@ -673,7 +673,7 @@ const Clients = {
       App.handleRoute();
     });
 
-    if (Auth.can('clients:edit') && this.activeTab === 'active') {
+    if (Auth.user?.role === 'Admin' && this.activeTab === 'active') {
       const addBtn = el('button', {
         class: 'btn btn-primary btn-sm',
         style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
@@ -907,7 +907,11 @@ const Clients = {
       const keyLink = el('a', { class: 'jira-key-link', href: '#clients', text: keyVal });
       keyLink.addEventListener('click', (e) => {
         e.preventDefault();
-        this.showForm(client.id);
+        if (Auth.user?.role === 'Admin') {
+          this.showForm(client.id);
+        } else {
+          chevBtn.click();
+        }
       });
       workDiv.appendChild(keyLink);
 
@@ -1133,11 +1137,15 @@ const Clients = {
     const footer = el('div', { class: 'jira-table-footer' });
     container.appendChild(footer);
 
-    const footerLeft = el('button', { class: 'jira-footer-create-btn', html: '<span style="font-size:14px; font-weight:bold;">+</span> Create' });
-    footerLeft.addEventListener('click', () => {
-      this.showForm();
-    });
-    footer.appendChild(footerLeft);
+    if (isAdmin) {
+      const footerLeft = el('button', { class: 'jira-footer-create-btn', html: '<span style="font-size:14px; font-weight:bold;">+</span> Create' });
+      footerLeft.addEventListener('click', () => {
+        this.showForm();
+      });
+      footer.appendChild(footerLeft);
+    } else {
+      footer.appendChild(el('div'));
+    }
 
     const footerCenter = el('div', { class: 'jira-footer-center' });
     const countText = `${clients.length} of ${clients.length}`;
@@ -1558,8 +1566,11 @@ const Clients = {
     };
 
     const isNew = !this.editingId || this.editingId === 'new';
-    const canEditDirectly = Auth.can('clients:edit');
-    const isApproved = canEditDirectly || Auth.user.role === 'Admin' || Auth.isManagerial();
+    const isAdmin = Auth.user?.role === 'Admin';
+    if (!isAdmin) {
+      Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
+      return;
+    }
 
     if (isNew) {
       await Workflow.runBlockingArchiveAction({
@@ -2040,7 +2051,7 @@ const Clients = {
       console.error('Failed to load rejected client records', e);
     }
 
-    const canEdit = Auth.can('clients:edit');
+    const canEdit = Auth.user?.role === 'Admin';
 
     const buildItem = (c, category) => {
       const pocUser = window.apiClient.userCache.getById(c.contactUserId);
