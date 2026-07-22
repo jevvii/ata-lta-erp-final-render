@@ -187,6 +187,43 @@ describe('/v1/invoices', () => {
     expect(invoice.body.data.status).toBe('Partially Paid');
   });
 
+  it('records a payment on an Approved invoice and updates invoice balance', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validInvoice)
+      .expect(201);
+
+    mockTables.invoices.get(created.body.data.id).status = 'Approved';
+
+    const res = await request(app)
+      .post(`/v1/invoices/${created.body.data.id}/payments`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ amount: 5000, method: 'Bank Transfer', reference: 'REF-1', date: '2026-07-15' })
+      .expect(201);
+
+    expect(res.body.data.amount).toBe(5000);
+
+    const invoice = await request(app)
+      .get(`/v1/invoices/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(invoice.body.data.amount_paid).toBe(5000);
+    expect(invoice.body.data.balance).toBe(5000);
+    expect(invoice.body.data.status).toBe('Partially Paid');
+  });
+
   it('rejects recording payment on a Draft invoice', async () => {
     const admin = registerUser({
       email: 'admin@ata-lta.ph',
