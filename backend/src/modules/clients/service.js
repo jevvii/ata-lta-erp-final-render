@@ -268,24 +268,7 @@ const createClient = async ({ entityId, data, createdBy }) => {
   return getClientById({ id: clientId, entityId });
 };
 
-/**
- * Find an active client by TIN within an entity.
- * @param {string} entityId
- * @param {string} tin
- * @returns {Promise<object|null>}
- */
-const findClientByTin = async (entityId, tin) => {
-  const { data, error } = await supabaseAdmin
-    .from('clients')
-    .select('id')
-    .eq('entity_id', entityId)
-    .eq('tin', tin)
-    .is('deleted_at', null)
-    .maybeSingle();
 
-  if (error) return null;
-  return data || null;
-};
 
 /**
  * Upsert contact details for a client.

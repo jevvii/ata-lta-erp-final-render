@@ -39,6 +39,8 @@ const createDisbursementSchema = z.object({
   linkedTaskId: z.string().uuid().optional().nullable(),
   dueDate: z.string().optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
+  receiptS3Key: z.string().max(500).optional().nullable(),
+  receiptFilename: z.string().max(255).optional().nullable(),
 });
 
 /**

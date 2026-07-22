@@ -11,11 +11,9 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const {
   getSignedUploadUrl,
   getSignedDownloadUrl,
-  deleteObject,
 } = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
-const logger = require('../../lib/logger');
 
 /**
  * Sanitize a file name for safe storage.

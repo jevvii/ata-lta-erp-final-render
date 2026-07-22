@@ -3315,6 +3315,23 @@ const Workflow = {
       const receiptInput = form.querySelector('input[name="receipt"]');
       const receiptFile = receiptInput?.files?.[0];
 
+      let receiptS3Key = null;
+      let receiptFilename = null;
+
+      if (receiptFile) {
+        try {
+          const uploaded = await this.uploadReceipt(receiptFile, {
+            workRequestId: data.linkedWorkRequestId || null,
+            clientId: wr?.clientId || null,
+            linkedTaskId: data.linkedTaskId || null
+          });
+          receiptS3Key = uploaded.id;
+          receiptFilename = uploaded.name;
+        } catch (err) {
+          return;
+        }
+      }
+
       const record = {
         category: data.category,
         description: desc,
@@ -3329,7 +3346,8 @@ const Workflow = {
         status: 'Submitted',
         submittedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
-        receiptFilename: receiptFile ? receiptFile.name : null
+        receiptS3Key: receiptS3Key,
+        receiptFilename: receiptFilename
       };
 
       try {
@@ -10428,6 +10446,59 @@ const Workflow = {
       await new Promise(resolve => setTimeout(resolve, intervalMs));
     }
     throw new Error('Time log was saved but is not yet available in the task details due to synchronization delay.');
+  },
+  async uploadReceipt(file, options = {}) {
+    if (!file) return null;
+    if (file.size > 50 * 1024 * 1024) {
+      this.showMessage('File Too Large', 'Files must be 50 MB or smaller.', 'warning');
+      throw new Error('File size exceeds 50 MB limit');
+    }
+
+    const runUpload = await this.runBlockingArchiveAction({
+      title: 'Uploading Receipt',
+      message: 'Please wait while the receipt file is being uploaded...',
+      apiCall: async () => {
+        const metadata = {
+          fileName: file.name,
+          originalName: file.name,
+          contentType: file.type || 'application/octet-stream',
+          fileSize: file.size,
+          documentType: 'receipt',
+          category: 'OTHER',
+          description: options.description || 'Disbursement receipt',
+          workRequestId: options.workRequestId || null,
+          clientId: options.clientId || null,
+          linkedTaskId: options.linkedTaskId || null,
+        };
+
+        const createRes = await window.apiClient.documents.create(metadata);
+        const { document: dmsDoc, uploadUrl } = createRes.data;
+
+        const uploadRes = await fetch(uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': metadata.contentType },
+          body: file,
+        });
+        if (!uploadRes.ok) {
+          throw new Error(`Storage upload failed: ${uploadRes.status}`);
+        }
+
+        await window.apiClient.documents.confirmUpload(dmsDoc.id);
+        return { data: dmsDoc };
+      },
+      successTitle: 'Upload Succeeded',
+      successMessage: 'Receipt uploaded successfully.',
+      errorTitle: 'Upload Failed'
+    });
+
+    if (!runUpload.success) {
+      throw new Error('Receipt upload was not successful');
+    }
+
+    return {
+      id: runUpload.data.id,
+      name: file.name
+    };
   },
 
   async uploadTaskDocument(taskId, file, options = {}) {

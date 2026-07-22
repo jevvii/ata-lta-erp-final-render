@@ -168,11 +168,6 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
   };
 };
 
-const isManagerial = (user) =>
-  user.role === 'Admin' ||
-  user.role === 'Manager' ||
-  (user.departments || []).includes('Management');
-
 const isBackOffice = (user) => {
   if (!user) return false;
   const depts = user.departments || [];
