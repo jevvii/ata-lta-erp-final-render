@@ -9901,6 +9901,23 @@ const Workflow = {
         const timeSection = el('div', { class: 'detail-block' });
         const timeHeader = el('div', { class: 'detail-section-title' });
         timeHeader.appendChild(el('span', { text: 'Time Log History' }));
+        
+        const totalHours = getTaskTotalHours(t);
+        const totalHrsSpan = el('span', {
+          text: `Total: ${totalHours} hrs`,
+          class: 'task-total-hours-label',
+          'data-task-id': t.id,
+          style: 'font-size: 0.75rem; color: var(--color-text-muted); font-weight: normal; margin-left: 8px;'
+        });
+        timeHeader.appendChild(totalHrsSpan);
+
+        if (!isArchived) {
+          const addTimeBtn = el('button', { class: 'btn btn-primary btn-xs btn-add-inline', text: '+ Log Time' });
+          if (!disableIfPending(addTimeBtn, wr)) {
+            addTimeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddTimeLogModal(t.id); });
+          }
+          timeHeader.appendChild(addTimeBtn);
+        }
         timeSection.appendChild(timeHeader);
 
         const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': t.id });
