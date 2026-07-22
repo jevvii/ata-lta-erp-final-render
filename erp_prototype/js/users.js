@@ -534,9 +534,11 @@ const Users = {
         }
       } else {
         const showRequestsTab = hasOperations || hasManagement;
+        const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
+        const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
         const validViews = ['myPending'];
         if (showRequestsTab) validViews.push('myRequests');
-        if (hasManagement) validViews.push('pending');
+        if (showPendingTab) validViews.push('pending');
         if (urlAdminView && validViews.includes(urlAdminView)) {
           this.view = urlAdminView;
         } else {
@@ -555,10 +557,11 @@ const Users = {
       if (!validAdminViews.includes(this.view) && !isUrlDrivenDetail) this.view = 'users';
     } else {
       const showRequestsTab = hasOperations || hasManagement;
-      const isManager = hasManagement;
+      const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
+      const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
       const validViews = ['myPending'];
       if (showRequestsTab) validViews.push('myRequests');
-      if (isManager) validViews.push('pending');
+      if (showPendingTab) validViews.push('pending');
 
       if (!validViews.includes(this.view)) {
         this.view = 'myPending';
@@ -867,12 +870,13 @@ const Users = {
     const departments = Auth.user?.departments || [];
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
+    const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
     const showRequestsTab = hasOperations || hasManagement;
     if (showRequestsTab) {
       tabs.push({ key: 'myRequests', label: 'My Requests', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>', count: this._counts.myRequests });
     }
-    const isManager = hasManagement;
-    if (isManager) {
+    const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
+    if (showPendingTab) {
       const pendingCount = (() => {
         if (typeof this.getPendingCategories !== 'function') return 0;
         const categories = this.getPendingCategories();
@@ -2110,10 +2114,19 @@ const Users = {
 
   getPendingCategories() {
     const entity = Auth.activeEntity;
-    const isManagerNotAdmin = Auth.user?.role !== 'Admin' && (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management'));
+    const isAdmin = Auth.user?.role === 'Admin';
+    const isManager = !isAdmin && (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management'));
+    const isAccounting = !isAdmin && (Auth.user?.role === 'Accounting' || (Auth.user?.departments || []).includes('Accounting'));
 
     const allPendingChanges = (this._cachedAllPending || []).filter(pc => {
-      if (isManagerNotAdmin) {
+      const table = pc.table || pc.tableName;
+      if (isManager && !isAccounting && table !== 'tasks') {
+        return false;
+      }
+      if (isAccounting && !isManager && table !== 'invoices' && table !== 'disbursements') {
+        return false;
+      }
+      if (isManager) {
         const submitter = window.apiClient?.userCache?.getById(pc.submittedBy);
         const submitterRole = pc.submittedByRole || pc.submitter?.role || (submitter ? submitter.role : null);
         if (submitterRole === 'Admin') return false;
@@ -2137,12 +2150,12 @@ const Users = {
     allPendingChanges.forEach(pc => {
       const isNew = !pc.parentRecordId;
       const data = pc.proposedData || {};
-      const submitter = window.apiClient.userCache.getById(pc.submittedBy);
+      const submitter = window.apiClient?.userCache?.getById(pc.submittedBy);
 
       // Resolve the entity for the pending change
       let itemEntity = data.entity;
       if (pc.table === 'workRequestPhaseRouting') {
-        const wr = window.apiClient.workRequestCache.getById(pc.parentRecordId);
+        const wr = window.apiClient?.workRequestCache?.getById(pc.parentRecordId);
         itemEntity = wr?.entity;
       }
       if (!itemEntity || itemEntity === 'ALL') {
@@ -2152,7 +2165,7 @@ const Users = {
       // Filter by the active entity selection
       if (!entFilter(itemEntity)) return;
 
-      if (pc.table === 'workRequests') {
+      if (pc.table === 'workRequests' && (isAdmin || (!isManager && !isAccounting))) {
         workRequestCreation.push({
           type: 'change',
           kind: 'workRequestCreation',
@@ -2167,8 +2180,8 @@ const Users = {
           entity: itemEntity,
           raw: pc
         });
-      } else if (pc.table === 'workRequestPhaseRouting') {
-        const wr = window.apiClient.workRequestCache.getById(pc.parentRecordId);
+      } else if (pc.table === 'workRequestPhaseRouting' && (isAdmin || (!isManager && !isAccounting))) {
+        const wr = window.apiClient?.workRequestCache?.getById(pc.parentRecordId);
         wrPhaseRouting.push({
           type: 'change',
           kind: 'wrPhaseRouting',
@@ -2183,7 +2196,7 @@ const Users = {
           entity: itemEntity,
           raw: pc
         });
-      } else if (pc.table === 'invoices') {
+      } else if (pc.table === 'invoices' && (isAdmin || isAccounting)) {
         billingToRelease.push({
           type: 'change',
           kind: 'billingInvoiceCreation',
@@ -2198,7 +2211,7 @@ const Users = {
           entity: itemEntity,
           raw: pc
         });
-      } else if (pc.table === 'disbursements') {
+      } else if (pc.table === 'disbursements' && (isAdmin || isAccounting)) {
         disbursementToRelease.push({
           type: 'change',
           kind: 'disbursementCreation',
@@ -2213,7 +2226,7 @@ const Users = {
           entity: itemEntity,
           raw: pc
         });
-      } else if (pc.table === 'transmittals') {
+      } else if (pc.table === 'transmittals' && isAdmin) {
         transmittalSent.push({
           type: 'change',
           kind: 'transmittalSent',
@@ -2228,9 +2241,9 @@ const Users = {
           entity: itemEntity,
           raw: pc
         });
-      } else if (pc.table === 'tasks') {
+      } else if (pc.table === 'tasks' && (isAdmin || isManager)) {
         const wrId = data.workRequestId;
-        const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         taskCreation.push({
           type: 'change',
           kind: 'taskCreation',
@@ -2258,8 +2271,9 @@ const Users = {
 
       const submitter = window.apiClient?.userCache?.getById(normReq.requestedBy);
       const submitterRole = normReq.requestedByRole || (submitter ? submitter.role : null);
-      if (isManagerNotAdmin && submitterRole === 'Admin') return;
-      if (normReq.type === 'billing') {
+      if (isManager && submitterRole === 'Admin') return;
+
+      if (normReq.type === 'billing' && (isAdmin || isAccounting)) {
         const invNum = normReq.invoiceNumber ? ` (${normReq.invoiceNumber})` : '';
         billingToRelease.push({
           type: 'operations_request',
@@ -2275,7 +2289,7 @@ const Users = {
           entity: itemEntity,
           raw: normReq
         });
-      } else if (normReq.type === 'disbursement') {
+      } else if (normReq.type === 'disbursement' && (isAdmin || isAccounting)) {
         disbursementToRelease.push({
           type: 'operations_request',
           kind: 'disbursementRequest',
@@ -2290,7 +2304,7 @@ const Users = {
           entity: itemEntity,
           raw: normReq
         });
-      } else if (normReq.type === 'transmittal') {
+      } else if (normReq.type === 'transmittal' && isAdmin) {
         transmittalSent.push({
           type: 'operations_request',
           kind: 'transmittalRequest',

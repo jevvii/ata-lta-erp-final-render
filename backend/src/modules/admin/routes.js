@@ -59,7 +59,7 @@ router.post(
   '/pending-approvals/:id/approve',
   auth,
   entityScope,
-  requirePermission('approve_change:*'),
+  requirePermission(['approve_change:*', 'approve_change:tasks', 'approve_change:invoices', 'approve_change:disbursements']),
   audit('pending.approved', { table: 'pending_changes' }),
   adminController.approvePending
 );
