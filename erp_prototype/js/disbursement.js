@@ -546,11 +546,11 @@ const Disbursement = {
     if (this._items) {
       const idx = this._items.findIndex(d => d.id === id);
       if (idx >= 0) {
-        this._items[idx] = patch;
+        this._items[idx] = { ...this._items[idx], ...patch };
       }
     }
     if (this._detailCache[id]) {
-      this._detailCache[id] = patch;
+      this._detailCache[id] = { ...this._detailCache[id], ...patch };
     }
   },
 
@@ -733,6 +733,10 @@ const Disbursement = {
     App.handleRoute();
     try {
       const result = await apiCall();
+      if (result?.data) {
+        const norm = this.normalizeDisbursement(result.data);
+        this._updateCachedDisbursement(id, norm);
+      }
       this._clearSkipGenerationIfCurrent(gen);
       if (typeof window.apiClient?.disbursements?.invalidateCounts === 'function') {
         window.apiClient.disbursements.invalidateCounts();
