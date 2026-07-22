@@ -11,6 +11,7 @@ const {
   updateTaskSchema,
   retainerTemplateSchema,
   groundWorkerSchema,
+  addTimeLogsSchema,
 } = require('./schema');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
@@ -438,6 +439,24 @@ const createGroundWorker = async (req, res, next) => {
   }
 };
 
+const addTimeLogs = async (req, res, next) => {
+  try {
+    const payload = validate(addTimeLogsSchema, req.body);
+    const entityId = req.entityUUID;
+    const task = await operationsService.addTimeLogs({
+      workRequestId: req.params.wrId,
+      taskId: req.params.taskId,
+      entityId,
+      logs: payload.logs,
+      user: req.user,
+    });
+
+    res.status(201).json({ data: task });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   operationsController: {
     list,
@@ -460,5 +479,6 @@ module.exports = {
     deleteRetainerTemplate,
     listGroundWorkers,
     createGroundWorker,
+    addTimeLogs,
   },
 };

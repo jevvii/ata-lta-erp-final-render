@@ -101,6 +101,10 @@ const groundWorkerSchema = z.object({
   name: z.string().min(1).max(255),
 });
 
+const addTimeLogsSchema = z.object({
+  logs: z.array(timeLogSchema),
+});
+
 module.exports = {
   createWorkRequestSchema,
   updateWorkRequestSchema,
@@ -110,4 +114,5 @@ module.exports = {
   timeLogSchema,
   retainerTemplateSchema,
   groundWorkerSchema,
+  addTimeLogsSchema,
 };

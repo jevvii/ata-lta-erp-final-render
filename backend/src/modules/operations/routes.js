@@ -140,6 +140,13 @@ router.put(
   audit('task.updated', { table: 'tasks' }),
   operationsController.updateTask
 );
+router.post(
+  '/:wrId/tasks/:taskId/time-logs',
+  resolveEntity(),
+  requirePermission(['workflow:edit', 'workflow:task_add', 'workflow:task_upload']),
+  audit('task.time_log_added', { table: 'task_time_logs' }),
+  operationsController.addTimeLogs
+);
 router.delete(
   '/:wrId/tasks/:taskId',
   resolveEntity(),

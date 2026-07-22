@@ -68,6 +68,45 @@ const toApiWorkRequest = (row, entityCode) => ({
   updatedAt: row.updated_at,
 });
 
+const formatTimeManila = (dateTime) => {
+  if (!dateTime) return null;
+  const d = new Date(dateTime);
+  if (isNaN(d.getTime())) return null;
+  const options = {
+    timeZone: 'Asia/Manila',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  };
+  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
+  const hour = parts.find(p => p.type === 'hour')?.value || '00';
+  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+  return `${hour}:${minute}`;
+};
+
+const formatDateManila = (dateVal) => {
+  if (!dateVal) return null;
+  if (typeof dateVal === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return dateVal;
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    return d.toISOString().slice(0, 10);
+  }
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return null;
+  const options = {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  };
+  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+};
+
 const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = {}) => {
   const taskLevelLogs = timeLogs.filter(t => !t.checklist_item_id);
 
@@ -96,9 +135,9 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
           : (c.depends_on || null),
         timeLogs: itemLogs.map((t) => ({
           id: t.id,
-          startTime: t.start_time || null,
-          endTime: t.end_time || null,
-          date: t.date || null,
+          startTime: formatTimeManila(t.start_time),
+          endTime: formatTimeManila(t.end_time),
+          date: formatDateManila(t.date),
           hours: Number(t.hours),
           userId: t.user_id || null,
           note: t.note || null,
@@ -109,9 +148,9 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
     }),
     timeLogs: taskLevelLogs.map((t) => ({
       id: t.id,
-      startTime: t.start_time || null,
-      endTime: t.end_time || null,
-      date: t.date || null,
+      startTime: formatTimeManila(t.start_time),
+      endTime: formatTimeManila(t.end_time),
+      date: formatDateManila(t.date),
       hours: Number(t.hours),
       userId: t.user_id || null,
       note: t.note || null,
@@ -650,18 +689,84 @@ const upsertTimeLogs = async (taskId, timeLogs, deleteExisting = true) => {
   if (deleteExisting) {
     await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).is('checklist_item_id', null);
   }
-  const rows = timeLogs.map((log) => ({
-    task_id: taskId,
-    start_time: log.startTime || null,
-    end_time: log.endTime || null,
-    date: log.date || null,
-    hours: log.hours ?? 0,
-    user_id: log.userId || null,
-    note: log.note || null,
-    worker_name: log.workerName || null,
-    checklist_item_id: log.checklistItemId || null,
-  }));
+  const rows = timeLogs.map((log) => {
+    let startTimeStr = null;
+    if (log.date && log.startTime) {
+      if (log.startTime.includes('T') || log.startTime.includes(' ')) {
+        startTimeStr = log.startTime;
+      } else {
+        startTimeStr = `${log.date}T${log.startTime}:00+08:00`;
+      }
+    }
+    let endTimeStr = null;
+    if (log.date && log.endTime) {
+      if (log.endTime.includes('T') || log.endTime.includes(' ')) {
+        endTimeStr = log.endTime;
+      } else {
+        endTimeStr = `${log.date}T${log.endTime}:00+08:00`;
+      }
+    }
+    return {
+      task_id: taskId,
+      start_time: startTimeStr,
+      end_time: endTimeStr,
+      date: log.date || null,
+      hours: log.hours ?? 0,
+      user_id: log.userId || null,
+      note: log.note || null,
+      worker_name: log.workerName || null,
+      checklist_item_id: log.checklistItemId || null,
+    };
+  });
   if (rows.length) await supabaseAdmin.from('task_time_logs').insert(rows);
+};
+
+const addTimeLogs = async ({ workRequestId, taskId, entityId, logs, user }) => {
+  const existing = await getTaskById({ workRequestId, taskId, entityId });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  }
+
+  const rows = logs.map((log) => {
+    let startTimeStr = null;
+    if (log.date && log.startTime) {
+      if (log.startTime.includes('T') || log.startTime.includes(' ')) {
+        startTimeStr = log.startTime;
+      } else {
+        startTimeStr = `${log.date}T${log.startTime}:00+08:00`;
+      }
+    }
+    let endTimeStr = null;
+    if (log.date && log.endTime) {
+      if (log.endTime.includes('T') || log.endTime.includes(' ')) {
+        endTimeStr = log.endTime;
+      } else {
+        endTimeStr = `${log.date}T${log.endTime}:00+08:00`;
+      }
+    }
+    return {
+      task_id: taskId,
+      start_time: startTimeStr,
+      end_time: endTimeStr,
+      date: log.date || null,
+      hours: log.hours ?? 0,
+      user_id: log.userId || user.id,
+      note: log.note || null,
+      worker_name: log.workerName || null,
+      checklist_item_id: log.checklistItemId || null,
+    };
+  });
+
+  const { error } = await supabaseAdmin.from('task_time_logs').insert(rows);
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to save time logs',
+    });
+  }
+
+  return getTaskById({ workRequestId, taskId, entityId });
 };
 
 const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }) => {
@@ -1036,4 +1141,5 @@ module.exports = {
   deleteRetainerTemplate,
   listGroundWorkers,
   createGroundWorker,
+  addTimeLogs,
 };

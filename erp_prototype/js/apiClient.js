@@ -494,6 +494,7 @@
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
       updateTask: (wrId, taskId, data) => put(`/work-requests/${wrId}/tasks/${taskId}`, data),
+      addTimeLogs: (wrId, taskId, data) => post(`/work-requests/${wrId}/tasks/${taskId}/time-logs`, data),
       removeTask: (wrId, taskId) => del(`/work-requests/${wrId}/tasks/${taskId}`),
       listTemplates: () => get('/work-requests/templates'),
       createTemplate: (data) => post('/work-requests/templates', data),

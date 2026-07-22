@@ -774,7 +774,7 @@ const WorkflowData = {
         const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
         normalized.checklist = (normalized.checklist || []).map(c => {
           const ec = existingClById.get(c.id);
-          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
         });
         Object.assign(existing, normalized);
       }
@@ -6424,7 +6424,12 @@ const Workflow = {
     const [timeHeaderToggle, timeContentToggle] = createCollapsibleSection('Time Log History', false, (cont) => {
       const timeHeaderActions = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;' });
       const totalHours = getTaskTotalHours(task);
-      timeHeaderActions.appendChild(el('span', { text: `Total: ${totalHours} hrs`, style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
+      timeHeaderActions.appendChild(el('span', {
+        text: `Total: ${totalHours} hrs`,
+        class: 'task-total-hours-label',
+        'data-task-id': task.id,
+        style: 'font-size: 0.8125rem; color: var(--color-text-muted);'
+      }));
       
       const isArchived = wr && (wr.status === 'Completed' || wr.status === 'Cancelled' || wr.isPendingApproval);
       if (!isArchived) {
@@ -6437,54 +6442,10 @@ const Workflow = {
       }
       cont.appendChild(timeHeaderActions);
 
-      const timeList = el('div', { class: 'details-content-list' });
-      const logs = task.timeLogs || [];
-      const checklistLogGroups = [];
-      (task.checklist || []).forEach(item => {
-        if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
-      });
-
-      if (logs.length === 0 && checklistLogGroups.length === 0) {
-        timeList.appendChild(renderEmptyState('No logs recorded'));
-      } else {
-        const buildTimeLogEntry = (l, subtaskName = null) => {
-          const [y, m, d] = l.date.split('-').map(Number);
-          const logDate = new Date(y, m - 1, d);
-          const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-          const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
-          const noteText = l.note ? ` — ${l.note}` : '';
-          const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
-
-          return el('div', { 
-            class: 'history-item', 
-            style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
-          }, [
-            el('div', {}, [
-              el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
-              el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
-              el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
-              el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
-            ]),
-            el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
-          ]);
-        };
-
-        const taskLevelLogs = logs.filter(l => !l.checklistItemId);
-        if (taskLevelLogs.length > 0) {
-          const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-          sorted.forEach(l => {
-            timeList.appendChild(buildTimeLogEntry(l));
-          });
-        }
-
-        checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
-          const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-          sorted.forEach(l => {
-            timeList.appendChild(buildTimeLogEntry(l, item.text));
-          });
-        });
-      }
+      const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': task.id });
       cont.appendChild(timeList);
+
+      this.refreshTaskTimeLogsList(task.id);
     });
     paneContent.appendChild(timeHeaderToggle);
     paneContent.appendChild(timeContentToggle);
@@ -9800,42 +9761,10 @@ const Workflow = {
         timeHeader.appendChild(el('span', { text: 'Time Log History' }));
         timeSection.appendChild(timeHeader);
 
-        const timeList = el('div', { class: 'details-content-list' });
-        const logs = t.timeLogs || [];
-        const checklistLogGroups = [];
-        (t.checklist || []).forEach(item => {
-          if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
-        });
-        if (logs.length === 0 && checklistLogGroups.length === 0) {
-          timeList.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
-        } else {
-          const buildTimeLogEntry = (l) => {
-            const [y, m, d] = l.date.split('-').map(Number);
-            const logDate = new Date(y, m - 1, d);
-            const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-            const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
-            const noteText = l.note ? ` — ${l.note}` : '';
-            return el('div', { class: 'history-item' }, [
-              el('div', {}, [
-                el('strong', { text: workerLabel }),
-                el('span', { text: noteText }),
-                el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}` })
-              ]),
-              el('span', { class: 'font-mono', text: `${l.hours}h` })
-            ]);
-          };
-          const taskLevelLogs = logs.filter(l => !l.checklistItemId);
-          if (taskLevelLogs.length > 0) {
-            const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-            sorted.forEach(l => timeList.appendChild(buildTimeLogEntry(l)));
-          }
-          checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
-            const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-            sorted.forEach(l => timeList.appendChild(buildTimeLogEntry(l)));
-          });
-        }
+        const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': t.id });
         timeSection.appendChild(timeList);
         rightPane.appendChild(timeSection);
+        this.refreshTaskTimeLogsList(t.id);
 
         // Dependency map section
         const depSection = el('div', { class: 'detail-block' });
@@ -10677,6 +10606,73 @@ const Workflow = {
           container.innerHTML = '';
           container.appendChild(renderEmptyState('Failed to load documents'));
         }
+      }
+    }
+  },
+
+  async refreshTaskTimeLogsList(taskId) {
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) return;
+
+    const listContainers = document.querySelectorAll(`.task-time-logs-list[data-task-id="${taskId}"]`);
+    if (listContainers.length === 0) return;
+
+    const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
+    const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
+
+    const totalHours = getTaskTotalHours(task);
+    const totalLabels = document.querySelectorAll(`.task-total-hours-label[data-task-id="${taskId}"]`);
+    totalLabels.forEach(lbl => {
+      lbl.textContent = `Total: ${totalHours} hrs`;
+    });
+
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      const logs = task.timeLogs || [];
+      const checklistLogGroups = [];
+      (task.checklist || []).forEach(item => {
+        if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
+      });
+
+      if (logs.length === 0 && checklistLogGroups.length === 0) {
+        container.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
+      } else {
+        const buildTimeLogEntry = (l, subtaskName = null) => {
+          const [y, m, d] = l.date.split('-').map(Number);
+          const logDate = new Date(y, m - 1, d);
+          const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+          const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
+          const noteText = l.note ? ` — ${l.note}` : '';
+          const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
+
+          return el('div', { 
+            class: 'history-item', 
+            style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
+          }, [
+            el('div', {}, [
+              el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
+              el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
+              el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
+              el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
+            ]),
+            el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
+          ]);
+        };
+
+        const taskLevelLogs = logs.filter(l => !l.checklistItemId);
+        if (taskLevelLogs.length > 0) {
+          const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            container.appendChild(buildTimeLogEntry(l));
+          });
+        }
+
+        checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
+          const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            container.appendChild(buildTimeLogEntry(l, item.text));
+          });
+        });
       }
     }
   },
@@ -11530,33 +11526,38 @@ const Workflow = {
         checklistItemId: checklistItemId || null
       }));
 
-      const updates = { updatedAt: new Date().toISOString() };
-      if (item) {
-        item.timeLogs = [...(item.timeLogs || []), ...newEntries];
-        updates.checklist = checklist;
-      } else {
-        updates.timeLogs = [...(currentTask.timeLogs || []), ...newEntries];
-      }
-      overlay.remove();
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving...';
 
-      this.runBlockingArchiveAction({
-        title: 'Logging Time',
-        message: 'Please wait while saving your time log...',
-        apiCall: async () => {
-          await WorkflowData.updateTask(taskId, updates);
+      (async () => {
+        try {
+          const res = await window.apiClient.workRequests.addTimeLogs(currentTask.workRequestId, taskId, { logs: newEntries });
+          const normalized = WorkflowData.normalizeTask(res.data);
+          const existing = WorkflowData.getTaskById(taskId);
+          if (existing) {
+            // Preserve frontend-only extensions the backend strips
+            normalized.comments = existing.comments || [];
+            normalized.taskDocuments = existing.taskDocuments || [];
+            normalized.coAssignees = existing.coAssignees || [];
+            normalized.priority = existing.priority || normalized.priority || 'Normal';
+            Object.assign(existing, normalized);
+          }
           WorkflowData.invalidateRelatedForWorkRequest(currentTask.workRequestId);
           WorkflowData.invalidateRelatedForTask(taskId);
-          return { success: true };
-        },
-        successTitle: 'Time Logged',
-        successMessage: 'Your time log has been successfully saved.',
-        errorTitle: 'Failed to Log Time'
-      }).then(() => {
-        if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
-          this.showTaskSidePane(taskId, null);
+
+          overlay.remove();
+
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+            this.showTaskSidePane(taskId, null);
+          }
+          await this.refreshTaskTimeLogsList(taskId);
+        } catch (err) {
+          console.error('Failed to log time', err);
+          this.showMessage('Failed to Log Time', err.message || 'Failed to save time log.', 'error');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save Log';
         }
-        App.handleRoute();
-      });
+      })();
     });
   },
 
