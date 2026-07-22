@@ -1534,11 +1534,15 @@ const Workflow = {
 
   _mergeRetainerTemplates(serverTemplates) {
     if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
+    const serverMap = new Map(serverTemplates.map(t => [t.id, t]));
+    this._retainerTemplates = this._retainerTemplates.filter(t => {
+      return serverMap.has(t.id) || WorkflowData._isTempId(t.id);
+    });
     const existingMap = new Map(this._retainerTemplates.map(t => [t.id, t]));
     serverTemplates.forEach(serverT => {
       const existing = existingMap.get(serverT.id);
       if (existing) Object.assign(existing, serverT);
-      else if (!WorkflowData._isTempId(serverT.id)) this._retainerTemplates.push(serverT);
+      else this._retainerTemplates.push(serverT);
     });
   },
 

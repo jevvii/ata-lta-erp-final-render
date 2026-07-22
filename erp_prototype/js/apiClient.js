@@ -167,6 +167,19 @@
       throw new Error(body.detail || `HTTP ${res.status}`);
     }
 
+    // Invalidate service worker API caches on successful mutations
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method || 'GET')) {
+      if (typeof caches !== 'undefined' && caches.keys) {
+        caches.keys().then(keys => {
+          keys.forEach(key => {
+            if (key.startsWith('erp-api-')) {
+              caches.delete(key).catch(() => {});
+            }
+          });
+        }).catch(() => {});
+      }
+    }
+
     if (res.status === 204) {
       return null;
     }
