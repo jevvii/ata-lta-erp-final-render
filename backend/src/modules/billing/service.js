@@ -281,12 +281,20 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
       }
     }
 
-    // Block direct jump from Draft / Pending to Sent, Paid, or Partially Paid via API without approval/release
-    if (['Draft', 'Pending'].includes(currentStatus) && ['Sent', 'Paid', 'Partially Paid'].includes(targetStatus)) {
+    // Block direct jump from Draft to Sent/Released (without approval) or Draft/Pending directly to Paid/Partially Paid without payments
+    if (currentStatus === 'Draft' && ['Sent', 'Paid', 'Partially Paid'].includes(targetStatus)) {
       throw new AppError({
         statusCode: 400,
         title: 'Bad Request',
-        detail: `Cannot transition invoice directly from ${currentStatus} to ${targetStatus}. Invoices must be approved and released first.`,
+        detail: `Cannot transition invoice directly from Draft to ${targetStatus}. Invoices must be submitted for approval first.`,
+      });
+    }
+
+    if (currentStatus === 'Pending' && ['Paid', 'Partially Paid'].includes(targetStatus)) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: `Cannot transition invoice directly from Pending to ${targetStatus}. Payments can only be recorded on released invoices.`,
       });
     }
   }

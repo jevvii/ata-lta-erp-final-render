@@ -1586,7 +1586,7 @@ const Billing = {
 
     const isOperations = departments.includes('Operations');
 
-    const releasedStatuses = ['Sent'];
+    const releasedStatuses = ['Sent', 'Approved'];
 
     if (isAdmin) {
       return [
@@ -1628,7 +1628,7 @@ const Billing = {
   },
 
   getInvoiceDisplayStatus(status) {
-    if (status === 'Sent') return 'Released';
+    if (status === 'Sent' || status === 'Approved') return 'Released';
     return status;
   },
 
@@ -1786,7 +1786,7 @@ const Billing = {
 
         // Payment status transitions require recorded payments that match the target AND invoice must be released.
         const paid = self.getPaidAmount(item);
-        const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(item.status);
+        const isReleased = ['Sent', 'Approved', 'Partially Paid', 'Overdue'].includes(item.status);
         if (targetStatus === 'Partially Paid') {
           return isReleased && paid > 0 && paid < item.total;
         }
@@ -1805,7 +1805,7 @@ const Billing = {
 
         if (targetStatus !== 'Partially Paid' && targetStatus !== 'Paid') return;
         const paid = self.getPaidAmount(item);
-        const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(item.status);
+        const isReleased = ['Sent', 'Approved', 'Partially Paid', 'Overdue'].includes(item.status);
 
         if (!isReleased) {
           Workflow.showMessage('Invoice Not Released', `Invoice "${item.invoiceNumber}" is in ${item.status} status and has not been released yet. Payments can only be recorded after an invoice is approved and released to the client.`, 'warning');
@@ -2900,7 +2900,7 @@ const Billing = {
 
     // Payment recording — billing:edit (Accounting/Admin) or billing:mark_paid (Manager)
     const canRecordPayment = Auth.can('billing:edit') || Auth.can('billing:mark_paid');
-    const isReleased = ['Sent', 'Partially Paid', 'Overdue'].includes(inv.status);
+    const isReleased = ['Sent', 'Approved', 'Partially Paid', 'Overdue'].includes(inv.status);
     if (canRecordPayment && isReleased) {
       const paySection = el('div', { class: 'form-section' });
       paySection.appendChild(el('h3', { text: 'Record Payment' }));
