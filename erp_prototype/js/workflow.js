@@ -346,6 +346,17 @@ const WorkflowData = {
         // overwriting it with [] after a refresh or page switch.
         if (existing.checklist?.length && !serverTask.checklist?.length) {
           serverTask.checklist = existing.checklist;
+        } else if (existing.checklist && serverTask.checklist) {
+          const existingClById = new Map(existing.checklist.map(c => [c.id, c]));
+          serverTask.checklist.forEach(item => {
+            const ec = existingClById.get(item.id);
+            if (ec && ec.timeLogs?.length && !item.timeLogs?.length) {
+              item.timeLogs = ec.timeLogs;
+            }
+          });
+        }
+        if (existing.timeLogs?.length && !serverTask.timeLogs?.length) {
+          serverTask.timeLogs = existing.timeLogs;
         }
         Object.assign(existing, serverTask);
       } else if (!this._isTempId(serverTask.id)) {
@@ -774,9 +785,20 @@ const WorkflowData = {
         const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
         normalized.checklist = (normalized.checklist || []).map(c => {
           const ec = existingClById.get(c.id);
-          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+          const preservedLogs = (c.timeLogs && c.timeLogs.length > 0)
+            ? c.timeLogs
+            : (ec && ec.timeLogs && ec.timeLogs.length > 0)
+              ? ec.timeLogs
+              : [];
+          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: preservedLogs, coAssignees: ec.coAssignees || [] } : c;
         });
+        const preservedTaskLogs = (normalized.timeLogs && normalized.timeLogs.length > 0)
+          ? normalized.timeLogs
+          : (existing.timeLogs && existing.timeLogs.length > 0)
+            ? existing.timeLogs
+            : [];
         Object.assign(existing, normalized);
+        existing.timeLogs = preservedTaskLogs;
       }
     } catch (e) {
       console.error('Failed to update task', e);
