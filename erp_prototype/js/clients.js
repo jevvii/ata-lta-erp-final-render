@@ -794,22 +794,9 @@ const Clients = {
     headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Related Companies', style: 'width: 180px;' }));
     headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Contact Details', style: 'width: 180px;' }));
 
-    // Trash bin header (only for admins)
-    if (isAdmin) {
-      const thTrash = el('th', { style: 'width: 45px; text-align: center;' });
-      const trashHeaderIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      trashHeaderIcon.setAttribute('viewBox', '0 0 24 24');
-      trashHeaderIcon.setAttribute('width', '14');
-      trashHeaderIcon.setAttribute('height', '14');
-      trashHeaderIcon.setAttribute('fill', 'none');
-      trashHeaderIcon.setAttribute('stroke', 'currentColor');
-      trashHeaderIcon.setAttribute('stroke-width', '2');
-      trashHeaderIcon.setAttribute('stroke-linecap', 'round');
-      trashHeaderIcon.setAttribute('stroke-linejoin', 'round');
-      trashHeaderIcon.innerHTML = '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>';
-      thTrash.appendChild(trashHeaderIcon);
-      headerRow.appendChild(thTrash);
-    }
+    // Actions column header
+    const thActions = el('th', { class: 'jira-backlog-col-header', style: 'width: 80px; text-align: center;', text: 'Actions' });
+    headerRow.appendChild(thActions);
 
     // Tbody
     const tbody = el('tbody');
@@ -1011,10 +998,31 @@ const Clients = {
       const tdCd = el('td', { text: cdList });
       tr.appendChild(tdCd);
 
-      // 12. Trash (Archive Action, only for admins)
+      // Actions column (Edit and Archive actions)
+      const tdActions = el('td', { style: 'text-align: center; white-space: nowrap;' });
+      
+      // Edit button (pen icon)
+      const editBtn = el('button', { class: 'jira-row-action-btn', title: 'Edit Client', style: 'margin-right: 6px; background: none; border: none; cursor: pointer; padding: 2px; color: var(--color-primary);' });
+      const editSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      editSvg.setAttribute('viewBox', '0 0 24 24');
+      editSvg.setAttribute('width', '14');
+      editSvg.setAttribute('height', '14');
+      editSvg.setAttribute('fill', 'none');
+      editSvg.setAttribute('stroke', 'currentColor');
+      editSvg.setAttribute('stroke-width', '2');
+      editSvg.setAttribute('stroke-linecap', 'round');
+      editSvg.setAttribute('stroke-linejoin', 'round');
+      editSvg.innerHTML = '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>';
+      editBtn.appendChild(editSvg);
+      editBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.showForm(client.id);
+      });
+      tdActions.appendChild(editBtn);
+
+      // Archive button (trash icon - only for admins)
       if (isAdmin) {
-        const tdTrash = el('td', { style: 'text-align: center;' });
-        const trashBtn = el('button', { class: 'jira-trash-btn', title: 'Archive Client' });
+        const trashBtn = el('button', { class: 'jira-trash-btn', title: 'Archive Client', style: 'background: none; border: none; cursor: pointer; padding: 2px;' });
         const trashSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         trashSvg.setAttribute('viewBox', '0 0 24 24');
         trashSvg.setAttribute('width', '14');
@@ -1026,19 +1034,19 @@ const Clients = {
         trashSvg.setAttribute('stroke-linejoin', 'round');
         trashSvg.innerHTML = '<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>';
         trashBtn.appendChild(trashSvg);
-        tdTrash.appendChild(trashBtn);
-        tr.appendChild(tdTrash);
-
-        trashBtn.addEventListener('click', () => {
+        trashBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           this.archiveClientDirectly(client.id);
         });
+        tdActions.appendChild(trashBtn);
       }
+      tr.appendChild(tdActions);
 
       tbody.appendChild(tr);
 
       // Accordion Row
       const accordionRow = el('tr', { class: 'jira-accordion-tr hidden' });
-      const accordionTd = el('td', { colspan: isAdmin ? '12' : '10', class: 'jira-accordion-td' });
+      const accordionTd = el('td', { colspan: isAdmin ? '12' : '11', class: 'jira-accordion-td' });
       accordionRow.appendChild(accordionTd);
       tbody.appendChild(accordionRow);
 
@@ -1540,11 +1548,14 @@ const Clients = {
 
     const pocInputValue = (data.pointOfContactInput || '').trim();
     let contactUserId = null;
+    let contactPerson = null;
 
     if (pocInputValue) {
       const matchedUser = window.apiClient.userCache._users?.find(u => (u.name + ' (' + u.role + ')') === pocInputValue);
       if (matchedUser) {
         contactUserId = matchedUser.id;
+      } else {
+        contactPerson = pocInputValue;
       }
     }
 
@@ -1557,9 +1568,10 @@ const Clients = {
       entity: data.entity || (Auth.activeEntity !== 'ALL' ? Auth.activeEntity : 'ATA'),
       retainer: !!form.querySelector('input[name="retainer"]:checked'),
       contactDetails,
-      relatedCompanies: this.toApiRelatedCompanies(relatedCompanies)
+      relatedCompanies: this.toApiRelatedCompanies(relatedCompanies),
+      contactUserId,
+      contactPerson
     };
-    if (contactUserId) record.contactUserId = contactUserId;
 
     const isNew = !this.editingId || this.editingId === 'new';
     const canEditDirectly = Auth.can('clients:edit');

@@ -25,6 +25,7 @@ const createClientSchema = z.object({
   retainer: z.boolean().default(false),
   tradeName: z.string().max(255).optional(),
   contactUserId: z.string().uuid().optional(),
+  contactPerson: z.string().max(255).optional().nullable(),
   contactDetails: z.array(contactDetailSchema).optional(),
   relatedCompanies: z.array(relatedCompanySchema).optional(),
 });
