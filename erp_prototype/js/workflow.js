@@ -1635,13 +1635,42 @@ const Workflow = {
       return null;
     }
   },
-  async _deleteRetainerTemplate(id) {
-    const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
-    try {
-      await window.apiClient.operations.deleteTemplate(id);
-      if (idx !== -1) this._retainerTemplates.splice(idx, 1);
-    } catch (e) {
-      console.error('[Workflow] failed to delete retainer template', e);
+  async deleteRetainerTemplates(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    
+    const runResult = await this.runBlockingArchiveAction({
+      title: ids.length === 1 ? 'Deleting Template' : 'Deleting Templates',
+      message: ids.length === 1
+        ? 'Please wait while the template is being deleted...'
+        : `Please wait while the ${ids.length} templates are being deleted...`,
+      apiCall: async () => {
+        for (const id of ids) {
+          await window.apiClient.operations.deleteTemplate(id);
+          if (this._retainerTemplates) {
+            const idx = this._retainerTemplates.findIndex(t => t.id === id);
+            if (idx !== -1) this._retainerTemplates.splice(idx, 1);
+          }
+        }
+        
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+        this._invalidateCountsAndSidebar();
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        
+        return { success: true };
+      },
+      successTitle: ids.length === 1 ? 'Template Deleted' : 'Templates Deleted',
+      successMessage: ids.length === 1
+        ? 'Retainer template has been successfully deleted.'
+        : `Successfully deleted ${ids.length} retainer templates.`,
+      errorTitle: ids.length === 1 ? 'Failed to Delete Template' : 'Failed to Delete Templates'
+    });
+
+    if (runResult.success) {
+      this.view = 'templates';
+      this.templateEditingId = null;
+      App.handleRoute();
+    } else {
+      App.handleRoute();
     }
   },
 
@@ -3825,7 +3854,7 @@ const Workflow = {
   async render() {
     await Promise.all([
       WorkflowData.ensure(),
-      this._loadRetainerTemplates(),
+      this.ensureRetainerTemplates(),
       this._loadGroundWorkers(),
     ]);
     await WorkflowData.loadPendingApprovals();
@@ -12639,11 +12668,8 @@ const Workflow = {
             this.showConfirm(
               title,
               message,
-              async () => {
-                for (const id of ids) {
-                  await this._deleteRetainerTemplate(id);
-                }
-                App.handleRoute();
+              () => {
+                this.deleteRetainerTemplates(ids);
               },
               'danger'
             );
@@ -12673,9 +12699,8 @@ const Workflow = {
           text: 'Delete',
           className: 'btn btn-danger btn-xs',
           onClick: () => {
-            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, async () => {
-              await this._deleteRetainerTemplate(item.id);
-              App.handleRoute();
+            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, () => {
+              this.deleteRetainerTemplates([item.id]);
             }, 'danger');
           }
         }
@@ -12718,10 +12743,7 @@ const Workflow = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
           this.showConfirm('Delete Template', 'Are you sure you want to delete this template?', () => {
-            this._deleteRetainerTemplate(template.id);
-            this.view = 'templates'; 
-            this.templateEditingId = null; 
-            closeFormPanelAndRoute('#operations');
+            this.deleteRetainerTemplates([template.id]);
           }, 'danger');
         });
         topActions.appendChild(delBtn);
@@ -13280,99 +13302,120 @@ const Workflow = {
     let generatedCount = 0;
     const failedTemplates = [];
 
-    const myGen = Workflow._startSkipGeneration();
-    App.handleRoute();
-
-    for (const templateId of templateIds) {
-      const template = this._getRetainerTemplateById(templateId);
-      if (!template) continue;
-
-      const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
-      const workRequest = {
-        id: generateId('wr'),
-        title: `${template.name} (${titleSuffix})`,
-        description: template.description || '',
-        clientId: template.clientId,
-        priority: template.priority || 'Normal',
-        assignedTo: template.assignedTo || null,
-        dueDate: dueDate.toISOString().slice(0, 10),
-        entity: template.entity,
-        status: 'Draft',
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        boardOrder: 0
-      };
-
-      WorkflowData._addOptimisticWorkRequest(workRequest);
-      this._updateCounts(1, 0);
-      let createdWr;
-      try {
-        createdWr = await WorkflowData.createWorkRequest(workRequest);
-      } catch (e) {
-        console.error('Failed to generate work request from template', template.name, e);
-        WorkflowData._removeWorkRequest(workRequest.id);
-        this._updateCounts(-1, 0);
-        failedTemplates.push(template.name || templateId);
-        continue;
-      }
-      const wrId = createdWr ? createdWr.id : workRequest.id;
-
-      const idMap = new Map();
-      (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
-
-      const tmplTasks = template.tasks || [];
-      const failedTaskTitles = [];
-      const taskRecords = [];
-      for (let idx = 0; idx < tmplTasks.length; idx++) {
-        const t = tmplTasks[idx];
-        const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-        const taskRecord = {
-          id: idMap.get(t.id),
-          workRequestId: wrId,
-          title: t.title,
-          assigneeId: t.assigneeId || null,
-          assigneeName: t.assigneeName || null,
-          predecessors: mappedPreds,
-          status: 'Draft',
-          dueDate: workRequest.dueDate,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-          sortOrder: idx
-        };
-        taskRecords.push(taskRecord);
-        WorkflowData._addOptimisticTask(taskRecord);
-      }
-      for (const taskRecord of taskRecords) {
+    const runResult = await this.runBlockingArchiveAction({
+      title: templateIds.length === 1 ? 'Generating Work Request' : 'Generating Work Requests',
+      message: templateIds.length === 1
+        ? 'Please wait while the Work Request is being generated...'
+        : `Please wait while the Work Requests are being generated from ${templateIds.length} templates...`,
+      apiCall: async () => {
+        const myGen = Workflow._startSkipGeneration();
         try {
-          await WorkflowData.createTask(taskRecord);
-        } catch (e) {
-          console.error('Failed to create generated task', taskRecord.title, e);
-          WorkflowData._removeTask(taskRecord.id);
-          failedTaskTitles.push(taskRecord.title);
+          for (const templateId of templateIds) {
+            const template = this._getRetainerTemplateById(templateId);
+            if (!template) continue;
+
+            const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
+            const workRequest = {
+              id: generateId('wr'),
+              title: `${template.name} (${titleSuffix})`,
+              description: template.description || '',
+              clientId: template.clientId,
+              priority: template.priority || 'Normal',
+              assignedTo: template.assignedTo || null,
+              dueDate: dueDate.toISOString().slice(0, 10),
+              entity: template.entity,
+              status: 'Draft',
+              createdAt: nowIso,
+              updatedAt: nowIso,
+              boardOrder: 0
+            };
+
+            WorkflowData._addOptimisticWorkRequest(workRequest);
+            this._updateCounts(1, 0);
+            let createdWr;
+            try {
+              createdWr = await WorkflowData.createWorkRequest(workRequest);
+            } catch (e) {
+              console.error('Failed to generate work request from template', template.name, e);
+              WorkflowData._removeWorkRequest(workRequest.id);
+              this._updateCounts(-1, 0);
+              failedTemplates.push(template.name || templateId);
+              continue;
+            }
+            const wrId = createdWr ? createdWr.id : workRequest.id;
+
+            const idMap = new Map();
+            (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
+
+            const tmplTasks = template.tasks || [];
+            const failedTaskTitles = [];
+            const taskRecords = [];
+            for (let idx = 0; idx < tmplTasks.length; idx++) {
+              const t = tmplTasks[idx];
+              const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
+              const taskRecord = {
+                id: idMap.get(t.id),
+                workRequestId: wrId,
+                title: t.title,
+                assigneeId: t.assigneeId || null,
+                assigneeName: t.assigneeName || null,
+                predecessors: mappedPreds,
+                status: 'Draft',
+                dueDate: workRequest.dueDate,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                sortOrder: idx
+              };
+              taskRecords.push(taskRecord);
+              WorkflowData._addOptimisticTask(taskRecord);
+            }
+            for (const taskRecord of taskRecords) {
+              try {
+                await WorkflowData.createTask(taskRecord);
+              } catch (e) {
+                console.error('Failed to create generated task', taskRecord.title, e);
+                WorkflowData._removeTask(taskRecord.id);
+                failedTaskTitles.push(taskRecord.title);
+              }
+            }
+
+            if (failedTaskTitles.length > 0) {
+              failedTemplates.push(`${template.name} (tasks: ${failedTaskTitles.join(', ')})`);
+            } else {
+              generatedCount++;
+            }
+
+            // Sync generated work request to the shared cache so billing/disbursement
+            // forms can select it without a manual refresh.
+            if (createdWr && window.apiClient?.workRequestCache) {
+              const cache = window.apiClient.workRequestCache;
+              if (!Array.isArray(cache._wrs)) cache._wrs = [];
+              const normalizedForCache = { ...createdWr, tasks: taskRecords };
+              const idx = cache._wrs.findIndex(wr => wr.id === normalizedForCache.id);
+              if (idx >= 0) cache._wrs[idx] = normalizedForCache;
+              else cache._wrs.push(normalizedForCache);
+              cache._loadedAt = Date.now();
+            }
+          }
+          
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+          Workflow._clearSkipGenerationIfLatest(myGen);
+
+          if (failedTemplates.length > 0) {
+            throw new Error(`Generation warnings: ${failedTemplates.join('; ')}`);
+          }
+          return { success: true };
+        } catch (err) {
+          Workflow._clearSkipGenerationIfLatest(myGen);
+          throw err;
         }
-      }
+      },
+      successTitle: 'Bulk Generation Complete',
+      successMessage: `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
+      errorTitle: 'Generation Warnings/Errors'
+    });
 
-      if (failedTaskTitles.length > 0) {
-        failedTemplates.push(`${template.name} (tasks: ${failedTaskTitles.join(', ')})`);
-      } else {
-        generatedCount++;
-      }
-    }
-
-    if (failedTemplates.length > 0) {
-      this.showMessage('Error', `Some generations failed: ${failedTemplates.join('; ')}`, 'error');
-    } else {
-      this.showMessage(
-        'Bulk Generation Complete',
-        `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
-        'success'
-      );
-    }
-
-    if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-    if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-
-    Workflow._clearSkipGenerationIfLatest(myGen);
     this.view = 'list';
     App.handleRoute();
   }
