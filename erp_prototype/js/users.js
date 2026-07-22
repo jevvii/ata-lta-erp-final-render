@@ -1622,17 +1622,18 @@ const Users = {
           record.password = data.password.trim();
         }
         const generation = this._beginSkipGeneration();
+        const userId = this.editingId;
         this.showUserList();
         try {
-          const res = await window.apiClient.admin.updateUser(this.editingId, record);
+          const res = await window.apiClient.admin.updateUser(userId, record);
           const serverUser = res?.data || res;
-          const localIdx = this.users.findIndex(u => u.id === this.editingId);
+          const localIdx = this.users.findIndex(u => u.id === userId);
           if (serverUser && localIdx >= 0) this.users[localIdx] = serverUser;
           // Patch the shared cache in place rather than wiping it, so dropdowns stay populated.
           if (window.apiClient?.userCache && Array.isArray(window.apiClient.userCache._users)) {
-            const uidx = window.apiClient.userCache._users.findIndex(u => u.id === this.editingId);
+            const uidx = window.apiClient.userCache._users.findIndex(u => u.id === userId);
             if (uidx >= 0) {
-              window.apiClient.userCache._users[uidx] = { ...window.apiClient.userCache._users[uidx], ...record, id: this.editingId };
+              window.apiClient.userCache._users[uidx] = { ...window.apiClient.userCache._users[uidx], ...record, id: userId };
             }
           }
         } catch (e) {
