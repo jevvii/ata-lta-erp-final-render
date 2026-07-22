@@ -2600,7 +2600,8 @@ const Workflow = {
         const wrapper = el('div', { class: 'modal-message-wrapper type-success' });
         const icon = el('div', { class: 'modal-icon-v2', html: SignalIcons.success || '' });
         wrapper.appendChild(icon);
-        wrapper.appendChild(el('p', { text: successMessage, class: 'modal-text' }));
+        const resolvedMsg = typeof successMessage === 'function' ? successMessage(res) : successMessage;
+        wrapper.appendChild(el('p', { text: resolvedMsg, class: 'modal-text' }));
 
         const footer = el('div', { class: 'modal-footer' });
         const okBtn = el('button', { class: 'btn btn-primary modal-btn-sure', text: 'OK' });
@@ -11845,17 +11846,20 @@ const Workflow = {
         taskDocuments: [],
         comments: []
       };
-      const result = await PendingChanges.submit('tasks', newTask, true);
-      if (result.approved) {
-        const runResult = await this.runBlockingArchiveAction({
-          title: 'Adding Task',
-          message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
-          apiCall: async () => {
+
+      let submitResult = null;
+
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Adding Task',
+        message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
+        apiCall: async () => {
+          submitResult = await PendingChanges.submit('tasks', newTask, true);
+          if (submitResult.approved) {
             // Optimistic insert so counts update immediately under the overlay.
             WorkflowData._addOptimisticTask(newTask);
             try {
-              if (result.record) {
-                const serverTask = WorkflowData.normalizeTask(result.record);
+              if (submitResult.record) {
+                const serverTask = WorkflowData.normalizeTask(submitResult.record);
                 serverTask.workRequestId = newTask.workRequestId;
                 this._syncTaskToCaches(serverTask);
                 return { data: serverTask };
@@ -11868,21 +11872,23 @@ const Workflow = {
               WorkflowData._removeTask(newTask.id);
               throw e;
             }
-          },
-          successTitle: 'Task Added',
-          successMessage: 'Task has been added to the work request.',
-          errorTitle: 'Failed to Add Task'
-        });
-        if (runResult.success) {
-          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-          this._invalidateCountsAndSidebar();
-          closeFormPanelAndRoute('#operations/detail/' + wrId);
-        } else {
-          App.handleRoute();
-        }
-      } else {
-        this.showMessage('Task Added', 'Task addition has been submitted for Manager approval.', 'success');
+          } else {
+            return { data: submitResult };
+          }
+        },
+        successTitle: 'Task Added',
+        successMessage: () => submitResult && submitResult.approved
+          ? 'Task has been added to the work request.'
+          : 'Task addition has been submitted for Manager approval.',
+        errorTitle: 'Failed to Add Task'
+      });
+
+      if (runResult.success) {
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+        this._invalidateCountsAndSidebar();
         closeFormPanelAndRoute('#operations/detail/' + wrId);
+      } else {
+        App.handleRoute();
       }
     });
 
