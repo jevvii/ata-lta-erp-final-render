@@ -1631,45 +1631,59 @@ const Users = {
       } else {
         record.password = data.password.trim();
         optimisticId = generateId('usr-opt');
-        const optimisticUser = {
-          id: optimisticId,
-          ...record,
-          createdAt: new Date().toISOString()
-        };
-        const generation = this._beginSkipGeneration();
-        this.users.unshift(optimisticUser);
-        this._usersLoaded = true;
-        this.showUserList(); // render once from warm cache before the API round-trip
+        let generation = 0;
 
-        try {
-          const res = await window.apiClient.admin.createUser(record);
-          const serverUser = res?.data || res;
-          this._replaceOptimisticUser(optimisticId, serverUser);
+        const runResult = await Workflow.runBlockingArchiveAction({
+          title: 'Creating User',
+          message: `Please wait while user "${record.name}" is being created...`,
+          apiCall: async () => {
+            const optimisticUser = {
+              id: optimisticId,
+              ...record,
+              createdAt: new Date().toISOString()
+            };
+            generation = this._beginSkipGeneration();
+            this.users.unshift(optimisticUser);
+            this._usersLoaded = true;
 
-          // Keep the shared user cache warm so assignee/dropdown pickers stay usable.
-          if (window.apiClient?.userCache) {
-            if (!Array.isArray(window.apiClient.userCache._users)) {
-              window.apiClient.userCache._users = serverUser ? [serverUser] : [];
-            } else if (serverUser) {
-              const uidx = window.apiClient.userCache._users.findIndex(u => u.id === serverUser.id);
-              if (uidx >= 0) window.apiClient.userCache._users[uidx] = serverUser;
-              else window.apiClient.userCache._users.push(serverUser);
+            try {
+              const res = await window.apiClient.admin.createUser(record);
+              const serverUser = res?.data || res;
+              this._replaceOptimisticUser(optimisticId, serverUser);
+
+              // Keep the shared user cache warm so assignee/dropdown pickers stay usable.
+              if (window.apiClient?.userCache) {
+                if (!Array.isArray(window.apiClient.userCache._users)) {
+                  window.apiClient.userCache._users = serverUser ? [serverUser] : [];
+                } else if (serverUser) {
+                  const uidx = window.apiClient.userCache._users.findIndex(u => u.id === serverUser.id);
+                  if (uidx >= 0) window.apiClient.userCache._users[uidx] = serverUser;
+                  else window.apiClient.userCache._users.push(serverUser);
+                }
+                window.apiClient.userCache._loadedAt = Date.now();
+              }
+              this._endSkipGeneration(generation);
+              return { data: serverUser };
+            } catch (e) {
+              // Rollback the optimistic insert on any create error.
+              this.users = this.users.filter(u => u.id !== optimisticId);
+              if (this.users.length === 0) this._usersLoaded = false;
+              this._endSkipGeneration(generation);
+              throw e;
             }
-            window.apiClient.userCache._loadedAt = Date.now();
-          }
-          Workflow.showMessage('Created', 'User created successfully.', 'success');
-        } catch (e) {
-          // Rollback the optimistic insert on any create error.
-          this.users = this.users.filter(u => u.id !== optimisticId);
-          if (this.users.length === 0) this._usersLoaded = false;
-          if (!isAbortError(e)) {
-            console.error('Failed to create user', e);
-            Workflow.showMessage('Save User', e.message || 'Unable to save user.', 'error');
-          }
-        } finally {
-          this._endSkipGeneration(generation);
+          },
+          successTitle: 'User Created',
+          successMessage: 'User created successfully.',
+          errorTitle: 'Failed to Create User'
+        });
+
+        if (runResult.success) {
+          this.showUserList();
+          App.handleRoute();
+        } else {
           App.handleRoute();
         }
+        return;
       }
     } catch (e) {
       if (optimisticId) {
