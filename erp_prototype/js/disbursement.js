@@ -184,12 +184,25 @@ const Disbursement = {
    */
   normalizeDisbursement(d, entityCodeHint) {
     if (!d) return d;
-    const entity = entityCodeHint
+    let entity = entityCodeHint
       || d.entityCode
       || d.entity_code
       || (typeof d.entity === 'string' && ['ATA', 'LTA'].includes(d.entity.toUpperCase()) ? d.entity : null)
       || this._entityCodeFromId(d.entity_id || d.entityId)
       || Auth.activeEntity;
+
+    if ((!entity || entity === 'ALL') && (d.client_id || d.clientId)) {
+      const client = window.apiClient.clientCache.getById(d.client_id || d.clientId);
+      if (client?.entity) {
+        entity = client.entity;
+      }
+    }
+    if ((!entity || entity === 'ALL') && (d.linked_work_request_id || d.linkedWorkRequestId)) {
+      const wr = window.apiClient.workRequestCache.getById(d.linked_work_request_id || d.linkedWorkRequestId);
+      if (wr?.entity) {
+        entity = wr.entity;
+      }
+    }
     const status = d.status || 'Draft';
     const approvedBy = d.approved_by || null;
     const paymentDetails = d.payment_method ? {
@@ -1395,9 +1408,6 @@ const Disbursement = {
     let allItems = this._items || [];
     let items = allItems.filter(d => this._entityMatches(d, entity));
     items = items.filter(d => this._activeBadgeFilter(d));
-    if (Auth.user?.departments?.includes('Operations')) {
-      items = items.filter(d => !['Draft', ...this.PENDING_APPROVAL_STATUSES].includes(d.status));
-    }
     const hasItems = items.length > 0;
 
     if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {

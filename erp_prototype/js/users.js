@@ -993,7 +993,7 @@ const Users = {
 
     try {
       const content = await this.renderPendingDetail(pc, true);
-      if (window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === pc.id) {
+      if (window.SidePaneInstance.recordId === pc.id) {
         const oldFooter = window.SidePaneInstance.pane.querySelector('.side-pane-form-footer, .side-pane-footer');
         if (oldFooter) oldFooter.remove();
         window.SidePaneInstance._lastFooter = null;
@@ -1010,7 +1010,7 @@ const Users = {
       }
     } catch (e) {
       console.error('Failed to load pending detail', e);
-      if (window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === pc.id) {
+      if (window.SidePaneInstance.recordId === pc.id) {
         window.SidePaneInstance.body.replaceChildren(renderEmptyState('Failed to load details'));
       }
     }

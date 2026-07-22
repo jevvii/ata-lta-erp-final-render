@@ -266,6 +266,10 @@ const listWorkRequests = async ({
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
 
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
   if (isArchived) {
     query = query.eq('archived', true);
   } else if (archived === false || archived === 'false') {
