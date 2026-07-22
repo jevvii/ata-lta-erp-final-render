@@ -418,6 +418,7 @@ const PendingChanges = {
    */
   canApproveChange(pc) {
     if (!pc) return false;
+    if (pc.submittedBy === Auth.user?.id) return false;
     if (Auth.user?.role === 'Admin') return true;
     if (Auth.user?.role === 'Manager' || (Auth.user?.departments || []).includes('Management')) {
       const submitter = (typeof window !== 'undefined' && window.apiClient?.userCache)
