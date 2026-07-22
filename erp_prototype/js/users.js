@@ -417,6 +417,8 @@ const Users = {
    */
   _normalizeOperationsRequest(r) {
     if (!r) return r;
+    const invoiceId = r.invoice_id || r.invoiceId || (typeof r.notes === 'string' ? (r.notes.match(/Invoice ID: ([^\s)]+)/) || [])[1] : null);
+    const invoiceNumber = r.invoice_number || r.invoiceNumber || (typeof r.notes === 'string' ? (r.notes.match(/Invoice (INV-[^\s)]+)/) || [])[1] : null);
     return {
       ...r,
       id: r.id,
@@ -436,7 +438,10 @@ const Users = {
       disbursementType: r.disbursement_type || r.disbursementType,
       paymentMethod: r.payment_method || r.paymentMethod,
       recipientDetails: r.recipient_details || r.recipientDetails,
-      documents: r.documents
+      documents: r.documents,
+      invoiceId,
+      invoiceNumber,
+      requestedRouting: r.requested_routing || r.requestedRouting || (typeof r.notes === 'string' && r.notes.includes('Paid phase') ? 'Paid' : null)
     };
   },
 
@@ -478,6 +483,13 @@ const Users = {
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to preload my rejected', err);
       this._cachedMyRejected = [];
+    }
+    try {
+      const opRes = await window.apiClient.operationsRequests.list({ status: 'pending' });
+      this._cachedPendingOpRequests = (opRes.data || []).map(r => this._normalizeOperationsRequest(r));
+    } catch (err) {
+      if (!isAbortError(err)) console.error('Failed to preload pending operations requests', err);
+      this._cachedPendingOpRequests = [];
     }
 
     if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
@@ -1020,6 +1032,21 @@ const Users = {
     // Render type-specific fields
     if (r.type === 'billing') {
       const linkedTask = r.linkedTaskId ? (wr?.tasks || []).find(t => t.id === r.linkedTaskId) : null;
+      if (r.invoiceNumber || r.invoiceId) {
+        const invLink = el('span', { text: r.invoiceNumber ? r.invoiceNumber : 'View Invoice' });
+        if (r.invoiceId) {
+          invLink.style.cursor = 'pointer';
+          invLink.style.color = 'var(--color-primary)';
+          invLink.style.textDecoration = 'underline';
+          invLink.addEventListener('click', () => {
+            location.hash = `#billing/detail/${r.invoiceId}`;
+          });
+        }
+        addProp('Invoice', invLink);
+      }
+      if (r.requestedRouting) {
+        addProp('Target Routing', document.createTextNode(`${r.requestedRouting} Phase`));
+      }
       addProp('Linked Task', document.createTextNode(linkedTask ? linkedTask.title : '— Whole Project —'));
       addProp('Amount', el('strong', { text: (r.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'PHP' }) }));
       if (r.receiptFilename) {
@@ -1098,25 +1125,41 @@ const Users = {
     const wrapper = this.renderRequestDetailContent(r);
 
     if (r.status === 'pending') {
-      const footerActions = el('div', { class: 'side-pane-form-footer' });
-      const cancelBtn = el('button', { class: 'btn btn-danger', text: 'Cancel Request' });
-      cancelBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
-          try {
-            await window.apiClient.operationsRequests.remove(r.id);
-          } catch (e) {
-            Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
-            return;
-          }
-          Users.invalidateMyRequestsCount();
-          if (location.hash.includes('/')) {
-            location.hash = location.hash.split('/')[0];
-          } else {
-            App.handleRoute();
-          }
-        }, 'danger');
-      });
-      footerActions.appendChild(cancelBtn);
+      const footerActions = el('div', { class: 'side-pane-form-footer', style: 'display:flex; gap:8px; justify-content:flex-end;' });
+      const canApprove = Auth.user?.role === 'Admin' || Auth.canApproveChange('invoices');
+      if (canApprove) {
+        const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Request' });
+        approveBtn.addEventListener('click', () => {
+          this.approveOperationsRequest(r);
+        });
+        footerActions.appendChild(approveBtn);
+
+        const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject Request' });
+        rejectBtn.addEventListener('click', () => {
+          this.rejectOperationsRequest(r);
+        });
+        footerActions.appendChild(rejectBtn);
+      }
+      if (r.requestedBy === Auth.user?.id || !canApprove) {
+        const cancelBtn = el('button', { class: 'btn btn-secondary', text: 'Cancel Request' });
+        cancelBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', async () => {
+            try {
+              await window.apiClient.operationsRequests.remove(r.id);
+            } catch (e) {
+              Workflow.showMessage('Cancel Request', e.message || 'Unable to cancel request.', 'error');
+              return;
+            }
+            Users.invalidateMyRequestsCount();
+            if (location.hash.includes('/')) {
+              location.hash = location.hash.split('/')[0];
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger');
+        });
+        footerActions.appendChild(cancelBtn);
+      }
       wrapper.appendChild(footerActions);
     }
 
@@ -2151,9 +2194,63 @@ const Users = {
       }
     });
 
-    // Record-type pending release requests (disbursement, billing, transmittal)
-    // are now handled through their respective resource APIs / operations requests;
-    // only structural pending-approval changes remain in this list.
+    (this._cachedPendingOpRequests || []).forEach(opReq => {
+      const normReq = this._normalizeOperationsRequest(opReq);
+      let itemEntity = normReq.entity;
+      if (!itemEntity || itemEntity === 'ALL') {
+        itemEntity = (entity === 'ALL') ? (Auth.user.entities[0] || 'ATA') : entity;
+      }
+      if (!entFilter(itemEntity)) return;
+
+      const submitter = window.apiClient.userCache.getById(normReq.requestedBy);
+      if (normReq.type === 'billing') {
+        const invNum = normReq.invoiceNumber ? ` (${normReq.invoiceNumber})` : '';
+        billingToRelease.push({
+          type: 'operations_request',
+          kind: 'billingRouting',
+          id: normReq.id,
+          recordId: normReq.invoiceId || normReq.workRequestId,
+          title: `Billing Request${invNum}`,
+          description: normReq.notes || 'Request to route invoice to Paid phase',
+          amount: normReq.amount || null,
+          submittedBy: normReq.requestedBy,
+          submitter,
+          submittedAt: normReq.requestedAt,
+          entity: itemEntity,
+          raw: normReq
+        });
+      } else if (normReq.type === 'disbursement') {
+        disbursementToRelease.push({
+          type: 'operations_request',
+          kind: 'disbursementRequest',
+          id: normReq.id,
+          recordId: normReq.workRequestId,
+          title: `Disbursement Request: ${normReq.category || '—'}`,
+          description: normReq.notes || 'Disbursement request awaiting approval',
+          amount: normReq.amount || null,
+          submittedBy: normReq.requestedBy,
+          submitter,
+          submittedAt: normReq.requestedAt,
+          entity: itemEntity,
+          raw: normReq
+        });
+      } else if (normReq.type === 'transmittal') {
+        transmittalSent.push({
+          type: 'operations_request',
+          kind: 'transmittalRequest',
+          id: normReq.id,
+          recordId: normReq.workRequestId,
+          title: `Transmittal Request`,
+          description: normReq.notes || 'Transmittal request awaiting approval',
+          amount: null,
+          submittedBy: normReq.requestedBy,
+          submitter,
+          submittedAt: normReq.requestedAt,
+          entity: itemEntity,
+          raw: normReq
+        });
+      }
+    });
 
     return {
       workRequestCreation,
@@ -2346,6 +2443,10 @@ const Users = {
   },
 
   approvePendingItem(item) {
+    if (item.type === 'operations_request') {
+      this.approveOperationsRequest(item.raw);
+      return;
+    }
     const isRouting = item.kind === 'wrPhaseRouting';
     const confirmTitle = isRouting ? 'Confirm Routing' : 'Confirm Approval';
     const confirmMsg = isRouting 
@@ -2371,6 +2472,10 @@ const Users = {
   },
 
   rejectPendingItem(item) {
+    if (item.type === 'operations_request') {
+      this.rejectOperationsRequest(item.raw);
+      return;
+    }
     const reason = prompt('Enter rejection reason:');
     if (reason === null) return;
 
@@ -2384,6 +2489,108 @@ const Users = {
         successTitle: 'Rejection Successful',
         successMessage: `"${item.title}" has been rejected.`,
         onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
+    }, 'danger');
+  },
+
+  async approveOperationsRequest(r) {
+    const self = this;
+    const norm = this._normalizeOperationsRequest(r);
+    const reqTitle = self._requestTypeLabel(norm.type);
+    Workflow.showConfirm('Confirm Approval', `Approve ${reqTitle} request?`, () => {
+      Workflow.runBlockingArchiveAction({
+        title: 'Approving Request',
+        message: 'Please wait while the request is being approved...',
+        apiCall: async () => {
+          if (norm.type === 'billing') {
+            const invoiceId = norm.invoiceId || norm.linkedInvoiceId || norm.recordId;
+            const invNumber = norm.invoiceNumber;
+            let targetInv = invoiceId ? Billing.getInvoiceById(invoiceId) : null;
+            if (!targetInv && invoiceId) {
+              try {
+                const invRes = await window.apiClient.invoices.get(invoiceId);
+                targetInv = invRes?.data ? Billing.normalizeInvoice(invRes.data) : null;
+              } catch (e) {}
+            }
+            if (!targetInv && invNumber && Array.isArray(Billing._listCache)) {
+              targetInv = Billing._listCache.find(i => i.invoiceNumber === invNumber);
+            }
+            if (!targetInv && norm.workRequestId && Array.isArray(Billing._listCache)) {
+              targetInv = Billing._listCache.find(i => i.workRequestId === norm.workRequestId);
+            }
+
+            if (targetInv) {
+              const paid = Billing.getPaidAmount(targetInv);
+              const total = targetInv.total || parseFloat(norm.amount) || 0;
+              await window.apiClient.invoices.update(targetInv.id, {
+                status: 'Paid',
+                amount_paid: total,
+                balance: 0
+              });
+              if (window.apiClient.invoices.recordPayment && paid < total) {
+                await window.apiClient.invoices.recordPayment(targetInv.id, {
+                  amount: Math.max(0, total - paid),
+                  payment_date: new Date().toISOString().slice(0, 10),
+                  method: 'Admin Approved Routing',
+                  notes: 'Routed to Paid phase via Admin approval'
+                }).catch(e => console.warn('Payment record warning', e));
+              }
+              Billing.invalidateCache();
+            }
+          }
+
+          await window.apiClient.operationsRequests.update(norm.id, {
+            status: 'fulfilled',
+            fulfilledBy: Auth.user.id,
+            fulfilledAt: new Date().toISOString()
+          });
+          return true;
+        },
+        successTitle: 'Approval Successful',
+        successMessage: 'Request has been approved successfully.',
+        onAfterConfirm: async () => {
+          Users.invalidateMyRequestsCount();
+          if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+            window.apiClient.operationsRequests.invalidateCounts();
+          }
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+            window.SidePaneInstance.close({ silent: true });
+          }
+          App.handleRoute();
+        }
+      });
+    }, 'success');
+  },
+
+  async rejectOperationsRequest(r) {
+    const norm = this._normalizeOperationsRequest(r);
+    const reason = prompt('Enter rejection reason:');
+    if (reason === null) return;
+    Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this request?', () => {
+      Workflow.runBlockingArchiveAction({
+        title: 'Rejecting Request',
+        message: 'Please wait while the request is being rejected...',
+        apiCall: async () => {
+          await window.apiClient.operationsRequests.update(norm.id, {
+            status: 'rejected',
+            rejectionReason: reason,
+            fulfilledBy: Auth.user.id,
+            fulfilledAt: new Date().toISOString()
+          });
+          return true;
+        },
+        successTitle: 'Rejection Successful',
+        successMessage: 'Request has been rejected.',
+        onAfterConfirm: async () => {
+          Users.invalidateMyRequestsCount();
+          if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+            window.apiClient.operationsRequests.invalidateCounts();
+          }
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+            window.SidePaneInstance.close({ silent: true });
+          }
           App.handleRoute();
         }
       });
@@ -3772,7 +3979,8 @@ const Users = {
     let requests = [];
     const hasItems = await (async () => {
       try {
-        const res = await window.apiClient.operationsRequests.list({ requestedBy: Auth.user?.id, limit: 1000 });
+        const query = (Auth.user?.role === 'Admin') ? { limit: 1000 } : { requestedBy: Auth.user?.id, limit: 1000 };
+        const res = await window.apiClient.operationsRequests.list(query);
         requests = (res?.data || []).map(r => this._normalizeOperationsRequest(r));
         return requests.length > 0;
       } catch (err) {
