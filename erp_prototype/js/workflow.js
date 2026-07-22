@@ -544,17 +544,17 @@ const WorkflowData = {
     if (parentWr) {
       if (!Array.isArray(this._tasks)) this._tasks = [];
 
+      // Filter out all old tasks for localId and finalWrId from the cache to prevent duplicate or stale tasks
+      this._tasks = this._tasks.filter(t => t.workRequestId !== localId && t.workRequestId !== finalWrId);
+
       serverTasks.forEach(t => {
         const normalizedTask = this.normalizeTask(t);
         normalizedTask.workRequestId = finalWrId;
-        const existingTask = normalizedTask.id ? this.getTaskById(normalizedTask.id) : null;
+        const existingTask = normalizedTask.id ? capturedTempTasks.find(tk => tk.id === normalizedTask.id) : null;
         // Match by server id first (covers updates), then by captured optimistic
         // task using a stable criterion (title + original temp id, falling back to title).
         const tempTask = !existingTask && capturedTempTasks.length
           ? (capturedTempTasks.find(tk =>
-              tk.id && normalizedTask.id && tk.id === normalizedTask.id
-            ) ||
-            capturedTempTasks.find(tk =>
               tk.title === normalizedTask.title && !tk._adopted
             ) ||
             null)
@@ -562,9 +562,11 @@ const WorkflowData = {
 
         if (existingTask) {
           Object.assign(existingTask, normalizedTask);
+          this._tasks.push(existingTask);
         } else if (tempTask) {
           Object.assign(tempTask, normalizedTask);
           tempTask._adopted = true;
+          this._tasks.push(tempTask);
         } else {
           this._tasks.push(normalizedTask);
         }
@@ -11958,6 +11960,7 @@ const Workflow = {
               if (submitResult.record) {
                 const serverTask = WorkflowData.normalizeTask(submitResult.record);
                 serverTask.workRequestId = newTask.workRequestId;
+                WorkflowData._removeTask(newTask.id);
                 this._syncTaskToCaches(serverTask);
                 return { data: serverTask };
               }
