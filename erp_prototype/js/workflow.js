@@ -2181,7 +2181,7 @@ const Workflow = {
     return Auth.can('workflow:edit') || Auth.can('workflow:task_add') || Auth.can('workflow:task_approve');
   },
 
-  requestPhaseRouting(wrId, nextPhase) {
+  async requestPhaseRouting(wrId, nextPhase) {
     const wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) return;
     const existing = WorkflowData.getPendingApprovalsWhere(pc =>
@@ -2198,7 +2198,7 @@ const Workflow = {
       previousStatus: wr.status,
       requestedAt: new Date().toISOString()
     };
-    PendingChanges.submit('workRequestPhaseRouting', record, false);
+    await PendingChanges.submit('workRequestPhaseRouting', record, false);
     this.showMessage('Routing Requested', `Phase routing to "${nextPhase}" has been submitted for Admin approval.`, 'success');
   },
 
