@@ -36,10 +36,7 @@ projects:
               - key: LOG_LEVEL
                 value: info
               - key: FRONTEND_URL
-                fromService:
-                  name: ata-lta-erp-spa-uat
-                  type: web
-                  property: url
+                value: https://ata-lta-erp-spa-uat.onrender.com
               - fromGroup: erp-uat-secrets
 
           # ─── UAT Frontend Static Site ──────────────────────────────────
@@ -54,7 +51,4 @@ projects:
             staticPublishPath: .
             envVars:
               - key: ERP_API_BASE_URL
-                fromService:
-                  name: ata-lta-erp-api-uat
-                  type: web
-                  property: url
+                value: https://ata-lta-erp-api-uat.onrender.com/v1
