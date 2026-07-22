@@ -1394,8 +1394,10 @@ const Disbursement = {
 
     let allItems = this._items || [];
     let items = allItems.filter(d => this._entityMatches(d, entity));
-
     items = items.filter(d => this._activeBadgeFilter(d));
+    if (Auth.user?.departments?.includes('Operations')) {
+      items = items.filter(d => !['Draft', ...this.PENDING_APPROVAL_STATUSES].includes(d.status));
+    }
     const hasItems = items.length > 0;
 
     if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {
@@ -1611,8 +1613,6 @@ const Disbursement = {
 
     if (isOperations) {
       return [
-        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
-        { key: 'Requested', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
         { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#10b981' },
         { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
         { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }

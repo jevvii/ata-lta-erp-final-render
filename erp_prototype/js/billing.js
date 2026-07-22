@@ -1302,6 +1302,10 @@ const Billing = {
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
       let invoices = [...baseInvoices, ...pendingInvs];
 
+      if (Auth.user?.departments?.includes('Operations')) {
+        invoices = invoices.filter(inv => !['Draft', 'Pending', 'Approved'].includes(inv.status));
+      }
+
       if (activeFilters.workRequest.size > 0) {
         invoices = invoices.filter(inv => activeFilters.workRequest.has(inv.workRequestId));
       }
@@ -1568,6 +1572,8 @@ const Billing = {
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
 
+    const isOperations = departments.includes('Operations');
+
     const releasedStatuses = ['Sent'];
 
     if (isAdmin) {
@@ -1584,6 +1590,15 @@ const Billing = {
       return [
         { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
         { key: 'Pending', label: 'Pending', statuses: ['Pending'], targetStatus: 'Pending', color: '#f59e0b' },
+        { key: 'Released', label: 'Released', statuses: releasedStatuses, targetStatus: 'Sent', color: '#3b82f6' },
+        { key: 'Partially Paid', label: 'Partially Paid', statuses: ['Partially Paid'], targetStatus: 'Partially Paid', color: '#f59e0b' },
+        { key: 'Paid', label: 'Paid', statuses: ['Paid'], targetStatus: 'Paid', color: '#10b981' },
+        { key: 'Overdue', label: 'Overdue', statuses: ['Overdue'], targetStatus: 'Overdue', color: '#ef4444' }
+      ];
+    }
+
+    if (isOperations) {
+      return [
         { key: 'Released', label: 'Released', statuses: releasedStatuses, targetStatus: 'Sent', color: '#3b82f6' },
         { key: 'Partially Paid', label: 'Partially Paid', statuses: ['Partially Paid'], targetStatus: 'Partially Paid', color: '#f59e0b' },
         { key: 'Paid', label: 'Paid', statuses: ['Paid'], targetStatus: 'Paid', color: '#10b981' },

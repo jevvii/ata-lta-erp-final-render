@@ -900,8 +900,8 @@ const Transmittal = {
     // Documentation and Management: Draft | Sent | Acknowledged
     if (isDocumentation || isManagement) return [draftCol, sentCol, ackCol];
 
-    // Operations: Requested | Sent | Acknowledged
-    if (isOperations) return [draftCol, sentCol, ackCol];
+    // Operations: Sent | Acknowledged
+    if (isOperations) return [sentCol, ackCol];
 
     // Others (Accounting, HR, etc.): Sent | Acknowledged
     return [sentCol, ackCol];
@@ -1110,6 +1110,9 @@ const Transmittal = {
     container.replaceChildren();
 
     items = items.filter(t => !t.archived && t.status !== 'Cancelled');
+    if (Auth.user?.departments?.includes('Operations')) {
+      items = items.filter(t => t.status !== 'Draft');
+    }
     const hasItems = items.length > 0;
 
     if (activeFilters.workRequest && activeFilters.workRequest.size > 0) {
