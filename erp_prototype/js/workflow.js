@@ -5854,12 +5854,14 @@ const Workflow = {
     // Load task-specific documents from the DMS. These rows are persisted,
     // so attachments survive refresh unlike the legacy taskDocuments array.
     let taskDocs = [];
-    try {
-      const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id, _t: Date.now() });
-      taskDocs = docsRes?.data || [];
-    } catch (e) {
-      if (!isAbortError(e)) {
-        console.error('[Workflow] failed to load DMS documents for task side pane', e);
+    if (task.id && !WorkflowData._isTempId(task.id)) {
+      try {
+        const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id, _t: Date.now() });
+        taskDocs = docsRes?.data || [];
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.error('[Workflow] failed to load DMS documents for task side pane', e);
+        }
       }
     }
 
@@ -9713,6 +9715,11 @@ const Workflow = {
         rightPane.appendChild(docsSection);
 
         (async () => {
+          if (t.id && WorkflowData._isTempId(t.id)) {
+            docsList.innerHTML = '';
+            docsList.appendChild(renderEmptyState('No documents attached'));
+            return;
+          }
           try {
             const docsRes = await window.apiClient.documents.list({ linkedTaskId: t.id, _t: Date.now() });
             const taskDocs = docsRes?.data || [];
@@ -10594,6 +10601,10 @@ const Workflow = {
 
     for (const container of listContainers) {
       container.innerHTML = '';
+      if (WorkflowData._isTempId(taskId)) {
+        container.appendChild(renderEmptyState('No documents attached'));
+        continue;
+      }
       container.appendChild(renderEmptyState('Loading documents...'));
       try {
         const docsRes = await window.apiClient.documents.list({ linkedTaskId: taskId, _t: Date.now() });
