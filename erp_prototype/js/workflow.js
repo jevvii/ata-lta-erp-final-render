@@ -7126,21 +7126,6 @@ const Workflow = {
     dueGroup.appendChild(el('input', { type: 'date', name: 'dueDate', class: 'notion-prop-input', required: true, value: wr ? (wr.dueDate || '') : '' }));
     propsGrid.appendChild(dueGroup);
 
-    // Assignee
-    const assigneeGroup = el('div', { class: 'notion-prop' });
-    assigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Assignee' }));
-    const assigneeSel = el('select', { name: 'assignedTo', class: 'notion-prop-select', required: true });
-    assigneeSel.appendChild(el('option', { value: '', text: '— Select —' }));
-    (window.apiClient.userCache._users || []).filter(u => {
-      return (u.entities || []).some(e => matchesEntity(e, entity));
-    }).forEach(u => {
-      const opt = el('option', { value: u.id, text: u.name });
-      if (wr && wr.assignedTo === u.id) opt.selected = true;
-      assigneeSel.appendChild(opt);
-    });
-    assigneeGroup.appendChild(assigneeSel);
-    propsGrid.appendChild(assigneeGroup);
-
     form.appendChild(propsGrid);
 
     // ── Description free-form ──
@@ -13547,21 +13532,6 @@ const Workflow = {
     });
     clientGroup.appendChild(clientSel);
     form.appendChild(clientGroup);
-
-    const assigneeGroup = el('div', { class: 'form-group' });
-    assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
-    const assigneeSel = el('select', { name: 'assignedTo' });
-    assigneeSel.appendChild(el('option', { value: '', text: '— Select Assignee —' }));
-    (window.apiClient.userCache._users || []).filter(u => {
-      const userEntities = (u.entities || []).map(e => e.toUpperCase());
-      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(entity.toUpperCase());
-    }).forEach(u => {
-      const opt = el('option', { value: u.id, text: u.name });
-      if (template && template.assignedTo === u.id) opt.selected = true;
-      assigneeSel.appendChild(opt);
-    });
-    assigneeGroup.appendChild(assigneeSel);
-    form.appendChild(assigneeGroup);
 
     const priorityGroup = el('div', { class: 'form-group' });
     priorityGroup.appendChild(el('label', { text: 'Priority' }));
