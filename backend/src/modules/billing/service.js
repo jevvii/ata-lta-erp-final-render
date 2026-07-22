@@ -368,7 +368,6 @@ const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
   }
 
   const payment = result?.payment;
-  const invoice = result?.invoice;
 
   await auditService.log({
     action: 'invoice.payment',

@@ -224,7 +224,6 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
  */
 const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
   const MAX_RETRIES = 5;
-  let lastError = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const disbursementNumber = await generateDisbursementNumber(
@@ -283,7 +282,7 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
       });
     }
 
-    lastError = error;
+
   }
 
   throw new AppError({
