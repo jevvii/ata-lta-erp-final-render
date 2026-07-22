@@ -2223,36 +2223,48 @@ const Workflow = {
       async () => {
         const now = new Date().toISOString();
         const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
-        // Snapshot cancellable tasks so we can roll them back if the WR update fails.
         const taskSnapshots = [];
         let cancelledCount = 0;
 
-        for (const t of tasks) {
-          if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-            taskSnapshots.push({ id: t.id, status: t.status });
-            await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
-            cancelledCount++;
-          }
-        }
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Cancelling Work Request',
+          message: `Please wait while "${wr.title || 'the work request'}" is being cancelled...`,
+          apiCall: async () => {
+            for (const t of tasks) {
+              if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+                taskSnapshots.push({ id: t.id, status: t.status });
+                await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+                cancelledCount++;
+              }
+            }
 
-        try {
-          await this._optimisticUpdate(
-            wrId,
-            { status: 'Cancelled', archived: true },
-            () => window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true }),
-            'Failed to cancel Work Request'
-          );
-          this.showMessage('Work Request Cancelled',
-            `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
-            'warning'
-          );
-        } catch (e) {
-          // Roll back the optimistically cancelled tasks if the WR update failed.
-          for (const snapshot of taskSnapshots) {
-            const task = WorkflowData.getTaskById(snapshot.id);
-            if (task) task.status = snapshot.status;
-          }
-          this.showMessage('Cancel Failed', 'Work Request could not be cancelled; task statuses have been restored.', 'error');
+            try {
+              const res = await window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true });
+              const updated = WorkflowData.normalizeWorkRequest(res.data);
+              WorkflowData._addOptimisticWorkRequest(updated);
+              this._syncWorkRequestToCaches(updated);
+              return { data: updated };
+            } catch (e) {
+              for (const snapshot of taskSnapshots) {
+                const task = WorkflowData.getTaskById(snapshot.id);
+                if (task) task.status = snapshot.status;
+              }
+              throw e;
+            }
+          },
+          successTitle: 'Work Request Cancelled',
+          successMessage: () => `Work Request has been successfully cancelled. ${cancelledCount} task(s) were also cancelled.`,
+          errorTitle: 'Failed to Cancel Work Request'
+        });
+
+        if (runResult.success) {
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          this._invalidateCountsAndSidebar();
+          this.view = 'list';
+          this.detailWrId = null;
+          App.handleRoute();
+        } else {
+          App.handleRoute();
         }
       },
       'danger'
@@ -3943,11 +3955,26 @@ const Workflow = {
           style: 'margin-right: 8px;'
         });
         cancelBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Cancellation', 'Are you sure you want to cancel and withdraw this request?', () => {
-            PendingChanges.delete(wr.pendingChangeId);
-            this.view = 'list';
-            this.detailWrId = null;
-            App.handleRoute();
+          Workflow.showConfirm('Confirm Cancellation', 'Are you sure you want to cancel and withdraw this request?', async () => {
+            const runResult = await this.runBlockingArchiveAction({
+              title: 'Withdrawing Request',
+              message: 'Please wait while the request is being withdrawn...',
+              apiCall: async () => {
+                await PendingChanges.delete(wr.pendingChangeId);
+                return { success: true };
+              },
+              successTitle: 'Request Withdrawn',
+              successMessage: 'The creation request has been successfully cancelled.',
+              errorTitle: 'Failed to Withdraw Request'
+            });
+
+            if (runResult.success) {
+              this.view = 'list';
+              this.detailWrId = null;
+              App.handleRoute();
+            } else {
+              App.handleRoute();
+            }
           }, 'danger');
         });
         actions.appendChild(cancelBtn);
