@@ -843,7 +843,7 @@ const Users = {
       this.view = key;
       this.editingId = null;
       this.pendingDetailId = null;
-      App.handleRoute();
+      location.hash = '#admin/' + key;
     };
 
     if (canManageUsers) {
