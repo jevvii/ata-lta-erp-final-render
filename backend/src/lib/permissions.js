@@ -63,6 +63,8 @@ const DEPARTMENT_PERMISSIONS = {
     'dms:view',
     'transmittal:view',
     'reports:view',
+    'approve_change:invoices',
+    'approve_change:disbursements',
   ],
   Operations: [
     'clients:view',

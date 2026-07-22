@@ -254,7 +254,8 @@ const App = {
 
         const myReqsPending = showRequestsTab ? (opsCounts?.data?.pending || 0) : 0;
         let approvalsCount = 0;
-        if (Auth.isManagerial() && typeof Users !== 'undefined' && typeof Users.getPendingCategories === 'function') {
+        const canSeePending = Auth.isManagerial() || (Auth.user?.departments || []).includes('Accounting') || Auth.user?.role === 'Accounting';
+        if (canSeePending && typeof Users !== 'undefined' && typeof Users.getPendingCategories === 'function') {
           const categories = Users.getPendingCategories();
           approvalsCount = Object.values(categories).reduce((sum, arr) => sum + (arr || []).length, 0);
         }

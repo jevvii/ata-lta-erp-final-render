@@ -60,7 +60,7 @@ const Auth = {
    */
   DEPARTMENT_PERMISSIONS: {
     'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_add','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:delete','dms:handover','transmittal:view','transmittal:mark','transmittal:delete','bypass_review:tasks','approve_change:tasks'],
-    'Accounting': ['clients:view','workflow:view','workflow:task_add','billing:view','billing:edit','disbursement:view','disbursement:create','disbursement:edit','dms:view','transmittal:view'],
+    'Accounting': ['clients:view','workflow:view','workflow:task_add','billing:view','billing:edit','disbursement:view','disbursement:create','disbursement:edit','dms:view','transmittal:view','approve_change:invoices','approve_change:disbursements'],
     'Operations': ['clients:view','workflow:view','workflow:task_add','workflow:task_upload','billing:view','billing:request','disbursement:view','disbursement:request','dms:view','transmittal:view','transmittal:request'],
     'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:delete','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark']
   },
@@ -187,6 +187,10 @@ const Auth = {
   },
 
   canApproveChange(table) {
+    if (this.user?.role === 'Admin') return true;
+    if ((this.user?.departments || []).includes('Accounting') || this.user?.role === 'Accounting') {
+      if (table === 'invoices' || table === 'disbursements') return true;
+    }
     return this.can('approve_change:' + table);
   },
 
