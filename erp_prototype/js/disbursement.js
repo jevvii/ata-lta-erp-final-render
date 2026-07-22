@@ -2338,10 +2338,60 @@ const Disbursement = {
       return;
     }
 
+    let receiptS3Key = existing?.receiptS3Key || null;
+    let receiptFilename = existing?.receiptFilename || null;
+
+    if (receiptFile) {
+      const runUpload = await Workflow.runBlockingArchiveAction({
+        title: 'Uploading Receipt',
+        message: 'Please wait while the receipt file is being uploaded...',
+        apiCall: async () => {
+          const metadata = {
+            fileName: receiptFile.name,
+            originalName: receiptFile.name,
+            contentType: receiptFile.type || 'application/octet-stream',
+            fileSize: receiptFile.size,
+            documentType: 'receipt',
+            category: 'OTHER',
+            description: 'Disbursement receipt',
+            workRequestId: data.linkedWorkRequestId || null,
+            clientId: this.prefilledClientId || null,
+            linkedTaskId: data.linkedTaskId || null,
+          };
+
+          const createRes = await window.apiClient.documents.create(metadata);
+          const { document: dmsDoc, uploadUrl } = createRes.data;
+
+          const uploadRes = await fetch(uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': metadata.contentType },
+            body: receiptFile,
+          });
+          if (!uploadRes.ok) {
+            throw new Error(`Storage upload failed: ${uploadRes.status}`);
+          }
+
+          await window.apiClient.documents.confirmUpload(dmsDoc.id);
+          return { data: dmsDoc };
+        },
+        successTitle: 'Upload Succeeded',
+        successMessage: 'Receipt uploaded successfully.',
+        errorTitle: 'Upload Failed'
+      });
+
+      if (!runUpload.success) {
+        return;
+      }
+      receiptS3Key = runUpload.data.id;
+      receiptFilename = receiptFile.name;
+    }
+
     const payload = {
       ...this.toApiPayload(data),
       clientId: this.prefilledClientId || null,
-      employeeId: Auth.user.id
+      employeeId: Auth.user.id,
+      receiptS3Key,
+      receiptFilename
     };
 
     const targetRoute = isResubmitting ? '#admin' : '#disbursement';
@@ -2540,6 +2590,35 @@ const Disbursement = {
     meta.appendChild(el('p', { text: 'Client: ' + (client?.name || '—') }));
     meta.appendChild(el('p', { text: 'Date Submitted: ' + formatDate(d.submittedAt) }));
     meta.appendChild(el('p', { text: 'Fund Source: ' + this.getFundSource(d) }));
+    if (d.receiptFilename) {
+      const receiptP = el('p', { text: 'Receipt: ' });
+      const receiptLink = el('a', {
+        href: 'javascript:void(0)',
+        text: d.receiptFilename,
+        style: 'color:#2563eb;font-weight:500;text-decoration:none;margin-left:4px;'
+      });
+      receiptLink.addEventListener('click', async () => {
+        try {
+          if (d.receiptS3Key) {
+            const urlRes = await window.apiClient.documents.downloadUrl(d.receiptS3Key);
+            if (urlRes.data && urlRes.data.url) {
+              window.open(urlRes.data.url, '_blank');
+            } else {
+              throw new Error('Download URL not found in response');
+            }
+          } else {
+            Workflow.showMessage('Error', 'Receipt file key is missing.', 'danger');
+          }
+        } catch (err) {
+          console.error('Failed to get download URL', err);
+          Workflow.showMessage('Download Failed', 'Failed to retrieve download link: ' + (err.message || 'Unknown error'), 'danger');
+        }
+      });
+      receiptLink.addEventListener('mouseenter', () => { receiptLink.style.textDecoration = 'underline'; });
+      receiptLink.addEventListener('mouseleave', () => { receiptLink.style.textDecoration = 'none'; });
+      receiptP.appendChild(receiptLink);
+      meta.appendChild(receiptP);
+    }
     container.appendChild(meta);
 
     // Linked Work Request / Task info card

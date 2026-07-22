@@ -249,6 +249,8 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
       requested_by: userId,
       due_date: data.dueDate || null,
       notes: data.notes || null,
+      receipt_s3_key: data.receiptS3Key || null,
+      receipt_filename: data.receiptFilename || null,
       created_by: userId,
       updated_by: userId,
     };
@@ -374,6 +376,8 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.archived !== undefined) updates.archived = data.archived;
+  if (data.receiptS3Key !== undefined) updates.receipt_s3_key = data.receiptS3Key;
+  if (data.receiptFilename !== undefined) updates.receipt_filename = data.receiptFilename;
 
   const { data: updated, error } = await supabaseAdmin
     .from('disbursements')

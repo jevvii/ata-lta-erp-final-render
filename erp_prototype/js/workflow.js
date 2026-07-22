@@ -3315,6 +3315,54 @@ const Workflow = {
       const receiptInput = form.querySelector('input[name="receipt"]');
       const receiptFile = receiptInput?.files?.[0];
 
+      let receiptS3Key = null;
+      let receiptFilename = null;
+
+      if (receiptFile) {
+        const runUpload = await this.runBlockingArchiveAction({
+          title: 'Uploading Receipt',
+          message: 'Please wait while the receipt file is being uploaded...',
+          apiCall: async () => {
+            const metadata = {
+              fileName: receiptFile.name,
+              originalName: receiptFile.name,
+              contentType: receiptFile.type || 'application/octet-stream',
+              fileSize: receiptFile.size,
+              documentType: 'receipt',
+              category: 'OTHER',
+              description: 'Disbursement receipt',
+              workRequestId: data.linkedWorkRequestId || null,
+              clientId: wr?.clientId || null,
+              linkedTaskId: data.linkedTaskId || null,
+            };
+
+            const createRes = await window.apiClient.documents.create(metadata);
+            const { document: dmsDoc, uploadUrl } = createRes.data;
+
+            const uploadRes = await fetch(uploadUrl, {
+              method: 'PUT',
+              headers: { 'Content-Type': metadata.contentType },
+              body: receiptFile,
+            });
+            if (!uploadRes.ok) {
+              throw new Error(`Storage upload failed: ${uploadRes.status}`);
+            }
+
+            await window.apiClient.documents.confirmUpload(dmsDoc.id);
+            return { data: dmsDoc };
+          },
+          successTitle: 'Upload Succeeded',
+          successMessage: 'Receipt uploaded successfully.',
+          errorTitle: 'Upload Failed'
+        });
+
+        if (!runUpload.success) {
+          return;
+        }
+        receiptS3Key = runUpload.data.id;
+        receiptFilename = receiptFile.name;
+      }
+
       const record = {
         category: data.category,
         description: desc,
@@ -3329,7 +3377,8 @@ const Workflow = {
         status: 'Submitted',
         submittedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
-        receiptFilename: receiptFile ? receiptFile.name : null
+        receiptS3Key: receiptS3Key,
+        receiptFilename: receiptFilename
       };
 
       try {
