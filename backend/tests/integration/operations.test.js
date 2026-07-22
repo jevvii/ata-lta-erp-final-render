@@ -143,6 +143,15 @@ describe('/v1/work-requests', () => {
 
     expect(tasks.body.data).toHaveLength(1);
 
+    const singleTask = await request(app)
+      .get(`/v1/work-requests/${wr.body.data.id}/tasks/${task.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(singleTask.body.data.id).toBe(task.body.data.id);
+    expect(singleTask.body.data.title).toBe('Prepare documents');
+
     await request(app)
       .delete(`/v1/work-requests/${wr.body.data.id}/tasks/${task.body.data.id}`)
       .set('Authorization', `Bearer ${admin}`)

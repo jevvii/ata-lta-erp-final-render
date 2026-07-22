@@ -491,6 +491,7 @@
       unarchive: (id) => post(`/work-requests/${id}/unarchive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       remove: (id) => del(`/work-requests/${id}`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       getRelated: (id) => get(`/work-requests/${id}/related`),
+      getTask: (wrId, taskId) => get(`/work-requests/${wrId}/tasks/${taskId}`),
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
       updateTask: (wrId, taskId, data) => put(`/work-requests/${wrId}/tasks/${taskId}`, data),

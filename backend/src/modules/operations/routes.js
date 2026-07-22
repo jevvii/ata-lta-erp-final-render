@@ -126,6 +126,12 @@ router.get(
   requirePermission('workflow:view'),
   operationsController.listTasks
 );
+router.get(
+  '/:wrId/tasks/:taskId',
+  resolveEntity(),
+  requirePermission('workflow:view'),
+  operationsController.getTask
+);
 router.post(
   '/:wrId/tasks',
   resolveEntity(),

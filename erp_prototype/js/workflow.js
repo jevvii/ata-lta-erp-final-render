@@ -10638,7 +10638,7 @@ const Workflow = {
   },
 
   async refreshTaskTimeLogsList(taskId) {
-    const task = WorkflowData.getTaskById(taskId);
+    let task = WorkflowData.getTaskById(taskId);
     if (!task) return;
 
     const listContainers = document.querySelectorAll(`.task-time-logs-list[data-task-id="${taskId}"]`);
@@ -10646,6 +10646,37 @@ const Workflow = {
 
     const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
     const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
+
+    // Show a loading indicator inside each list container (exactly like document loading)
+    listContainers.forEach(container => {
+      container.innerHTML = '';
+      container.appendChild(renderEmptyState('Loading logs...'));
+    });
+
+    try {
+      // Fetch the latest task from the backend to get freshly persisted time logs
+      const res = await window.apiClient.workRequests.getTask(task.workRequestId, taskId);
+      const serverTask = res?.data;
+      if (serverTask) {
+        const normalized = WorkflowData.normalizeTask(serverTask);
+        
+        // Merge normalized task into local cache to persist it across reload/refresh/page switch!
+        const existing = WorkflowData.getTaskById(taskId);
+        if (existing) {
+          const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+          normalized.checklist = (normalized.checklist || []).map(c => {
+            const ec = existingClById.get(c.id);
+            return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+          });
+          Object.assign(existing, normalized);
+          task = existing;
+        } else {
+          task = normalized;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load task details for time logs', err);
+    }
 
     const totalHours = getTaskTotalHours(task);
     const totalLabels = document.querySelectorAll(`.task-total-hours-label[data-task-id="${taskId}"]`);
