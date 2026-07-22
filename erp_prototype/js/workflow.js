@@ -9902,9 +9902,9 @@ const Workflow = {
         const timeHeader = el('div', { class: 'detail-section-title' });
         timeHeader.appendChild(el('span', { text: 'Time Log History' }));
         
-        const totalHours = getTaskTotalHours(t);
+        const taskTotalHours = getTaskTotalHours(t);
         const totalHrsSpan = el('span', {
-          text: `Total: ${totalHours} hrs`,
+          text: `Total: ${taskTotalHours} hrs`,
           class: 'task-total-hours-label',
           'data-task-id': t.id,
           style: 'font-size: 0.75rem; color: var(--color-text-muted); font-weight: normal; margin-left: 8px;'
