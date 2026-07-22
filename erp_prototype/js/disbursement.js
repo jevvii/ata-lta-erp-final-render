@@ -2527,14 +2527,7 @@ const Disbursement = {
       window.apiClient.workRequestCache.ensure()
     ]);
     const entity = Auth.activeEntity;
-    let wrs = window.apiClient.workRequestCache._wrs || [];
-    wrs = wrs.filter(wr => {
-      const wrEnt = (wr.entity || '').toUpperCase();
-      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
-      return wrEnt === entity.toUpperCase();
-    });
-
-    wrs = wrs.filter(wr => window.apiClient.workRequestCache.isActive(wr) && Auth.canViewWr(wr));
+    const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
 
     let pendingRequests = [];
     try {
