@@ -1191,6 +1191,7 @@ const Users = {
       await this.loadUsers();
     }
     const users = this.users;
+    const isAdmin = Auth.user.role === 'Admin';
 
     if (users.length === 0) {
       container.appendChild(renderEmptyStateV2({
@@ -1198,13 +1199,13 @@ const Users = {
         icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/></svg>',
         title: 'No users found',
         body: 'Add users to start managing credentials and roles.',
-        actions: [
+        actions: isAdmin ? [
           {
             text: '+ Add User',
             className: 'btn btn-primary btn-sm',
             onClick: () => this.showUserForm()
           }
-        ]
+        ] : []
       }));
       return;
     }
@@ -1362,14 +1363,15 @@ const Users = {
         { label: 'Entities', width: '120px', align: 'left' },
         { label: 'Status', width: '90px', align: 'left' }
       ],
-      headerActions: [
+      headerActions: isAdmin ? [
         {
           text: '+ Add User',
           className: 'btn btn-primary btn-sm',
           onClick: () => this.showUserForm()
         }
-      ],
+      ] : [],
       rowActions: (item) => {
+        if (!isAdmin) return [];
         const user = users.find(u => u.id === item.id);
         if (!user || this._isTempId(user.id)) return [];
         return [
@@ -1489,6 +1491,10 @@ const Users = {
   },
 
   showUserForm(userId, mode = null) {
+    if (Auth.user.role !== 'Admin') {
+      Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit users.', 'danger');
+      return;
+    }
     this.editingId = userId || 'new';
     const user = userId ? this.users.find(u => u.id === userId) : null;
     const form = this.renderUserFormContent(user);
@@ -1532,6 +1538,10 @@ const Users = {
   },
 
   async submitUserForm(form) {
+    if (Auth.user.role !== 'Admin') {
+      Workflow.showMessage('Access Denied', 'Only admin accounts can modify users.', 'danger');
+      return;
+    }
     const data = Object.fromEntries(new FormData(form).entries());
     const entityCheckboxes = form.querySelectorAll('input[name="entities"]:checked');
     const entities = Array.from(entityCheckboxes).map(cb => cb.value);

@@ -15,7 +15,6 @@ const DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
 const DEPARTMENT_PERMISSIONS = {
   Management: [
     'clients:view',
-    'clients:edit',
     'workflow:view',
     'workflow:edit',
     'workflow:task_add',
@@ -47,12 +46,10 @@ const DEPARTMENT_PERMISSIONS = {
     'approve_change:tasks',
     'approve_change:*',
     'users:view',
-    'users:manage',
     'audit:view_all',
   ],
   Accounting: [
     'clients:view',
-    'clients:edit',
     'workflow:view',
     'workflow:task_add',
     'billing:view',
@@ -153,6 +150,8 @@ const buildPermissionSet = ({ role, departments = [] }) => {
     Object.values(DEPARTMENT_PERMISSIONS)
       .flat()
       .forEach((p) => granted.add(p));
+    granted.add('users:manage');
+    granted.add('clients:edit');
   }
 
   return granted;
