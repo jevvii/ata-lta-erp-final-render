@@ -113,7 +113,10 @@ async function run() {
     const quotedTables = tablesToClear.map((t) => `"${t}"`).join(', ');
     await client.query(`TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE;`);
 
-    console.log('\n✅ Remote database data successfully cleared (schemas and users preserved).');
+    console.log('Cleaning up users table (retaining only Admin users)...');
+    await client.query(`DELETE FROM users WHERE role != 'Admin';`);
+
+    console.log('\n✅ Remote database data successfully cleared (schemas and Admin users preserved).');
   } finally {
     await client.end();
   }
