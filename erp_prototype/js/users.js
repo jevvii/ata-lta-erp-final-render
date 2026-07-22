@@ -493,6 +493,7 @@ const Users = {
     const departments = Auth.user?.departments || [];
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
+    const isManager = hasManagement || Auth.isManagerial();
 
     // Initialize view state dynamically to prevent view state bleed-through.
     // Respect URL-driven admin subviews (e.g. #admin/myRequests/:id) so direct
