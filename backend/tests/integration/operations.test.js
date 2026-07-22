@@ -143,11 +143,70 @@ describe('/v1/work-requests', () => {
 
     expect(tasks.body.data).toHaveLength(1);
 
+    const singleTask = await request(app)
+      .get(`/v1/work-requests/${wr.body.data.id}/tasks/${task.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(singleTask.body.data.id).toBe(task.body.data.id);
+    expect(singleTask.body.data.title).toBe('Prepare documents');
+
     await request(app)
       .delete(`/v1/work-requests/${wr.body.data.id}/tasks/${task.body.data.id}`)
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .expect(204);
+  });
+
+  it('supports logging time under a task via POST /time-logs', async () => {
+    const admin = registerUser({
+      email: 'admin-tl@ata-lta.ph',
+      name: 'Admin TL',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+    const client = await createClient(admin, 'ATA');
+    const wr = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Time Log Test WR', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    const task = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Task with time log', checklist: [{ id: '9a217645-7399-4893-99d0-9a2451b11c74', text: 'Subtask 1', completed: false }] })
+      .expect(201);
+
+    const checklistItemId = task.body.data.checklist[0].id;
+
+    // Log time
+    const updatedTask = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks/${task.body.data.id}/time-logs`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        logs: [
+          {
+            startTime: '09:00',
+            endTime: '17:00',
+            date: '2026-07-22',
+            hours: 8,
+            note: 'Worked on integration test',
+            workerName: 'Integration Tester',
+            checklistItemId,
+          }
+        ]
+      })
+      .expect(201);
+
+    expect(updatedTask.body.data.checklist[0].timeLogs).toHaveLength(1);
+    expect(updatedTask.body.data.checklist[0].timeLogs[0].startTime).toBe('09:00');
+    expect(updatedTask.body.data.checklist[0].timeLogs[0].endTime).toBe('17:00');
+    expect(updatedTask.body.data.checklist[0].timeLogs[0].workerName).toBe('Integration Tester');
   });
 
   it('forbids workflow:edit for staff without permission', async () => {

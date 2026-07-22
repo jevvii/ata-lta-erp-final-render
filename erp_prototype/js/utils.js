@@ -209,6 +209,21 @@ function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }
 
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function isTempId(id) {
+  return typeof id === 'string' && /^(tmp-|temp-|opt-|usr-opt-|tx-temp-)/.test(id);
+}
+
 
 /**
  * Generate the next sequential invoice number for an entity.
@@ -220,7 +235,7 @@ async function nextInvoiceNumber(entity) {
   const prefix = entity + '-SI-' + year + '-';
   try {
     const api = (typeof window !== 'undefined' && window.apiClient) || null;
-    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }) : null;
+    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }, { headers: { 'X-Active-Entity': entity } }) : null;
     const list = res?.data || [];
     const maxNum = list.reduce((max, inv) => {
       const numStr = inv.invoice_number || inv.invoiceNumber || '';
@@ -463,7 +478,9 @@ function buildProgressRingSVG(progress, color) {
 }
 
 function buildCompactBoardCard(opts) {
-  const card = el('div', { class: 'board-card-v2 compact' });
+  const cardClasses = ['board-card-v2', 'compact'];
+  if (opts.isOptimistic) cardClasses.push('kanban-card-optimistic');
+  const card = el('div', { class: cardClasses.join(' ') });
 
   // 1. Header Row
   const header = el('div', { class: 'card-v2-header' });
@@ -625,6 +642,20 @@ const PaymentIcons = {
  * @param {string} [opts.maxWidth] - Optional max-width CSS value
  * @returns {HTMLElement} wrapper element with .value property
  */
+const _searchableDropdowns = new Set();
+let _searchableDropdownDocListener = false;
+function _ensureSearchableDropdownDocListener() {
+  if (_searchableDropdownDocListener) return;
+  _searchableDropdownDocListener = true;
+  document.addEventListener('mousedown', (e) => {
+    _searchableDropdowns.forEach((dropdown) => {
+      if (!dropdown.wrapper.contains(e.target)) {
+        dropdown.close();
+      }
+    });
+  });
+}
+
 function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
@@ -734,6 +765,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = true;
     highlightIdx = -1;
     wrapper.classList.add('open');
+    _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
   }
 
@@ -741,6 +773,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     if (!isOpen) return;
     isOpen = false;
     wrapper.classList.remove('open');
+    _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {
       selectedValue = input.value.trim();
@@ -750,12 +783,21 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     clearBtn.style.display = input.value ? 'flex' : 'none';
   }
 
-  input.addEventListener('focus', () => {
+  const dropdownRef = { wrapper, close };
+  _ensureSearchableDropdownDocListener();
+
+  const listeners = [];
+  const on = (target, type, fn, opts) => {
+    target.addEventListener(type, fn, opts);
+    listeners.push({ target, type, fn, opts });
+  };
+
+  on(input, 'focus', () => {
     input.select();
     open();
   });
 
-  input.addEventListener('input', () => {
+  on(input, 'input', () => {
     highlightIdx = -1;
     if (!isOpen) open();
     renderList(input.value);
@@ -763,11 +805,11 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     wrapper.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
-  input.addEventListener('blur', () => {
+  on(input, 'blur', () => {
     close();
   });
 
-  input.addEventListener('keydown', (e) => {
+  on(input, 'keydown', (e) => {
     const items = listbox.querySelectorAll('.searchable-dropdown-item');
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -793,22 +835,17 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     }
   });
 
-  clearBtn.addEventListener('mousedown', (e) => {
+  on(clearBtn, 'mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
     selectOption('', '');
     close();
   });
 
-  arrow.addEventListener('mousedown', (e) => {
+  on(arrow, 'mousedown', (e) => {
     e.preventDefault();
     if (isOpen) { close(); input.blur(); }
     else { input.focus(); if (!isOpen) open(); }
-  });
-
-  // Close when clicking outside
-  document.addEventListener('mousedown', (e) => {
-    if (!wrapper.contains(e.target)) close();
   });
 
   // Expose .value as getter/setter for drop-in compatibility with <select>
@@ -833,6 +870,14 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   Object.defineProperty(wrapper, 'searchText', {
     get() { return input.value; }
   });
+
+  wrapper.destroy = () => {
+    close();
+    listeners.forEach(({ target, type, fn, opts }) => {
+      target.removeEventListener(type, fn, opts);
+    });
+    listeners.length = 0;
+  };
 
   // Expose addEventListener on wrapper (already works since it's a div)
   return wrapper;
@@ -2082,6 +2127,26 @@ async function triggerSyncReload(hash, messageConfig) {
       if (typeof Users !== 'undefined' && typeof Users.invalidateCache === 'function') {
         Users.invalidateCache();
       }
+
+      // Reset generation-based skip flags so entity switches / explicit syncs fetch fresh data.
+      [
+        { ref: typeof Workflow !== 'undefined' ? Workflow : null },
+        { ref: typeof Billing !== 'undefined' ? Billing : null },
+        { ref: typeof Disbursement !== 'undefined' ? Disbursement : null },
+        { ref: typeof Clients !== 'undefined' ? Clients : null },
+        { ref: typeof Transmittal !== 'undefined' ? Transmittal : null },
+        { ref: typeof Users !== 'undefined' ? Users : null }
+      ].forEach(mod => {
+        if (!mod.ref) return;
+        if (mod.ref._skipFetchGeneration !== undefined) {
+          mod.ref._skipFetchGeneration = 0;
+          mod.ref._activeSkipGeneration = 0;
+        }
+        if (mod.ref._skipNextListFetch !== undefined) {
+          mod.ref._skipNextListFetch = false;
+        }
+      });
+
       if (typeof window.apiClient.abortRequests === 'function') {
         window.apiClient.abortRequests('sync-reload');
       }
@@ -2306,7 +2371,9 @@ function createJiraFilterToolbar(config) {
         });
         const checkbox = el('input', { type: 'checkbox', class: 'jira-filter-checkbox' });
         checkbox.checked = isChecked;
-        checkbox.addEventListener('click', (e) => e.stopPropagation());
+        checkbox.addEventListener('click', (e) => {
+          e.preventDefault();
+        });
 
         const label = el('span', { text: opt.label });
         row.appendChild(checkbox);
@@ -2318,6 +2385,7 @@ function createJiraFilterToolbar(config) {
             if (catSet.has(opt.value)) catSet.delete(opt.value);
             else catSet.add(opt.value);
           }
+          checkbox.checked = catSet.has(opt.value);
           updateFilterUI();
           if (onFilterChange) onFilterChange();
         });
@@ -3012,16 +3080,48 @@ const ArchivePage = {
     const selectCategory = (key) => {
       sessionStorage.setItem(storageKey, key);
       selected = key;
-      App.handleRoute();
+      if (pagination && typeof pagination.onPage === 'function') {
+        pagination.onPage(1);
+      } else {
+        App.handleRoute();
+      }
     };
 
     wrapper.appendChild(this.renderPills(categoryList, total, selected, selectCategory));
 
+    let categoryItemsMap = new Map();
+    if (pagination && pagination.limit) {
+      const page = Math.max(1, pagination.page || 1);
+      const limit = pagination.limit;
+      let offsetStart = (page - 1) * limit;
+      let offsetEnd = offsetStart + limit;
+      let globalIdx = 0;
+
+      categoryList.forEach(cat => {
+        const catItems = cat.items || [];
+        if (selected !== 'all' && selected !== cat.key) {
+          categoryItemsMap.set(cat.key, []);
+          return;
+        }
+        const visibleSlice = [];
+        catItems.forEach(item => {
+          if (globalIdx >= offsetStart && globalIdx < offsetEnd) {
+            visibleSlice.push(item);
+          }
+          globalIdx++;
+        });
+        categoryItemsMap.set(cat.key, visibleSlice);
+      });
+    } else {
+      categoryList.forEach(cat => categoryItemsMap.set(cat.key, cat.items || []));
+    }
+
     categoryList.forEach(cat => {
-      const items = cat.items || [];
+      const items = categoryItemsMap.get(cat.key) || [];
       if (items.length === 0) return;
       if (selected !== 'all' && selected !== cat.key) return;
-      wrapper.appendChild(this.renderCategoryCard(cat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
+      const slicedCat = { ...cat, items };
+      wrapper.appendChild(this.renderCategoryCard(slicedCat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
     });
 
     if (pagination) {
@@ -3036,7 +3136,7 @@ const ArchivePage = {
     const hasPrev = page > 1;
     const hasNext = page < totalPages;
 
-    const wrap = el('div', { class: 'archive-pagination', style: 'display:flex;align-items:center;gap:var(--spacing-md);margin-top:var(--spacing-lg);' });
+    const wrap = el('div', { class: 'archive-pagination', style: 'display:flex;align-items:center;justify-content:center;gap:var(--spacing-md);margin-top:var(--spacing-lg);width:100%;' });
     const info = el('span', { class: 'archive-pagination-info', text: `Page ${page} of ${totalPages} (${total} total)`, style: 'min-width:120px;text-align:center;color:var(--color-text-muted);font-size:0.875rem;' });
 
     const prevBtn = el('button', {
@@ -3270,7 +3370,9 @@ const JiraBacklogList = {
       bulkActions,
       countLabel = 'template',
       columns,
-      selectable = true
+      selectable = true,
+      pagination,
+      onPageChange
     } = options;
 
     const hasColumns = Array.isArray(columns) && columns.length > 0;
@@ -3333,20 +3435,34 @@ const JiraBacklogList = {
     // Optional column header (table-like alignment).
     // The lead spacers line up with the checkbox/icon/key/title area so the
     // first data column header sits directly above the first row data column.
+    const titleColWidth = options.titleColumnWidth !== undefined ? options.titleColumnWidth : '1fr';
+    const hasTitleCol = titleColWidth !== '0px' && titleColWidth !== '0' && titleColWidth !== 0 && titleColWidth !== false;
+
     if (hasColumns) {
       const colHeader = el('div', { class: 'jira-backlog-columns-header' });
       // Fixed lead widths so the header and body columns line up exactly.
-      const titleColWidth = options.titleColumnWidth || '1fr';
       const actionsCol = hasRowActions ? 'minmax(120px, max-content)' : '';
-      const leadCols = `28px 24px 75px ${titleColWidth}`;
+      const leadCols = hasTitleCol ? `28px 24px 75px ${titleColWidth}` : `28px 24px 75px`;
       const metaCols = columns.map(c => c.width || '1fr').join(' ');
       colHeader.style.gridTemplateColumns = `${leadCols} ${metaCols}${actionsCol ? ' ' + actionsCol : ''}`;
 
-      // Lead-column placeholders: checkbox, icon, key, title.
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
-      colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+      // Lead-column placeholders: checkbox, icon, key, (title if present).
+      if (options.leadColumnLabel) {
+        const leadSpan = hasTitleCol ? 4 : 3;
+        const h = el('div', {
+          class: 'jira-backlog-col-header jira-backlog-col-header--lead',
+          text: options.leadColumnLabel,
+          style: `grid-column: span ${leadSpan};`
+        });
+        colHeader.appendChild(h);
+      } else {
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        if (hasTitleCol) {
+          colHeader.appendChild(el('div', { class: 'jira-backlog-col-header jira-backlog-col-header--spacer' }));
+        }
+      }
 
       columns.forEach(col => {
         const alignClass = col.align ? ' jira-backlog-col-header--' + col.align : '';
@@ -3465,7 +3581,18 @@ const JiraBacklogList = {
       });
     }
 
-    items.forEach((item, index) => {
+    let displayItems = items;
+    let pageStartIndex = 0;
+    if (pagination) {
+      const pageSize = pagination.pageSize || 20;
+      const totalPages = Math.ceil(items.length / pageSize) || 1;
+      const safePage = Math.max(1, Math.min(pagination.currentPage || 1, totalPages));
+      pageStartIndex = (safePage - 1) * pageSize;
+      displayItems = items.slice(pageStartIndex, pageStartIndex + pageSize);
+    }
+
+    displayItems.forEach((item, index) => {
+      const globalIndex = pageStartIndex + index;
       const rowClasses = ['jira-backlog-row'];
       if (hasColumns) rowClasses.push('jira-backlog-row--columns');
       if (hasColumns && options.titleColumnWidth) rowClasses.push('jira-backlog-row--fixed-title');
@@ -3505,20 +3632,21 @@ const JiraBacklogList = {
       row.appendChild(iconWrap);
 
       // Unique Key/ID
-      const keyIndex = String(index + 1).padStart(2, '0');
+      const keyIndex = String(globalIndex + 1).padStart(2, '0');
       const keyVal = item.keyText || `${rowIdPrefix}-${keyIndex}`;
       const keyNode = el('div', { class: 'jira-backlog-row-key', text: keyVal });
       row.appendChild(keyNode);
 
-      // Primary Title
-      const titleNode = el('div', { class: 'jira-backlog-row-title', text: item.name });
-      row.appendChild(titleNode);
+      // Primary Title (only if title column is enabled)
+      if (hasTitleCol) {
+        const titleNode = el('div', { class: 'jira-backlog-row-title', text: item.name || '' });
+        row.appendChild(titleNode);
+      }
 
       // Column-mode grid sizing (lead columns + metadata columns)
       if (hasColumns) {
-        const titleColWidth = options.titleColumnWidth || '1fr';
         const actionsCol = hasRowActions ? 'minmax(120px, max-content)' : '';
-        const leadCols = `28px 24px 75px ${titleColWidth}`;
+        const leadCols = hasTitleCol ? `28px 24px 75px ${titleColWidth}` : `28px 24px 75px`;
         const metaCols = columns.map(c => c.width || '1fr').join(' ');
         row.style.gridTemplateColumns = `${leadCols} ${metaCols}${actionsCol ? ' ' + actionsCol : ''}`;
       }
@@ -3527,7 +3655,8 @@ const JiraBacklogList = {
       const tagsNode = el('div', { class: 'jira-backlog-row-tags' + (hasColumns ? ' jira-backlog-row-tags--columns' : '') });
       if (hasColumns) {
         tagsNode.style.gridTemplateColumns = columns.map(c => c.width || '1fr').join(' ');
-        tagsNode.style.gridColumn = `5 / span ${columns.length}`;
+        const leadColCount = hasTitleCol ? 5 : 4;
+        tagsNode.style.gridColumn = `${leadColCount} / span ${columns.length}`;
       }
       const tagList = item.tags || [];
       tagList.forEach((tag, tagIdx) => {
@@ -3635,6 +3764,52 @@ const JiraBacklogList = {
 
     body.appendChild(list);
     container.appendChild(body);
+
+    if (pagination) {
+      const pageSize = pagination.pageSize || 20;
+      const totalPages = Math.ceil(items.length / pageSize) || 1;
+      const safePage = Math.max(1, Math.min(pagination.currentPage || 1, totalPages));
+
+      const paginationFooter = el('div', { class: 'jira-backlog-pagination' });
+
+      const prevBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-secondary btn-sm jira-pagination-prev',
+        text: 'Previous'
+      });
+      if (safePage <= 1) {
+        prevBtn.disabled = true;
+      } else {
+        prevBtn.addEventListener('click', () => {
+          if (onPageChange) onPageChange(safePage - 1);
+        });
+      }
+
+      const pageInfo = el('span', {
+        class: 'jira-pagination-info',
+        text: `Page ${safePage} of ${totalPages}`
+      });
+
+      const nextBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-secondary btn-sm jira-pagination-next',
+        text: 'Next'
+      });
+      if (safePage >= totalPages) {
+        nextBtn.disabled = true;
+      } else {
+        nextBtn.addEventListener('click', () => {
+          if (onPageChange) onPageChange(safePage + 1);
+        });
+      }
+
+      paginationFooter.appendChild(prevBtn);
+      paginationFooter.appendChild(pageInfo);
+      paginationFooter.appendChild(nextBtn);
+
+      container.appendChild(paginationFooter);
+    }
+
     return container;
   }
 };

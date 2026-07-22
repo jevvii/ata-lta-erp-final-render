@@ -76,12 +76,22 @@ const listDocuments = async ({ entityId, filters = {} }) => {
     page = 1,
     limit = 50,
   } = filters;
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('documents')
     .select('*', { count: 'exact' })
-    .eq('entity_id', entityId)
     .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else {
+    query = query.eq('archived', false);
+  }
 
   if (category) query = query.eq('category', category);
   if (status) query = query.eq('status', status);
@@ -89,7 +99,6 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   if (clientId) query = query.eq('client_id', clientId);
   if (workRequestId) query = query.eq('work_request_id', workRequestId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
-  if (typeof archived === 'boolean') query = query.eq('archived', archived);
   if (search) {
     query = query.or(
       `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
@@ -121,15 +130,42 @@ const listDocuments = async ({ entityId, filters = {} }) => {
  * @returns {Promise<{ document: object, uploadUrl: string }>}
  */
 const createDocument = async ({ entityId, entityCode, userId, data }) => {
+  // Validate linkedTaskId if provided
+  if (data.linkedTaskId) {
+    const { data: task, error: taskError } = await supabaseAdmin
+      .from('tasks')
+      .select('id, work_request_id')
+      .eq('id', data.linkedTaskId)
+      .single();
+
+    if (taskError || !task) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: `Linked task ${data.linkedTaskId} does not exist`,
+      });
+    }
+
+    if (data.workRequestId && task.work_request_id !== data.workRequestId) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: `Linked task ${data.linkedTaskId} does not belong to work request ${data.workRequestId}`,
+      });
+    }
+  }
+
   const documentId = randomUUID();
 
-  const storagePath = generateStoragePath({
-    entityCode: entityCode || entityId,
-    clientId: data.clientId || null,
-    workRequestId: data.workRequestId || null,
-    documentId,
-    fileName: data.fileName,
-  });
+  const storagePath = data.externalUrl
+    ? null
+    : generateStoragePath({
+        entityCode: entityCode || entityId,
+        clientId: data.clientId || null,
+        workRequestId: data.workRequestId || null,
+        documentId,
+        fileName: data.fileName,
+      });
 
   const row = {
     id: documentId,
@@ -143,11 +179,13 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     uploader_id: userId,
     description: data.description || null,
     entity_id: entityId,
-    status: 'pending_upload',
+    status: data.externalUrl ? 'active' : 'pending_upload',
     document_lifecycle: 'collected',
-    file_size: data.fileSize,
-    content_type: data.contentType,
+    archived: false,
+    file_size: data.fileSize || null,
+    content_type: data.contentType || null,
     storage_path: storagePath,
+    external_url: data.externalUrl || null,
     comments: data.comments || [],
     versions: data.versions || [],
     created_by: userId,
@@ -168,11 +206,13 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     });
   }
 
-  const uploadUrl = await getSignedUploadUrl({
-    path: storagePath,
-    contentType: data.contentType,
-    expiresInSeconds: 300,
-  });
+  const uploadUrl = data.externalUrl
+    ? null
+    : await getSignedUploadUrl({
+        path: storagePath,
+        contentType: data.contentType,
+        expiresInSeconds: 300,
+      });
 
   await auditService.log({
     action: 'document.create',
@@ -235,6 +275,7 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
   if (data.category !== undefined) updates.category = data.category;
   if (data.description !== undefined) updates.description = data.description;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
+  if (data.externalUrl !== undefined) updates.external_url = data.externalUrl;
   if (data.scannedBy !== undefined) updates.scanned_by = data.scannedBy;
   if (data.envelopeId !== undefined) updates.envelope_id = data.envelopeId;
   if (data.storedLocation !== undefined) updates.stored_location = data.storedLocation;
@@ -291,19 +332,6 @@ const deleteDocument = async ({ entityId, id, userId }) => {
     });
   }
 
-  // Clean up storage object if it exists
-  if (doc.storage_path) {
-    try {
-      await deleteObject(doc.storage_path);
-    } catch (storageErr) {
-      // Log but don't fail — metadata is already soft-deleted
-      logger.warn('failed to delete storage object', {
-        path: doc.storage_path,
-        error: storageErr.message,
-      });
-    }
-  }
-
   await auditService.log({
     action: 'document.delete',
     table: 'documents',
@@ -312,6 +340,76 @@ const deleteDocument = async ({ entityId, id, userId }) => {
     userId,
     details: { fileName: doc.original_name },
   });
+};
+
+const archiveDocument = async ({ entityId, id, userId }) => {
+  const existing = await getDocumentById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('documents')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive document' });
+  }
+
+  await auditService.log({
+    action: 'document.archive',
+    table: 'documents',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { fileName: existing.original_name },
+  });
+
+  return updated;
+};
+
+const unarchiveDocument = async ({ entityId, id, userId }) => {
+  const existing = await getDocumentById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('documents')
+    .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive document' });
+  }
+
+  await auditService.log({
+    action: 'document.unarchive',
+    table: 'documents',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { fileName: existing.original_name },
+  });
+
+  return updated;
+};
+
+const countDocuments = async ({ entityId }) => {
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('documents')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q;
+  };
+
+  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+    baseQuery().eq('archived', false),
+    baseQuery().eq('archived', true),
+  ]);
+
+  return { active: activeCount || 0, archived: archivedCount || 0 };
 };
 
 /**
@@ -442,6 +540,9 @@ module.exports = {
   getDocumentById,
   updateDocument,
   deleteDocument,
+  archiveDocument,
+  unarchiveDocument,
+  countDocuments,
   confirmUpload,
   getDownloadUrl,
   updateLifecycle,

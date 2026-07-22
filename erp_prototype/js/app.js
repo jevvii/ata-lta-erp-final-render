@@ -207,36 +207,27 @@ const App = {
     const entity = Auth.activeEntity;
 
     // Fetch lightweight badge counts from the API in parallel (cached for 30s by apiClient).
-    const [disbResult, opsResult] = await Promise.allSettled([
+    const [disbResult, opsResult, invResult, txResult] = await Promise.allSettled([
       window.apiClient.disbursements.counts(entity),
       window.apiClient.operationsRequests.counts(entity),
+      window.apiClient.invoices.counts(entity),
+      window.apiClient.transmittals.counts(entity),
     ]);
     const disbCounts = disbResult.status === 'fulfilled' ? disbResult.value : null;
     const opsCounts = opsResult.status === 'fulfilled' ? opsResult.value : null;
+    const invCounts = invResult.status === 'fulfilled' ? invResult.value : null;
+    const txCounts = txResult.status === 'fulfilled' ? txResult.value : null;
     if (disbResult.status === 'rejected') {
       console.error('[App.updateSidebarNotifications] disbursement counts failed', disbResult.reason);
     }
     if (opsResult.status === 'rejected') {
       console.error('[App.updateSidebarNotifications] operations request counts failed', opsResult.reason);
     }
-
-    // Disbursement nav badge only surfaces work awaiting release.
-    // Pending approvals and release requests are handled in the dedicated Admin > Pending Approvals page.
-    const awaitingRelease = disbCounts?.data?.awaitingRelease || 0;
-
-    const navLink = document.querySelector('nav a[href="#disbursement"]');
-    if (navLink) {
-      let badge = navLink.querySelector('.nav-badge');
-      if (awaitingRelease > 0) {
-        if (!badge) {
-          badge = document.createElement('span');
-          badge.className = 'nav-badge';
-          navLink.appendChild(badge);
-        }
-        badge.textContent = awaitingRelease > 99 ? '99+' : awaitingRelease;
-      } else if (badge) {
-        badge.remove();
-      }
+    if (invResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] invoice counts failed', invResult.reason);
+    }
+    if (txResult.status === 'rejected') {
+      console.error('[App.updateSidebarNotifications] transmittal counts failed', txResult.reason);
     }
 
     // Admin nav badge: reflect pending approvals / pending submissions to draw attention.
@@ -283,7 +274,6 @@ const App = {
       }
     }
 
-    // Pending requests are centralized on the Admin page; no module-level nav badges needed.
   },
 
   renderShell() {
@@ -525,9 +515,17 @@ const App = {
     const chip = document.getElementById('user-chip');
     const toggle = document.getElementById('user-menu-toggle');
     const dropdown = document.getElementById('user-menu-dropdown');
-    if (!toggle || !dropdown) return;
+    if (!chip || !dropdown) return;
 
-    toggle.addEventListener('click', (e) => {
+    // Ensure dropdown is hidden on initialization/login
+    dropdown.classList.add('hidden');
+
+    if (this._userMenuWired) return;
+    this._userMenuWired = true;
+
+    // Toggle dropdown when clicking anywhere on user-chip (avatar, name, or arrow icon)
+    chip.addEventListener('click', (e) => {
+      if (dropdown.contains(e.target)) return;
       e.stopPropagation();
       dropdown.classList.toggle('hidden');
     });
@@ -552,17 +550,22 @@ const App = {
 
   setupLogout() {
     const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => {
-        Auth.logout();
-        document.getElementById('app-shell').classList.add('hidden');
-        document.getElementById('login-screen').classList.remove('hidden');
-        const form = document.getElementById('login-form');
-        if (form) form.reset();
-        const errorEl = document.getElementById('login-error');
-        if (errorEl) errorEl.classList.add('hidden');
-      });
-    }
+    if (!logoutBtn) return;
+
+    if (this._logoutWired) return;
+    this._logoutWired = true;
+
+    logoutBtn.addEventListener('click', () => {
+      const dropdown = document.getElementById('user-menu-dropdown');
+      if (dropdown) dropdown.classList.add('hidden');
+      Auth.logout();
+      document.getElementById('app-shell').classList.add('hidden');
+      document.getElementById('login-screen').classList.remove('hidden');
+      const form = document.getElementById('login-form');
+      if (form) form.reset();
+      const errorEl = document.getElementById('login-error');
+      if (errorEl) errorEl.classList.add('hidden');
+    });
   },
 
   /**
@@ -909,6 +912,25 @@ const App = {
       detailToolbarHeight = detailToolbar.getBoundingClientRect().height;
     }
     container.style.setProperty('--project-detail-toolbar-height', `${detailToolbarHeight}px`);
+  },
+
+  /**
+   * Update or remove a numeric badge on a sidebar nav link.
+   */
+  _updateNavBadge(selector, count) {
+    const navLink = document.querySelector('nav a[href="' + selector + '"]');
+    if (!navLink) return;
+    let badge = navLink.querySelector('.nav-badge');
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'nav-badge';
+        navLink.appendChild(badge);
+      }
+      badge.textContent = count > 99 ? '99+' : count;
+    } else if (badge) {
+      badge.remove();
+    }
   }
 };
 

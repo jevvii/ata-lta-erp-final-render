@@ -15,13 +15,16 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 // Resolve entity code → UUID for all routes in this module
 router.use(resolveEntity());
 
+// Get document counts
+router.get('/counts', requirePermission('dms:view'), documentsController.getDocumentCounts);
+
 // List documents
 router.get('/', requirePermission('dms:view'), documentsController.listDocuments);
 
 // Create document metadata + get upload URL
 router.post(
   '/',
-  requirePermission('dms:edit'),
+  requirePermission(['dms:edit', 'workflow:task_upload']),
   audit('document.create', { table: 'documents' }),
   documentsController.createDocument
 );
@@ -37,6 +40,22 @@ router.put(
   documentsController.updateDocument
 );
 
+// Archive document
+router.post(
+  '/:id/archive',
+  requirePermission('dms:edit'),
+  audit('document.archive', { table: 'documents' }),
+  documentsController.archiveDocument
+);
+
+// Unarchive document
+router.post(
+  '/:id/unarchive',
+  requirePermission('dms:edit'),
+  audit('document.unarchive', { table: 'documents' }),
+  documentsController.unarchiveDocument
+);
+
 // Soft-delete document
 router.delete(
   '/:id',
@@ -48,7 +67,7 @@ router.delete(
 // Confirm storage upload completed
 router.post(
   '/:id/confirm-upload',
-  requirePermission('dms:edit'),
+  requirePermission(['dms:edit', 'workflow:task_upload']),
   audit('document.confirm-upload', { table: 'documents' }),
   documentsController.confirmUpload
 );

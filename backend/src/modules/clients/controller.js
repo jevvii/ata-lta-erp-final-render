@@ -27,6 +27,16 @@ const validate = (schema, data) => {
   return result.data;
 };
 
+const counts = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await clientsService.getClientCounts({ entityId });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const list = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
@@ -34,6 +44,7 @@ const list = async (req, res, next) => {
       entityId,
       search: req.query.search,
       status: req.query.status,
+      archived: req.query.archived,
       page: req.query.page,
       limit: req.query.limit,
       sortBy: req.query.sortBy,
@@ -41,6 +52,34 @@ const list = async (req, res, next) => {
     });
     const isPaginated = req.query.page !== undefined || req.query.limit !== undefined;
     res.status(200).json(isPaginated ? { data, meta } : { data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const archive = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await clientsService.archiveClient({
+      id: req.params.id,
+      entityId,
+      userId: req.user.id,
+    });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const unarchive = async (req, res, next) => {
+  try {
+    const entityId = req.entityUUID;
+    const data = await clientsService.unarchiveClient({
+      id: req.params.id,
+      entityId,
+      userId: req.user.id,
+    });
+    res.status(200).json({ data });
   } catch (err) {
     next(err);
   }
@@ -170,4 +209,4 @@ const remove = async (req, res, next) => {
   }
 };
 
-module.exports = { clientsController: { list, create, getById, update, remove } };
+module.exports = { clientsController: { list, counts, create, getById, update, archive, unarchive, remove } };

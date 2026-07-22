@@ -450,13 +450,22 @@ const applyPendingChange = async (change, user) => {
   }
 
   if (tableName === 'tasks' && proposed.workRequestId) {
-    await operationsService.updateTask({
-      workRequestId: proposed.workRequestId,
-      taskId: change.parent_record_id,
-      entityId: change.entity_id,
-      data: proposed,
-      user,
-    });
+    if (change.parent_record_id) {
+      await operationsService.updateTask({
+        workRequestId: proposed.workRequestId,
+        taskId: change.parent_record_id,
+        entityId: change.entity_id,
+        data: proposed,
+        user,
+      });
+    } else {
+      await operationsService.createTask({
+        workRequestId: proposed.workRequestId,
+        entityId: change.entity_id,
+        data: proposed,
+        user,
+      });
+    }
     return;
   }
 };
@@ -466,28 +475,36 @@ const approvePending = async ({ id, user }) => {
     .from('pending_changes')
     .select('*')
     .eq('id', id)
-    .eq('status', 'pending')
     .maybeSingle();
 
   if (error || !change) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Pending change not found' });
   }
 
-  await applyPendingChange(change, user);
+  const { data: rows, error: rpcError } = await supabaseAdmin.rpc('pending_change_approve', {
+    p_id: id,
+    p_user_id: user.id,
+    p_entity_id: change.entity_id,
+  });
 
-  const now = new Date().toISOString();
-  const { error: updateError } = await supabaseAdmin
-    .from('pending_changes')
-    .update({ status: 'approved', reviewed_by: user.id, reviewed_at: now })
-    .eq('id', id);
-
-  if (updateError) {
+  if (rpcError) {
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
       detail: 'Unable to approve change',
     });
   }
+
+  if (!rows || rows.length === 0) {
+    throw new AppError({
+      statusCode: 409,
+      title: 'Conflict',
+      detail: 'This pending change has already been reviewed',
+      code: 'PENDING_CHANGE_ALREADY_REVIEWED',
+    });
+  }
+
+  await applyPendingChange(change, user);
 
   return { id, status: 'approved' };
 };

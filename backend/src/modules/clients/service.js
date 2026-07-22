@@ -24,6 +24,7 @@ const toApiClient = (row, extras = {}) => {
     address: row.address || null,
     tradeName: row.trade_name || null,
     contactUserId: row.contact_user_id || null,
+    contactPerson: row.contact_person || null,
     retainer: row.retainer,
     status: row.status,
     createdBy: row.created_by || null,
@@ -124,7 +125,7 @@ const loadRelated = async (clientIds) => {
  * @param {string} [params.sortOrder]
  * @returns {Promise<{ data: Array, meta: object }>}
  */
-const listClients = async ({ entityId, search, status, page, limit, sortBy, sortOrder }) => {
+const listClients = async ({ entityId, search, status, archived, page, limit, sortBy, sortOrder }) => {
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
@@ -133,17 +134,24 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
     : 'name';
   const sortAsc = String(sortOrder).toLowerCase() === 'asc';
 
+  const isArchived = archived === true || archived === 'true' || status === 'Archived';
+
   let query = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact' })
-    .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
+
+  if (isArchived) {
+    query = query.or('status.eq.Archived,deleted_at.not.is.null');
+  } else {
+    query = query.is('deleted_at', null);
+  }
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
   }
 
-  if (status) {
+  if (status && status !== 'Archived') {
     query = query.eq('status', status);
   }
 
@@ -211,15 +219,6 @@ const listClients = async ({ entityId, search, status, page, limit, sortBy, sort
  * @returns {Promise<object>}
  */
 const createClient = async ({ entityId, data, createdBy }) => {
-  const existing = await findClientByTin(entityId, data.tin);
-  if (existing) {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: `A client with TIN ${data.tin} already exists in this entity`,
-    });
-  }
-
   const now = new Date().toISOString();
   const clientRecord = {
     id: randomUUID(),
@@ -230,6 +229,7 @@ const createClient = async ({ entityId, data, createdBy }) => {
     address: data.address || null,
     trade_name: data.tradeName || null,
     contact_user_id: data.contactUserId || null,
+    contact_person: data.contactPerson || null,
     retainer: data.retainer ?? false,
     status: data.status || 'Active',
     created_by: createdBy,
@@ -241,6 +241,14 @@ const createClient = async ({ entityId, data, createdBy }) => {
   const { error } = await supabaseAdmin.from('clients').insert(clientRecord);
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `A client with TIN ${data.tin} already exists in this entity`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -328,8 +336,12 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * @param {boolean} [params.allowCrossEntity=false] - When true, skip entity filtering (for consolidated ALL view).
  * @returns {Promise<object|null>}
  */
-const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
-  let query = supabaseAdmin.from('clients').select('*').eq('id', id).is('deleted_at', null);
+const getClientById = async ({ id, entityId, allowCrossEntity = false, includeArchived = false }) => {
+  let query = supabaseAdmin.from('clients').select('*').eq('id', id);
+
+  if (!includeArchived) {
+    query = query.is('deleted_at', null);
+  }
 
   if (entityId) {
     query = query.eq('entity_id', entityId);
@@ -353,7 +365,7 @@ const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
 
   if (!data) return null;
 
-  const [related, entityCode] = await Promise.all([loadRelated([id]), resolveEntityCode(entityId)]);
+  const [related, entityCode] = await Promise.all([loadRelated([id]), resolveEntityCode(data.entity_id || entityId)]);
 
   return toApiClient(data, {
     entityCode,
@@ -364,15 +376,9 @@ const getClientById = async ({ id, entityId, allowCrossEntity = false }) => {
 
 /**
  * Update a client.
- * @param {Object} params
- * @param {string} params.id
- * @param {string} params.entityId
- * @param {object} params.data
- * @param {string} params.updatedBy
- * @returns {Promise<object>}
  */
 const updateClient = async ({ id, entityId, data, updatedBy }) => {
-  const existing = await getClientById({ id, entityId });
+  const existing = await getClientById({ id, entityId, includeArchived: true });
   if (!existing) {
     throw new AppError({
       statusCode: 404,
@@ -381,6 +387,7 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
     });
   }
 
+  const newStatus = data.status ?? existing.status;
   const updates = {
     name: data.name ?? existing.name,
     tin: data.tin ?? existing.tin,
@@ -388,11 +395,16 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
     address: data.address ?? existing.address,
     trade_name: data.tradeName ?? existing.tradeName,
     contact_user_id: data.contactUserId ?? existing.contactUserId,
+    contact_person: data.contactPerson !== undefined ? data.contactPerson : existing.contactPerson,
     retainer: data.retainer ?? existing.retainer,
-    status: data.status ?? existing.status,
+    status: newStatus,
     updated_by: updatedBy,
     updated_at: new Date().toISOString(),
   };
+
+  if (newStatus !== 'Archived') {
+    updates.deleted_at = null;
+  }
 
   const { error } = await supabaseAdmin
     .from('clients')
@@ -415,19 +427,87 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
     await upsertRelatedCompanies(id, data.relatedCompanies);
   }
 
-  return getClientById({ id, entityId });
+  return getClientById({ id, entityId, includeArchived: true });
+};
+
+/**
+ * Archive a client.
+ */
+const archiveClient = async ({ id, entityId, userId }) => {
+  const existing = await getClientById({ id, entityId, includeArchived: true });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Client not found' });
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from('clients')
+    .update({ status: 'Archived', deleted_at: now, updated_by: userId, updated_at: now })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive client' });
+  }
+
+  return getClientById({ id, entityId, includeArchived: true });
+};
+
+/**
+ * Unarchive / restore a client.
+ */
+const unarchiveClient = async ({ id, entityId, userId }) => {
+  const existing = await getClientById({ id, entityId, includeArchived: true });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Client not found' });
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from('clients')
+    .update({ status: 'Active', deleted_at: null, updated_by: userId, updated_at: now })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore client' });
+  }
+
+  return getClientById({ id, entityId, includeArchived: true });
+};
+
+/**
+ * Get client count breakdown.
+ */
+const getClientCounts = async ({ entityId }) => {
+  let activeQuery = supabaseAdmin
+    .from('clients')
+    .select('*', { count: 'exact', head: true })
+    .is('deleted_at', null);
+
+  let archivedQuery = supabaseAdmin
+    .from('clients')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'Archived');
+
+  if (entityId && entityId !== 'ALL') {
+    activeQuery = activeQuery.eq('entity_id', entityId);
+    archivedQuery = archivedQuery.eq('entity_id', entityId);
+  }
+
+  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+    activeQuery,
+    archivedQuery,
+  ]);
+
+  return { active: activeCount || 0, archived: archivedCount || 0 };
 };
 
 /**
  * Soft delete a client and cascade to its work requests and documents.
- * @param {Object} params
- * @param {string} params.id
- * @param {string} params.entityId
- * @param {string} params.deletedBy
- * @returns {Promise<boolean>}
  */
 const deleteClient = async ({ id, entityId, deletedBy }) => {
-  const existing = await getClientById({ id, entityId });
+  const existing = await getClientById({ id, entityId, includeArchived: true });
   if (!existing) return false;
 
   const now = new Date().toISOString();
@@ -478,6 +558,9 @@ module.exports = {
   createClient,
   getClientById,
   updateClient,
+  archiveClient,
+  unarchiveClient,
+  getClientCounts,
   deleteClient,
   resolveEntityId,
 };

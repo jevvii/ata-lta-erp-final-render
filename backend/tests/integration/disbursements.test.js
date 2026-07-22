@@ -276,4 +276,32 @@ describe('/v1/disbursements', () => {
 
     expect(opsCounts.body.data.awaitingRelease).toBe(0);
   });
+
+  it('soft deletes a disbursement', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validDisbursement)
+      .expect(201);
+
+    await request(app)
+      .delete(`/v1/disbursements/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(204);
+
+    await request(app)
+      .get(`/v1/disbursements/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(404);
+  });
 });

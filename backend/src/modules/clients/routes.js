@@ -13,6 +13,15 @@ const { requirePermission } = require('../../middleware/rbac');
 const { audit } = require('../../middleware/audit');
 
 router.get(
+  '/counts',
+  auth,
+  entityScope,
+  resolveEntity({ allowAll: true }),
+  requirePermission('clients:view'),
+  clientsController.counts
+);
+
+router.get(
   '/',
   auth,
   entityScope,
@@ -42,6 +51,18 @@ router.put(
   requirePermission('clients:edit'),
   audit('client.updated', { table: 'clients' }),
   clientsController.update
+);
+router.post(
+  '/:id/archive',
+  requirePermission('clients:edit'),
+  audit('client.archived', { table: 'clients' }),
+  clientsController.archive
+);
+router.post(
+  '/:id/unarchive',
+  requirePermission('clients:edit'),
+  audit('client.unarchived', { table: 'clients' }),
+  clientsController.unarchive
 );
 router.delete(
   '/:id',

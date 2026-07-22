@@ -8,11 +8,13 @@ const AppError = require('../../lib/AppError');
 const { randomUUID } = require('crypto');
 
 const VALID_TRANSITIONS = {
-  Draft: ['In Progress', 'Cancelled'],
-  'In Progress': ['For Review', 'Cancelled'],
-  'For Review': ['Completed', 'In Progress'],
-  Completed: [],
-  Cancelled: [],
+  Draft: ['Pre-processing', 'In Progress', 'Processing', 'Cancelled'],
+  'Pre-processing': ['Processing', 'In Progress', 'For Review', 'Cancelled'],
+  'In Progress': ['For Review', 'Completed', 'Processing', 'Cancelled'],
+  Processing: ['Completed', 'Billing', 'Disbursement', 'For Review', 'Cancelled'],
+  'For Review': ['Completed', 'In Progress', 'Processing', 'Cancelled'],
+  Completed: ['Draft', 'Processing'],
+  Cancelled: ['Draft', 'In Progress'],
 };
 
 /* ── Cached entity resolution ─────────────────────────────────────── */
@@ -57,6 +59,8 @@ const toApiWorkRequest = (row, entityCode) => ({
   description: row.description || null,
   clientId: row.client_id,
   status: row.status,
+  priority: row.priority || 'Normal',
+  archived: row.archived ?? false,
   requestedBy: row.requested_by || null,
   assignedTo: row.assigned_to || null,
   dueDate: row.due_date || null,
@@ -64,37 +68,105 @@ const toApiWorkRequest = (row, entityCode) => ({
   updatedAt: row.updated_at,
 });
 
-const toApiTask = (row, { checklist = [], timeLogs = [] } = {}) => ({
-  id: row.id,
-  workRequestId: row.work_request_id,
-  title: row.title,
-  description: row.description || null,
-  status: row.status,
-  assigneeId: row.assignee_id || null,
-  assigneeName: row.assignee_name || null,
-  predecessors: row.predecessors || [],
-  dueDate: row.due_date || null,
-  displayOrder: row.display_order,
-  checklist: checklist.map((c) => ({
-    id: c.id,
-    text: c.text,
-    category: c.category || null,
-    completed: c.completed,
-    assigneeId: c.assignee_id || null,
-    assigneeName: c.assignee_name || null,
-  })),
-  timeLogs: timeLogs.map((t) => ({
-    id: t.id,
-    startTime: t.start_time || null,
-    endTime: t.end_time || null,
-    date: t.date || null,
-    hours: Number(t.hours),
-    userId: t.user_id || null,
-    note: t.note || null,
-  })),
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
+const formatTimeManila = (dateTime) => {
+  if (!dateTime) return null;
+  const d = new Date(dateTime);
+  if (isNaN(d.getTime())) return null;
+  const options = {
+    timeZone: 'Asia/Manila',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  };
+  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
+  const hour = parts.find(p => p.type === 'hour')?.value || '00';
+  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+  return `${hour}:${minute}`;
+};
+
+const formatDateManila = (dateVal) => {
+  if (!dateVal) return null;
+  if (typeof dateVal === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) return dateVal;
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return dateVal;
+    return d.toISOString().slice(0, 10);
+  }
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return null;
+  const options = {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  };
+  const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
+  const year = parts.find(p => p.type === 'year')?.value;
+  const month = parts.find(p => p.type === 'month')?.value;
+  const day = parts.find(p => p.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+};
+
+const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = {}) => {
+  const taskLevelLogs = timeLogs.filter(t => !t.checklist_item_id);
+
+  return {
+    id: row.id,
+    workRequestId: row.work_request_id,
+    title: row.title,
+    description: row.description || null,
+    status: row.status,
+    assigneeId: row.assignee_id || null,
+    assigneeName: row.assignee_name || null,
+    predecessors: row.predecessors || [],
+    dueDate: row.due_date || null,
+    displayOrder: row.display_order,
+    checklist: checklist.map((c) => {
+      const itemLogs = timeLogs.filter(t => t.checklist_item_id === c.id);
+      return {
+        id: c.id,
+        text: c.text,
+        category: c.category || null,
+        completed: c.completed,
+        assigneeId: c.assignee_id || null,
+        assigneeName: c.assignee_name || null,
+        dependsOn: Array.isArray(c.depends_on)
+          ? (c.depends_on[0] || null)
+          : (c.depends_on || null),
+        timeLogs: itemLogs.map((t) => ({
+          id: t.id,
+          startTime: formatTimeManila(t.start_time),
+          endTime: formatTimeManila(t.end_time),
+          date: formatDateManila(t.date),
+          hours: Number(t.hours),
+          userId: t.user_id || null,
+          note: t.note || null,
+          workerName: t.worker_name || null,
+          checklistItemId: t.checklist_item_id || null,
+        })),
+      };
+    }),
+    timeLogs: taskLevelLogs.map((t) => ({
+      id: t.id,
+      startTime: formatTimeManila(t.start_time),
+      endTime: formatTimeManila(t.end_time),
+      date: formatDateManila(t.date),
+      hours: Number(t.hours),
+      userId: t.user_id || null,
+      note: t.note || null,
+      workerName: t.worker_name || null,
+      checklistItemId: null,
+    })),
+    taskDocuments: taskDocuments.map((d) => ({
+      documentId: d.id,
+      fileName: d.file_name,
+      uploadDate: d.upload_date ? new Date(d.upload_date).toISOString().slice(0, 10) : null,
+      uploaderId: d.uploader_id,
+    })),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+};
 
 const isBackOffice = (user) => {
   if (!user) return false;
@@ -128,10 +200,12 @@ const loadTasksForWorkRequests = async (wrIds) => {
 const loadTaskExtras = async (taskIds) => {
   const checklist = new Map();
   const timeLogs = new Map();
-  if (!taskIds.length) return { checklist, timeLogs };
-  const [{ data: clRows }, { data: tlRows }] = await Promise.all([
+  const taskDocuments = new Map();
+  if (!taskIds.length) return { checklist, timeLogs, taskDocuments };
+  const [{ data: clRows }, { data: tlRows }, { data: docRows }] = await Promise.all([
     supabaseAdmin.from('task_checklists').select('*').in('task_id', taskIds),
     supabaseAdmin.from('task_time_logs').select('*').in('task_id', taskIds),
+    supabaseAdmin.from('documents').select('*').in('linked_task_id', taskIds).is('deleted_at', null),
   ]);
   (clRows || []).forEach((r) => {
     if (!checklist.has(r.task_id)) checklist.set(r.task_id, []);
@@ -141,7 +215,11 @@ const loadTaskExtras = async (taskIds) => {
     if (!timeLogs.has(r.task_id)) timeLogs.set(r.task_id, []);
     timeLogs.get(r.task_id).push(r);
   });
-  return { checklist, timeLogs };
+  (docRows || []).forEach((r) => {
+    if (!taskDocuments.has(r.linked_task_id)) taskDocuments.set(r.linked_task_id, []);
+    taskDocuments.get(r.linked_task_id).push(r);
+  });
+  return { checklist, timeLogs, taskDocuments };
 };
 
 const canViewWorkRequest = (wr, user, taskMap) => {
@@ -162,6 +240,7 @@ const listWorkRequests = async ({
   search,
   status,
   clientId,
+  archived,
   page,
   limit,
   sortBy,
@@ -175,6 +254,7 @@ const listWorkRequests = async ({
     ? sortBy
     : 'created_at';
   const sortAsc = String(sortOrder).toLowerCase() === 'asc';
+  const isArchived = archived === true || archived === 'true';
 
   let query = supabaseAdmin
     .from('work_requests')
@@ -182,13 +262,12 @@ const listWorkRequests = async ({
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
+  if (isArchived) {
+    query = query.eq('archived', true);
+  } else if (archived === false || archived === 'false') {
+    query = query.or('archived.is.null,archived.eq.false');
   }
-
-  if (status) {
-    query = query.eq('status', status);
-  }
+  if (status) query = query.eq('status', status);
   if (clientId) {
     query = query.eq('client_id', clientId);
   }
@@ -249,13 +328,28 @@ const listWorkRequests = async ({
     ? await loadTasksForWorkRequests(resultRows.map((r) => r.id))
     : new Map();
 
+  // Load checklist/time-log extras when embedding tasks so the client does not
+  // overwrite a freshly-saved checklist with [] after refresh/page switch.
+  let extras = { checklist: new Map(), timeLogs: new Map(), taskDocuments: new Map() };
+  if (withTasks) {
+    const allTaskIds = [];
+    taskMap.forEach((tasks) => allTaskIds.push(...tasks.map((t) => t.id)));
+    extras = await loadTaskExtras(allTaskIds);
+  }
+
   const result = resultRows.map((row) => {
     const code = entityCodeMap
       ? entityCodeMap.get(row.entity_id) || row.entity_id
       : singleEntityCode;
     const wr = toApiWorkRequest(row, code);
     if (withTasks) {
-      wr.tasks = (taskMap.get(row.id) || []).map((t) => toApiTask(t));
+      wr.tasks = (taskMap.get(row.id) || []).map((t) =>
+        toApiTask(t, {
+          checklist: extras.checklist.get(t.id) || [],
+          timeLogs: extras.timeLogs.get(t.id) || [],
+          taskDocuments: extras.taskDocuments.get(t.id) || [],
+        })
+      );
     }
     return wr;
   });
@@ -285,6 +379,7 @@ const createWorkRequest = async ({ entityId, data, user }) => {
     title: data.title,
     description: data.description || null,
     status: data.status || 'Draft',
+    priority: data.priority || 'Normal',
     requested_by: data.requestedBy || user.id,
     assigned_to: data.assignedTo || null,
     due_date: data.dueDate || null,
@@ -351,10 +446,13 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     description: data.description ?? existing.description,
     client_id: data.clientId ?? existing.clientId,
     status: data.status ?? existing.status,
+    priority: data.priority ?? existing.priority,
     assigned_to: data.assignedTo ?? existing.assignedTo,
     due_date: data.dueDate ?? existing.dueDate,
     updated_at: new Date().toISOString(),
   };
+
+  if (data.archived !== undefined) updates.archived = data.archived;
 
   const { error } = await supabaseAdmin
     .from('work_requests')
@@ -370,6 +468,64 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
   }
 
   return getWorkRequestById({ id, entityId, user });
+};
+
+const archiveWorkRequest = async ({ id, entityId, user }) => {
+  const existing = await getWorkRequestById({ id, entityId, user });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  }
+
+  const { error } = await supabaseAdmin
+    .from('work_requests')
+    .update({ archived: true, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive work request' });
+  }
+
+  // Return the post-update row so the frontend sees the current archived flag.
+  return getWorkRequestById({ id, entityId, user });
+};
+
+const unarchiveWorkRequest = async ({ id, entityId, user }) => {
+  const existing = await getWorkRequestById({ id, entityId, user });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  }
+
+  const { error } = await supabaseAdmin
+    .from('work_requests')
+    .update({ archived: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId);
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore work request' });
+  }
+
+  // Return the post-update row so the frontend sees the current archived flag.
+  return getWorkRequestById({ id, entityId, user });
+};
+
+const getWorkRequestCounts = async ({ entityId }) => {
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('work_requests')
+      .select('*', { count: 'exact', head: true })
+      .is('deleted_at', null);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q;
+  };
+
+  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+    baseQuery().or('archived.is.null,archived.eq.false'),
+    baseQuery().eq('archived', true),
+  ]);
+
+  return { active: activeCount || 0, archived: archivedCount || 0 };
 };
 
 const deleteWorkRequest = async ({ id, entityId, user }) => {
@@ -418,6 +574,7 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
     toApiTask(t, {
       checklist: extras.checklist.get(t.id) || [],
       timeLogs: extras.timeLogs.get(t.id) || [],
+      taskDocuments: extras.taskDocuments.get(t.id) || [],
     })
   );
 };
@@ -444,6 +601,7 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
   return toApiTask(data, {
     checklist: extras.checklist.get(taskId) || [],
     timeLogs: extras.timeLogs.get(taskId) || [],
+    taskDocuments: extras.taskDocuments.get(taskId) || [],
   });
 };
 
@@ -476,39 +634,134 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
 
   if (data.checklist?.length) {
     await upsertChecklist(id, data.checklist);
+    const checklistTimeLogs = [];
+    data.checklist.forEach(item => {
+      if (Array.isArray(item.timeLogs)) {
+        item.timeLogs.forEach(log => {
+          checklistTimeLogs.push({
+            ...log,
+            checklistItemId: item.id
+          });
+        });
+      }
+    });
+    if (checklistTimeLogs.length) {
+      await upsertTimeLogs(id, checklistTimeLogs, false);
+    }
   }
   if (data.timeLogs?.length) {
-    await upsertTimeLogs(id, data.timeLogs);
+    await upsertTimeLogs(id, data.timeLogs, true);
   }
 
   return getTaskById({ workRequestId, taskId: id, entityId });
 };
 
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const upsertChecklist = async (taskId, checklist) => {
   await supabaseAdmin.from('task_checklists').delete().eq('task_id', taskId);
-  const rows = checklist.map((item) => ({
-    task_id: taskId,
-    text: item.text,
-    category: item.category || null,
-    completed: item.completed ?? false,
-    assignee_id: item.assigneeId || null,
-    assignee_name: item.assigneeName || null,
-  }));
+  const rows = checklist.map((item) => {
+    const dependsOn = Array.isArray(item.dependsOn)
+      ? item.dependsOn
+      : (item.dependsOn ? [item.dependsOn] : []);
+    return {
+      id: isValidUUID(item.id) ? item.id : undefined,
+      task_id: taskId,
+      text: item.text,
+      category: item.category || null,
+      completed: item.completed ?? false,
+      assignee_id: item.assigneeId || null,
+      assignee_name: item.assigneeName || null,
+      depends_on: dependsOn,
+    };
+  });
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);
 };
 
-const upsertTimeLogs = async (taskId, timeLogs) => {
-  await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId);
-  const rows = timeLogs.map((log) => ({
-    task_id: taskId,
-    start_time: log.startTime || null,
-    end_time: log.endTime || null,
-    date: log.date || null,
-    hours: log.hours ?? 0,
-    user_id: log.userId || null,
-    note: log.note || null,
-  }));
+const upsertTimeLogs = async (taskId, timeLogs, deleteExisting = true) => {
+  if (deleteExisting) {
+    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).is('checklist_item_id', null);
+  }
+  const rows = timeLogs.map((log) => {
+    let startTimeStr = null;
+    if (log.date && log.startTime) {
+      if (log.startTime.includes('T') || log.startTime.includes(' ')) {
+        startTimeStr = log.startTime;
+      } else {
+        startTimeStr = `${log.date}T${log.startTime}:00+08:00`;
+      }
+    }
+    let endTimeStr = null;
+    if (log.date && log.endTime) {
+      if (log.endTime.includes('T') || log.endTime.includes(' ')) {
+        endTimeStr = log.endTime;
+      } else {
+        endTimeStr = `${log.date}T${log.endTime}:00+08:00`;
+      }
+    }
+    return {
+      task_id: taskId,
+      start_time: startTimeStr,
+      end_time: endTimeStr,
+      date: log.date || null,
+      hours: log.hours ?? 0,
+      user_id: log.userId || null,
+      note: log.note || null,
+      worker_name: log.workerName || null,
+      checklist_item_id: log.checklistItemId || null,
+    };
+  });
   if (rows.length) await supabaseAdmin.from('task_time_logs').insert(rows);
+};
+
+const addTimeLogs = async ({ workRequestId, taskId, entityId, logs, user }) => {
+  const existing = await getTaskById({ workRequestId, taskId, entityId });
+  if (!existing) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  }
+
+  const rows = logs.map((log) => {
+    let startTimeStr = null;
+    if (log.date && log.startTime) {
+      if (log.startTime.includes('T') || log.startTime.includes(' ')) {
+        startTimeStr = log.startTime;
+      } else {
+        startTimeStr = `${log.date}T${log.startTime}:00+08:00`;
+      }
+    }
+    let endTimeStr = null;
+    if (log.date && log.endTime) {
+      if (log.endTime.includes('T') || log.endTime.includes(' ')) {
+        endTimeStr = log.endTime;
+      } else {
+        endTimeStr = `${log.date}T${log.endTime}:00+08:00`;
+      }
+    }
+    return {
+      task_id: taskId,
+      start_time: startTimeStr,
+      end_time: endTimeStr,
+      date: log.date || null,
+      hours: log.hours ?? 0,
+      user_id: log.userId || user.id,
+      note: log.note || null,
+      worker_name: log.workerName || null,
+      checklist_item_id: log.checklistItemId || null,
+    };
+  });
+
+  const { error } = await supabaseAdmin.from('task_time_logs').insert(rows);
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to save time logs',
+    });
+  }
+
+  return getTaskById({ workRequestId, taskId, entityId });
 };
 
 const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }) => {
@@ -542,8 +795,27 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     });
   }
 
-  if (data.checklist !== undefined) await upsertChecklist(taskId, data.checklist);
-  if (data.timeLogs !== undefined) await upsertTimeLogs(taskId, data.timeLogs);
+  if (data.checklist !== undefined) {
+    await upsertChecklist(taskId, data.checklist);
+    const checklistTimeLogs = [];
+    data.checklist.forEach(item => {
+      if (Array.isArray(item.timeLogs)) {
+        item.timeLogs.forEach(log => {
+          checklistTimeLogs.push({
+            ...log,
+            checklistItemId: item.id
+          });
+        });
+      }
+    });
+    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).not('checklist_item_id', 'is', null);
+    if (checklistTimeLogs.length) {
+      await upsertTimeLogs(taskId, checklistTimeLogs, false);
+    }
+  }
+  if (data.timeLogs !== undefined) {
+    await upsertTimeLogs(taskId, data.timeLogs, true);
+  }
 
   return getTaskById({ workRequestId, taskId, entityId });
 };
@@ -577,20 +849,15 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
  */
 const getWorkRequestRelated = async ({ id, entityId }) => {
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', id)
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .maybeSingle();
 
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
-
-  if (wrErr || !wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
+  if (!wr) {
+    return { invoices: [], disbursements: [], transmittals: [], documents: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
@@ -646,31 +913,26 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[] }>}
  */
 const getTaskRelated = async ({ id, entityId }) => {
-  const { data: task, error: taskErr } = await supabaseAdmin
+  const { data: task } = await supabaseAdmin
     .from('tasks')
     .select('id, work_request_id')
     .eq('id', id)
     .is('deleted_at', null)
     .maybeSingle();
 
-  if (taskErr || !task) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+  if (!task || !task.work_request_id) {
+    return { invoices: [], disbursements: [] };
   }
 
-  let wrQuery = supabaseAdmin
+  const { data: wr } = await supabaseAdmin
     .from('work_requests')
     .select('id, entity_id')
     .eq('id', task.work_request_id)
-    .is('deleted_at', null);
-
-  if (entityId && entityId !== 'ALL') {
-    wrQuery = wrQuery.eq('entity_id', entityId);
-  }
-
-  const { data: wr } = await wrQuery.maybeSingle();
+    .is('deleted_at', null)
+    .maybeSingle();
 
   if (!wr) {
-    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
+    return { invoices: [], disbursements: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
@@ -705,7 +967,7 @@ const getTaskRelated = async ({ id, entityId }) => {
 const listRetainerTemplates = async ({ entityId }) => {
   const { data, error } = await supabaseAdmin
     .from('retainer_templates')
-    .select('*, clients(name)')
+    .select('*, entities(code), clients(name)')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .order('name', { ascending: true });
@@ -724,10 +986,12 @@ const listRetainerTemplates = async ({ entityId }) => {
 const createRetainerTemplate = async ({ entityId, userId, data }) => {
   const row = {
     entity_id: entityId,
-    name: data.name,
+    name: data.title || data.name,
     description: data.description || null,
     client_id: data.clientId || null,
     schedule: data.schedule || null,
+    priority: data.priority || 'Normal',
+    assigned_to: data.assignedTo || null,
     pf_amount: data.pfAmount || 0,
     tasks: data.tasks || [],
     created_by: userId,
@@ -736,7 +1000,7 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
   const { data: template, error } = await supabaseAdmin
     .from('retainer_templates')
     .insert(row)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error) {
@@ -753,10 +1017,13 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
 const updateRetainerTemplate = async ({ entityId, id, data }) => {
   const updates = { updated_at: new Date().toISOString() };
 
-  if (data.name !== undefined) updates.name = data.name;
+  if (data.title !== undefined) updates.name = data.title;
+  else if (data.name !== undefined) updates.name = data.name;
   if (data.description !== undefined) updates.description = data.description;
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.schedule !== undefined) updates.schedule = data.schedule;
+  if (data.priority !== undefined) updates.priority = data.priority;
+  if (data.assignedTo !== undefined) updates.assigned_to = data.assignedTo;
   if (data.pfAmount !== undefined) updates.pf_amount = data.pfAmount;
   if (data.tasks !== undefined) updates.tasks = data.tasks;
 
@@ -766,7 +1033,7 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
     .eq('id', id)
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error || !updated) {
@@ -851,6 +1118,9 @@ module.exports = {
   createWorkRequest,
   getWorkRequestById,
   updateWorkRequest,
+  archiveWorkRequest,
+  unarchiveWorkRequest,
+  getWorkRequestCounts,
   deleteWorkRequest,
   listTasks,
   getTaskById,
@@ -866,4 +1136,5 @@ module.exports = {
   deleteRetainerTemplate,
   listGroundWorkers,
   createGroundWorker,
+  addTimeLogs,
 };

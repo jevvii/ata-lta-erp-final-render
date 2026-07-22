@@ -30,6 +30,7 @@ const listTransmittals = async (req, res, next) => {
       status: req.query.status,
       clientId: req.query.clientId,
       search: req.query.search,
+      archived: req.query.archived,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
@@ -104,6 +105,7 @@ const sendTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
   } catch (err) {
@@ -115,6 +117,35 @@ const sendTransmittal = async (req, res, next) => {
 const acknowledgeTransmittal = async (req, res, next) => {
   try {
     const data = await service.acknowledgeTransmittal({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+      boardOrder: req.body?.boardOrder,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const archiveTransmittal = async (req, res, next) => {
+  try {
+    const data = await service.archiveTransmittal({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
+const unarchiveTransmittal = async (req, res, next) => {
+  try {
+    const data = await service.unarchiveTransmittal({
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
@@ -148,6 +179,8 @@ module.exports = {
     updateTransmittal,
     sendTransmittal,
     acknowledgeTransmittal,
+    archiveTransmittal,
+    unarchiveTransmittal,
     deleteTransmittal,
   },
 };

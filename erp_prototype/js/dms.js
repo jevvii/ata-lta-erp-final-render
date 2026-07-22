@@ -1196,5 +1196,40 @@ const DMS = {
       console.error('Failed to record handover', e);
       Workflow.showMessage('Handover Failed', e.message || 'Unable to record handover.', 'danger');
     }
+  },
+
+  async archiveDocument(docId) {
+    try {
+      await window.apiClient.documents.archive(docId);
+      window.apiClient.documents.invalidateCounts();
+      App.handleRoute();
+      Workflow.showMessage('Archived', 'Document has been archived.', 'success');
+    } catch (e) {
+      Workflow.showMessage('Archive Failed', e.message || 'Unable to archive document.', 'danger');
+    }
+  },
+
+  async unarchiveDocument(docId) {
+    try {
+      await window.apiClient.documents.unarchive(docId);
+      window.apiClient.documents.invalidateCounts();
+      App.handleRoute();
+      Workflow.showMessage('Restored', 'Document has been restored.', 'success');
+    } catch (e) {
+      Workflow.showMessage('Restore Failed', e.message || 'Unable to restore document.', 'danger');
+    }
+  },
+
+  async deleteDocument(docId) {
+    Workflow.showConfirm('Delete Document', 'Are you sure you want to delete this document?', async () => {
+      try {
+        await window.apiClient.documents.remove(docId);
+        window.apiClient.documents.invalidateCounts();
+        App.handleRoute();
+        Workflow.showMessage('Deleted', 'Document has been deleted.', 'success');
+      } catch (e) {
+        Workflow.showMessage('Delete Failed', e.message || 'Unable to delete document.', 'danger');
+      }
+    }, 'danger');
   }
 };

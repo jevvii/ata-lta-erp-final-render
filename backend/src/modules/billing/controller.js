@@ -237,12 +237,40 @@ const deleteTemplate = async (req, res, next) => {
   }
 };
 
+const archiveInvoice = async (req, res, next) => {
+  try {
+    const data = await service.archiveInvoice({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const unarchiveInvoice = async (req, res, next) => {
+  try {
+    const data = await service.unarchiveInvoice({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   billingController: {
     listInvoices,
     createInvoice,
     getInvoice,
     updateInvoice,
+    archiveInvoice,
+    unarchiveInvoice,
     deleteInvoice,
     recordPayment,
     getInvoicePdf,

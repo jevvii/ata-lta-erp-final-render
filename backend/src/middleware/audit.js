@@ -1,11 +1,3 @@
-/**
- * Audit logging middleware.
- * Records mutating requests to the audit_logs table after the response finishes.
- *
- * Controllers should set res.locals.audit = { action, table, recordId, details }
- * for this middleware to persist an audit row.
- */
-
 const auditService = require('../services/auditService');
 
 /**
@@ -17,22 +9,44 @@ const auditService = require('../services/auditService');
  */
 const audit = (action, options = {}) => {
   return async (req, res, next) => {
+    const originalJson = res.json;
+    let responseBody = null;
+    res.json = function (body) {
+      responseBody = body;
+      return originalJson.apply(this, arguments);
+    };
+
     const finishHandler = () => {
       res.removeListener('finish', finishHandler);
 
-      const auditMeta = res.locals.audit || {};
       if (res.statusCode >= 400) return;
+      if (res.locals.auditLogged) return;
+
+      const auditMeta = res.locals.audit || {};
+      const resData = responseBody?.data || responseBody;
+
+      const recordId = auditMeta.recordId || req.params?.id || resData?.id || resData?.recordId || null;
+
+      const details = { ...(auditMeta.details || {}) };
+      if (resData && typeof resData === 'object') {
+        const itemNum = resData.disbursementNumber || resData.disbursement_number ||
+                        resData.trackingNumber || resData.tracking_number ||
+                        resData.invoiceNumber || resData.invoice_number ||
+                        resData.voucherNumber || resData.voucher_number ||
+                        resData.workRequestTitle || resData.title || resData.name || resData.email;
+        if (itemNum && !details.disbursementNumber && !details.trackingNumber && !details.invoiceNumber && !details.name && !details.title) {
+          details.name = String(itemNum);
+        }
+      }
 
       auditService
         .log({
           action: auditMeta.action || action,
           table: auditMeta.table || options.table,
-          recordId: auditMeta.recordId || null,
-          // resolveEntity() overrides req.activeEntity to the entity UUID (36 chars),
-          // which exceeds audit_logs.entity varchar(10). Use the preserved short code.
+          recordId,
           entity: req.entityCode || req.activeEntity || null,
           userId: req.user?.id || null,
-          details: auditMeta.details || {},
+          details,
         })
         .catch(() => {
           // Swallow; auditService already logs errors.

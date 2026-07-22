@@ -11,6 +11,7 @@ const { uploadBuffer } = require('../../services/storageService');
 const { generatePdf } = require('../../services/pdfService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const { resolveEntityCode } = require('../../lib/entityResolver');
 
 // ============================================================
 // Invoice CRUD
@@ -29,21 +30,20 @@ const listInvoices = async ({ entityId, filters = {} }) => {
 
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients!inner(name)', { count: 'exact' })
-    .eq('entity_id', entityId)
+    .select('*, clients(name)', { count: 'exact' })
     .is('deleted_at', null);
 
-  if (isArchived) {
-    if (status === 'Paid') {
-      query = query.eq('status', 'Paid').eq('archived', true);
-    } else if (status === 'Cancelled') {
-      query = query.eq('status', 'Cancelled');
-    } else {
-      query = query.or('and(status.eq.Paid,archived.eq.true),status.eq.Cancelled');
-    }
-  } else {
-    if (status) query = query.eq('status', status);
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
   }
+
+  if (isArchived) {
+    // Archive view shows both explicitly archived invoices and cancelled (trashed) invoices.
+    query = query.or('archived.eq.true,status.eq.Cancelled');
+  } else if (archived === false || archived === 'false') {
+    query = query.eq('archived', false).neq('status', 'Cancelled');
+  }
+  if (status) query = query.eq('status', status);
   if (clientId) query = query.eq('client_id', clientId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
@@ -63,7 +63,18 @@ const listInvoices = async ({ entityId, filters = {} }) => {
     });
   }
 
-  return { data: data || [], count: count || 0 };
+  const rows = data || [];
+  const { data: entitiesData } = rows.length
+    ? await supabaseAdmin.from('entities').select('id, code')
+    : { data: [] };
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+
+  const mapped = rows.map((row) => ({
+    ...row,
+    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+  }));
+
+  return { data: mapped, count: count || 0 };
 };
 
 /**
@@ -151,7 +162,8 @@ const createInvoice = async ({ entityId, userId, data }) => {
     details: { invoiceNumber: data.invoiceNumber, total },
   });
 
-  return { ...invoice, line_items: lineItems };
+  const entityCode = await resolveEntityCode(invoice.entity_id);
+  return { ...invoice, entity_code: entityCode, line_items: lineItems };
 };
 
 /**
@@ -192,7 +204,8 @@ const getInvoiceById = async ({ entityId, id }) => {
     .eq('invoice_id', id)
     .order('payment_date', { ascending: false });
 
-  return { ...invoice, line_items: lineItems || [], payments: payments || [] };
+  const entityCode = await resolveEntityCode(invoice.entity_id);
+  return { ...invoice, entity_code: entityCode, line_items: lineItems || [], payments: payments || [] };
 };
 
 /**
@@ -268,7 +281,8 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
     });
   }
 
-  return updated;
+  const entityCode = await resolveEntityCode(updated.entity_id);
+  return { ...updated, entity_code: entityCode };
 };
 
 /**
@@ -316,33 +330,33 @@ const deleteInvoice = async ({ entityId, id, userId }) => {
  * @returns {Promise<object>}
  */
 const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
-  const invoice = await getInvoiceById({ entityId, id: invoiceId });
+  const { data: result, error: rpcError } = await supabaseAdmin.rpc('invoice_record_payment', {
+    p_invoice_id: invoiceId,
+    p_amount: data.amount,
+    p_method: data.method,
+    p_reference: data.reference || null,
+    p_payment_date: data.date,
+    p_recorded_by: userId,
+    p_entity_id: entityId,
+    p_notes: data.notes || null,
+  });
 
-  if (invoice.balance <= 0) {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: 'Invoice is already fully paid',
-    });
-  }
-
-  const paymentRow = {
-    invoice_id: invoiceId,
-    amount: data.amount,
-    method: data.method,
-    reference: data.reference || null,
-    payment_date: data.date,
-    recorded_by: userId,
-    notes: data.notes || null,
-  };
-
-  const { data: payment, error: payErr } = await supabaseAdmin
-    .from('invoice_payments')
-    .insert(paymentRow)
-    .select()
-    .single();
-
-  if (payErr) {
+  if (rpcError) {
+    if (rpcError.code === 'P0001') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Overpayment',
+        detail: rpcError.message || 'Payment would exceed invoice balance',
+        code: 'OVERPAYMENT',
+      });
+    }
+    if (rpcError.code === 'P0002') {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Invoice not found',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -350,32 +364,13 @@ const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
     });
   }
 
-  // Update invoice totals
-  const newAmountPaid = parseFloat(invoice.amount_paid) + data.amount;
-  const newBalance = parseFloat(invoice.total) - newAmountPaid;
-  let newStatus = invoice.status;
-
-  if (newBalance <= 0) {
-    newStatus = 'Paid';
-  } else if (newAmountPaid > 0) {
-    newStatus = 'Partially Paid';
-  }
-
-  await supabaseAdmin
-    .from('invoices')
-    .update({
-      amount_paid: newAmountPaid,
-      balance: Math.max(newBalance, 0),
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-      updated_by: userId,
-    })
-    .eq('id', invoiceId);
+  const payment = result?.payment;
+  const invoice = result?.invoice;
 
   await auditService.log({
     action: 'invoice.payment',
     table: 'invoice_payments',
-    recordId: payment.id,
+    recordId: payment?.id,
     entity: entityId,
     userId,
     details: { invoiceId, amount: data.amount, method: data.method },
@@ -784,7 +779,7 @@ const getInvoiceCounts = async ({ entityId, user }) => {
 const listTemplates = async ({ entityId }) => {
   const { data, error } = await supabaseAdmin
     .from('billing_templates')
-    .select('*, clients(name)')
+    .select('*, entities(code), clients(name)')
     .eq('entity_id', entityId)
     .is('deleted_at', null)
     .eq('active', true)
@@ -824,7 +819,7 @@ const createTemplate = async ({ entityId, userId, data }) => {
   const { data: template, error } = await supabaseAdmin
     .from('billing_templates')
     .insert(row)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error) {
@@ -861,7 +856,7 @@ const updateTemplate = async ({ entityId, id, data }) => {
     .eq('id', id)
     .eq('entity_id', entityId)
     .is('deleted_at', null)
-    .select()
+    .select('*, entities(code), clients(name)')
     .single();
 
   if (error || !updated) {
@@ -898,11 +893,69 @@ const deleteTemplate = async ({ entityId, id }) => {
   }
 };
 
+const archiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.archive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
+const unarchiveInvoice = async ({ entityId, id, userId }) => {
+  const existing = await getInvoiceById({ entityId, id });
+  const updateData = { archived: false, updated_by: userId, updated_at: new Date().toISOString() };
+  if (existing && existing.status === 'Cancelled') {
+    updateData.status = 'Draft';
+  }
+  const { data: updated, error } = await supabaseAdmin
+    .from('invoices')
+    .update(updateData)
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive invoice' });
+  }
+
+  await auditService.log({
+    action: 'invoice.unarchive',
+    table: 'invoices',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { invoiceNumber: existing.invoice_number },
+  });
+
+  return updated;
+};
+
 module.exports = {
   listInvoices,
   createInvoice,
   getInvoiceById,
   updateInvoice,
+  archiveInvoice,
+  unarchiveInvoice,
   deleteInvoice,
   recordPayment,
   generateInvoicePdf,

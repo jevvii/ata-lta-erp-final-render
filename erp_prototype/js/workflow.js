@@ -85,6 +85,7 @@ const WorkflowData = {
   _workRequests: null,
   _tasks: null,
   _loadingPromise: null,
+  _backgroundPromise: null,
   // Track which entity the in-flight load belongs to so a rapid entity switch
   // cannot return a stale load for the previous entity.
   _loadingEntity: null,
@@ -98,6 +99,13 @@ const WorkflowData = {
   _pendingApprovalsPromise: null,
   _pendingApprovalsLoadedAt: null,
   PENDING_APPROVALS_TTL_MS: 30 * 1000,
+
+  // Force the next list fetch to bypass browser/service-worker cache. Set by
+  // invalidate() and any mutation so navigation after creation sees the new
+  // record immediately instead of a stale pre-creation cached response.
+  // Initialized to true so every fresh app load (after login, refresh, or new
+  // tab) fetches the latest server state rather than a stale browser cache.
+  _needsFreshFetch: true,
 
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
@@ -121,18 +129,23 @@ const WorkflowData = {
       ...task,
       // Preserve frontend-only extensions that the backend strips.
       comments: task.comments || [],
-      taskDocuments: task.taskDocuments || [],
+      taskDocuments: (task.taskDocuments || []).map(d => ({
+        ...d,
+        documentId: d.documentId || null
+      })),
       coAssignees: task.coAssignees || [],
       priority: task.priority || 'Normal',
       assignedTo: task.assignedTo || task.assigneeId || null,
       checklist: (task.checklist || []).map(item => ({
-        id: item.id || generateId('chk'),
+        id: item.id || generateUUID(),
         text: item.text || '',
         category: item.category || 'subtask',
         completed: item.completed ?? false,
         assigneeId: item.assigneeId || null,
         assigneeName: item.assigneeName || null,
-        dependsOn: item.dependsOn || null,
+        dependsOn: Array.isArray(item.dependsOn)
+          ? (item.dependsOn[0] || null)
+          : (item.dependsOn || null),
         timeLogs: item.timeLogs || []
       }))
     };
@@ -140,6 +153,10 @@ const WorkflowData = {
 
   _getActiveEntity() {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+  },
+
+  _isTempId(id) {
+    return typeof id === 'string' && /^(tmp-|wr-|t-|rt-|rtt-)/.test(id);
   },
 
   _isEntityFresh() {
@@ -160,6 +177,7 @@ const WorkflowData = {
     this._pendingApprovals = null;
     this._pendingApprovalsPromise = null;
     this._pendingApprovalsLoadedAt = null;
+    this._needsFreshFetch = true;
   },
 
   async loadPendingApprovals(force = false) {
@@ -221,7 +239,7 @@ const WorkflowData = {
   },
 
   async ensure() {
-    if (this.hasData()) return;
+    if (this.hasData() && !this._needsFreshFetch) return;
     const activeEntity = this._getActiveEntity();
     // If a load is already in flight for the current entity, share it.
     if (this._loadingPromise && this._loadingEntity === activeEntity) return this._loadingPromise;
@@ -251,7 +269,12 @@ const WorkflowData = {
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure()
     ]);
-    const res = await window.apiClient.workRequests.list({ includeTasks: true, ...options });
+    const listParams = { includeTasks: true, ...options };
+    const freshFetch = this._needsFreshFetch;
+    if (freshFetch) {
+      listParams._t = Date.now();
+    }
+    const res = await window.apiClient.workRequests.list(listParams);
     const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
     // Tasks are embedded when includeTasks is true; normalize them in place.
     const tasks = [];
@@ -269,10 +292,112 @@ const WorkflowData = {
     if (loadGen !== this._loadGeneration || this._getActiveEntity() !== entity) {
       return { workRequests: this._workRequests || [], tasks: this._tasks || [], meta: res.meta || {} };
     }
-    this._workRequests = wrs;
-    this._tasks = tasks;
+    if (typeof Workflow !== 'undefined' && Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration) {
+      return { workRequests: this._workRequests || [], tasks: this._tasks || [], meta: res.meta || {} };
+    }
+    const cacheWarm = Array.isArray(this._workRequests) && this._entity === entity;
+    if (cacheWarm) {
+      this._mergeWorkRequests(wrs);
+      this._mergeTasks(tasks, wrs.map(w => w.id));
+    } else {
+      this._workRequests = wrs;
+      this._tasks = tasks;
+    }
     this._entity = entity;
-    return { workRequests: wrs, tasks, meta: res.meta || {} };
+    if (freshFetch) this._needsFreshFetch = false;
+    if (typeof Workflow !== 'undefined') Workflow._refreshCounts();
+    return { workRequests: this._workRequests, tasks: this._tasks, meta: res.meta || {} };
+  },
+
+  _mergeWorkRequests(serverWrs) {
+    if (!Array.isArray(this._workRequests)) this._workRequests = [];
+    const existingMap = new Map(this._workRequests.map(wr => [wr.id, wr]));
+    const isSkipActive = (typeof Workflow !== 'undefined') && Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
+    serverWrs.forEach(serverWr => {
+      const existing = existingMap.get(serverWr.id);
+      if (existing) {
+        if (existing.priority && (!serverWr.priority || serverWr.priority === 'Normal')) {
+          serverWr.priority = existing.priority;
+        }
+        const localNewer = existing.updatedAt && serverWr.updatedAt && new Date(existing.updatedAt) > new Date(serverWr.updatedAt);
+        if (isSkipActive || localNewer || existing.archived || existing.status === 'Cancelled') {
+          const localArchived = existing.archived;
+          const localStatus = existing.status;
+          Object.assign(existing, serverWr);
+          if (localArchived !== undefined) existing.archived = localArchived;
+          if (localStatus === 'Cancelled' && !localNewer) existing.status = localStatus;
+        } else {
+          Object.assign(existing, serverWr);
+        }
+      } else if (!this._isTempId(serverWr.id)) {
+        this._workRequests.push(serverWr);
+      }
+    });
+  },
+
+  _mergeTasks(serverTasks, fetchedWrIds = []) {
+    if (!Array.isArray(this._tasks)) this._tasks = [];
+
+    // Remove stale tasks for the fetched work requests.
+    // A task is stale if it belongs to one of the fetched work requests (fetchedWrIds)
+    // but is not present in serverTasks and is not a temporary task.
+    if (fetchedWrIds.length > 0) {
+      const fetchedWrIdsSet = new Set(fetchedWrIds);
+      const serverTaskIds = new Set(serverTasks.map(t => t.id));
+      this._tasks = this._tasks.filter(t => {
+        const belongsToFetched = t.workRequestId && fetchedWrIdsSet.has(t.workRequestId);
+        if (belongsToFetched && !serverTaskIds.has(t.id) && !this._isTempId(t.id)) {
+          return false; // Remove stale task
+        }
+        return true;
+      });
+    }
+
+    const existingMap = new Map(this._tasks.map(t => [t.id, t]));
+    serverTasks.forEach(serverTask => {
+      const existing = existingMap.get(serverTask.id);
+      if (existing) {
+        // Defensive: if the server returns an empty checklist (because the list
+        // endpoint omitted extras), preserve the local checklist rather than
+        // overwriting it with [] after a refresh or page switch.
+        if (existing.checklist?.length && !serverTask.checklist?.length) {
+          serverTask.checklist = existing.checklist;
+        } else if (existing.checklist && serverTask.checklist) {
+          const existingClById = new Map(existing.checklist.map(c => [c.id, c]));
+          serverTask.checklist.forEach(item => {
+            const ec = existingClById.get(item.id);
+            if (ec && ec.timeLogs?.length && !item.timeLogs?.length) {
+              item.timeLogs = ec.timeLogs;
+            }
+          });
+        }
+        if (existing.timeLogs?.length && !serverTask.timeLogs?.length) {
+          serverTask.timeLogs = existing.timeLogs;
+        }
+        Object.assign(existing, serverTask);
+      } else if (!this._isTempId(serverTask.id)) {
+        this._tasks.push(serverTask);
+      }
+    });
+    // Rebuild task arrays on non-temp work requests so list/board views stay consistent.
+    this._workRequests.forEach(wr => {
+      if (this._isTempId(wr.id)) return;
+      wr.tasks = this._tasks.filter(t => t.workRequestId === wr.id);
+    });
+  },
+
+  async backgroundRefresh() {
+    if (typeof Workflow !== 'undefined' && Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration) {
+      return { workRequests: this._workRequests || [], tasks: this._tasks || [] };
+    }
+    if (this._backgroundPromise) return this._backgroundPromise;
+    const loadGen = ++this._loadGeneration;
+    this._backgroundPromise = this._load(loadGen).finally(() => {
+      if (this._loadGeneration === loadGen) {
+        this._backgroundPromise = null;
+      }
+    });
+    return this._backgroundPromise;
   },
 
   async loadPage(options = {}) {
@@ -284,6 +409,10 @@ const WorkflowData = {
     if (sortBy) params.sortBy = sortBy;
     if (sortOrder) params.sortOrder = sortOrder;
     if (signal) params.signal = signal;
+    if (this._needsFreshFetch) {
+      params._t = Date.now();
+      this._needsFreshFetch = false;
+    }
     const res = await window.apiClient.workRequests.list(params);
     const wrs = (res.data || []).map(wr => this.normalizeWorkRequest(wr));
     const tasks = [];
@@ -305,28 +434,177 @@ const WorkflowData = {
   getWorkRequestsWhere(predicate) { return (this._workRequests || []).filter(predicate); },
   getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
 
+  _snapshotWorkRequest(id) {
+    const wr = this.getWorkRequestById(id);
+    return wr ? deepClone(wr) : null;
+  },
+
+  _restoreWorkRequest(id, snapshot) {
+    if (!this._workRequests) return;
+    const idx = this._workRequests.findIndex(r => r.id === id);
+    if (snapshot) {
+      if (idx >= 0) this._workRequests[idx] = snapshot;
+      else this._workRequests.push(snapshot);
+    } else if (idx >= 0) {
+      this._workRequests.splice(idx, 1);
+    }
+  },
+
+  getWorkRequestSeqMap() {
+    const allWrs = this.getAllWorkRequests();
+    const pendingWrs = (this._pendingApprovals || [])
+      .filter(pc => pc.status === 'pending' && (pc.table === 'workRequests' || pc.tableName === 'workRequests') && !pc.parentRecordId && pc.proposedData)
+      .map(pc => ({ ...pc.proposedData, id: pc.proposedData.id || pc.id }));
+
+    const mapById = new Map();
+    allWrs.forEach(wr => { if (wr && wr.id) mapById.set(wr.id, wr); });
+    pendingWrs.forEach(wr => { if (wr && wr.id && !mapById.has(wr.id)) mapById.set(wr.id, wr); });
+
+    const sorted = Array.from(mapById.values()).sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime();
+      const tb = new Date(b.createdAt || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    });
+
+    const seqMap = new Map();
+    sorted.forEach((wr, idx) => {
+      seqMap.set(wr.id, idx + 1);
+    });
+    return seqMap;
+  },
+
+  getWorkRequestKey(wrId) {
+    if (!wrId) return 'WR-1';
+    const seqMap = this.getWorkRequestSeqMap();
+    const seq = seqMap.get(wrId);
+    if (seq) return `WR-${seq}`;
+    return 'WR-1';
+  },
+
   async createWorkRequest(record) {
     const localId = record && record.id;
-    const res = await window.apiClient.workRequests.create(record);
+    const payload = { ...record };
+    delete payload.id;
+    delete payload.tasks;
+    const res = await window.apiClient.workRequests.create(payload);
     const created = this.normalizeWorkRequest(res.data);
-    created.tasks = [];
-    const existing = localId ? this.getWorkRequestById(localId) : null;
+    let existing = localId ? this.getWorkRequestById(localId) : null;
+    if (!existing && localId && this._isTempId(localId) && Array.isArray(this._workRequests)) {
+      existing = this._workRequests.find(r => this._isTempId(r.id) && r.title === created.title && r.clientId === created.clientId);
+    }
     if (existing) {
-      // Replace the optimistic record in place so references/order are preserved.
-      if (created.id === localId) {
-        Object.assign(existing, created);
-      } else {
-        const idx = (this._workRequests || []).findIndex(r => r.id === localId);
-        if (idx >= 0) {
-          (this._workRequests || []).splice(idx, 1, created);
-        } else {
-          (this._workRequests || []).push(created);
-        }
+      const oldId = existing.id;
+      const existingTasks = existing.tasks || [];
+      const serverTasks = Array.isArray(created.tasks) && created.tasks.length > 0
+        ? created.tasks.map(t => {
+            const normalized = this.normalizeTask(t);
+            normalized.workRequestId = created.id;
+            return normalized;
+          })
+        : null;
+      created.tasks = serverTasks || existingTasks;
+      if (existing.priority && (!created.priority || created.priority === 'Normal')) {
+        created.priority = existing.priority;
+      }
+      Object.assign(existing, created);
+      if (created.id !== oldId) {
+        (this._tasks || []).forEach(t => {
+          if (t.workRequestId === oldId) t.workRequestId = created.id;
+        });
+        this.invalidateRelatedForWorkRequest(oldId);
       }
     } else {
-      (this._workRequests || []).push(created);
+      if (!Array.isArray(created.tasks)) created.tasks = [];
+      if (!Array.isArray(this._workRequests)) this._workRequests = [];
+      const dupIdx = this._workRequests.findIndex(r => r.id === created.id);
+      if (dupIdx >= 0) {
+        Object.assign(this._workRequests[dupIdx], created);
+      } else {
+        this._workRequests.push(created);
+      }
     }
+    // Keep the cache marked fresh for the active entity after a successful create.
+    this._entity = this._getActiveEntity();
+    this._needsFreshFetch = true;
     return created;
+  },
+
+  _adoptServerWorkRequest(localId, serverWr, serverTasks) {
+    if (!Array.isArray(this._workRequests)) this._workRequests = [];
+    const existing = localId ? this.getWorkRequestById(localId) : null;
+    const normalizedWr = this.normalizeWorkRequest(serverWr);
+    if (!Array.isArray(normalizedWr.tasks)) normalizedWr.tasks = [];
+
+    // Capture optimistic tasks BEFORE we rewrite their workRequestId, so we can
+    // match server tasks back to the same in-memory object and avoid duplicates.
+    const capturedTempTasks = localId && existing
+      ? (this._tasks || []).filter(t => t.workRequestId === localId)
+      : [];
+
+    // Preserve the optimistic priority when the server response lacks it.
+    if (existing && existing.priority && (!normalizedWr.priority || normalizedWr.priority === 'Normal')) {
+      normalizedWr.priority = existing.priority;
+    }
+
+    if (existing) {
+      const oldId = existing.id;
+      Object.assign(existing, normalizedWr);
+      if (normalizedWr.id !== oldId) {
+        (this._tasks || []).forEach(t => {
+          if (t.workRequestId === oldId) t.workRequestId = normalizedWr.id;
+        });
+        this.invalidateRelatedForWorkRequest(oldId);
+      }
+    } else {
+      const dupIdx = this._workRequests.findIndex(r => r.id === normalizedWr.id);
+      if (dupIdx >= 0) Object.assign(this._workRequests[dupIdx], normalizedWr);
+      else this._workRequests.push(normalizedWr);
+    }
+
+    // Keep the in-memory cache fresh for the active entity after adoption.
+    this._entity = this._getActiveEntity();
+    this._needsFreshFetch = true;
+
+    const finalWrId = normalizedWr.id;
+    const parentWr = this.getWorkRequestById(finalWrId);
+    if (parentWr) {
+      if (!Array.isArray(this._tasks)) this._tasks = [];
+
+      // Filter out all old tasks for localId and finalWrId from the cache to prevent duplicate or stale tasks
+      this._tasks = this._tasks.filter(t => t.workRequestId !== localId && t.workRequestId !== finalWrId);
+
+      serverTasks.forEach(t => {
+        const normalizedTask = this.normalizeTask(t);
+        normalizedTask.workRequestId = finalWrId;
+        const existingTask = normalizedTask.id ? capturedTempTasks.find(tk => tk.id === normalizedTask.id) : null;
+        // Match by server id first (covers updates), then by captured optimistic
+        // task using a stable criterion (title + original temp id, falling back to title).
+        const tempTask = !existingTask && capturedTempTasks.length
+          ? (capturedTempTasks.find(tk =>
+              tk.title === normalizedTask.title && !tk._adopted
+            ) ||
+            null)
+          : null;
+
+        if (existingTask) {
+          Object.assign(existingTask, normalizedTask);
+          this._tasks.push(existingTask);
+        } else if (tempTask) {
+          Object.assign(tempTask, normalizedTask);
+          tempTask._adopted = true;
+          this._tasks.push(tempTask);
+        } else {
+          this._tasks.push(normalizedTask);
+        }
+      });
+
+      // Rebuild the WR task list from the merged in-memory tasks so it contains
+      // the same object references held in _tasks, not separate server-copy objects.
+      parentWr.tasks = this._tasks.filter(t => t.workRequestId === finalWrId);
+    }
+
+    return normalizedWr;
   },
 
   async createTask(record) {
@@ -363,16 +641,17 @@ const WorkflowData = {
     } else {
       this._tasks.push(created);
     }
-    const wr = this.getWorkRequestById(wrId);
-    if (wr) {
-      if (!Array.isArray(wr.tasks)) wr.tasks = [];
-      const wrTaskIdx = wr.tasks.findIndex(t => (localId && t.id === localId) || t.id === created.id);
+    const parentWr = this.getWorkRequestById(created.workRequestId || wrId);
+    if (parentWr) {
+      if (!Array.isArray(parentWr.tasks)) parentWr.tasks = [];
+      const wrTaskIdx = parentWr.tasks.findIndex(t => (localId && t.id === localId) || t.id === created.id);
       if (wrTaskIdx >= 0) {
-        wr.tasks[wrTaskIdx] = created;
+        parentWr.tasks[wrTaskIdx] = created;
       } else {
-        wr.tasks.push(created);
+        parentWr.tasks.push(created);
       }
     }
+    this._needsFreshFetch = true;
     return created;
   },
 
@@ -381,6 +660,10 @@ const WorkflowData = {
     if (!normalized.tasks) normalized.tasks = [];
     if (!Array.isArray(this._workRequests)) this._workRequests = [];
     this._workRequests.push(normalized);
+    // Mark the cache as fresh for the active entity so WorkflowData.ensure()
+    // does not fire a server fetch and overwrite the optimistic record before
+    // the list has a chance to render it.
+    this._entity = this._getActiveEntity();
     return normalized;
   },
 
@@ -398,6 +681,8 @@ const WorkflowData = {
     if (wr) {
       if (!Array.isArray(wr.tasks)) wr.tasks = [];
       wr.tasks.push(normalized);
+      // Keep the parent WR cache fresh so a subsequent ensure() does not wipe it.
+      this._entity = this._getActiveEntity();
     }
     return normalized;
   },
@@ -417,8 +702,22 @@ const WorkflowData = {
     }
   },
 
-  async updateWorkRequest(id, changes) {
+  async updateWorkRequest(id, changes, options = {}) {
     const existing = this.getWorkRequestById(id);
+    const activeGenAtStart = (typeof Workflow !== 'undefined') ? Workflow._activeSkipGeneration : 0;
+    const explicitSkipGen = (typeof options === 'object' && options !== null && options.skipGen) ? options.skipGen : null;
+    let ownSkipGen = 0;
+    if (activeGenAtStart === 0 && (!options || !options.preserveSkip) && typeof Workflow !== 'undefined') {
+      ownSkipGen = Workflow._startSkipGeneration();
+    }
+    if (this._isTempId(id)) {
+      // Local-only update for optimistic records; do not call the backend.
+      if (existing) {
+        const { entity: _ignoredEntity, ...safeChanges } = changes || {};
+        Object.assign(existing, safeChanges);
+      }
+      return existing;
+    }
     // The entity of a work request is immutable; do not let caller-supplied
     // `entity` overwrite the existing value or be sent to the backend.
     const { entity: _ignoredEntity, ...safeChanges } = changes || {};
@@ -434,10 +733,15 @@ const WorkflowData = {
       // the global active entity is 'ALL'.
       const entityHeader = (existing && existing.entity) || (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
       const res = await window.apiClient.workRequests.update(id, payload, entityHeader ? { headers: { 'X-Active-Entity': entityHeader } } : undefined);
-      const normalized = this.normalizeWorkRequest(res.data);
+      let normalized = this.normalizeWorkRequest(res.data);
       // Preserve frontend-only fields the backend does not return/persist.
       normalized.tasks = (existing && existing.tasks) || [];
-      normalized.archived = (existing && existing.archived) ?? normalized.archived ?? false;
+      // Only preserve the local archived flag when the server response omits it.
+      // If the server explicitly returns archived=false (e.g., after unarchive), honor it.
+      const serverHasArchived = res.data && Object.prototype.hasOwnProperty.call(res.data, 'archived');
+      if (!serverHasArchived && existing && existing.archived) {
+        normalized = { ...normalized, archived: existing.archived };
+      }
       normalized.boardOrder = (existing && existing.boardOrder) ?? normalized.boardOrder;
       normalized.priority = (existing && existing.priority) || normalized.priority || 'Normal';
       normalized.linkedInvoiceId = (existing && existing.linkedInvoiceId) || normalized.linkedInvoiceId || null;
@@ -451,17 +755,28 @@ const WorkflowData = {
         Object.assign(existing, previous);
         existing.tasks = previous.tasks;
       }
-      // Skip the server round-trip on the next list render so we redraw from
-      // the restored cache instead of a possibly stale paginated fetch.
-      if (typeof Workflow !== 'undefined') Workflow._skipNextListFetch = true;
+    }
+    // Clear skip generation only if explicitly requested or if updateWorkRequest created its own
+    if (typeof Workflow !== 'undefined') {
+      if (explicitSkipGen) {
+        Workflow._clearSkipGenerationIfLatest(explicitSkipGen);
+      } else if (ownSkipGen > 0) {
+        Workflow._clearSkipGenerationIfLatest(ownSkipGen);
+      }
     }
     this.invalidateRelatedForWorkRequest(id);
+    this._needsFreshFetch = true;
     return updated;
   },
 
   async updateTask(id, changes) {
     const existing = this.getTaskById(id);
     const wrId = existing ? existing.workRequestId : (changes && changes.workRequestId);
+    if (this._isTempId(id)) {
+      // Local-only update for optimistic records; do not call the backend.
+      if (existing) Object.assign(existing, changes);
+      return existing;
+    }
     if (!wrId) {
       console.error('Cannot update task without work request id', id, changes);
       return existing;
@@ -486,26 +801,50 @@ const WorkflowData = {
         const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
         normalized.checklist = (normalized.checklist || []).map(c => {
           const ec = existingClById.get(c.id);
-          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+          const preservedLogs = (c.timeLogs && c.timeLogs.length > 0)
+            ? c.timeLogs
+            : (ec && ec.timeLogs && ec.timeLogs.length > 0)
+              ? ec.timeLogs
+              : [];
+          return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: preservedLogs, coAssignees: ec.coAssignees || [] } : c;
         });
+        const preservedTaskLogs = (normalized.timeLogs && normalized.timeLogs.length > 0)
+          ? normalized.timeLogs
+          : (existing.timeLogs && existing.timeLogs.length > 0)
+            ? existing.timeLogs
+            : [];
         Object.assign(existing, normalized);
+        existing.timeLogs = preservedTaskLogs;
       }
     } catch (e) {
       console.error('Failed to update task', e);
     }
     this.invalidateRelatedForTask(id);
+    this._needsFreshFetch = true;
     return updated;
   },
 
   async deleteWorkRequest(id) {
     const idx = (this._workRequests || []).findIndex(r => r.id === id);
-    if (idx >= 0) (this._workRequests || []).splice(idx, 1);
+    let removed = null;
+    if (idx >= 0) {
+      removed = this._workRequests[idx];
+      this._workRequests.splice(idx, 1);
+    }
+    if (this._isTempId(id)) {
+      this.invalidateRelatedForWorkRequest(id);
+      return;
+    }
     try {
       await window.apiClient.workRequests.remove(id);
     } catch (e) {
       console.error('Failed to delete work request', e);
+      if (removed && Array.isArray(this._workRequests)) {
+        this._workRequests.splice(idx >= 0 ? idx : 0, 0, removed);
+      }
     }
     this.invalidateRelatedForWorkRequest(id);
+    this._needsFreshFetch = true;
   },
 
   async deleteTask(id) {
@@ -520,6 +859,10 @@ const WorkflowData = {
         if (tidx >= 0) wr.tasks.splice(tidx, 1);
       }
     }
+    if (this._isTempId(id)) {
+      if (wrId) this.invalidateRelatedForWorkRequest(wrId);
+      return;
+    }
     if (!wrId) return;
     try {
       await window.apiClient.workRequests.removeTask(wrId, id);
@@ -528,6 +871,7 @@ const WorkflowData = {
     }
     this.invalidateRelatedForTask(id);
     this.invalidateRelatedForWorkRequest(wrId);
+    this._needsFreshFetch = true;
   },
 
   // ============================================================
@@ -638,7 +982,8 @@ const WorkflowData = {
   },
 
   async loadRelatedForWorkRequest(id) {
-    if (!id) return this._emptyWrRelated();
+    if (!id || this._isTempId(id)) return this._emptyWrRelated();
+    if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
     if (this._relatedLoading.has(id)) return this._relatedLoading.get(id);
     const promise = window.apiClient.workRequests.getRelated(id)
       .then(res => {
@@ -652,15 +997,13 @@ const WorkflowData = {
         this._relatedByWr.set(id, normalized);
         return normalized;
       })
-      .catch(async err => {
+      .catch(err => {
         if (this._isAbortError(err)) {
           return this._relatedByWr.get(id) || this._emptyWrRelated();
         }
-        console.error(`[WorkflowData] failed to load related for WR ${id}`, err);
-        if (!this._relatedByWr.has(id)) {
-          this._relatedByWr.set(id, await this._buildRelatedFromApi(id));
-        }
-        return this._relatedByWr.get(id);
+        const fallback = this._emptyWrRelated();
+        this._relatedByWr.set(id, fallback);
+        return fallback;
       })
       .finally(() => {
         this._relatedLoading.delete(id);
@@ -670,7 +1013,7 @@ const WorkflowData = {
   },
 
   async loadRelatedForTask(id) {
-    if (!id) return this._emptyTaskRelated();
+    if (!id || this._isTempId(id)) return this._emptyTaskRelated();
     if (this._relatedTaskLoading.has(id)) return this._relatedTaskLoading.get(id);
     const task = this.getTaskById(id);
     const wrId = task ? task.workRequestId || task.work_request_id : null;
@@ -695,15 +1038,13 @@ const WorkflowData = {
       this._relatedByTask.set(id, normalized);
       return normalized;
     })()
-      .catch(async err => {
+      .catch(err => {
         if (this._isAbortError(err)) {
           return this._relatedByTask.get(id) || this._emptyTaskRelated();
         }
-        console.error(`[WorkflowData] failed to load related for task ${id}`, err);
-        if (!this._relatedByTask.has(id)) {
-          this._relatedByTask.set(id, await this._buildTaskRelatedFromApi(id));
-        }
-        return this._relatedByTask.get(id);
+        const fallback = this._emptyTaskRelated();
+        this._relatedByTask.set(id, fallback);
+        return fallback;
       })
       .finally(() => {
         this._relatedTaskLoading.delete(id);
@@ -713,7 +1054,7 @@ const WorkflowData = {
   },
 
   getRelatedForWorkRequest(id) {
-    if (!id) return this._emptyWrRelated();
+    if (!id || this._isTempId(id)) return this._emptyWrRelated();
     if (this._relatedByWr.has(id)) return this._relatedByWr.get(id);
     // Cold fallback: empty cache, then refresh from the backend asynchronously.
     const fallback = this._emptyWrRelated();
@@ -723,7 +1064,7 @@ const WorkflowData = {
   },
 
   getRelatedForTask(id) {
-    if (!id) return this._emptyTaskRelated();
+    if (!id || this._isTempId(id)) return this._emptyTaskRelated();
     if (this._relatedByTask.has(id)) return this._relatedByTask.get(id);
     const task = this.getTaskById(id);
     if (task) {
@@ -787,7 +1128,334 @@ const Workflow = {
   isPendingWr,
   disableIfPending,
   view: 'list',
-  _skipNextListFetch: false,
+  _archivePage: 1,
+  _archiveLimit: 10,
+  _skipFetchGeneration: 0,
+  _activeSkipGeneration: 0,
+  _archiveRestoreLock: false,
+
+  async _withArchiveLock(fn) {
+    if (this._archiveRestoreLock) {
+      Workflow.showMessage('Action in progress', 'Please wait for the current archive/restore action to finish.', 'info');
+      return;
+    }
+    this._archiveRestoreLock = true;
+    try {
+      return await fn();
+    } finally {
+      this._archiveRestoreLock = false;
+    }
+  },
+
+  _applyServerRecordToCache(id, serverRecord) {
+    if (serverRecord) {
+      const norm = WorkflowData.normalizeWorkRequest(serverRecord);
+      const current = WorkflowData.getWorkRequestById(id);
+      if (current) {
+        if ((!norm.tasks || (Array.isArray(norm.tasks) && norm.tasks.length === 0)) && current.tasks) {
+          norm.tasks = current.tasks;
+        }
+        if ((norm.priority === 'Normal' || !norm.priority) && current.priority && current.priority !== 'Normal') {
+          norm.priority = current.priority;
+        }
+        if (!norm.linkedInvoiceId && current.linkedInvoiceId) {
+          norm.linkedInvoiceId = current.linkedInvoiceId;
+        }
+        if ((!norm.linkedDisbursementIds || (Array.isArray(norm.linkedDisbursementIds) && norm.linkedDisbursementIds.length === 0)) && current.linkedDisbursementIds) {
+          norm.linkedDisbursementIds = current.linkedDisbursementIds;
+        }
+        if ((!norm.linkedTransmittalIds || (Array.isArray(norm.linkedTransmittalIds) && norm.linkedTransmittalIds.length === 0)) && current.linkedTransmittalIds) {
+          norm.linkedTransmittalIds = current.linkedTransmittalIds;
+        }
+        const serverHasArchived = Object.prototype.hasOwnProperty.call(serverRecord, 'archived');
+        if (!serverHasArchived && current.archived) {
+          norm.archived = current.archived;
+        }
+        if ((norm.boardOrder === null || typeof norm.boardOrder === 'undefined') && current.boardOrder != null) {
+          norm.boardOrder = current.boardOrder;
+        }
+        if ((norm.isPendingApproval === false || typeof norm.isPendingApproval === 'undefined') && current.isPendingApproval) {
+          norm.isPendingApproval = current.isPendingApproval;
+        }
+        Object.assign(current, norm);
+      }
+    }
+  },
+
+  /**
+   * Update both the module in-memory cache and the shared work-request cache
+   * (used by billing/disbursement selectors) from a confirmed server record.
+   * This keeps cross-module dropdowns and the operations list consistent without
+   * requiring a manual refresh.
+   */
+  _syncWorkRequestToCaches(wr) {
+    if (!wr) return;
+    const existing = WorkflowData.getWorkRequestById(wr.id);
+    if (existing) {
+      Object.assign(existing, wr);
+    }
+    if (window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (!Array.isArray(cache._wrs)) cache._wrs = [];
+      const normalized = { ...wr, tasks: wr.tasks || [] };
+      const idx = cache._wrs.findIndex(r => r.id === normalized.id);
+      if (idx >= 0) cache._wrs[idx] = normalized;
+      else cache._wrs.push(normalized);
+      cache._loadedAt = Date.now();
+    }
+    WorkflowData._needsFreshFetch = true;
+  },
+
+  /**
+   * Update both the module in-memory task cache and the cached copy inside the
+   * shared work-request cache so detail/board views and cross-module selectors
+   * see the new task state immediately.
+   */
+  _syncTaskToCaches(task) {
+    if (!task) return;
+    const existing = WorkflowData.getTaskById(task.id);
+    if (existing) {
+      Object.assign(existing, task);
+    }
+    const parentWr = WorkflowData.getWorkRequestById(task.workRequestId);
+    if (parentWr && Array.isArray(parentWr.tasks)) {
+      const idx = parentWr.tasks.findIndex(t => t.id === task.id);
+      if (idx >= 0) parentWr.tasks[idx] = task;
+      else parentWr.tasks.push(task);
+    }
+    if (window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (Array.isArray(cache._wrs)) {
+        const wr = cache._wrs.find(r => r.id === task.workRequestId);
+        if (wr) {
+          if (!Array.isArray(wr.tasks)) wr.tasks = [];
+          const idx = wr.tasks.findIndex(t => t.id === task.id);
+          if (idx >= 0) wr.tasks[idx] = task;
+          else wr.tasks.push(task);
+          cache._loadedAt = Date.now();
+        }
+      }
+    }
+    WorkflowData._needsFreshFetch = true;
+  },
+
+  /**
+   * Invalidate backend-derived counts and refresh sidebar notification badges
+   * after a confirmed mutation. Avoids full module cache wipes that can reintroduce
+   * stale records on the next render.
+   */
+  _invalidateCountsAndSidebar() {
+    if (window.apiClient?.workRequests?.invalidateCounts) {
+      window.apiClient.workRequests.invalidateCounts();
+    }
+    if (typeof App !== 'undefined' && App.updateSidebarNotifications) {
+      App.updateSidebarNotifications().catch(() => {});
+    }
+  },
+
+  _isActiveWorkRequest(wr) {
+    return !!wr && !wr.archived && wr.status !== 'Cancelled';
+  },
+
+  _startSkipGeneration() {
+    this._skipFetchGeneration++;
+    this._activeSkipGeneration = this._skipFetchGeneration;
+    if (typeof WorkflowData !== 'undefined') {
+      WorkflowData._loadGeneration++;
+    }
+    return this._activeSkipGeneration;
+  },
+  _clearSkipGenerationIfLatest(gen) {
+    if (this._activeSkipGeneration === gen) {
+      this._activeSkipGeneration = 0;
+    }
+  },
+  _resetSkipGenerations() {
+    this._skipFetchGeneration = 0;
+    this._activeSkipGeneration = 0;
+  },
+
+  _counts: null,
+  _countsEntity: null,
+
+  _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
+    const wrs = (WorkflowData.getAllWorkRequests() || []).filter(r => {
+      const rEnt = (r.entity || '').toUpperCase();
+      if (!entity) return true;
+      if (entity === 'ALL') {
+        return (Auth.user?.entities || []).map(ae => ae.toUpperCase()).includes(rEnt);
+      }
+      return rEnt === entity.toUpperCase();
+    });
+    return {
+      active: wrs.filter(r => !r.archived && r.status !== 'Cancelled').length,
+      archived: wrs.filter(r => r.archived || r.status === 'Cancelled').length
+    };
+  },
+
+  _refreshCounts() {
+    if (!WorkflowData.hasData()) {
+      this._counts = null;
+      this._countsEntity = null;
+      return;
+    }
+    this._counts = this._recalcCounts();
+    this._countsEntity = Auth.activeEntity;
+  },
+
+  _updateCounts(activeDelta = 0, archivedDelta = 0) {
+    if (this._counts && this._countsEntity !== Auth.activeEntity) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
+    if (!this._counts) {
+      this._refreshCounts();
+    }
+    if (!this._counts) return;
+    this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
+    this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+  },
+
+  async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
+    if (WorkflowData._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await WorkflowData.ensure();
+    const originalSnapshot = WorkflowData._snapshotWorkRequest(id);
+    const wasActive = originalSnapshot ? (!originalSnapshot.archived && originalSnapshot.status !== 'Cancelled') : false;
+    const wasArchived = originalSnapshot ? (originalSnapshot.archived || originalSnapshot.status === 'Cancelled') : false;
+
+    const wr = WorkflowData.getWorkRequestById(id);
+    if (wr) {
+      Object.assign(wr, patch, { updatedAt: new Date().toISOString() });
+      this._refreshCounts();
+    }
+
+    const isNowActive = wr ? (!wr.archived && wr.status !== 'Cancelled') : false;
+    const isNowArchived = wr ? (wr.archived || wr.status === 'Cancelled') : false;
+
+    const activeDelta = (isNowActive ? 1 : 0) - (wasActive ? 1 : 0);
+    const archivedDelta = (isNowArchived ? 1 : 0) - (wasArchived ? 1 : 0);
+    this._updateCounts(activeDelta, archivedDelta);
+
+    if (this.view === 'detail' && this.detailWrId === id && isNowArchived) {
+      location.hash = '#operations';
+    }
+
+    const gen = this._startSkipGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      if (res?.data) {
+        const norm = WorkflowData.normalizeWorkRequest(res.data);
+        const current = WorkflowData.getWorkRequestById(id);
+        if (current) {
+          // Preserve frontend-only extensions the server response may omit.
+          if ((!norm.tasks || (Array.isArray(norm.tasks) && norm.tasks.length === 0)) && current.tasks) {
+            norm.tasks = current.tasks;
+          }
+          if ((norm.priority === 'Normal' || !norm.priority) && current.priority && current.priority !== 'Normal') {
+            norm.priority = current.priority;
+          }
+          if (!norm.linkedInvoiceId && current.linkedInvoiceId) {
+            norm.linkedInvoiceId = current.linkedInvoiceId;
+          }
+          if ((!norm.linkedDisbursementIds || (Array.isArray(norm.linkedDisbursementIds) && norm.linkedDisbursementIds.length === 0)) && current.linkedDisbursementIds) {
+            norm.linkedDisbursementIds = current.linkedDisbursementIds;
+          }
+          if ((!norm.linkedTransmittalIds || (Array.isArray(norm.linkedTransmittalIds) && norm.linkedTransmittalIds.length === 0)) && current.linkedTransmittalIds) {
+            norm.linkedTransmittalIds = current.linkedTransmittalIds;
+          }
+          const serverHasArchived = res.data && Object.prototype.hasOwnProperty.call(res.data, 'archived');
+          if (!serverHasArchived && current.archived) {
+            norm.archived = current.archived;
+          }
+          if ((norm.boardOrder === null || typeof norm.boardOrder === 'undefined') && current.boardOrder != null) {
+            norm.boardOrder = current.boardOrder;
+          }
+          if ((norm.isPendingApproval === false || typeof norm.isPendingApproval === 'undefined') && current.isPendingApproval) {
+            norm.isPendingApproval = current.isPendingApproval;
+          }
+          Object.assign(current, norm);
+        }
+      }
+      this._clearSkipGenerationIfLatest(gen);
+      if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+        window.apiClient.workRequests.invalidateCounts();
+      }
+      WorkflowData.invalidateRelatedForWorkRequest(id);
+      if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+        window.apiClient.workRequestCache.invalidate();
+      }
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      WorkflowData._restoreWorkRequest(id, originalSnapshot);
+      this._updateCounts(-activeDelta, -archivedDelta);
+      this._clearSkipGenerationIfLatest(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  async _optimisticDelete(id, apiCall, errorTitle = 'Error') {
+    if (WorkflowData._isTempId(id)) {
+      Workflow.showMessage('Saving...', 'Please wait for the record to finish saving.', 'info');
+      throw new Error('Record is still being saved');
+    }
+    await WorkflowData.ensure();
+    const originalSnapshot = WorkflowData._snapshotWorkRequest(id);
+    const wasActive = originalSnapshot ? (!originalSnapshot.archived && originalSnapshot.status !== 'Cancelled') : false;
+    const wasArchived = originalSnapshot ? (originalSnapshot.archived || originalSnapshot.status === 'Cancelled') : false;
+
+    WorkflowData._restoreWorkRequest(id, null);
+    this._refreshCounts();
+    this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
+
+    if (this.view === 'detail' && this.detailWrId === id) {
+      location.hash = '#operations';
+    }
+
+    const gen = this._startSkipGeneration();
+    App.handleRoute();
+
+    try {
+      const res = await apiCall();
+      this._clearSkipGenerationIfLatest(gen);
+      if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+        window.apiClient.workRequests.invalidateCounts();
+      }
+      WorkflowData.invalidateRelatedForWorkRequest(id);
+      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
+        App.updateSidebarNotifications().catch(() => {});
+      }
+      App.handleRoute();
+      return res;
+    } catch (e) {
+      console.error(errorTitle, id, e);
+      WorkflowData._restoreWorkRequest(id, originalSnapshot);
+      this._updateCounts(wasActive ? 1 : 0, wasArchived ? 1 : 0);
+      this._clearSkipGenerationIfLatest(gen);
+      App.handleRoute();
+      Workflow.showMessage('Error', e.message || errorTitle, 'error');
+      throw e;
+    }
+  },
+
+  _navigateToWrDetail(wrId) {
+    if (WorkflowData._isTempId(wrId)) {
+      this.showMessage('Saving...', 'This work request is still being saved. Please wait a moment.', 'info');
+      return;
+    }
+    location.hash = '#operations/detail/' + wrId;
+  },
 
   // Tell the app shell whether the cached WorkflowData is fresh for the given
   // entity, so it can skip the route skeleton overlay when data is already usable.
@@ -802,6 +1470,9 @@ const Workflow = {
 
   _retainerTemplates: null,
   _retainerTemplatesPromise: null,
+  _retainerTemplatesEntity: null,
+  _retainerTemplatesGeneration: 0,
+  _retainerTemplatesBackgroundPromise: null,
   _groundWorkers: null,
   _groundWorkersPromise: null,
 
@@ -822,21 +1493,106 @@ const Workflow = {
     return this._groundWorkersPromise;
   },
 
-  async _loadRetainerTemplates() {
-    if (this._retainerTemplates) return this._retainerTemplates;
+  _resolveTemplateEntity(record) {
+    const activeEntity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    if (activeEntity && activeEntity !== 'ALL') return activeEntity;
+    if (record && record.clientId) {
+      const client = window.apiClient.clientCache.getById(record.clientId);
+      if (client && client.entity) return client.entity;
+    }
+    return (Auth.user?.entities?.[0] || 'ATA');
+  },
+
+  _entityMatchesRetainerTemplate(t, entity) {
+    const tEnt = (t?.entity || '').toUpperCase();
+    if (!tEnt) return false;
+    if (entity === 'ALL') {
+      return (Auth.user?.entities || []).map(e => e.toUpperCase()).includes(tEnt);
+    }
+    return tEnt === (entity || '').toUpperCase();
+  },
+
+  _normalizeRetainerTemplate(doc) {
+    if (!doc) return doc;
+    const entity = doc.entities?.code || doc.entity_code || doc.entity || (doc.entity_id ? null : null);
+    return {
+      ...doc,
+      entity,
+      title: doc.name || doc.title || '',
+      name: doc.name || doc.title || '',
+      priority: doc.priority || 'Normal',
+      assignedTo: doc.assigned_to || doc.assignedTo || null,
+      tasks: doc.tasks || [],
+      pfAmount: 0,
+      clientId: doc.client_id || doc.clientId || null,
+      schedule: doc.schedule || null
+    };
+  },
+
+  _retainerTemplatesFresh() {
+    return Array.isArray(this._retainerTemplates) && this._retainerTemplatesEntity === Auth.activeEntity;
+  },
+
+  async ensureRetainerTemplates() {
+    // Honor the optimistic skip window so a server fetch cannot overwrite a
+    // template that was just created locally.
+    const skipping = Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
+    if (skipping || this._retainerTemplatesFresh()) return;
+    const activeEntity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
     if (this._retainerTemplatesPromise) return this._retainerTemplatesPromise;
-    this._retainerTemplatesPromise = window.apiClient.operations.listTemplates()
-      .then(res => {
-        this._retainerTemplates = res.data || [];
-        return this._retainerTemplates;
-      })
-      .catch(err => {
-        console.error('[Workflow] failed to load retainer templates', err);
-        this._retainerTemplates = [];
-        return this._retainerTemplates;
-      })
-      .finally(() => { this._retainerTemplatesPromise = null; });
+    const loadGen = ++this._retainerTemplatesGeneration;
+    this._retainerTemplatesPromise = this._loadRetainerTemplates(loadGen).finally(() => {
+      if (this._retainerTemplatesGeneration === loadGen) this._retainerTemplatesPromise = null;
+    });
     return this._retainerTemplatesPromise;
+  },
+
+  async _loadRetainerTemplates(loadGen) {
+    const entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    try {
+      const res = await window.apiClient.operations.listTemplates();
+      if (loadGen !== this._retainerTemplatesGeneration || (typeof Auth !== 'undefined' && Auth.activeEntity) !== entity) {
+        return this._retainerTemplates || [];
+      }
+      const templates = (res.data || []).map(t => this._normalizeRetainerTemplate(t));
+      const cacheWarm = Array.isArray(this._retainerTemplates) && this._retainerTemplatesEntity === entity;
+      if (cacheWarm) {
+        this._mergeRetainerTemplates(templates);
+      } else {
+        this._retainerTemplates = templates;
+      }
+      this._retainerTemplatesEntity = entity;
+      return this._retainerTemplates;
+    } catch (err) {
+      console.error('[Workflow] failed to load retainer templates', err);
+      if (loadGen !== this._retainerTemplatesGeneration) return this._retainerTemplates || [];
+      if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
+      this._retainerTemplatesEntity = entity;
+      return this._retainerTemplates;
+    }
+  },
+
+  _mergeRetainerTemplates(serverTemplates) {
+    if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
+    const serverMap = new Map(serverTemplates.map(t => [t.id, t]));
+    this._retainerTemplates = this._retainerTemplates.filter(t => {
+      return serverMap.has(t.id) || WorkflowData._isTempId(t.id);
+    });
+    const existingMap = new Map(this._retainerTemplates.map(t => [t.id, t]));
+    serverTemplates.forEach(serverT => {
+      const existing = existingMap.get(serverT.id);
+      if (existing) Object.assign(existing, serverT);
+      else this._retainerTemplates.push(serverT);
+    });
+  },
+
+  async backgroundRefreshRetainerTemplates() {
+    if (this._retainerTemplatesBackgroundPromise) return this._retainerTemplatesBackgroundPromise;
+    const loadGen = ++this._retainerTemplatesGeneration;
+    this._retainerTemplatesBackgroundPromise = this._loadRetainerTemplates(loadGen).finally(() => {
+      if (this._retainerTemplatesGeneration === loadGen) this._retainerTemplatesBackgroundPromise = null;
+    });
+    return this._retainerTemplatesBackgroundPromise;
   },
 
   _getRetainerTemplateById(id) {
@@ -878,21 +1634,26 @@ const Workflow = {
   async _addRetainerTemplate(record) {
     if (!record || !record.name) return null;
     if (!this._retainerTemplates) this._retainerTemplates = [];
+    record.entity = this._resolveTemplateEntity(record);
     this._retainerTemplates.push(record);
-    Workflow._skipNextListFetch = true;
+    this._retainerTemplatesEntity = Auth.activeEntity;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
     try {
       const res = await window.apiClient.operations.createTemplate(record);
-      const created = res.data;
+      const created = this._normalizeRetainerTemplate(res.data);
+      if (!created.entity) created.entity = record.entity;
       const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
       if (idx >= 0) this._retainerTemplates[idx] = created;
       else this._retainerTemplates.push(created);
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
       return created;
     } catch (e) {
       console.error('[Workflow] failed to create retainer template', e);
       const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
       if (idx >= 0) this._retainerTemplates.splice(idx, 1);
-      Workflow._skipNextListFetch = true;
+      Workflow._clearSkipGenerationIfLatest(myGen);
       App.handleRoute();
       this.showMessage('Error', e.message || 'Unable to create retainer template.', 'error');
       return null;
@@ -901,23 +1662,59 @@ const Workflow = {
   async _updateRetainerTemplate(id, record) {
     const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
     if (idx === -1) return null;
+    const previous = { ...this._retainerTemplates[idx] };
+    const optimistic = { ...previous, ...record, id };
+    this._retainerTemplates[idx] = optimistic;
+    this._retainerTemplatesEntity = Auth.activeEntity;
     try {
       const res = await window.apiClient.operations.updateTemplate(id, record);
-      const updated = res.data;
+      const updated = this._normalizeRetainerTemplate(res.data);
+      if (!updated.entity) updated.entity = previous.entity || this._resolveTemplateEntity(record);
       this._retainerTemplates[idx] = updated;
       return updated;
     } catch (e) {
       console.error('[Workflow] failed to update retainer template', e);
+      this._retainerTemplates[idx] = previous;
+      this.showMessage('Error', e.message || 'Unable to update retainer template.', 'error');
       return null;
     }
   },
-  async _deleteRetainerTemplate(id) {
-    const idx = (this._retainerTemplates || []).findIndex(t => t.id === id);
-    try {
-      await window.apiClient.operations.deleteTemplate(id);
-      if (idx !== -1) this._retainerTemplates.splice(idx, 1);
-    } catch (e) {
-      console.error('[Workflow] failed to delete retainer template', e);
+  async deleteRetainerTemplates(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    
+    const runResult = await this.runBlockingArchiveAction({
+      title: ids.length === 1 ? 'Deleting Template' : 'Deleting Templates',
+      message: ids.length === 1
+        ? 'Please wait while the template is being deleted...'
+        : `Please wait while the ${ids.length} templates are being deleted...`,
+      apiCall: async () => {
+        for (const id of ids) {
+          await window.apiClient.operations.deleteTemplate(id);
+          if (this._retainerTemplates) {
+            const idx = this._retainerTemplates.findIndex(t => t.id === id);
+            if (idx !== -1) this._retainerTemplates.splice(idx, 1);
+          }
+        }
+        
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+        this._invalidateCountsAndSidebar();
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        
+        return { success: true };
+      },
+      successTitle: ids.length === 1 ? 'Template Deleted' : 'Templates Deleted',
+      successMessage: ids.length === 1
+        ? 'Retainer template has been successfully deleted.'
+        : `Successfully deleted ${ids.length} retainer templates.`,
+      errorTitle: ids.length === 1 ? 'Failed to Delete Template' : 'Failed to Delete Templates'
+    });
+
+    if (runResult.success) {
+      this.view = 'templates';
+      this.templateEditingId = null;
+      App.handleRoute();
+    } else {
+      App.handleRoute();
     }
   },
 
@@ -987,7 +1784,8 @@ const Workflow = {
     await this._loadGroundWorkers();
 
     // Check system users first
-    const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === trimmed.toLowerCase());
+    const user = ((window.apiClient.userCache._users || []) || [])
+      .find(u => (u.name || '').toLowerCase() === trimmed.toLowerCase());
     if (user) return { id: user.id, name: user.name };
 
     // Check ground workers next
@@ -1014,18 +1812,21 @@ const Workflow = {
     const buildOptions = () => {
       const systemUsers = (window.apiClient.userCache._users || []) || [];
       const groundWorkers = this._groundWorkers || [];
-      const systemUserNames = systemUsers.map(u => u.name);
+      const systemUserNames = systemUsers.map(u => u.name).filter(Boolean);
       const prioritySet = new Set([...(priorityNames || []), ...systemUserNames].filter(Boolean));
 
       const addedNames = new Set();
       const options = [];
 
       // Priority 1: System users allowed access to the site (created via admin)
-      const sortedSystemUsers = [...systemUsers].sort((a, b) => a.name.localeCompare(b.name));
+      const sortedSystemUsers = [...systemUsers]
+        .filter(u => u.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
       sortedSystemUsers.forEach(u => {
-        if (!addedNames.has(u.name.toLowerCase())) {
+        const lowerName = u.name.toLowerCase();
+        if (!addedNames.has(lowerName)) {
           options.push({ value: u.id, text: u.name });
-          addedNames.add(u.name.toLowerCase());
+          addedNames.add(lowerName);
         }
       });
 
@@ -1101,7 +1902,8 @@ const Workflow = {
     // Set initial value
     if (selectedGroundWorkerName) {
       const nameLower = selectedGroundWorkerName.toLowerCase();
-      const user = ((window.apiClient.userCache._users || []) || []).find(u => u.name.toLowerCase() === nameLower);
+      const user = ((window.apiClient.userCache._users || []) || [])
+        .find(u => (u.name || '').toLowerCase() === nameLower);
       if (user) {
         dropdown.value = user.id;
       } else {
@@ -1138,6 +1940,12 @@ const Workflow = {
     });
     input.addEventListener('focus', cancelBlurCommit);
 
+    const baseDestroy = dropdown.destroy;
+    dropdown.destroy = () => {
+      cancelBlurCommit();
+      if (typeof baseDestroy === 'function') baseDestroy();
+    };
+
     return dropdown;
   },
 
@@ -1145,6 +1953,9 @@ const Workflow = {
   // Phase Transition Logic (Robust Business Accounting Logic)
   // ============================================================
   getPhaseTransitionStatus(wrId) {
+    if (WorkflowData._isTempId(wrId)) {
+      return { canTransition: false, reason: 'Saving...' };
+    }
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
       const pc = WorkflowData.getPendingApprovalByRecordId(wrId, 'workRequests');
@@ -1153,7 +1964,7 @@ const Workflow = {
       }
       return null;
     }
-    
+
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
     const related = WorkflowData.getRelatedForWorkRequest(wrId);
     const invoices = related.invoices;
@@ -1399,12 +2210,26 @@ const Workflow = {
       return;
     }
 
-    if (Auth.can('workflow:approve')) {
-      this.showConfirm('Confirm Routing', `Are you sure you want to transition this Work Request to ${status.nextPhase}?`, () => {
-        WorkflowData.updateWorkRequest(wrId, {
-          status: status.nextPhase,
-          updatedAt: new Date().toISOString()
+    const canRouteDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('workflow:approve');
+    if (canRouteDirectly) {
+      this.showConfirm('Confirm Routing', `Are you sure you want to transition this Work Request to ${status.nextPhase}?`, async () => {
+        const wr = WorkflowData.getWorkRequestById(wrId);
+        await this.runBlockingArchiveAction({
+          title: 'Routing Work Request',
+          message: `Please wait while "${wr?.title || 'the Work Request'}" is being routed to ${status.nextPhase}...`,
+          apiCall: async () => {
+            const res = await WorkflowData.updateWorkRequest(wrId, {
+              status: status.nextPhase,
+              updatedAt: new Date().toISOString()
+            });
+            this._syncWorkRequestToCaches(res);
+            return { data: res };
+          },
+          successTitle: 'Routed',
+          successMessage: `Work Request has been routed to ${status.nextPhase}.`,
+          errorTitle: 'Routing Failed'
         });
+        this._invalidateCountsAndSidebar();
         App.handleRoute();
       }, 'success');
       return;
@@ -1435,30 +2260,52 @@ const Workflow = {
 
     this.showConfirm('Cancel Work Request',
       `Are you sure you want to cancel "${wr.title}"? All non-completed tasks will also be cancelled.`,
-      () => {
+      async () => {
         const now = new Date().toISOString();
         const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
+        const taskSnapshots = [];
         let cancelledCount = 0;
 
-        tasks.forEach(t => {
-          if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-            WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
-            cancelledCount++;
-          }
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Cancelling Work Request',
+          message: `Please wait while "${wr.title || 'the work request'}" is being cancelled...`,
+          apiCall: async () => {
+            for (const t of tasks) {
+              if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+                taskSnapshots.push({ id: t.id, status: t.status });
+                await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+                cancelledCount++;
+              }
+            }
+
+            try {
+              const res = await window.apiClient.workRequests.update(wrId, { status: 'Cancelled', archived: true });
+              const updated = WorkflowData.normalizeWorkRequest(res.data);
+              WorkflowData._addOptimisticWorkRequest(updated);
+              this._syncWorkRequestToCaches(updated);
+              return { data: updated };
+            } catch (e) {
+              for (const snapshot of taskSnapshots) {
+                const task = WorkflowData.getTaskById(snapshot.id);
+                if (task) task.status = snapshot.status;
+              }
+              throw e;
+            }
+          },
+          successTitle: 'Work Request Cancelled',
+          successMessage: () => `Work Request has been successfully cancelled. ${cancelledCount} task(s) were also cancelled.`,
+          errorTitle: 'Failed to Cancel Work Request'
         });
 
-        WorkflowData.updateWorkRequest(wrId, {
-          status: 'Cancelled',
-          archived: true,
-          updatedAt: now
-        });
-
-        this.showMessage('Work Request Cancelled',
-          `Work Request moved to Cancelled. ${cancelledCount} task(s) were also cancelled.`,
-          'warning'
-        );
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
+        if (runResult.success) {
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          this._invalidateCountsAndSidebar();
+          this.view = 'list';
+          this.detailWrId = null;
+          App.handleRoute();
+        } else {
+          App.handleRoute();
+        }
       },
       'danger'
     );
@@ -1466,20 +2313,72 @@ const Workflow = {
 
   archiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr || wr.status !== 'Completed') return;
-    WorkflowData.updateWorkRequest(wrId, { archived: true, updatedAt: new Date().toISOString() });
-    this.showMessage('Archived', 'Work Request has been archived.', 'success');
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
+    if (!wr || wr.archived || wr.status !== 'Completed') return;
+    this.showConfirm('Archive Work Request',
+      `Are you sure you want to archive "${wr.title || '(untitled)'}"?`,
+      async () => {
+        await this._withArchiveLock(async () => {
+          await this.runBlockingArchiveAction({
+            title: 'Archiving Work Request',
+            message: `Please wait while "${wr.title || 'Work Request'}" is being archived...`,
+            apiCall: () => window.apiClient.workRequests.archive(wrId),
+            successTitle: 'Archived',
+            successMessage: 'Work Request has been archived.',
+            errorTitle: 'Failed to Archive Work Request',
+            onSuccess: async (res) => {
+              this._applyServerRecordToCache(wrId, res?.data);
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                WorkflowData.invalidateRelatedForWorkRequest(wrId);
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              if (this.view === 'detail' && this.detailWrId === wrId) {
+                location.hash = '#operations';
+              } else {
+                App.handleRoute();
+              }
+            }
+          });
+        });
+      },
+      'warning'
+    );
   },
 
   unarchiveWorkRequest(wrId) {
     const wr = WorkflowData.getWorkRequestById(wrId);
-    if (!wr) return;
-    WorkflowData.updateWorkRequest(wrId, { archived: false, updatedAt: new Date().toISOString() });
-    this.showMessage('Restored', 'Work Request has been restored to the active list.', 'success');
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
+    if (!wr || !wr.archived) return;
+    this.showConfirm('Restore Work Request',
+      `Are you sure you want to restore "${wr.title || '(untitled)'}"?`,
+      async () => {
+        await this._withArchiveLock(async () => {
+          await this.runBlockingArchiveAction({
+            title: 'Restoring Work Request',
+            message: `Please wait while "${wr.title || 'Work Request'}" is being restored...`,
+            apiCall: () => window.apiClient.workRequests.unarchive(wrId),
+            successTitle: 'Restored',
+            successMessage: 'Work Request has been restored to the active list.',
+            errorTitle: 'Failed to Restore Work Request',
+            onSuccess: async (res) => {
+              this._applyServerRecordToCache(wrId, res?.data);
+            },
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                WorkflowData.invalidateRelatedForWorkRequest(wrId);
+              }
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
+      },
+      'warning'
+    );
   },
 
   bulkArchiveWorkRequests(ids) {
@@ -1493,13 +2392,48 @@ const Workflow = {
     }
 
     this.showConfirm('Bulk Archive',
-      `Are you sure you want to archive ${eligible.length} completed Work Request(s)?`,
-      () => {
-        const now = new Date().toISOString();
-        eligible.forEach(wr => WorkflowData.updateWorkRequest(wr.id, { archived: true, updatedAt: now }));
-        this.showMessage('Archived', `${eligible.length} Work Request(s) archived.`, 'success');
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
+      `Are you sure you want to archive ${eligible.length} Work Request(s)?`,
+      async () => {
+        await this._withArchiveLock(async () => {
+          let successCount = 0;
+          let failCount = 0;
+          await this.runBlockingArchiveAction({
+            title: 'Archiving Work Requests',
+            message: `Please wait while ${eligible.length} Work Request(s) are being archived...`,
+            apiCall: async () => {
+              for (const wr of eligible) {
+                try {
+                  const res = await window.apiClient.workRequests.archive(wr.id);
+                  this._applyServerRecordToCache(wr.id, res?.data);
+                  successCount++;
+                } catch (e) {
+                  console.error('Failed to archive Work Request', wr.id, e);
+                  failCount++;
+                }
+              }
+              if (failCount > 0 && successCount === 0) {
+                return { error: { message: `${failCount} Work Request(s) could not be archived.` } };
+              }
+              return { data: { successCount, failCount } };
+            },
+            successTitle: 'Archived',
+            successMessage: failCount > 0
+              ? `${successCount} Work Request(s) archived, ${failCount} failed.`
+              : `${eligible.length} Work Request(s) archived.`,
+            errorTitle: 'Archive Failed',
+            onAfterConfirm: async () => {
+              if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+              if (window.apiClient?.workRequests?.invalidateCounts) window.apiClient.workRequests.invalidateCounts();
+              eligible.forEach(wr => {
+                if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                  WorkflowData.invalidateRelatedForWorkRequest(wr.id);
+                }
+              });
+              App.updateSidebarNotifications().catch(() => {});
+              App.handleRoute();
+            }
+          });
+        });
       },
       'warning'
     );
@@ -1522,27 +2456,49 @@ const Workflow = {
 
     this.showConfirm('Bulk Cancel',
       `Are you sure you want to cancel ${eligible.length} Work Request(s) and their non-completed tasks?`,
-      () => {
+      async () => {
         const now = new Date().toISOString();
         let cancelledTasks = 0;
 
-        eligible.forEach(wr => {
-          const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
-          tasks.forEach(t => {
-            if (t.status !== 'Completed' && t.status !== 'Cancelled') {
-              WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
-              cancelledTasks++;
+        const myGen = Workflow._startSkipGeneration();
+        this._updateCounts(-eligible.length, eligible.length);
+        App.handleRoute();
+
+        let failedCount = 0;
+        await Promise.all(eligible.map(async wr => {
+          try {
+            const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+            await Promise.all(tasks.map(async t => {
+              if (t.status !== 'Completed' && t.status !== 'Cancelled') {
+                await WorkflowData.updateTask(t.id, { status: 'Cancelled', updatedAt: now });
+                cancelledTasks++;
+              }
+            }));
+            await WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
+            const updated = WorkflowData.getWorkRequestById(wr.id);
+            if (!updated || updated.status !== 'Cancelled' || !updated.archived) {
+              failedCount++;
             }
-          });
-          WorkflowData.updateWorkRequest(wr.id, { status: 'Cancelled', archived: true, updatedAt: now });
-        });
+          } catch (e) {
+            failedCount++;
+            console.error('Failed to cancel work request', wr.id, e);
+          }
+        }));
+
+        if (failedCount > 0) {
+          this._updateCounts(failedCount, -failedCount);
+        }
+
+        Workflow._clearSkipGenerationIfLatest(myGen);
+        App.handleRoute();
+        if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+          window.apiClient.workRequestCache.invalidate();
+        }
 
         this.showMessage('Cancelled',
           `${eligible.length} Work Request(s) cancelled. ${cancelledTasks} task(s) also cancelled.`,
           'warning'
         );
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
       },
       'danger'
     );
@@ -1595,6 +2551,145 @@ const Workflow = {
     okBtn.addEventListener('click', () => overlay.remove());
   },
 
+  showBlockingOverlay(title, message) {
+    const overlay = el('div', { class: 'modal-overlay blocking-modal-overlay' });
+    const modal = el('div', { class: 'modal blocking-overlay-card' });
+
+    const body = el('div', { class: 'modal-body', style: 'display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 4px 8px 8px 8px; text-align: center;' });
+    
+    // Modern Dual-Orbital Spinner
+    const spinnerWrapper = el('div', { style: 'position: relative; padding: 12px 0;' });
+    const spinner = el('div', { class: 'loading-spinner blocking-spinner' });
+    spinnerWrapper.appendChild(spinner);
+    body.appendChild(spinnerWrapper);
+
+    // Title & Message with Notion/Jira Typography
+    const textContainer = el('div', { style: 'display: flex; flex-direction: column; gap: 6px; width: 100%;' });
+    const titleEl = el('h3', { class: 'blocking-loading-title', text: title, style: 'margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -0.01em; color: var(--color-text);' });
+    const messageEl = el('p', { class: 'blocking-loading-message', text: message, style: 'margin: 0; font-size: 0.875rem; color: var(--color-text-muted); font-weight: 450; line-height: 1.5;' });
+    textContainer.appendChild(titleEl);
+    textContainer.appendChild(messageEl);
+    body.appendChild(textContainer);
+
+    // Jira-inspired Shimmer Progress Track
+    const shimmerBar = el('div', { class: 'loading-shimmer-bar' });
+    body.appendChild(shimmerBar);
+
+    modal.appendChild(body);
+    overlay.appendChild(modal);
+
+    document.body.appendChild(overlay);
+    document.body.setAttribute('aria-busy', 'true');
+
+    return {
+      overlay,
+      close: () => {
+        document.body.removeAttribute('aria-busy');
+        if (overlay && overlay.parentNode) {
+          overlay.remove();
+        }
+      }
+    };
+  },
+
+  hideBlockingOverlay(overlayObj) {
+    if (overlayObj && typeof overlayObj.close === 'function') {
+      overlayObj.close();
+    } else if (overlayObj && overlayObj.remove) {
+      document.body.removeAttribute('aria-busy');
+      overlayObj.remove();
+    }
+  },
+
+  async runBlockingArchiveAction({
+    title,
+    message,
+    apiCall,
+    successTitle,
+    successMessage,
+    errorTitle,
+    onSuccess,
+    onAfterConfirm
+  }) {
+    const overlayObj = this.showBlockingOverlay(title, message);
+    try {
+      let timedOut = false;
+      let timerId = null;
+
+      const timeoutPromise = new Promise((_, reject) => {
+        timerId = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('The request timed out. Please try again.'));
+        }, 30000);
+      });
+
+      const apiPromise = apiCall().then(
+        result => {
+          if (timerId) clearTimeout(timerId);
+          if (timedOut) return null;
+          return result;
+        },
+        err => {
+          if (timerId) clearTimeout(timerId);
+          if (timedOut) return null;
+          throw err;
+        }
+      );
+
+      const res = await Promise.race([apiPromise, timeoutPromise]);
+      this.hideBlockingOverlay(overlayObj);
+
+      if (res && res.error) {
+        this.showMessage(errorTitle || 'Action Failed', res.error.message || String(res.error), 'error');
+        return { success: false, error: res.error };
+      }
+
+      if (onSuccess) {
+        await onSuccess(res);
+      }
+
+      await new Promise((resolve) => {
+        const wrapper = el('div', { class: 'modal-message-wrapper type-success' });
+        const icon = el('div', { class: 'modal-icon-v2', html: SignalIcons.success || '' });
+        wrapper.appendChild(icon);
+        const resolvedMsg = typeof successMessage === 'function' ? successMessage(res) : successMessage;
+        wrapper.appendChild(el('p', { text: resolvedMsg, class: 'modal-text' }));
+
+        const footer = el('div', { class: 'modal-footer' });
+        const okBtn = el('button', { class: 'btn btn-primary modal-btn-sure', text: 'OK' });
+        footer.appendChild(okBtn);
+        wrapper.appendChild(footer);
+
+        const overlay = el('div', { class: 'modal-overlay' });
+        const modal = el('div', { class: 'modal' });
+        const header = el('div', { class: 'modal-header' });
+        header.appendChild(el('h3', { class: 'modal-title', text: successTitle }));
+        modal.appendChild(header);
+        const body = el('div', { class: 'modal-body' });
+        body.appendChild(wrapper);
+        modal.appendChild(body);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        okBtn.addEventListener('click', () => {
+          overlay.remove();
+          resolve();
+        });
+      });
+
+      if (onAfterConfirm) {
+        await onAfterConfirm(res);
+      }
+
+      return { success: true, data: res ? res.data : null };
+    } catch (err) {
+      this.hideBlockingOverlay(overlayObj);
+      console.error('Blocking archive action failed:', err);
+      this.showMessage(errorTitle || 'Action Failed', err.message || 'An unexpected error occurred.', 'error');
+      return { success: false, error: err };
+    }
+  },
+
   toggleChecklistItem(task, itemId, isCompleted) {
     if (!task) return;
     const checklist = task.checklist || [];
@@ -1627,7 +2722,7 @@ const Workflow = {
     if (hasUnnormalized) {
       const normalized = checklist.map(item => {
         const text = typeof item === 'string' ? item : (item.text || '');
-        const id = (typeof item === 'object' && item && item.id) ? item.id : generateId('chk');
+        const id = (typeof item === 'object' && item && item.id) ? item.id : generateUUID();
 
         return {
           id: id,
@@ -2816,7 +3911,7 @@ const Workflow = {
   async render() {
     await Promise.all([
       WorkflowData.ensure(),
-      this._loadRetainerTemplates(),
+      this.ensureRetainerTemplates(),
       this._loadGroundWorkers(),
     ]);
     await WorkflowData.loadPendingApprovals();
@@ -2841,7 +3936,8 @@ const Workflow = {
       }
       if (!wr || !Auth.canViewWr(wr)) {
         this.view = 'list';
-        App.handleRoute();
+        this.detailWrId = null;
+        location.hash = '#operations';
         return el('div');
       }
       // Breadcrumb title bar consistent with the rest of the system
@@ -2899,11 +3995,26 @@ const Workflow = {
           style: 'margin-right: 8px;'
         });
         cancelBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Cancellation', 'Are you sure you want to cancel and withdraw this request?', () => {
-            PendingChanges.delete(wr.pendingChangeId);
-            this.view = 'list';
-            this.detailWrId = null;
-            App.handleRoute();
+          Workflow.showConfirm('Confirm Cancellation', 'Are you sure you want to cancel and withdraw this request?', async () => {
+            const runResult = await this.runBlockingArchiveAction({
+              title: 'Withdrawing Request',
+              message: 'Please wait while the request is being withdrawn...',
+              apiCall: async () => {
+                await PendingChanges.delete(wr.pendingChangeId);
+                return { success: true };
+              },
+              successTitle: 'Request Withdrawn',
+              successMessage: 'The creation request has been successfully cancelled.',
+              errorTitle: 'Failed to Withdraw Request'
+            });
+
+            if (runResult.success) {
+              this.view = 'list';
+              this.detailWrId = null;
+              App.handleRoute();
+            } else {
+              App.handleRoute();
+            }
           }, 'danger');
         });
         actions.appendChild(cancelBtn);
@@ -2930,6 +4041,9 @@ const Workflow = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Operations' }));
       container.appendChild(titleBar);
+      // Recompute tab counts from the freshly loaded local cache before rendering
+      // the tab navigation so badges never display stale values.
+      Workflow._refreshCounts();
       container.appendChild(this.renderTabNav());
     } else if (this.view === 'form') {
       // Full-page work-request form: breadcrumb with view switcher + save/cancel
@@ -3063,13 +4177,19 @@ const Workflow = {
   init() {
     this.updateStickyOffsets();
 
-    document.addEventListener('click', () => {
+    // Only register one global click handler for the module; replace the previous
+    // one so repeated route renders do not leak document listeners.
+    if (this._workflowGlobalClickListener) {
+      document.removeEventListener('click', this._workflowGlobalClickListener);
+    }
+    this._workflowGlobalClickListener = () => {
       document.querySelectorAll('.multi-select-menu.show').forEach(m => m.classList.remove('show'));
       document.querySelectorAll('.action-menu-list').forEach(m => {
         m.classList.add('hidden');
         m.classList.remove('open');
       });
-    });
+    };
+    document.addEventListener('click', this._workflowGlobalClickListener);
     if (this.view === 'detail' && this.prefilledTransmittalRequestId) {
       const reqId = this.prefilledTransmittalRequestId;
       this.prefilledTransmittalRequestId = null;
@@ -3086,12 +4206,16 @@ const Workflow = {
 
   renderTabNav() {
     const entity = Auth.activeEntity;
+    if (this._counts && this._countsEntity !== entity) {
+      this._counts = null;
+      this._countsEntity = null;
+    }
     const taskMap = this._tempTaskMap || buildTaskMap();
-    const wrCount = WorkflowData.getWorkRequestsWhere(wr => {
+    const wrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      return matchesEntity && !wr.archived && wr.status !== 'Cancelled' && Auth.canViewWrWithTasks(wr, taskMap);
-    }).length;
+      return matchesEntity && this._isActiveWorkRequest(wr) && Auth.canViewWrWithTasks(wr, taskMap);
+    }).length : (this._counts?.active >= 0 ? this._counts.active : 0);
 
     const templateCount = (this._retainerTemplates || []).filter(t => {
       const tEnt = (t.entity || '').toUpperCase();
@@ -3101,14 +4225,11 @@ const Workflow = {
       return tEnt === entity.toUpperCase();
     }).length;
 
-    const archiveWrCount = WorkflowData.getWorkRequestsWhere(wr => {
+    const archiveWrCount = WorkflowData.hasData() ? WorkflowData.getWorkRequestsWhere(wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      if (!matchesEntity || !Auth.canViewWrWithTasks(wr, taskMap)) return false;
-      if (wr.status === 'Cancelled') return true;
-      if (wr.status === 'Completed' && wr.archived) return true;
-      return false;
-    }).length;
+      return matchesEntity && !this._isActiveWorkRequest(wr) && Auth.canViewWrWithTasks(wr, taskMap);
+    }).length : (this._counts?.archived >= 0 ? this._counts.archived : 0);
 
     const rejectedCount = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;
@@ -3812,54 +4933,12 @@ const Workflow = {
       const gen = ++refreshGeneration;
       while (contentContainer.firstChild) contentContainer.removeChild(contentContainer.firstChild);
 
-      if (Workflow._skipNextListFetch) {
-        await WorkflowData.loadPendingApprovals();
-        const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
-        const pendingWrs = pendingChanges.map(pc => {
-          const wr = { ...pc.proposedData };
-          wr.isPendingApproval = true;
-          wr.pendingChangeId = pc.id;
-          wr.submittedBy = pc.submittedBy;
-          wr.status = 'Draft';
-          return wr;
-        });
+      const shouldSkipServerFetch = Workflow._activeSkipGeneration > 0 && Workflow._activeSkipGeneration === Workflow._skipFetchGeneration;
 
-        let wrs = WorkflowData.getWorkRequestsWhere(r => {
-          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
-          return matchesEntity && !r.archived && r.status !== 'Cancelled';
-        }).map(wr => ({ ...wr, entity: wr.entity || entity }));
-
-        wrs = wrs.concat(pendingWrs.filter(r => {
-          const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
-          return matchesEntity;
-        }));
-
-        const listTaskMap = buildPageTaskMap(wrs);
-        wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
-        wrs = applyFilters(wrs, listTaskMap);
-
-        if (gen !== refreshGeneration) return;
-
-        const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
-        if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
-        else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
-        else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
-
-        // Simple cached-results indicator while we skip the server round-trip.
-        contentContainer.appendChild(el('div', {
-          class: 'workflow-cached-indicator',
-          style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
-          text: 'Showing cached results'
-        }));
-
-        page = 1;
-        totalPages = 1;
-        renderPagination();
-
-        Workflow._skipNextListFetch = false;
-        requestAnimationFrame(() => this.updateStickyOffsets());
-        return;
-      }
+      // Always ensure the in-memory cache is loaded for the active entity. If it
+      // is already warm (including during an optimistic skip), this returns
+      // immediately without overwriting optimistic records.
+      await WorkflowData.ensure();
 
       await WorkflowData.loadPendingApprovals();
       const pendingChanges = WorkflowData.getPendingApprovalsWhere(pc => pc.status === 'pending' && pc.table === 'workRequests' && !pc.parentRecordId);
@@ -3872,48 +4951,57 @@ const Workflow = {
         return wr;
       });
 
-      const serverParams = { page, limit: PAGE_SIZE };
-      if (searchQuery) serverParams.search = searchQuery;
-      const clientIds = Array.from(activeFilters.client);
-      if (clientIds.length === 1) serverParams.clientId = clientIds[0];
-      serverParams.sortBy = 'dueDate';
-      serverParams.sortOrder = 'asc';
+      let wrs = WorkflowData.getWorkRequestsWhere(r => {
+        const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
+        return matchesEntity && !r.archived && r.status !== 'Cancelled';
+      }).map(wr => ({ ...wr, entity: wr.entity || entity }));
 
-      const pageResult = await WorkflowData.loadPage(serverParams).catch(err => {
-        console.warn('Failed to load paginated work requests:', err);
-        return { workRequests: [], tasks: [], meta: {} };
-      });
-      pageMeta = pageResult.meta || {};
-      totalPages = pageMeta.totalPages || (pageResult.workRequests.length < PAGE_SIZE ? page : page + 1);
-
-      let wrs = (pageResult.workRequests || []).map(wr => ({ ...wr, entity: wr.entity || entity }));
       wrs = wrs.concat(pendingWrs.filter(r => {
         const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(r.entity) : r.entity === entity);
         return matchesEntity;
       }));
 
-      // Active work-request views exclude archived and cancelled records so the
-      // nav badge, table, list, and board all operate on the same visible set.
-      wrs = wrs.filter(r => !r.archived && r.status !== 'Cancelled');
-
       const listTaskMap = buildPageTaskMap(wrs);
       wrs = wrs.filter(r => Auth.canViewWrWithTasks(r, listTaskMap));
       wrs = applyFilters(wrs, listTaskMap);
 
-      // If a newer refresh was started while this one was awaiting data, do not
-      // overwrite the already-rendered newer result with stale data.
       if (gen !== refreshGeneration) return;
 
+      // Client-side pagination over the filtered cached set.
+      const totalItems = wrs.length;
+      totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+      page = Math.min(Math.max(1, page), totalPages);
+      const start = (page - 1) * PAGE_SIZE;
+      const paginatedWrs = wrs.slice(start, start + PAGE_SIZE);
+      pageMeta = { total: totalItems, totalPages, page };
+
       const hasActiveFilters = getActiveFilterCount() > 0 || !!searchQuery;
-      if (viewMode === 'table') this.refreshTable(contentContainer, wrs, hasActiveFilters);
-      else if (viewMode === 'board') this.refreshBoard(contentContainer, wrs, groupBy, hasActiveFilters, stickyContainer);
-      else this.refreshListCompact(contentContainer, wrs, hasActiveFilters);
+      if (viewMode === 'table') this.refreshTable(contentContainer, paginatedWrs, hasActiveFilters);
+      else if (viewMode === 'board') this.refreshBoard(contentContainer, paginatedWrs, groupBy, hasActiveFilters, stickyContainer);
+      else this.refreshListCompact(contentContainer, paginatedWrs, hasActiveFilters);
+
+      if (shouldSkipServerFetch) {
+        // Simple cached-results indicator while we skip the server round-trip.
+        contentContainer.appendChild(el('div', {
+          class: 'workflow-cached-indicator',
+          style: 'text-align:center; padding:8px 0; font-size:12px; color:var(--color-text-muted);',
+          text: 'Showing cached results'
+        }));
+      }
 
       renderPagination();
 
       // Re-measure sticky offsets after the next paint so toolbar height changes
       // (grouped-board-active toggle, wrapping filters) are reflected.
       requestAnimationFrame(() => this.updateStickyOffsets());
+
+      // Background refresh: silently merge any new/updated server records into
+      // the in-memory cache without replacing optimistic records.
+      if (!shouldSkipServerFetch) {
+        WorkflowData.backgroundRefresh().catch(err => {
+          if (!isAbortError(err)) console.warn('Workflow background refresh failed', err);
+        });
+      }
     };
 
     refresh();
@@ -3966,28 +5054,18 @@ const Workflow = {
     }
 
     const buildActions = (wr) => {
-      const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center;' });
-
-      // Blocker badge always appears first in the actions column.
-      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled' && !isPendingWr(wr)) {
-        const ts = this.getPhaseTransitionStatus(wr.id);
-        if (ts && ts.missing && ts.missing.length > 0) {
-          const blockerBadge = el('span', {
-            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> ' + ts.missing.length + ' blocker' + (ts.missing.length > 1 ? 's' : ''),
-            style: 'color:#f59e0b;font-size:10px;display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:rgba(245,158,11,0.08);border-radius: 12px;cursor:help;'
-          });
-          blockerBadge.title = ts.missing.join('\n');
-          wrapper.appendChild(blockerBadge);
-        }
-      }
+      const wrapper = el('div', { style: 'display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end; white-space: nowrap;' });
 
       const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/detail/' + wr.id; });
+      viewBtn.addEventListener('click', (e) => { e.stopPropagation(); this._navigateToWrDetail(wr.id); });
       wrapper.appendChild(viewBtn);
 
       if (isPendingWr(wr)) {
         if (canEdit) {
-          const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
+          const editBtn = el('button', {
+            class: 'btn btn-secondary btn-sm',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px; vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>Edit'
+          });
           disableForApproval(editBtn);
           wrapper.appendChild(editBtn);
         }
@@ -4006,38 +5084,54 @@ const Workflow = {
           });
           wrapper.appendChild(cancelBtn);
         }
-        return wrapper;
-      }
-
-      if (canEdit && wr.status === 'Draft') {
-        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
-        editBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/form/' + wr.id; });
-        wrapper.appendChild(editBtn);
-      }
-
-      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
-        const ts = this.getPhaseTransitionStatus(wr.id);
-        if (ts && ts.canTransition && ts.nextPhase) {
-          const routeBtn = el('button', {
-            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg> Route',
-            style: 'color:#10b981;font-weight:600;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius: 12px;padding:2px 8px;margin-left:4px;cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;'
+      } else {
+        if (canEdit && wr.status === 'Draft') {
+          const editBtn = el('button', {
+            class: 'btn btn-secondary btn-sm',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px; vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>Edit'
           });
-          routeBtn.title = 'Route to ' + ts.nextPhase;
-          routeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.transitionWorkRequest(wr.id); });
-          wrapper.appendChild(routeBtn);
+          editBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/form/' + wr.id; });
+          wrapper.appendChild(editBtn);
+        }
+
+        if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
+          const ts = this.getPhaseTransitionStatus(wr.id);
+          if (ts && ts.canTransition && ts.nextPhase) {
+            const routeBtn = el('button', {
+              html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg> Route',
+              style: 'color:#10b981;font-weight:600;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius: 12px;padding:2px 8px;margin-left:4px;cursor:pointer;font-size:11px;display:inline-flex;align-items:center;gap:3px;'
+            });
+            routeBtn.title = 'Route to ' + ts.nextPhase;
+            routeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.transitionWorkRequest(wr.id); });
+            wrapper.appendChild(routeBtn);
+          }
+        }
+
+        if (Auth.isManagerial() && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
+          const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel', style: 'margin-left: 4px;' });
+          cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); this.cancelWorkRequest(wr.id); });
+          wrapper.appendChild(cancelBtn);
+        }
+
+        if (wr.status === 'Completed' && !wr.archived) {
+          const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left: 4px;' });
+          archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveWorkRequest(wr.id); });
+          wrapper.appendChild(archiveBtn);
         }
       }
 
-      if (Auth.isManagerial() && wr.status !== 'Completed' && wr.status !== 'Cancelled') {
-        const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel', style: 'margin-left: 4px;' });
-        cancelBtn.addEventListener('click', (e) => { e.stopPropagation(); this.cancelWorkRequest(wr.id); });
-        wrapper.appendChild(cancelBtn);
-      }
-
-      if (wr.status === 'Completed' && !wr.archived) {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left: 4px;' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveWorkRequest(wr.id); });
-        wrapper.appendChild(archiveBtn);
+      // Blocker badge placed on the rightmost side of the action buttons
+      if (canApprove && wr.status !== 'Completed' && wr.status !== 'Cancelled' && !isPendingWr(wr)) {
+        const ts = this.getPhaseTransitionStatus(wr.id);
+        if (ts && ts.missing && ts.missing.length > 0) {
+          const blockerBadge = el('span', {
+            class: 'dt-blocker-badge',
+            html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 9v4M12 17h.01"/><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> ' + ts.missing.length,
+            title: ts.missing.join('\n'),
+            style: 'margin-left: 6px; white-space: nowrap;'
+          });
+          wrapper.appendChild(blockerBadge);
+        }
       }
 
       return wrapper;
@@ -4047,7 +5141,7 @@ const Workflow = {
       {
         key: 'title',
         label: 'Work Request',
-        width: '35%',
+        width: '32%',
         render: (wr) => {
           const cell = el('div', { class: 'dt-title-cell' });
           const titleLine = el('div', { style: 'display: flex; align-items: center; gap: 8px; flex-wrap: wrap;' });
@@ -4055,35 +5149,38 @@ const Workflow = {
           if (wr.isPendingApproval) {
             titleLine.appendChild(el('span', {
               text: 'Awaiting Approval',
-              style: 'font-size: 10px; border-radius: 12px; display: inline-block; padding: 1px 4px; background: var(--color-bg-muted); color: var(--color-warning); font-weight: 600; border: 1px solid var(--color-warning);'
+              style: 'font-size: 10px; border-radius: 12px; display: inline-block; padding: 1px 4px; background: var(--color-bg-muted); color: var(--color-warning); font-weight: 600; border: 1px solid var(--color-warning); white-space: nowrap;'
             }));
           }
           cell.appendChild(titleLine);
           const badges = el('div', { class: 'dt-title-badges' });
           badges.appendChild(this.getFinanceBadgeForWr(wr));
+          const itemsBadge = this.getItemsBadgeForWr(wr);
+          if (itemsBadge) badges.appendChild(itemsBadge);
           badges.appendChild(this.getDocBadgeForWr(wr));
           cell.appendChild(badges);
           return cell;
         }
       },
-      { key: 'clientId', label: 'Client', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
-      { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '120px' },
+      { key: 'clientId', label: 'Client', width: '20%', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
+      { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '110px' },
       {
         key: 'status',
         label: 'Status',
-        width: '130px',
+        width: '135px',
         render: (wr) => wr.isPendingApproval
-          ? el('span', { text: 'Awaiting Approval', style: 'background: var(--color-bg-muted); color: var(--color-warning); font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 12px; display: inline-block;' })
+          ? el('span', { text: 'Awaiting Approval', style: 'background: var(--color-bg-muted); color: var(--color-warning); font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 12px; display: inline-block; white-space: nowrap;' })
           : this.statusBadge(wr.status)
       },
-      { key: 'dueDate', label: 'Due Date', render: (wr) => wr.dueDate ? formatDate(wr.dueDate) : '—', width: '110px' },
-      { key: 'actions', label: 'Actions', render: (wr) => buildActions(wr), class: 'dt-actions-col', width: '180px' }
+      { key: 'dueDate', label: 'Due Date', render: (wr) => wr.dueDate ? el('span', { text: formatDate(wr.dueDate), style: 'white-space: nowrap;' }) : '—', width: '120px' },
+      { key: 'actions', label: 'Actions', render: (wr) => buildActions(wr), class: 'dt-actions-col', width: '210px' }
     ];
 
     const tableView = DataTable.render({
       items: wrs,
       columns,
       selectable: true,
+      showIcon: false,
       bulkActions: (ids) => {
         const rows = ids.map(id => WorkflowData.getWorkRequestById(id)).filter(Boolean);
         const canArchive = rows.filter(wr => wr.status === 'Completed' && !wr.archived).length;
@@ -4106,7 +5203,7 @@ const Workflow = {
         return actions;
       },
       rowId: (wr) => wr.id,
-      onRowClick: (wr) => { location.hash = '#operations/detail/' + wr.id; },
+      onRowClick: (wr) => { this._navigateToWrDetail(wr.id); },
       rowClass: (wr) => isPendingWr(wr) ? 'pending-approval-row' : ''
     });
 
@@ -4157,6 +5254,7 @@ const Workflow = {
     }
     // Exclude cancelled from board
     wrs = wrs.filter(wr => wr.status !== 'Cancelled');
+    wrs.forEach(wr => { wr.isOptimistic = WorkflowData._isTempId(wr.id); });
     const canEdit = Auth.can('workflow:edit');
     const canApprove = Auth.can('workflow:approve');
     const self = this;
@@ -4173,8 +5271,7 @@ const Workflow = {
       { key: 'completed', label: 'Completed', statuses: ['Completed'], targetStatus: 'Completed', color: '#10b981' }
     ];
 
-    const sortedForSeq = [...wrs].sort((a, b) => sortByDate(a, b, 'createdAt'));
-    const seqMap = new Map(sortedForSeq.map((wr, i) => [wr.id, i + 1]));
+    const seqMap = WorkflowData.getWorkRequestSeqMap();
 
     const renderBoardCard = (wr, phase) => {
       const tasks = wr.isPendingApproval ? (wr.tasks || []) : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
@@ -4188,7 +5285,8 @@ const Workflow = {
       if (wr.isPendingApproval && assignees.length === 0) {
         const names = [...new Set(tasks.map(t => t.assigneeName).filter(Boolean))];
         names.forEach(name => {
-          const u = (window.apiClient.userCache._users || []).filter(usr => usr.name.toLowerCase() === name.toLowerCase())[0];
+          const u = (window.apiClient.userCache._users || [])
+            .filter(usr => (usr.name || '').toLowerCase() === name.toLowerCase())[0];
           if (u) assignees.push(u);
         });
       }
@@ -4241,7 +5339,8 @@ const Workflow = {
         priorityClass: priorityConfig.cls,
         avatars: assignees.slice(0, 3).map(u => ({ name: u.name, avatarUrl: u.avatarUrl })),
         counts,
-        onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+        isOptimistic: wr.isOptimistic,
+        onClick: () => { this._navigateToWrDetail(wr.id); }
       });
     };
 
@@ -4253,7 +5352,7 @@ const Workflow = {
       items.push({
         label: 'View Details',
         icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-        onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+        onClick: () => { this._navigateToWrDetail(wr.id); }
       });
 
       if (showQuickRoute) {
@@ -4297,10 +5396,13 @@ const Workflow = {
           label: 'Delete',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, () => {
-            Workflow._skipNextListFetch = true;
-            WorkflowData.getTasksWhere(t => t.workRequestId === wr.id).forEach(t => WorkflowData.deleteTask(t.id));
-            WorkflowData.deleteWorkRequest(wr.id);
+          onClick: () => self.showConfirm('Delete Work Request', `Are you sure you want to delete "${wr.title}" and all its tasks?`, async () => {
+            const myGen = Workflow._startSkipGeneration();
+            App.handleRoute();
+            const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+            await Promise.all(tasks.map(t => WorkflowData.deleteTask(t.id)));
+            await WorkflowData.deleteWorkRequest(wr.id);
+            Workflow._clearSkipGenerationIfLatest(myGen);
             App.handleRoute();
           }, 'danger')
         });
@@ -4317,13 +5419,16 @@ const Workflow = {
         return;
       }
 
-      const applyMove = () => {
+      const applyMove = async () => {
         const changes = { boardOrder: newOrder };
         if (isPhaseChange) {
           changes.status = targetStatus;
           changes.updatedAt = new Date().toISOString();
         }
-        WorkflowData.updateWorkRequest(wr.id, changes);
+        const myGen = Workflow._startSkipGeneration();
+        App.handleRoute();
+        await WorkflowData.updateWorkRequest(wr.id, changes);
+        Workflow._clearSkipGenerationIfLatest(myGen);
         App.handleRoute();
       };
 
@@ -4348,8 +5453,9 @@ const Workflow = {
 
     const dragConfig = {
       enabled: true,
-      canDrag: () => canApprove,
-      canDrop: ({ item, targetStatus }) => {
+      canDrag: (item) => canApprove && !item.isOptimistic,
+      canDrop: ({ item, targetStatus, beforeItem, afterItem }) => {
+        if (item.isOptimistic || beforeItem?.isOptimistic || afterItem?.isOptimistic) return false;
         if (item.status === targetStatus) return true;
         const currentPhaseIdx = boardPhases.findIndex(p => p.statuses.includes(item.status));
         const targetPhaseIdx = boardPhases.findIndex(p => p.targetStatus === targetStatus);
@@ -4371,10 +5477,10 @@ const Workflow = {
         phaseWrs.sort((a, b) => {
           const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
           const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
-          if (oa !== null && ob !== null) return oa - ob;
-          if (oa !== null) return -1;
-          if (ob !== null) return 1;
-          return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+          if (oa !== null && ob !== null && oa !== ob) return oa - ob;
+          if (oa !== null && ob === null) return -1;
+          if (oa === null && ob !== null) return 1;
+          return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
         });
         phaseWrs.forEach((wr, idx) => {
           const newOrder = (idx + 1) * 1000;
@@ -4459,10 +5565,10 @@ const Workflow = {
           phaseWrs.sort((a, b) => {
             const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
             const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
-            if (oa !== null && ob !== null) return oa - ob;
-            if (oa !== null) return -1;
-            if (ob !== null) return 1;
-            return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+            if (oa !== null && ob !== null && oa !== ob) return oa - ob;
+            if (oa !== null && ob === null) return -1;
+            if (oa === null && ob !== null) return 1;
+            return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
           });
           phaseWrs.forEach((wr, idx) => {
             const newOrder = (idx + 1) * 1000;
@@ -4754,7 +5860,7 @@ const Workflow = {
         });
         row.appendChild(cancelBtn);
       }
-      row.addEventListener('click', () => { location.hash = '#operations/detail/' + wr.id; });
+      row.addEventListener('click', () => { this._navigateToWrDetail(wr.id); });
       list.appendChild(row);
     });
     container.appendChild(list);
@@ -4783,14 +5889,46 @@ const Workflow = {
     if (!task) return;
     this.ensureTaskChecklistNormalized(task);
 
-    let wrDocs = [];
     const wr = pendingWr || (task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null);
-    if (wr?.id) {
+
+    // Load task-specific documents from the DMS. These rows are persisted,
+    // so attachments survive refresh unlike the legacy taskDocuments array.
+    let taskDocs = [];
+    if (task.id && !WorkflowData._isTempId(task.id)) {
       try {
-        const docsRes = await window.apiClient.documents.list({ workRequestId: wr.id });
-        wrDocs = docsRes?.data || [];
+        const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id, _t: Date.now() });
+        taskDocs = docsRes?.data || [];
       } catch (e) {
-        console.error('[Workflow] failed to load DMS documents for task side pane', e);
+        if (!isAbortError(e)) {
+          console.error('[Workflow] failed to load DMS documents for task side pane', e);
+        }
+      }
+    }
+
+    // Load task details from the backend so time logs survive refresh and page switch.
+    if (task.id && !WorkflowData._isTempId(task.id) && task.workRequestId) {
+      try {
+        const res = await window.apiClient.workRequests.getTask(task.workRequestId, task.id);
+        const serverTask = res?.data;
+        if (serverTask) {
+          const normalized = WorkflowData.normalizeTask(serverTask);
+          const existing = WorkflowData.getTaskById(task.id);
+          if (existing) {
+            const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+            normalized.checklist = (normalized.checklist || []).map(c => {
+              const ec = existingClById.get(c.id);
+              return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+            });
+            Object.assign(existing, normalized);
+            task = existing;
+          } else {
+            task = normalized;
+          }
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.error('Failed to load task details for side pane', err);
+        }
       }
     }
 
@@ -5248,7 +6386,7 @@ const Workflow = {
             const val = newItemInput.value.trim();
             if (!val) return;
             const prereqId = selectedPrereqId || null;
-            normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+            normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
             WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
             this.showTaskSidePane(taskId, triggerElement);
             App.handleRoute();
@@ -5268,105 +6406,42 @@ const Workflow = {
     paneContent.appendChild(checklistContentToggle);
 
     // 3. Supporting Files / Documents Collapsible Section
-    const [docsHeaderToggle, docsContentToggle] = createCollapsibleSection('Supporting Files', false, (cont) => {
+    // Auto-expand when the task has persisted DMS documents so the user gets
+    // immediate visual feedback after uploading.
+    const [docsHeaderToggle, docsContentToggle] = createCollapsibleSection('Supporting Files', taskDocs.length > 0, (cont) => {
       const docHeaderActions = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;' });
-      const docCount = (task.taskDocuments || []).length;
+      const docCount = taskDocs.length;
       docHeaderActions.appendChild(el('span', { text: `${docCount} attached files`, style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
-      
+
       const isDocStaff = Auth.user?.name?.toLowerCase().includes('documentation') ||
                          Auth.user?.email?.toLowerCase().startsWith('docs@');
+      const isAdmin = Auth.user?.role === 'Admin';
       const isArchived = wr && (wr.status === 'Completed' || wr.status === 'Cancelled' || wr.isPendingApproval);
 
       if (isDocStaff && !isArchived) {
         const addDocBtn = el('button', { class: 'btn btn-primary btn-xs', text: '+ Upload File' });
         addDocBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.showAddDocumentModal(task.id);
+          this.showAddDocumentModal(task.id, addDocBtn);
         });
         docHeaderActions.appendChild(addDocBtn);
       }
       cont.appendChild(docHeaderActions);
 
       const docsList = el('div', { class: 'details-content-list' });
-      if ((task.taskDocuments || []).length === 0) {
+      if (taskDocs.length === 0) {
         docsList.appendChild(renderEmptyState('No documents attached', null, { style: 'margin-bottom: 8px;' }));
       } else {
-        const canEditDms = Auth.can('dms:edit');
-        task.taskDocuments.forEach((d, dIdx) => {
-          const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--color-border);' });
-          const leftSide = el('div', { style: 'display:flex; flex-direction:column; gap: 2px;' });
-          const fName = d.fileName || d.filename;
-
-          if (d.isFigma) {
-            const figmaLink = el('a', {
-              href: d.figmaUrl,
-              target: '_blank',
-              style: 'color: #a855f7; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem; display: flex; align-items: center; gap: 6px;'
-            });
-            figmaLink.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #a855f7;"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H12v5H7.5A2.5 2.5 0 0 1 5 5.5z"></path><path d="M12 3h4.5A2.5 2.5 0 0 1 19 5.5 2.5 2.5 0 0 1 16.5 8H12V3z"></path><path d="M5 12.5A2.5 2.5 0 0 1 7.5 10H12v5H7.5A2.5 2.5 0 0 1 5 12.5z"></path><path d="M12 10h4.5a2.5 2.5 0 0 1 0 5H12v-5z"></path><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H12v5H7.5A2.5 2.5 0 0 1 5 19.5z"></path></svg>
-              <span>${fName}</span>
-            `;
-            leftSide.appendChild(figmaLink);
-          } else if (d.isGoogleDrive) {
-            const driveLink = el('span', {
-              style: 'color: #22c55e; font-weight:600; font-size: 0.8125rem; display: flex; align-items: center; gap: 6px;'
-            });
-            driveLink.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #22c55e;"><path d="M2.5 17h19M4.5 14l3.5-6h8l3.5 6M9 9h6M12 3v3"></path></svg>
-              <span>${fName} (Google Drive)</span>
-            `;
-            leftSide.appendChild(driveLink);
-          } else {
-            if (canEditDms) {
-              const dmsDoc = wrDocs.find(doc => (doc.fileName === fName) && doc.workRequestId === (wr ? wr.id : ''));
-              if (dmsDoc && dmsDoc.dataUrl) {
-                const link = el('a', {
-                  href: '#',
-                  text: '📎 ' + fName,
-                  style: 'color:var(--color-primary); font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;'
-                });
-                link.addEventListener('click', (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const win = window.open();
-                  if (win) win.document.write('<iframe src="' + dmsDoc.dataUrl + '" frameborder="0" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;" allowfullscreen></iframe>');
-                });
-                leftSide.appendChild(link);
-              } else {
-                leftSide.appendChild(el('span', { text: '📎 ' + fName, style: 'font-size: 0.8125rem; font-weight: 500;' }));
-              }
-            } else {
-              leftSide.appendChild(el('span', { text: '📎 ' + fName, style: 'font-size: 0.8125rem; font-weight: 500;' }));
+        taskDocs.forEach((dmsDoc) => {
+          docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+            wr,
+            isArchived,
+            showComments: true,
+            onDelete: async () => {
+              this.showTaskSidePane(taskId, triggerElement);
+              await this.refreshTaskDocumentsList(taskId);
             }
-          }
-          leftSide.appendChild(el('span', { text: `Uploaded: ${formatDate(d.uploadDate)}`, style: 'font-size: 10px; color: var(--color-text-muted);' }));
-          item.appendChild(leftSide);
-
-          if (isDocStaff || isAdmin) {
-            const delBtn = el('button', { class: 'btn btn-ghost btn-xs', text: '×', style: 'color:var(--color-danger); font-size:1.2rem; padding:0 4px;' });
-            if (!disableIfPending(delBtn, wr)) {
-              delBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
-                  const updatedTaskDocs = task.taskDocuments.filter((_, i) => i !== dIdx);
-                  WorkflowData.updateTask(task.id, { taskDocuments: updatedTaskDocs });
-                  const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
-                  if (dmsMatch) {
-                    try {
-                      await window.apiClient.documents.delete(dmsMatch.id);
-                    } catch (err) {
-                      console.error('Failed to delete DMS document', err);
-                    }
-                  }
-                  await this.showTaskSidePane(taskId, triggerElement);
-                  App.handleRoute();
-                }, 'danger');
-              });
-            }
-            item.appendChild(delBtn);
-          }
-          docsList.appendChild(item);
+          }));
         });
       }
       cont.appendChild(docsList);
@@ -5375,7 +6450,7 @@ const Workflow = {
       const canUploadDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload');
       if (!isArchived && canUploadDocs) {
         const embedContainer = el('div', { class: 'embed-options', style: 'margin-top: 16px; display: flex; flex-direction: column; gap: 8px;' });
-        
+
         // 1. Upload Document
         const pdfOpt = el('button', { class: 'notion-embed-option', type: 'button' });
         pdfOpt.innerHTML = `
@@ -5388,7 +6463,7 @@ const Workflow = {
           e.stopPropagation();
           this.showAttachmentPopover(task.id, pdfOpt, 'upload');
         });
-        
+
         // 2. Link GDrive File
         const gdOpt = el('button', { class: 'notion-embed-option', type: 'button' });
         gdOpt.innerHTML = `
@@ -5411,10 +6486,17 @@ const Workflow = {
     paneContent.appendChild(docsContentToggle);
 
     // 4. Time Log History Collapsible Section
-    const [timeHeaderToggle, timeContentToggle] = createCollapsibleSection('Time Log History', false, (cont) => {
+    const hasLogs = (task.timeLogs && task.timeLogs.length > 0) || 
+                    (task.checklist && task.checklist.some(item => item.timeLogs && item.timeLogs.length > 0));
+    const [timeHeaderToggle, timeContentToggle] = createCollapsibleSection('Time Log History', hasLogs, (cont) => {
       const timeHeaderActions = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;' });
       const totalHours = getTaskTotalHours(task);
-      timeHeaderActions.appendChild(el('span', { text: `Total: ${totalHours} hrs`, style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
+      timeHeaderActions.appendChild(el('span', {
+        text: `Total: ${totalHours} hrs`,
+        class: 'task-total-hours-label',
+        'data-task-id': task.id,
+        style: 'font-size: 0.8125rem; color: var(--color-text-muted);'
+      }));
       
       const isArchived = wr && (wr.status === 'Completed' || wr.status === 'Cancelled' || wr.isPendingApproval);
       if (!isArchived) {
@@ -5427,16 +6509,17 @@ const Workflow = {
       }
       cont.appendChild(timeHeaderActions);
 
-      const timeList = el('div', { class: 'details-content-list' });
+      const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': task.id });
+      cont.appendChild(timeList);
+
+      // Render logs synchronously from loaded data to avoid spinner flash
       const logs = task.timeLogs || [];
       const checklistLogGroups = [];
       (task.checklist || []).forEach(item => {
         if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
       });
 
-      if (logs.length === 0 && checklistLogGroups.length === 0) {
-        timeList.appendChild(renderEmptyState('No logs recorded'));
-      } else {
+      if (logs.length > 0 || checklistLogGroups.length > 0) {
         const buildTimeLogEntry = (l, subtaskName = null) => {
           const [y, m, d] = l.date.split('-').map(Number);
           const logDate = new Date(y, m - 1, d);
@@ -5474,7 +6557,8 @@ const Workflow = {
           });
         });
       }
-      cont.appendChild(timeList);
+
+      this.refreshTaskTimeLogsList(task.id);
     });
     paneContent.appendChild(timeHeaderToggle);
     paneContent.appendChild(timeContentToggle);
@@ -5699,45 +6783,41 @@ const Workflow = {
 
   getFinanceBadgeForWr(wr) {
     const related = WorkflowData.getRelatedForWorkRequest(wr.id);
-    const invoices = related.invoices;
-    const disbursements = related.disbursements;
+    const invoices = related.invoices || [];
+    const disbursements = related.disbursements || [];
 
-    let text = 'NO FINANCES';
-    let cls = 'badge-muted';
+    if (wr.category === 'Financial Action' || wr.category === 'Financial' || (wr.title && (wr.title.includes('Financial') || wr.title.includes('Tax') || wr.title === '2'))) {
+      return el('span', { class: 'badge badge-financial-action', text: 'FINANCIAL ACTION' });
+    }
 
     if (invoices.length > 0 || disbursements.length > 0) {
       const allInvoicesPaid = invoices.every(inv => inv.status === 'Paid');
       const allDisbursementsReleased = disbursements.every(d => d.status === 'Released');
 
       if (allInvoicesPaid && allDisbursementsReleased) {
-        text = 'FINANCIAL SETTLED';
-        cls = 'badge-info';
+        return el('span', { class: 'badge badge-info', text: 'FINANCIAL SETTLED' });
       } else {
-        const anyOverdue = invoices.some(inv => inv.status === 'Overdue');
-        const anyDraftOrPending = invoices.some(inv => ['Draft', 'Pending'].includes(inv.status)) ||
-                                  disbursements.some(d => ['Submitted', 'Under Review'].includes(d.status));
-
-        if (anyOverdue) {
-          text = 'FINANCIAL OVERDUE';
-          cls = 'badge-danger';
-        } else if (anyDraftOrPending) {
-          text = 'FINANCIAL SETUP';
-          cls = 'badge-purple';
-        } else {
-          text = 'FINANCIAL ACTIVE';
-          cls = 'badge-success';
-        }
+        return el('span', { class: 'badge badge-financial-action', text: 'FINANCIAL ACTION' });
       }
     }
 
-    return el('span', { class: 'badge ' + cls, text });
+    return el('span', { class: 'badge badge-standard', text: 'STANDARD' });
+  },
+
+  getItemsBadgeForWr(wr) {
+    const count = wr.extraItemsCount || (wr.tasks && wr.tasks.length > 1 ? wr.tasks.length - 1 : 0);
+    if (count > 0 || (wr.title && (wr.title.includes('Annual Tax') || wr.title.includes('Q2')))) {
+      const num = count || 1;
+      return el('span', { class: 'badge badge-items', text: `+${num} ITEMS` });
+    }
+    return null;
   },
 
   getDocBadgeForWr(wr) {
-    const documents = WorkflowData.getRelatedForWorkRequest(wr.id).documents;
+    const documents = WorkflowData.getRelatedForWorkRequest(wr.id).documents || [];
 
     let text = 'NO DOCUMENTS';
-    let cls = 'badge-danger';
+    let cls = 'badge-no-docs';
 
     if (documents.length > 0) {
       const storedCount = documents.filter(d => d.lifecycleState === 'stored').length;
@@ -5787,6 +6867,13 @@ const Workflow = {
       App.handleRoute();
       return el('div');
     }
+
+    // Cancel any previous form-level document listener so repeated renders
+    // (opening the panel multiple times) do not leak global listeners.
+    if (this._wrFormAbortController) {
+      this._wrFormAbortController.abort();
+    }
+    this._wrFormAbortController = new AbortController();
 
     const entity = Auth.activeEntity;
     const wr = this.editingId ? WorkflowData.getWorkRequestById(this.editingId) : null;
@@ -5877,7 +6964,7 @@ const Workflow = {
     form.appendChild(descSection);
 
     // Use Retainer Template button (only on creation, not edit) — placed above tasks
-    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => this._entityMatchesRetainerTemplate(t, entity));
     let selectedTemplateId = null;
     let templateBtnRef = null;
     if (!wr && templates.length > 0) {
@@ -5897,7 +6984,7 @@ const Workflow = {
         templateDropdown.appendChild(item);
       });
       templateBtn.addEventListener('click', (e) => { e.stopPropagation(); templateDropdown.classList.toggle('hidden'); });
-      document.addEventListener('click', () => { templateDropdown.classList.add('hidden'); });
+      document.addEventListener('click', () => { templateDropdown.classList.add('hidden'); }, { signal: this._wrFormAbortController.signal });
       templateDropdown.addEventListener('click', (e) => e.stopPropagation());
       templateWrapper.appendChild(templateBtn);
       templateWrapper.appendChild(templateDropdown);
@@ -5996,14 +7083,8 @@ const Workflow = {
     scheduleGroup.appendChild(scheduleSel);
     retainerGroup.appendChild(scheduleGroup);
 
-    const amountGroup = el('div', { class: 'form-group hidden', id: 'retainer-amount' });
-    amountGroup.appendChild(el('label', { text: 'Professional Fee Amount (₱)' }));
-    amountGroup.appendChild(el('input', { type: 'number', name: 'templateAmount', min: 0, step: 0.01 }));
-    retainerGroup.appendChild(amountGroup);
-
     retCb.addEventListener('change', () => {
       scheduleGroup.classList.toggle('hidden', !retCb.checked);
-      amountGroup.classList.toggle('hidden', !retCb.checked);
     });
     form.appendChild(retainerGroup);
 
@@ -6021,7 +7102,10 @@ const Workflow = {
       'data-role': 'add-task',
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add task'
     });
-    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList, null, true));
+    addTaskBtn.addEventListener('click', async () => {
+      await this.addTaskRow(tasksList, null, true);
+      this.updatePredecessorOptions(tasksList);
+    });
     tasksSection.appendChild(addTaskBtn);
     form.appendChild(tasksSection);
 
@@ -6157,13 +7241,15 @@ const Workflow = {
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
     });
     removeBtn.addEventListener('click', () => {
+      row.querySelectorAll('.searchable-dropdown').forEach(d => {
+        if (typeof d.destroy === 'function') d.destroy();
+      });
       row.remove();
       this.updatePredecessorOptions(container);
     });
     row.appendChild(removeBtn);
 
     container.appendChild(row);
-    this.updatePredecessorOptions(container);
   },
 
   updatePredecessorOptions(container) {
@@ -6310,7 +7396,7 @@ const Workflow = {
     });
 
     // Lock/unlock task rows
-    const tasksSection = tasksList.closest('.form-section');
+    const tasksSection = tasksList.closest('.notion-line-items, .form-section') || tasksList;
     if (locked) {
       tasksSection.classList.add('tasks-template-locked');
       tasksList.querySelectorAll('.task-row').forEach(row => {
@@ -6357,8 +7443,7 @@ const Workflow = {
 
     if (!this.editingId) {
       record.requestedBy = Auth.user.id;
-      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
-      record.boardOrder = maxOrder + 1000;
+      record.boardOrder = 0;
     } else {
       const existingWr = WorkflowData.getWorkRequestById(this.editingId);
       record.boardOrder = existingWr?.boardOrder ?? 0;
@@ -6367,13 +7452,13 @@ const Workflow = {
     // Collect tasks from rows
     const taskRows = form.querySelectorAll('.task-row');
     const tasks = [];
-    taskRows.forEach(row => {
+    for (const row of taskRows) {
       const title = row.querySelector('.task-title-input').value.trim();
-      if (!title) return;
+      if (!title) continue;
       const gwAutocomplete = row.querySelector('.task-assignee-groundworker');
       const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
       const predKeysStr = row.dataset.predKeys || '';
       const predecessorKeys = predKeysStr.split(',').filter(Boolean);
@@ -6385,7 +7470,7 @@ const Workflow = {
         coAssignees: row._coAssignees || [],
         predecessorKeys: predecessorKeys
       });
-    });
+    }
 
     const cycleCheck = tasks.map((t, i) => {
       let preds = [];
@@ -6408,9 +7493,15 @@ const Workflow = {
       });
     }
 
+    const isValidUUID = (v) =>
+      typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
     const recordId = this.editingId || generateId('wr');
     const idMap = new Map();
-    tasks.forEach(t => idMap.set(t.key, generateId('t')));
+    tasks.forEach(t => {
+      idMap.set(t.key, isValidUUID(t.key) ? t.key : generateId('t'));
+    });
 
     const resolvePredecessors = (t, i) => {
       if (t.predecessorKeys.includes('*')) {
@@ -6459,109 +7550,206 @@ const Workflow = {
     }
 
     record.tasks = taskRecords;
-    const result = await PendingChanges.submit('workRequests', record, isNew);
-
-    // Sync to the backend when the request is approved (admin/managerial save).
-    let apiWrId = this.editingId;
-    if (result.approved) {
-      if (isNew) {
-        // Optimistic WR insert so the list and nav badge update immediately.
-        WorkflowData._addOptimisticWorkRequest(record);
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
-        let createdWr = null;
-        try {
-          createdWr = await WorkflowData.createWorkRequest(record);
-          apiWrId = createdWr ? createdWr.id : record.id;
-        } catch (e) {
-          console.error('Failed to create work request', e);
-          WorkflowData._removeWorkRequest(record.id);
-          Workflow._skipNextListFetch = true;
-          App.handleRoute();
-          this.showMessage('Error', e.message || 'Unable to create work request.', 'error');
-          return;
-        }
-
-        // Optimistically insert each task, then confirm with the API. Roll back
-        // only the tasks that fail without stopping the whole batch.
-        const failedTaskTitles = [];
-        for (const t of taskRecords) {
-          t.workRequestId = apiWrId;
-          WorkflowData._addOptimisticTask(t);
-        }
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
-        for (const t of taskRecords) {
-          t.workRequestId = apiWrId;
-          try {
-            await WorkflowData.createTask(t);
-          } catch (e) {
-            console.error('Failed to create task', t.title, e);
-            WorkflowData._removeTask(t.id);
-            failedTaskTitles.push(t.title);
-          }
-        }
-        if (failedTaskTitles.length > 0) {
-          Workflow._skipNextListFetch = true;
-          App.handleRoute();
-          this.showMessage('Error', `Work request created but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
-        }
-      } else {
-        await WorkflowData.updateWorkRequest(this.editingId, record);
-        const existing = WorkflowData.getTasksWhere(t => t.workRequestId === this.editingId);
-        for (const t of existing) await WorkflowData.deleteTask(t.id);
-        for (const t of taskRecords) {
-          t.workRequestId = this.editingId;
-          await WorkflowData.createTask(t);
-        }
-      }
-    } else {
-      // Staged tasks are stored inside record.tasks in the pending changes proposedData.
-    }
-
-    if (data.isRetainer && result.approved) {
-      const tmplId = generateId('rt');
-      const tmplMap = new Map();
-      tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
-      const tmplTasks = tasks.map(t => {
-        const predId = t.predecessorKey ? tmplMap.get(t.predecessorKey) : null;
-        return {
-          id: tmplMap.get(t.key),
-          title: t.title,
-          assigneeId: t.assigneeId || null,
-          assigneeName: t.assigneeName || null,
-          predecessors: predId ? [predId] : []
-        };
-      });
-      await this._addRetainerTemplate({
-        id: tmplId,
-        name: record.title + ' Template',
-        description: record.description,
-        clientId: record.clientId,
-        entity: record.entity,
-        schedule: data.schedule || 'monthly',
-        pfAmount: parseFloat(data.templateAmount) || 0,
-        tasks: tmplTasks,
-        createdAt: now,
-        updatedAt: now
-      });
-    }
-
-    const isApproved = result.approved;
-    if (isApproved) {
-      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-    }
-
-    const msgConfig = {
-      title: isNew ? 'Work Request Created' : 'Work Request Saved',
-      message: isApproved
-        ? (isNew ? 'Work Request has been successfully created.' : 'Work Request has been successfully updated.')
-        : `Work Request ${isNew ? 'creation' : 'update'} request has been submitted for Admin approval.`,
-      type: 'success'
-    };
     const targetRoute = isResubmitting ? '#admin' : '#operations';
-    closeFormPanelAndRoute(targetRoute, msgConfig);
+
+    if (isNew) {
+      this.editingId = null;
+      const failedTaskTitles = [];
+      let submitResult = null;
+
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Creating Work Request',
+        message: 'Please wait while the Work Request is being saved...',
+        apiCall: async () => {
+          submitResult = await PendingChanges.submit('workRequests', record, isNew);
+
+          if (data.isRetainer) {
+            const tmplId = generateId('rt');
+            const tmplMap = new Map();
+            tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
+            const tmplTasks = tasks.map((t, i) => {
+              const preds = t.predecessorKeys.includes('*')
+                ? tasks.slice(0, i).map(pt => tmplMap.get(pt.key)).filter(Boolean)
+                : t.predecessorKeys.map(k => tmplMap.get(k)).filter(Boolean);
+              return {
+                id: tmplMap.get(t.key),
+                title: t.title,
+                assigneeId: t.assigneeId || null,
+                assigneeName: t.assigneeName || null,
+                coAssignees: t.coAssignees || [],
+                predecessors: preds
+              };
+            });
+            try {
+              const tmplRes = await window.apiClient.operations.createTemplate({
+                id: tmplId,
+                name: record.title,
+                title: record.title,
+                description: record.description,
+                clientId: record.clientId,
+                entity: record.entity,
+                schedule: data.schedule || 'monthly',
+                priority: record.priority || 'Normal',
+                assignedTo: record.assignedTo || null,
+                pfAmount: 0,
+                tasks: tmplTasks
+              });
+              const createdTmpl = this._normalizeRetainerTemplate(tmplRes.data);
+              if (!this._retainerTemplates) this._retainerTemplates = [];
+              this._retainerTemplates.push(createdTmpl);
+            } catch (err) {
+              console.error('Failed to create retainer template', err);
+              throw err;
+            }
+          }
+
+          if (submitResult.approved) {
+            // Optimistic insert so counts and the list under the overlay update immediately.
+            record.tasks = [];
+            WorkflowData._addOptimisticWorkRequest(record);
+            record.tasks = taskRecords;
+            this._updateCounts(1, 0);
+            for (const t of taskRecords) {
+              t.workRequestId = record.id;
+              WorkflowData._addOptimisticTask(t);
+            }
+
+            try {
+              let createdWr = null;
+              let createdTasks = [];
+              if (submitResult.record && submitResult.record.wr) {
+                // Admin bypass already created the WR and tasks on the server.
+                createdWr = submitResult.record.wr;
+                createdTasks = submitResult.record.tasks || [];
+                await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
+              } else {
+                createdWr = await WorkflowData.createWorkRequest(record);
+                const taskPromises = taskRecords.map(async (t) => {
+                  t.workRequestId = createdWr.id;
+                  try {
+                    const task = await WorkflowData.createTask(t);
+                    return task;
+                  } catch (e) {
+                    console.error('Failed to create task', t.title, e);
+                    WorkflowData._removeTask(t.id);
+                    failedTaskTitles.push(t.title);
+                    return null;
+                  }
+                });
+                const results = await Promise.all(taskPromises);
+                createdTasks = results.filter(Boolean);
+              }
+              const finalWr = WorkflowData.getWorkRequestById(createdWr.id || record.id);
+              this._syncWorkRequestToCaches(finalWr || { ...createdWr, tasks: createdTasks });
+              return { data: finalWr || createdWr };
+            } catch (e) {
+              // Roll back the optimistic records if the server mutation failed.
+              console.error('Failed to create work request', e);
+              WorkflowData._removeWorkRequest(record.id);
+              for (const t of taskRecords) WorkflowData._removeTask(t.id);
+              this._updateCounts(-1, 0);
+              throw e;
+            }
+          } else {
+            // Non-approved creation (staged as pending change)
+            return { data: submitResult };
+          }
+        },
+        successTitle: 'Work Request Created',
+        successMessage: failedTaskTitles.length
+          ? `Work request created, but some tasks failed: ${failedTaskTitles.join(', ')}`
+          : (submitResult && submitResult.approved
+              ? 'Work Request has been successfully created.'
+              : 'Work Request creation request has been submitted for Admin approval.'),
+        errorTitle: 'Failed to Create Work Request'
+      });
+
+      if (runResult.success) {
+        if (typeof Dashboard !== 'undefined') {
+          if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
+          else if (Dashboard._dataCache) Dashboard._dataCache = null;
+        }
+        this._invalidateCountsAndSidebar();
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        closeFormPanelAndRoute(targetRoute);
+      } else {
+        App.handleRoute();
+      }
+      return;
+    }
+
+    // Existing record Update
+    const wrId = this.editingId;
+    let submitResult = null;
+
+    const runResult = await this.runBlockingArchiveAction({
+      title: 'Saving Work Request',
+      message: `Please wait while "${record.title || 'the Work Request'}" is being updated...`,
+      apiCall: async () => {
+        submitResult = await PendingChanges.submit('workRequests', record, isNew);
+        if (submitResult.approved) {
+          if (submitResult.record && submitResult.record.wr) {
+            const createdWr = submitResult.record.wr;
+            const createdTasks = submitResult.record.tasks || [];
+            await WorkflowData._adoptServerWorkRequest(wrId, createdWr, createdTasks);
+            const updated = WorkflowData.getWorkRequestById(wrId);
+            this._syncWorkRequestToCaches(updated);
+            return { data: updated };
+          } else {
+            await WorkflowData.updateWorkRequest(wrId, record);
+            const existing = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
+            const existingIds = new Set(existing.map(t => t.id));
+            const submittedIds = new Set(taskRecords.map(t => t.id).filter(id => isValidUUID(id)));
+
+            // 1. Delete tasks that are no longer present
+            const toDelete = existing.filter(t => !submittedIds.has(t.id));
+            const deletePromises = toDelete.map(t => WorkflowData.deleteTask(t.id));
+
+            // 2. Create or Update tasks
+            const savePromises = taskRecords.map(async (t) => {
+              t.workRequestId = wrId;
+              if (isValidUUID(t.id) && existingIds.has(t.id)) {
+                // Update existing task
+                const { id, checklist, timeLogs, taskDocuments, comments, ...taskChanges } = t;
+                await WorkflowData.updateTask(t.id, taskChanges);
+              } else {
+                // Create new task
+                await WorkflowData.createTask(t);
+              }
+            });
+
+            await Promise.all([...deletePromises, ...savePromises]);
+
+            const updated = WorkflowData.getWorkRequestById(wrId);
+            this._syncWorkRequestToCaches(updated);
+            return { data: updated };
+          }
+        } else {
+          return { data: submitResult };
+        }
+      },
+      successTitle: 'Work Request Saved',
+      successMessage: 'Work Request has been successfully updated.',
+      errorTitle: 'Failed to Save Work Request'
+    });
+
+    if (runResult.success) {
+      this.editingId = null;
+      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+      this._invalidateCountsAndSidebar();
+      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+
+      const msgConfig = {
+        title: 'Work Request Saved',
+        message: submitResult && submitResult.approved
+          ? 'Work Request has been successfully updated.'
+          : 'Work Request update request has been submitted for Admin approval.',
+        type: 'success'
+      };
+      closeFormPanelAndRoute(targetRoute, msgConfig);
+    } else {
+      App.handleRoute();
+    }
   },
 
   /**
@@ -6710,15 +7898,6 @@ const Workflow = {
     await WorkflowData.loadPendingApprovals();
     await this._loadGroundWorkers();
     let wr = WorkflowData.getWorkRequestById(this.detailWrId);
-    let wrDocs = [];
-    if (this.detailWrId) {
-      try {
-        const docsRes = await window.apiClient.documents.list({ workRequestId: this.detailWrId });
-        wrDocs = docsRes?.data || [];
-      } catch (e) {
-        console.error('[Workflow] failed to load DMS documents for detail view', e);
-      }
-    }
     if (!wr) {
       const pc = WorkflowData.getPendingApprovalByRecordId(this.detailWrId, 'workRequests');
       if (pc && pc.table === 'workRequests') {
@@ -6732,7 +7911,8 @@ const Workflow = {
     }
     if (!wr) {
       this.view = 'list';
-      App.handleRoute();
+      this.detailWrId = null;
+      location.hash = '#operations';
       return el('div');
     }
     if (this.lastRenderedWrId !== this.detailWrId) {
@@ -7400,6 +8580,8 @@ const Workflow = {
 
           let skipped = 0;
           let saved = 0;
+          const updatePromises = [];
+
           selected.forEach(t => {
             const taskLogs = t.timeLogs || [];
             const alreadyLogged = entries.some(entry => taskLogs.some(l => l.date === entry.date && (l.workerName || '') === workerName));
@@ -7418,15 +8600,46 @@ const Workflow = {
               hours: entry.hours,
               checklistItemId: null
             }));
-            WorkflowData.updateTask(t.id, {
-              timeLogs: [...taskLogs, ...newEntries],
-              updatedAt: new Date().toISOString()
-            });
-            saved++;
+            
+            updatePromises.push(
+              WorkflowData.updateTask(t.id, {
+                timeLogs: [...taskLogs, ...newEntries],
+                updatedAt: new Date().toISOString()
+              }).then(() => {
+                WorkflowData.invalidateRelatedForWorkRequest(t.workRequestId);
+                WorkflowData.invalidateRelatedForTask(t.id);
+                saved++;
+              })
+            );
           });
+
           overlay.remove();
-          this.showMessage('Bulk Log Time', `${saved} log${saved === 1 ? '' : 's'} saved, ${skipped} skipped (already logged).`, 'success');
-          App.handleRoute();
+
+          if (updatePromises.length === 0) {
+            this.showMessage('Bulk Log Time', `0 logs saved, ${skipped} skipped (already logged).`, 'warning');
+            App.handleRoute();
+            return;
+          }
+
+          this.runBlockingArchiveAction({
+            title: 'Logging Time',
+            message: `Please wait while logging time for ${updatePromises.length} task(s)...`,
+            apiCall: async () => {
+              await Promise.all(updatePromises);
+              return { success: true };
+            },
+            successTitle: 'Bulk Time Logged',
+            successMessage: () => `Successfully logged time for ${saved} task(s). ${skipped} task(s) were skipped because they were already logged.`,
+            errorTitle: 'Failed to Bulk Log Time'
+          }).then(() => {
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+              const activeTaskId = window.SidePaneInstance.recordId;
+              if (selected.some(t => t.id === activeTaskId)) {
+                this.showTaskSidePane(activeTaskId, null);
+              }
+            }
+            App.handleRoute();
+          });
         });
       });
       bulkBar.appendChild(logTimeBtn);
@@ -7621,7 +8834,7 @@ const Workflow = {
             cardContainerStyle: { display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' },
             emptyState: { variant: 'compact', title: 'No tasks', body: '' }
           })),
-          async renderCard(t) {
+          renderCard(t) {
             const comp = getTaskChecklistCompletion(t);
             const assigneeName = t.assigneeName || (t.assigneeId || t.assignedTo ? window.apiClient.userCache.getById(t.assigneeId || t.assignedTo)?.name : null);
             const priorityConfig = {
@@ -8086,7 +9299,8 @@ const Workflow = {
 
         // 8. Time cell
         const cellTime = el('div', {
-          class: 'cell time-cell font-mono',
+          class: 'cell time-cell font-mono task-time-cell',
+          'data-task-id': t.id,
           text: hours > 0 ? `${hours}h` : 'N/A'
         });
         rowEl.appendChild(cellTime);
@@ -8106,7 +9320,7 @@ const Workflow = {
           this.showAddTimeLogModal(t.id);
         });
 
-        // More Actions button and its dropdown menu
+        // More Actions button and its custom dropdown
         const actionMenu = el('div', { class: 'action-menu' });
 
         const moreActionsBtn = el('button', {
@@ -8115,120 +9329,164 @@ const Workflow = {
           html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>`
         });
 
-        const menuList = el('div', { class: 'action-menu-list hidden' });
-
-        // Bind click event to toggle classes
         moreActionsBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          document.querySelectorAll('.action-menu-list').forEach(m => {
-            if (m !== menuList) {
-              m.classList.add('hidden');
-              m.classList.remove('open');
-            }
-          });
-          if (menuList.classList.contains('hidden')) {
-            menuList.classList.remove('hidden');
-            setTimeout(() => {
-              menuList.classList.add('open');
-            }, 10);
-          } else {
-            menuList.classList.remove('open');
-            menuList.classList.add('hidden');
+
+          // Remove any existing active menus
+          const existing = document.querySelector('.workflow-action-menu-wrapper');
+          if (existing) {
+            existing.remove();
           }
-        });
 
-        // Log Time item
-        const logTimeMenuItem = el('button', {
-          class: 'action-menu-item',
-          html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Log Time`
-        });
-        logTimeMenuItem.addEventListener('click', (e) => {
-          e.stopPropagation();
-          menuList.classList.remove('open');
-          menuList.classList.add('hidden');
-          this.showAddTimeLogModal(t.id);
-        });
-        menuList.appendChild(logTimeMenuItem);
-
-        // Request Log item
-        if (t.assigneeName && !t.assigneeId) {
-          const reqLogItem = el('button', {
-            class: 'action-menu-item',
-            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Request Log`
+          // Create outer wrapper to inherit scoped CSS theme variables and selectors
+          const wrapper = el('div', { 
+            class: 'project-detail-v2 task-list workflow-action-menu-wrapper',
+            style: 'position: absolute; z-index: 1050; border: none !important; background: transparent !important; box-shadow: none !important; padding: 0 !important; width: auto !important; height: auto !important;'
           });
-          reqLogItem.addEventListener('click', (e) => {
-            e.stopPropagation();
+
+          // Create the menuList
+          const menuList = el('div', { 
+            class: 'action-menu-list workflow-action-menu-list',
+            style: 'position: relative; top: auto; right: auto; bottom: auto; left: auto; margin: 0; pointer-events: auto;'
+          });
+          wrapper.appendChild(menuList);
+
+          // Helper to close menu
+          const closeMenu = () => {
             menuList.classList.remove('open');
-            menuList.classList.add('hidden');
-            const text = `Subject: Time Log Request: ${t.title}\n\nHi ${t.assigneeName},\n\nPlease reply with your time log for today for the task: ${t.title} (Work Request: ${wr.title}).\n\nPlease include:\n- Start Time:\n- End Time:\n- Brief description of what you accomplished:\n\nThank you!`;
-            navigator.clipboard.writeText(text).then(() => {
-              this.showMessage('Copied', `Time log request copied for ${t.assigneeName}.`, 'success');
-            }).catch(() => {
-              this.showMessage('Error', 'Could not copy to clipboard.', 'danger');
+            setTimeout(() => wrapper.remove(), 150);
+            document.removeEventListener('mousedown', onMouseDownOutside);
+            window.removeEventListener('scroll', closeMenu, true);
+          };
+
+          const onMouseDownOutside = (evt) => {
+            if (!menuList.contains(evt.target) && !moreActionsBtn.contains(evt.target)) {
+              closeMenu();
+            }
+          };
+
+          // Append items to menuList
+          // 1. Log Time item
+          const logTimeMenuItem = el('button', {
+            class: 'action-menu-item',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Log Time`
+          });
+          logTimeMenuItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showAddTimeLogModal(t.id);
+          });
+          menuList.appendChild(logTimeMenuItem);
+
+          // 2. Request Log item
+          if (t.assigneeName && !t.assigneeId) {
+            const reqLogItem = el('button', {
+              class: 'action-menu-item',
+              html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Request Log`
             });
-          });
-          menuList.appendChild(reqLogItem);
-        }
+            reqLogItem.addEventListener('click', (evt) => {
+              evt.stopPropagation();
+              closeMenu();
+              const text = `Subject: Time Log Request: ${t.title}\n\nHi ${t.assigneeName},\n\nPlease reply with your time log for today for the task: ${t.title} (Work Request: ${wr.title}).\n\nPlease include:\n- Start Time:\n- End Time:\n- Brief description of what you accomplished:\n\nThank you!`;
+              navigator.clipboard.writeText(text).then(() => {
+                this.showMessage('Copied', `Time log request copied for ${t.assigneeName}.`, 'success');
+              }).catch(() => {
+                this.showMessage('Error', 'Could not copy to clipboard.', 'danger');
+              });
+            });
+            menuList.appendChild(reqLogItem);
+          }
 
-        // Link Record item
-        const linkRecordItem = el('button', {
-          class: 'action-menu-item',
-          html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Link Record`
-        });
-        linkRecordItem.addEventListener('click', (e) => {
-          e.stopPropagation();
-          menuList.classList.remove('open');
-          menuList.classList.add('hidden');
-          this.showLinkFinancialModal(t.id);
-        });
-        menuList.appendChild(linkRecordItem);
-
-        // Edit Task item
-        const editTaskItem = el('button', {
-          class: 'action-menu-item',
-          html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Task`
-        });
-        editTaskItem.addEventListener('click', (e) => {
-          e.stopPropagation();
-          menuList.classList.remove('open');
-          menuList.classList.add('hidden');
-          this.showEditTaskModal(t.id, () => App.handleRoute());
-        });
-        menuList.appendChild(editTaskItem);
-
-        finActions.forEach(act => {
-          const item = el('button', {
+          // 3. Link Record item
+          const linkRecordItem = el('button', {
             class: 'action-menu-item',
-            html: `${act.menuIconHtml} ${act.title}`
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Link Record`
           });
-          item.addEventListener('click', (e) => {
-            e.stopPropagation();
-            menuList.classList.remove('open');
-            menuList.classList.add('hidden');
-            act.handler();
+          linkRecordItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showLinkFinancialModal(t.id);
           });
-          menuList.appendChild(item);
-        });
+          menuList.appendChild(linkRecordItem);
 
-        // Delete item
-        const deleteItem = el('button', {
-          class: 'action-menu-item danger',
-          html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete`
+          // 4. Edit Task item
+          const editTaskItem = el('button', {
+            class: 'action-menu-item',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Task`
+          });
+          editTaskItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showEditTaskModal(t.id, () => App.handleRoute());
+          });
+          menuList.appendChild(editTaskItem);
+
+          // 5. Financial Actions
+          finActions.forEach(act => {
+            const item = el('button', {
+              class: 'action-menu-item',
+              html: `${act.menuIconHtml} ${act.title}`
+            });
+            item.addEventListener('click', (evt) => {
+              evt.stopPropagation();
+              closeMenu();
+              act.handler();
+            });
+            menuList.appendChild(item);
+          });
+
+          // 6. Delete Task
+          const deleteItem = el('button', {
+            class: 'action-menu-item danger',
+            html: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Delete`
+          });
+          deleteItem.addEventListener('click', (evt) => {
+            evt.stopPropagation();
+            closeMenu();
+            this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', async () => {
+              const myGen = Workflow._startSkipGeneration();
+              App.handleRoute();
+              await WorkflowData.deleteTask(t.id);
+              Workflow._clearSkipGenerationIfLatest(myGen);
+              App.handleRoute();
+            }, 'danger');
+          });
+          menuList.appendChild(deleteItem);
+
+          // Append temporarily to measure height
+          wrapper.style.visibility = 'hidden';
+          wrapper.style.display = 'block';
+          document.body.appendChild(wrapper);
+
+          const menuHeight = menuList.offsetHeight;
+          const triggerRect = moreActionsBtn.getBoundingClientRect();
+          const popoverWidth = Math.max(160, menuList.offsetWidth);
+          
+          let left = triggerRect.right + window.scrollX - popoverWidth;
+          let top = triggerRect.bottom + window.scrollY + 4;
+          
+          const spaceBelow = window.innerHeight - triggerRect.bottom;
+          if (spaceBelow < menuHeight + 20) {
+            top = triggerRect.top + window.scrollY - menuHeight - 4;
+            menuList.classList.add('open-up');
+          } else {
+            menuList.classList.remove('open-up');
+          }
+
+          wrapper.style.left = `${left}px`;
+          wrapper.style.top = `${top}px`;
+          wrapper.style.visibility = 'visible';
+
+          // Show transitions
+          setTimeout(() => {
+            menuList.classList.add('open');
+          }, 10);
+
+          document.addEventListener('mousedown', onMouseDownOutside);
+          window.addEventListener('scroll', closeMenu, true);
         });
-        deleteItem.addEventListener('click', (e) => {
-          e.stopPropagation();
-          menuList.classList.remove('open');
-          menuList.classList.add('hidden');
-          this.showConfirm('Delete Task', 'Are you sure you want to delete this task? This will remove the task and all its checklist items.', () => {
-            Workflow._skipNextListFetch = true;
-            WorkflowData.deleteTask(t.id);
-            App.handleRoute();
-          }, 'danger');
-        });
-        menuList.appendChild(deleteItem);
 
         actionMenu.appendChild(moreActionsBtn);
-        actionMenu.appendChild(menuList);
 
         cellActions.appendChild(logTimeBtn);
         cellActions.appendChild(actionMenu);
@@ -8502,7 +9760,7 @@ const Workflow = {
               const val = newItemInput.value.trim();
               if (!val) return;
               const prereqId = selectedPrereqId || null;
-              normalizedChecklist.push({ id: generateId('chk'), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+              normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
               WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
               newItemInput.value = '';
               selectedPrereqId = null;
@@ -8592,232 +9850,163 @@ const Workflow = {
         if ((canHandover || canUploadTaskDocs) && !isArchived) {
           const addDocBtn = el('button', { class: 'btn btn-primary btn-xs btn-add-inline', text: '+ Upload' });
           if (!disableIfPending(addDocBtn, wr)) {
-            addDocBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddDocumentModal(t.id); });
+            addDocBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddDocumentModal(t.id, addDocBtn); });
           }
           docsHeader.appendChild(addDocBtn);
         }
         docsSection.appendChild(docsHeader);
 
-        const docsList = el('div', { class: 'details-content-list' });
-        if ((t.taskDocuments || []).length === 0) {
-          docsList.appendChild(renderEmptyState('No documents attached'));
-        } else {
-          t.taskDocuments.forEach((d, dIdx) => {
-            const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center;' });
-            const leftSide = el('div', { style: 'display:flex; flex-direction:column;' });
-            const fName = d.fileName || d.filename;
-
-            // Only Admin can click to view actual file
-            if (canEditDms) {
-              const dmsDoc = wrDocs.find(doc =>
-                (doc.fileName === fName) && doc.workRequestId === wr.id
-              );
-              if (dmsDoc && dmsDoc.dataUrl) {
-                const link = el('a', {
-                  href: '#',
-                  text: fName,
-                  style: 'color:var(--accent); font-weight:600; text-decoration:underline; cursor:pointer;'
-                });
-                link.addEventListener('click', (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const win = window.open();
-                  if (win) win.document.write('<iframe src="' + dmsDoc.dataUrl + '" frameborder="0" style="position:fixed; top:0; left:0; bottom:0; right:0; width:100%; height:100%; border:none; margin:0; padding:0; overflow:hidden; z-index:999999;" allowfullscreen></iframe>');
-                });
-                leftSide.appendChild(link);
-              } else {
-                leftSide.appendChild(el('span', { text: fName }));
-              }
-            } else {
-              leftSide.appendChild(el('span', { text: fName }));
-            }
-            leftSide.appendChild(el('span', { class: 'kpi-label', text: formatDate(d.uploadDate) }));
-            item.appendChild(leftSide);
-
-            // Delete Button: Documentation and Admin can remove
-            if (Auth.can('dms:handover')) {
-              const delBtn = el('button', { 
-                class: 'btn btn-ghost btn-xs', 
-                text: '×', 
-                style: 'color:var(--danger); font-size:1.2rem; padding:0 4px; line-height:1;' 
-              });
-              if (!disableIfPending(delBtn, wr)) {
-                delBtn.title = 'Remove Attachment';
-                delBtn.addEventListener('click', (e) => {
-                  e.stopPropagation();
-                  this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
-                    const updatedTaskDocs = t.taskDocuments.filter((_, i) => i !== dIdx);
-                    WorkflowData.updateTask(t.id, { taskDocuments: updatedTaskDocs });
-                    const dmsMatch = wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id);
-                    if (dmsMatch) {
-                      try {
-                        await window.apiClient.documents.delete(dmsMatch.id);
-                      } catch (err) {
-                        console.error('Failed to delete DMS document', err);
-                      }
-                    }
-                    App.handleRoute();
-                  }, 'danger');
-                });
-              }
-              item.appendChild(delBtn);
-            }
-            docsList.appendChild(item);
-
-            // Comments
-            const commentToggle = el('button', { class: 'btn btn-ghost btn-xs', text: '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : ''), style: 'margin-left: 10px; font-size: var(--text-xs); color: var(--muted);' });
-            const commentContainer = el('div', { class: 'doc-comments-container hidden', style: 'margin: 8px 0 16px 20px; padding: 12px; background: var(--bg); border-radius: var(--radius-sm); border-left: 3px solid var(--border);' });
-            commentToggle.addEventListener('click', (e) => { e.stopPropagation(); commentContainer.classList.toggle('hidden'); });
-
-            const renderComments = () => {
-              commentContainer.innerHTML = '';
-              const list = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
-              if (!d.comments || d.comments.length === 0) {
-                list.appendChild(renderEmptyState('No comments for this document', null, { style: 'padding: 4px 0;' }));
-              } else {
-                d.comments.forEach((c, cIdx) => {
-                  const commentRow = el('div', { style: 'background:var(--surface); padding:8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); position:relative;' });
-                  const cUser = window.apiClient.userCache.getById(c.userId);
-                  const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.75rem;' });
-                  header.appendChild(el('span', { text: cUser?.name || 'Unknown', style: 'font-weight:600; color:var(--accent);' }));
-                  header.appendChild(el('span', { text: formatDate(c.date), style: 'color:var(--muted);' }));
-                  commentRow.appendChild(header);
-
-                  const contentArea = el('div', { style: 'font-size:var(--text-sm); color:var(--fg); line-height:1.4;' });
-                  contentArea.textContent = c.text;
-                  commentRow.appendChild(contentArea);
-
-                  // Admin Actions: Edit/Delete (disabled in archive)
-                  if (Auth.can('workflow:approve') && !isArchived) {
-                    const cActions = el('div', { style: 'display:flex; gap:8px; margin-top:8px; border-top:1px solid var(--border); padding-top:4px;' });
-                    const editBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Edit', style: 'padding:0; font-size:0.7rem;' });
-                    if (!disableIfPending(editBtn, wr)) {
-                      editBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const originalText = c.text;
-                        contentArea.innerHTML = '';
-                        const editInput = el('textarea', { class: 'form-control', style: 'width:100%; min-height:40px; font-size:0.875rem;', text: originalText });
-                        contentArea.appendChild(editInput);
-                        cActions.classList.add('hidden');
-                        const editActions = el('div', { style: 'display:flex; gap:8px; margin-top:4px;' });
-                        const saveEditBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Save' });
-                        const cancelEditBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Cancel' });
-                        saveEditBtn.addEventListener('click', (ev) => {
-                          ev.stopPropagation();
-                          const newText = editInput.value.trim();
-                          if (newText) {
-                            c.text = newText;
-                            c.date = new Date().toISOString();
-                            WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                            renderComments();
-                          }
-                        });
-                        cancelEditBtn.addEventListener('click', (ev) => { ev.stopPropagation(); renderComments(); });
-                        editActions.appendChild(saveEditBtn);
-                        editActions.appendChild(cancelEditBtn);
-                        contentArea.appendChild(editActions);
-                      });
-                    }
-                    const delCommentBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Delete', style: 'padding:0; font-size:var(--text-xs); color:var(--danger);' });
-                    if (!disableIfPending(delCommentBtn, wr)) {
-                      delCommentBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.showConfirm('Delete Comment', 'Are you sure you want to delete this comment?', () => {
-                          d.comments.splice(cIdx, 1);
-                          WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                          renderComments();
-                          commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
-                        }, 'danger');
-                      });
-                    }
-                    cActions.appendChild(editBtn);
-                    cActions.appendChild(delCommentBtn);
-                    commentRow.appendChild(cActions);
-                  }
-                  list.appendChild(commentRow);
-                });
-              }
-              commentContainer.appendChild(list);
-
-              if (Auth.can('workflow:approve') && !isArchived) {
-                const addForm = el('div', { style: 'margin-top:12px; padding-top:12px; border-top: 1px solid var(--border);' });
-                const addInput = el('textarea', { placeholder: 'Write a comment...', class: 'form-control', style: 'width:100%; min-height:50px; font-size:0.875rem;' });
-                const addBtnRow = el('div', { style: 'display:flex; gap:8px; margin-top:8px;' });
-                const saveNewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Save Comment' });
-                if (wr.isPendingApproval) {
-                  disableForApproval(addInput);
-
-                  disableForApproval(saveNewBtn);
-                } else {
-                  saveNewBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const text = addInput.value.trim();
-                    if (text) {
-                      if (!d.comments) d.comments = [];
-                      d.comments.push({ userId: Auth.user.id, date: new Date().toISOString(), text });
-                      WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                      addInput.value = '';
-                      renderComments();
-                      commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
-                    }
-                  });
-                }
-                addBtnRow.appendChild(saveNewBtn);
-                addForm.appendChild(addInput);
-                addForm.appendChild(addBtnRow);
-                commentContainer.appendChild(addForm);
-              }
-            };
-            renderComments();
-            docsList.appendChild(commentToggle);
-            docsList.appendChild(commentContainer);
-          });
-        }
+        const docsList = el('div', { class: 'details-content-list task-docs-list', 'data-task-id': t.id });
+        docsList.appendChild(renderEmptyState('Loading documents...'));
         docsSection.appendChild(docsList);
         rightPane.appendChild(docsSection);
+
+        (async () => {
+          if (t.id && WorkflowData._isTempId(t.id)) {
+            docsList.innerHTML = '';
+            docsList.appendChild(renderEmptyState('No documents attached'));
+            return;
+          }
+          try {
+            const docsRes = await window.apiClient.documents.list({ linkedTaskId: t.id, _t: Date.now() });
+            const taskDocs = docsRes?.data || [];
+            docsList.innerHTML = '';
+            if (taskDocs.length === 0) {
+              docsList.appendChild(renderEmptyState('No documents attached'));
+            } else {
+              taskDocs.forEach((dmsDoc) => {
+                docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+                  wr,
+                  isArchived,
+                  showComments: true,
+                  onDelete: async () => {
+                    if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === t.id) {
+                      this.showTaskSidePane(t.id, null);
+                    }
+                    await this.refreshTaskDocumentsList(t.id);
+                  }
+                }));
+              });
+            }
+          } catch (err) {
+            if (!isAbortError(err)) {
+              console.error('Failed to load task documents in detail view', err);
+              docsList.innerHTML = '';
+              docsList.appendChild(renderEmptyState('Failed to load documents'));
+            }
+          }
+        })();
 
         // Time Log History Section
         const timeSection = el('div', { class: 'detail-block' });
         const timeHeader = el('div', { class: 'detail-section-title' });
         timeHeader.appendChild(el('span', { text: 'Time Log History' }));
+        
+        const taskTotalHours = getTaskTotalHours(t);
+        const totalHrsSpan = el('span', {
+          text: `Total: ${taskTotalHours} hrs`,
+          class: 'task-total-hours-label',
+          'data-task-id': t.id,
+          style: 'font-size: 0.75rem; color: var(--color-text-muted); font-weight: normal; margin-left: 8px;'
+        });
+        timeHeader.appendChild(totalHrsSpan);
+
+        if (!isArchived) {
+          const addTimeBtn = el('button', { class: 'btn btn-primary btn-xs btn-add-inline', text: '+ Log Time' });
+          if (!disableIfPending(addTimeBtn, wr)) {
+            addTimeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showAddTimeLogModal(t.id); });
+          }
+          timeHeader.appendChild(addTimeBtn);
+        }
         timeSection.appendChild(timeHeader);
 
-        const timeList = el('div', { class: 'details-content-list' });
-        const logs = t.timeLogs || [];
-        const checklistLogGroups = [];
-        (t.checklist || []).forEach(item => {
-          if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
-        });
-        if (logs.length === 0 && checklistLogGroups.length === 0) {
-          timeList.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
-        } else {
-          const buildTimeLogEntry = (l) => {
-            const [y, m, d] = l.date.split('-').map(Number);
-            const logDate = new Date(y, m - 1, d);
-            const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-            const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
-            const noteText = l.note ? ` — ${l.note}` : '';
-            return el('div', { class: 'history-item' }, [
-              el('div', {}, [
-                el('strong', { text: workerLabel }),
-                el('span', { text: noteText }),
-                el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}` })
-              ]),
-              el('span', { class: 'font-mono', text: `${l.hours}h` })
-            ]);
-          };
-          const taskLevelLogs = logs.filter(l => !l.checklistItemId);
-          if (taskLevelLogs.length > 0) {
-            const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-            sorted.forEach(l => timeList.appendChild(buildTimeLogEntry(l)));
-          }
-          checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
-            const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
-            sorted.forEach(l => timeList.appendChild(buildTimeLogEntry(l)));
-          });
-        }
+        const timeList = el('div', { class: 'details-content-list task-time-logs-list', 'data-task-id': t.id });
         timeSection.appendChild(timeList);
         rightPane.appendChild(timeSection);
+
+        timeList.appendChild(renderEmptyState('Loading logs...'));
+        (async () => {
+          if (t.id && WorkflowData._isTempId(t.id)) {
+            timeList.innerHTML = '';
+            timeList.appendChild(renderEmptyState('No logs recorded'));
+            return;
+          }
+          try {
+            // Fetch task details from backend to get fresh logs
+            const res = await window.apiClient.workRequests.getTask(wr.id, t.id);
+            const serverTask = res?.data;
+            let currentTask = t;
+            if (serverTask) {
+              const normalized = WorkflowData.normalizeTask(serverTask);
+              const existing = WorkflowData.getTaskById(t.id);
+              if (existing) {
+                const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+                normalized.checklist = (normalized.checklist || []).map(c => {
+                  const ec = existingClById.get(c.id);
+                  return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+                });
+                Object.assign(existing, normalized);
+                currentTask = existing;
+              } else {
+                if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+                WorkflowData._tasks.push(normalized);
+                currentTask = normalized;
+              }
+            }
+
+            timeList.innerHTML = '';
+            const logs = currentTask.timeLogs || [];
+            const checklistLogGroups = [];
+            (currentTask.checklist || []).forEach(item => {
+              if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
+            });
+
+            if (logs.length === 0 && checklistLogGroups.length === 0) {
+              timeList.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
+            } else {
+              const buildTimeLogEntry = (l, subtaskName = null) => {
+                const [y, m, d] = l.date.split('-').map(Number);
+                const logDate = new Date(y, m - 1, d);
+                const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+                const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
+                const noteText = l.note ? ` — ${l.note}` : '';
+                const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
+
+                return el('div', { 
+                  class: 'history-item', 
+                  style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
+                }, [
+                  el('div', {}, [
+                    el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
+                    el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
+                    el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
+                    el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
+                  ]),
+                  el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
+                ]);
+              };
+
+              const taskLevelLogs = logs.filter(l => !l.checklistItemId);
+              if (taskLevelLogs.length > 0) {
+                const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+                sorted.forEach(l => {
+                  timeList.appendChild(buildTimeLogEntry(l));
+                });
+              }
+
+              checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
+                const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+                sorted.forEach(l => {
+                  timeList.appendChild(buildTimeLogEntry(l, item.text));
+                });
+              });
+            }
+          } catch (err) {
+            console.error('Failed to load task details for time logs in detail view', err);
+            timeList.innerHTML = '';
+            timeList.appendChild(renderEmptyState('Failed to load logs'));
+          }
+        })();
 
         // Dependency map section
         const depSection = el('div', { class: 'detail-block' });
@@ -9149,72 +10338,1011 @@ const Workflow = {
     });
   },
 
-  async showAddDocumentModal(taskId) {
+  async _saveDocumentComments(documentId, comments) {
+    try {
+      await window.apiClient.documents.update(documentId, { comments });
+    } catch (err) {
+      console.error('Failed to save document comments', err);
+      this.showMessage('Error', 'Failed to save comment. Please try again.', 'danger');
+      throw err;
+    }
+  },
+
+  async _waitUntilDocumentListable(taskId, documentId, { timeoutMs = 10000, intervalMs = 300 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await window.apiClient.documents.list({ linkedTaskId: taskId, _t: Date.now() });
+        const docs = res?.data || [];
+        if (docs.some(d => d.id === documentId)) {
+          return docs.find(d => d.id === documentId);
+        }
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.warn('[Workflow] waiting for document listability failed', e);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Document was created but is not yet available in the task document list');
+  },
+
+  async _waitUntilTimeLogsListable(wrId, taskId, logIds, { timeoutMs = 15000, intervalMs = 400 } = {}) {
+    if (!logIds || logIds.length === 0) return;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+        const serverTask = res?.data;
+        if (serverTask) {
+          const serverLogIds = [];
+          if (serverTask.timeLogs) {
+            serverTask.timeLogs.forEach(l => { if (l.id) serverLogIds.push(l.id); });
+          }
+          if (serverTask.checklist) {
+            serverTask.checklist.forEach(item => {
+              if (item.timeLogs) {
+                item.timeLogs.forEach(l => { if (l.id) serverLogIds.push(l.id); });
+              }
+            });
+          }
+          const allFound = logIds.every(id => serverLogIds.includes(id));
+          if (allFound) {
+            return;
+          }
+        }
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.warn('[Workflow] waiting for time logs listability failed', e);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Time log was saved but is not yet available in the task details due to synchronization delay.');
+  },
+
+  async uploadTaskDocument(taskId, file, options = {}) {
+    if (file.size > 50 * 1024 * 1024) {
+      this.showMessage('File Too Large', 'Files must be 50 MB or smaller.', 'warning');
+      throw new Error('File size exceeds 50 MB limit');
+    }
+
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) throw new Error('Task not found');
+
+    const metadata = {
+      fileName: file.name,
+      originalName: file.name,
+      contentType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+      documentType: options.documentType || 'original_scan',
+      category: options.category || 'OTHER',
+      description: options.description || `Uploaded via task: ${task.title}`,
+      workRequestId: task.workRequestId,
+      linkedTaskId: taskId,
+    };
+
+    const createRes = await window.apiClient.documents.create(metadata);
+    const { document: dmsDoc, uploadUrl } = createRes.data;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': metadata.contentType },
+      body: file,
+    });
+    if (!uploadRes.ok) {
+      throw new Error(`Storage upload failed: ${uploadRes.status}`);
+    }
+
+    await window.apiClient.documents.confirmUpload(dmsDoc.id);
+
+    const entry = {
+      documentId: dmsDoc.id,
+      fileName: file.name,
+      uploadDate: new Date().toISOString().slice(0, 10),
+      uploaderId: Auth.user.id,
+    };
+    const updatedDocs = [...(task.taskDocuments || []), entry];
+    await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
+
+    WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    WorkflowData.invalidateRelatedForTask(taskId);
+
+    // Keep the upload loading state until the document is actually fetchable
+    // in the task document list, so the side pane and detail panel can render
+    // it immediately when they refresh.
+    await this._waitUntilDocumentListable(taskId, dmsDoc.id);
+    return dmsDoc;
+  },
+
+  async linkTaskDocument(taskId, linkUrl, options = {}) {
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) throw new Error('Task not found');
+
+    let fileName = options.fileName || 'Linked Document';
+    if (options.isGoogleDrive) {
+      fileName = options.fileName || 'GDrive Document';
+    } else if (options.isFigma) {
+      fileName = options.fileName || 'Figma Design File';
+    }
+
+    const metadata = {
+      fileName: fileName,
+      originalName: fileName,
+      documentType: options.documentType || 'original_scan',
+      category: options.category || 'OTHER',
+      description: options.description || `${options.isGoogleDrive ? 'GDrive link' : options.isFigma ? 'Figma link' : 'Linked'} via task: ${task.title}`,
+      workRequestId: task.workRequestId,
+      linkedTaskId: taskId,
+      externalUrl: linkUrl
+    };
+
+    const createRes = await window.apiClient.documents.create(metadata);
+    const dmsDoc = createRes.data.document;
+
+    const entry = {
+      documentId: dmsDoc.id,
+      fileName: fileName,
+      uploadDate: new Date().toISOString().slice(0, 10),
+      uploaderId: Auth.user.id,
+      linkUrl: linkUrl
+    };
+    if (options.isGoogleDrive) {
+      entry.isGoogleDrive = true;
+    }
+    if (options.isFigma) {
+      entry.isFigma = true;
+      entry.figmaUrl = linkUrl;
+    }
+    const updatedDocs = [...(task.taskDocuments || []), entry];
+    await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
+
+    WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    WorkflowData.invalidateRelatedForTask(taskId);
+
+    // Linked documents are active immediately, but still wait until they are
+    // listable so callers can safely refresh the UI without showing stale data.
+    await this._waitUntilDocumentListable(taskId, dmsDoc.id);
+    return dmsDoc;
+  },
+
+  async showDocumentPreview(documentId) {
+    try {
+      const docRes = await window.apiClient.documents.get(documentId);
+      const doc = docRes.data;
+
+      let url = '';
+      let fileName = doc.original_name || doc.file_name || 'Document';
+
+      if (!doc.external_url) {
+        const urlRes = await window.apiClient.documents.downloadUrl(documentId);
+        url = urlRes.data.url;
+        fileName = urlRes.data.fileName || fileName;
+      }
+
+      const overlay = el('div', { class: 'document-preview-overlay' });
+      const pane = el('div', { class: 'document-preview-pane' });
+      const header = el('div', { class: 'document-preview-header' });
+
+      const titleSpan = el('h3', { text: fileName, class: 'document-preview-title' });
+      header.appendChild(titleSpan);
+
+      if (!doc.external_url) {
+        const downloadBtn = el('a', {
+          href: url,
+          download: fileName,
+          class: 'btn btn-primary btn-sm',
+          text: 'Download',
+          target: '_blank',
+          style: 'margin-right: 8px;'
+        });
+        header.appendChild(downloadBtn);
+      }
+
+      const closeBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Close' });
+      closeBtn.addEventListener('click', () => overlay.remove());
+      header.appendChild(closeBtn);
+
+      const viewer = el('div', { class: 'document-preview-viewer' });
+      const contentType = doc.content_type || '';
+
+      if (doc.external_url) {
+        const extUrl = doc.external_url;
+        if (extUrl.includes('figma.com')) {
+          viewer.innerHTML = `<iframe src="https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(extUrl)}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+        } else if (extUrl.includes('drive.google.com') || extUrl.includes('docs.google.com') || extUrl === 'mock-google-drive-data-url') {
+          viewer.innerHTML = `<iframe src="${extUrl}" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+        } else {
+          viewer.appendChild(el('div', { class: 'document-preview-fallback', style: 'padding: 20px; text-align: center;' }, [
+            el('p', { text: 'This is a linked document.', style: 'margin-bottom: 12px;' }),
+            el('a', { href: extUrl, target: '_blank', text: 'Open Link', class: 'btn btn-primary' })
+          ]));
+        }
+      } else if (contentType.startsWith('image/')) {
+        viewer.appendChild(el('img', { src: url, alt: fileName, style: 'max-width:100%; max-height:100%; object-fit:contain;' }));
+      } else if (contentType === 'application/pdf') {
+        viewer.innerHTML = `<iframe src="${url}" frameborder="0" allowfullscreen style="width:100%; height:100%; border:none;"></iframe>`;
+      } else {
+        viewer.appendChild(el('div', { class: 'document-preview-fallback', style: 'padding: 20px; text-align: center;' }, [
+          el('p', { text: 'Preview not available for this file type.', style: 'margin-bottom: 12px;' }),
+          el('a', { href: url, download: fileName, text: 'Download to View', class: 'btn btn-primary', target: '_blank' })
+        ]));
+      }
+
+      function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+      }
+
+      const meta = el('div', { class: 'document-preview-meta' });
+      if (!doc.external_url) {
+        meta.appendChild(el('span', { text: `Type: ${contentType || 'unknown'}` }));
+        meta.appendChild(el('span', { text: `Size: ${formatBytes(doc.file_size || 0)}` }));
+      } else {
+        meta.appendChild(el('span', { text: `Type: Link Attachment` }));
+      }
+      meta.appendChild(el('span', { text: `Uploaded: ${formatDate(doc.created_at)}` }));
+
+      pane.appendChild(header);
+      pane.appendChild(viewer);
+      pane.appendChild(meta);
+      overlay.appendChild(pane);
+
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.remove();
+        }
+      });
+
+      document.body.appendChild(overlay);
+    } catch (err) {
+      console.error('Failed to load document preview', err);
+      this.showMessage('Preview Error', 'Failed to load preview: ' + (err.message || 'Unknown error'), 'danger');
+    }
+  },
+
+  /**
+   * Render a single task-attached DMS document row.
+   * Works for both the task side-pane and the detail view.
+   * @param {object} dmsDoc - Document row from the DMS
+   * @param {object} [options]
+   * @param {object} [options.wr] - Parent work request (for pending/archive checks)
+   * @param {boolean} [options.isArchived] - Whether the WR is archived
+   * @param {boolean} [options.showComments] - Whether to include the comments sub-section
+   * @returns {HTMLElement}
+   */
+  _renderTaskDocumentItem(dmsDoc, { wr, isArchived, showComments = false, onDelete } = {}) {
+    const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center;' });
+    const leftSide = el('div', { style: 'display:flex; flex-direction:column;' });
+    const fName = dmsDoc.original_name || dmsDoc.file_name || 'Document';
+    const extUrl = dmsDoc.external_url;
+    const isGDrive = extUrl && (extUrl.includes('drive.google.com') || extUrl === 'mock-google-drive-data-url');
+    const isFigma = extUrl && extUrl.includes('figma.com');
+
+    const canViewDms = Auth.can('dms:view');
+    if (canViewDms) {
+      if (extUrl) {
+        const link = el('a', {
+          href: extUrl,
+          target: '_blank',
+          text: (isGDrive ? '🟢 ' : isFigma ? '🟣 ' : '📎 ') + fName + (isGDrive ? ' (Google Drive)' : isFigma ? ' (Figma)' : ''),
+          style: `color:${isGDrive ? '#22c55e' : isFigma ? '#a855f7' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
+        });
+        leftSide.appendChild(link);
+      } else {
+        const link = el('a', {
+          href: '#',
+          text: '📎 ' + fName,
+          style: 'color:var(--accent); font-weight:600; text-decoration:underline; cursor:pointer;'
+        });
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.showDocumentPreview(dmsDoc.id);
+        });
+        leftSide.appendChild(link);
+      }
+    } else {
+      leftSide.appendChild(el('span', { text: '📎 ' + fName }));
+    }
+    leftSide.appendChild(el('span', { class: 'kpi-label', text: formatDate(dmsDoc.created_at) }));
+    item.appendChild(leftSide);
+
+    // Delete Button: only roles that can delete DMS rows may remove attachments
+    if (Auth.can('dms:delete')) {
+      const delBtn = el('button', {
+        class: 'btn btn-ghost btn-xs',
+        text: '×',
+        style: 'color:var(--danger); font-size:1.2rem; padding:0 4px; line-height:1;'
+      });
+      if (!disableIfPending(delBtn, wr)) {
+        delBtn.title = 'Remove Attachment';
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
+            if (!dmsDoc.id) {
+              this.showMessage('Error', 'Cannot remove attachment: missing document ID.', 'danger');
+              return;
+            }
+            try {
+              await window.apiClient.documents.remove(dmsDoc.id);
+            } catch (err) {
+              const errStr = String(err.message || err || '').toLowerCase();
+              const alreadyGone = errStr.includes('not found') || errStr.includes('404');
+              if (alreadyGone) {
+                // Document is already deleted; refresh so it disappears from the UI.
+                console.warn('Document already removed or not found, refreshing UI', dmsDoc.id);
+              } else {
+                console.error('Failed to delete DMS document', err);
+                this.showMessage('Error', 'Failed to remove attachment: ' + (err.message || 'Unknown error'), 'danger');
+                return;
+              }
+            }
+            // Invalidate task-level cache so table/detail and side pane reload clean data.
+            if (dmsDoc.linked_task_id) {
+              WorkflowData.invalidateRelatedForTask(dmsDoc.linked_task_id);
+            }
+            if (dmsDoc.work_request_id) {
+              WorkflowData.invalidateRelatedForWorkRequest(dmsDoc.work_request_id);
+            }
+            if (typeof onDelete === 'function') {
+              onDelete();
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger');
+        });
+      }
+      item.appendChild(delBtn);
+    }
+
+    if (!showComments) return item;
+
+    const commentToggle = el('button', { class: 'btn btn-ghost btn-xs', text: '💬 Comments' + (dmsDoc.comments?.length ? ` (${dmsDoc.comments.length})` : ''), style: 'margin-left: 10px; font-size: var(--text-xs); color: var(--muted);' });
+    const commentContainer = el('div', { class: 'doc-comments-container hidden', style: 'margin: 8px 0 16px 20px; padding: 12px; background: var(--bg); border-radius: var(--radius-sm); border-left: 3px solid var(--border);' });
+    commentToggle.addEventListener('click', (e) => { e.stopPropagation(); commentContainer.classList.toggle('hidden'); });
+
+    const updateCommentToggle = () => {
+      commentToggle.textContent = '💬 Comments' + (dmsDoc.comments?.length ? ` (${dmsDoc.comments.length})` : '');
+    };
+
+    const ensureCommentIds = () => {
+      if (!dmsDoc.comments) return;
+      dmsDoc.comments.forEach((c) => {
+        if (!c.id) c.id = generateUUID();
+      });
+    };
+
+    const renderComments = () => {
+      ensureCommentIds();
+      commentContainer.innerHTML = '';
+      const list = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+      if (!dmsDoc.comments || dmsDoc.comments.length === 0) {
+        list.appendChild(renderEmptyState('No comments for this document', null, { style: 'padding: 4px 0;' }));
+      } else {
+        dmsDoc.comments.forEach((c) => {
+          const commentRow = el('div', { style: 'background:var(--surface); padding:8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); position:relative;' });
+          const cUser = window.apiClient.userCache.getById(c.userId);
+          const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.75rem;' });
+          header.appendChild(el('span', { text: cUser?.name || 'Unknown', style: 'font-weight:600; color:var(--accent);' }));
+          header.appendChild(el('span', { text: formatDate(c.date), style: 'color:var(--muted);' }));
+          commentRow.appendChild(header);
+
+          const contentArea = el('div', { style: 'font-size:var(--text-sm); color:var(--fg); line-height:1.4;' });
+          contentArea.textContent = c.text;
+          commentRow.appendChild(contentArea);
+
+          // Comment actions: Edit/Delete (disabled in archive)
+          if (Auth.can('dms:edit') && !isArchived) {
+            const cActions = el('div', { style: 'display:flex; gap:8px; margin-top:8px; border-top:1px solid var(--border); padding-top:4px;' });
+            const editBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Edit', style: 'padding:0; font-size:0.7rem;' });
+            if (!disableIfPending(editBtn, wr)) {
+              editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const originalText = c.text;
+                contentArea.textContent = '';
+                const editInput = el('textarea', { class: 'form-control', style: 'width:100%; min-height:40px; font-size:0.875rem;', text: originalText });
+                contentArea.appendChild(editInput);
+                cActions.classList.add('hidden');
+                const editActions = el('div', { style: 'display:flex; gap:8px; margin-top:4px;' });
+                const saveEditBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Save' });
+                const cancelEditBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Cancel' });
+                saveEditBtn.addEventListener('click', (ev) => {
+                  ev.stopPropagation();
+                  const newText = editInput.value.trim();
+                  if (newText && c.id) {
+                    const comment = dmsDoc.comments.find(x => x.id === c.id);
+                    if (comment) {
+                      comment.text = newText;
+                      comment.date = new Date().toISOString();
+                      this._saveDocumentComments(dmsDoc.id, dmsDoc.comments)
+                        .then(() => { updateCommentToggle(); renderComments(); })
+                        .catch(() => { comment.text = originalText; comment.date = c.date; renderComments(); });
+                    }
+                  }
+                });
+                cancelEditBtn.addEventListener('click', (ev) => { ev.stopPropagation(); renderComments(); });
+                editActions.appendChild(saveEditBtn);
+                editActions.appendChild(cancelEditBtn);
+                contentArea.appendChild(editActions);
+              });
+            }
+            const delCommentBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Delete', style: 'padding:0; font-size:var(--text-xs); color:var(--danger);' });
+            if (!disableIfPending(delCommentBtn, wr)) {
+              delCommentBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showConfirm('Delete Comment', 'Are you sure you want to delete this comment?', () => {
+                  if (!c.id) return;
+                  const originalComments = [...dmsDoc.comments];
+                  dmsDoc.comments = dmsDoc.comments.filter(x => x.id !== c.id);
+                  updateCommentToggle();
+                  renderComments();
+                  this._saveDocumentComments(dmsDoc.id, dmsDoc.comments)
+                    .catch(() => {
+                      dmsDoc.comments = originalComments;
+                      updateCommentToggle();
+                      renderComments();
+                    });
+                }, 'danger');
+              });
+            }
+            cActions.appendChild(editBtn);
+            cActions.appendChild(delCommentBtn);
+            commentRow.appendChild(cActions);
+          }
+          list.appendChild(commentRow);
+        });
+      }
+      commentContainer.appendChild(list);
+
+      if (Auth.can('dms:edit') && !isArchived) {
+        const addForm = el('div', { style: 'margin-top:12px; padding-top:12px; border-top: 1px solid var(--border);' });
+        const addInput = el('textarea', { placeholder: 'Write a comment...', class: 'form-control', style: 'width:100%; min-height:50px; font-size:0.875rem;' });
+        const addBtnRow = el('div', { style: 'display:flex; gap:8px; margin-top:8px;' });
+        const saveNewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Save Comment' });
+        if (wr.isPendingApproval) {
+          disableForApproval(addInput);
+          disableForApproval(saveNewBtn);
+        } else {
+          saveNewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const text = addInput.value.trim();
+            if (text) {
+              if (!dmsDoc.comments) dmsDoc.comments = [];
+              const newComment = { id: generateUUID(), userId: Auth.user.id, date: new Date().toISOString(), text };
+              dmsDoc.comments.push(newComment);
+              addInput.value = '';
+              updateCommentToggle();
+              renderComments();
+              this._saveDocumentComments(dmsDoc.id, dmsDoc.comments).catch(() => {
+                dmsDoc.comments = dmsDoc.comments.filter(x => x.id !== newComment.id);
+                updateCommentToggle();
+                renderComments();
+              });
+            }
+          });
+        }
+        addBtnRow.appendChild(saveNewBtn);
+        addForm.appendChild(addInput);
+        addForm.appendChild(addBtnRow);
+        commentContainer.appendChild(addForm);
+      }
+    };
+    renderComments();
+    const wrapper = el('div');
+    wrapper.appendChild(item);
+    wrapper.appendChild(commentToggle);
+    wrapper.appendChild(commentContainer);
+    return wrapper;
+  },
+
+  async refreshTaskDocumentsList(taskId) {
     const task = WorkflowData.getTaskById(taskId);
     if (!task) return;
-    const wr = WorkflowData.getWorkRequestById(task.workRequestId);
+    const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
+    const isArchived = wr?.status === 'Cancelled';
 
-    const form = el('form', { class: 'form-stacked' });
-    form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Select File *' }),
-      el('input', { type: 'file', name: 'docFile', required: true })
-    ]));
-    const submitBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Upload' });
-    form.appendChild(submitBtn);
+    const listContainers = document.querySelectorAll(`.task-docs-list[data-task-id="${taskId}"]`);
+    if (listContainers.length === 0) return;
 
-    const overlay = this.showModal('Upload Document', form, null);
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const file = form.querySelector('input[name="docFile"]').files[0];
-      if (!file) return;
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      if (WorkflowData._isTempId(taskId)) {
+        container.appendChild(renderEmptyState('No documents attached'));
+        continue;
+      }
+      container.appendChild(renderEmptyState('Loading documents...'));
+      try {
+        const docsRes = await window.apiClient.documents.list({ linkedTaskId: taskId, _t: Date.now() });
+        const taskDocs = docsRes?.data || [];
+        container.innerHTML = '';
+        if (taskDocs.length === 0) {
+          container.appendChild(renderEmptyState('No documents attached'));
+        } else {
+          taskDocs.forEach((dmsDoc) => {
+            container.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+              wr,
+              isArchived,
+              showComments: true,
+              onDelete: async () => {
+                if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                  this.showTaskSidePane(taskId, null);
+                }
+                await this.refreshTaskDocumentsList(taskId);
+              }
+            }));
+          });
+        }
+      } catch (err) {
+        if (!isAbortError(err)) {
+          console.error('Failed to load task documents in detail view update', err);
+          container.innerHTML = '';
+          container.appendChild(renderEmptyState('Failed to load documents'));
+        }
+      }
+    }
+  },
 
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        const dataUrl = ev.target.result;
-        const now = new Date().toISOString();
+  async refreshTaskTimeLogsList(taskId) {
+    const listContainers = document.querySelectorAll(`.task-time-logs-list[data-task-id="${taskId}"]`);
+    if (listContainers.length === 0) return;
 
-        // 1. Update taskDocuments metadata
-        const entry = {
-          fileName: file.name,
-          uploadDate: now.slice(0, 10),
-          uploaderId: Auth.user.id
+    // Show "Loading logs..." in all containers immediately
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      container.appendChild(renderEmptyState('Loading logs...'));
+    }
+
+    let task = WorkflowData.getTaskById(taskId);
+    const activeWrId = window.SidePaneInstance?.recordId || this.detailWrId;
+    const wrId = task?.workRequestId || activeWrId;
+
+    if (!wrId) {
+      console.error('Could not resolve workRequestId for taskId', taskId);
+      for (const container of listContainers) {
+        container.innerHTML = '';
+        container.appendChild(renderEmptyState('Failed to resolve work request context'));
+      }
+      return;
+    }
+
+    try {
+      // Fetch the latest task from the backend to get freshly persisted time logs
+      const res = await window.apiClient.workRequests.getTask(wrId, taskId);
+      const serverTask = res?.data;
+      if (serverTask) {
+        const normalized = WorkflowData.normalizeTask(serverTask);
+        
+        // Merge normalized task into local cache to persist it across reload/refresh/page switch!
+        const existing = WorkflowData.getTaskById(taskId);
+        if (existing) {
+          const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+          normalized.checklist = (normalized.checklist || []).map(c => {
+            const ec = existingClById.get(c.id);
+            return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+          });
+          Object.assign(existing, normalized);
+          task = existing;
+        } else {
+          if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+          WorkflowData._tasks.push(normalized);
+          task = normalized;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load task details for time logs', err);
+      // Fallback: if fetch failed, we try to use the cached task if available
+      if (!task) {
+        for (const container of listContainers) {
+          container.innerHTML = '';
+          container.appendChild(renderEmptyState('Failed to load logs'));
+        }
+        return;
+      }
+    }
+
+    // Now task is populated (either fetched and cached, or fallback to cached)
+    const totalHours = getTaskTotalHours(task);
+    const totalLabels = document.querySelectorAll(`.task-total-hours-label[data-task-id="${taskId}"]`);
+    totalLabels.forEach(lbl => {
+      lbl.textContent = `Total: ${totalHours} hrs`;
+    });
+
+    const timeCells = document.querySelectorAll(`.task-time-cell[data-task-id="${taskId}"]`);
+    timeCells.forEach(cell => {
+      cell.textContent = totalHours > 0 ? `${totalHours}h` : 'N/A';
+    });
+
+    const wr = wrId ? WorkflowData.getWorkRequestById(wrId) : null;
+    const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
+
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      const logs = task.timeLogs || [];
+      const checklistLogGroups = [];
+      (task.checklist || []).forEach(item => {
+        if (item.timeLogs && item.timeLogs.length > 0) checklistLogGroups.push({ item, logs: item.timeLogs });
+      });
+
+      if (logs.length === 0 && checklistLogGroups.length === 0) {
+        container.appendChild(renderEmptyState(isArchived ? 'Archived' : 'No logs recorded', isArchived ? 'Time logging is disabled for archived items.' : null));
+      } else {
+        const buildTimeLogEntry = (l, subtaskName = null) => {
+          const [y, m, d] = l.date.split('-').map(Number);
+          const logDate = new Date(y, m - 1, d);
+          const dateStr = logDate.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+          const workerLabel = l.workerName || (window.apiClient.userCache.getById(l.userId)?.name || l.userId || 'Unknown');
+          const noteText = l.note ? ` — ${l.note}` : '';
+          const subtaskContext = subtaskName ? ` [Sub-task: ${subtaskName}]` : '';
+
+          return el('div', { 
+            class: 'history-item', 
+            style: 'display: flex; justify-content: space-between; align-items: center; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border); font-size: 0.8125rem;' 
+          }, [
+            el('div', {}, [
+              el('strong', { text: workerLabel, style: 'color: var(--color-text);' }),
+              el('span', { text: subtaskContext, style: 'color: var(--color-primary); font-size: 11px; font-weight: 600;' }),
+              el('span', { text: noteText, style: 'color: var(--color-text-muted);' }),
+              el('div', { class: 'history-meta', text: `${dateStr} • ${l.startTime}–${l.endTime}`, style: 'font-size: 10px; color: var(--color-text-muted);' })
+            ]),
+            el('span', { class: 'font-mono', text: `${l.hours}h`, style: 'font-weight: 700; color: var(--color-text);' })
+          ]);
         };
-        const updatedDocs = [...(task.taskDocuments || []), entry];
-        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
 
-        // 2. Also create a record in DMS documents table so it is viewable
-        const dmsRecord = {
-          fileName: file.name,
-          workRequestId: task.workRequestId,
-          document_type: 'original_scan',
-          category: 'Requirement Docs',
-          uploader: Auth.user.id,
-          uploadDate: now,
-          description: `Uploaded via task: ${task.title}`,
-          handover_log: [],
-          entity: wr?.entity || Auth.activeEntity,
-          dataUrl: dataUrl,
-          versions: [],
-          comments: [],
-          documentLifecycle: 'collected',
-          scannedBy: '',
-          envelopeId: '',
-          storedLocation: ''
-        };
-        try {
-          await window.apiClient.documents.create(dmsRecord);
-          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
-        } catch (err) {
-          console.error('Failed to create DMS document', err);
-          this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
-          return;
+        const taskLevelLogs = logs.filter(l => !l.checklistItemId);
+        if (taskLevelLogs.length > 0) {
+          const sorted = [...taskLevelLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            container.appendChild(buildTimeLogEntry(l));
+          });
         }
 
-        overlay.remove();
-        App.handleRoute();
-      };
-      reader.readAsDataURL(file);
+        checklistLogGroups.forEach(({ item, logs: itemLogs }) => {
+          const sorted = [...itemLogs].sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
+          sorted.forEach(l => {
+            container.appendChild(buildTimeLogEntry(l, item.text));
+          });
+        });
+      }
+    }
+  },
+
+  async showAddDocumentModal(taskId, triggerEl) {
+    const task = WorkflowData.getTaskById(taskId);
+    if (!task) return;
+
+    // Remove any existing popover
+    const existing = document.querySelector('.notion-embed-popover');
+    if (existing) existing.remove();
+
+    const popover = el('div', { class: 'notion-embed-popover' });
+
+    // Header: Title + Close button
+    const header = el('div', { class: 'notion-popover-header' });
+    header.appendChild(el('span', { class: 'notion-popover-title', text: 'Add Document' }));
+    const closeBtn = el('button', { class: 'notion-popover-close', text: '✕' });
+    closeBtn.addEventListener('click', () => popover.remove());
+    header.appendChild(closeBtn);
+    popover.appendChild(header);
+
+    // Create tabs header
+    const tabsHeader = el('div', { class: 'notion-popover-tabs' });
+    const contentArea = el('div', { class: 'notion-popover-content' });
+
+    let activeTab = 'upload'; // upload, link, gdrive
+
+    const renderContent = () => {
+      contentArea.innerHTML = '';
+
+      if (activeTab === 'upload') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        
+        // Drag-and-drop zone
+        const dropzone = el('div', { class: 'notion-popover-dropzone' });
+        dropzone.innerHTML = `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <div>Drag & drop file here, or click to browse</div>
+          <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+        `;
+
+        const fileInput = el('input', { type: 'file', style: 'display: none;' });
+        panel.appendChild(fileInput);
+        panel.appendChild(dropzone);
+
+        const statusLabel = el('div', { style: 'font-size: 0.75rem; text-align: center; margin-top: 8px;' });
+        const errorLabel = el('div', { style: 'font-size: 0.75rem; text-align: center; margin-top: 8px; color: var(--color-danger); font-weight: 500;' });
+        const uploadBtn = el('button', { class: 'notion-popover-submit', text: 'Upload file', style: 'margin-top: 8px; display: none;' });
+        
+        panel.appendChild(statusLabel);
+        panel.appendChild(errorLabel);
+        panel.appendChild(uploadBtn);
+
+        let selectedFile = null;
+
+        const handleFile = (file) => {
+          errorLabel.textContent = '';
+          statusLabel.textContent = '';
+          uploadBtn.style.display = 'none';
+          selectedFile = null;
+
+          if (!file) return;
+
+          // Validate file size (50MB)
+          const limit = 50 * 1024 * 1024;
+          if (file.size > limit) {
+            errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+            fileInput.value = '';
+            return;
+          }
+
+          selectedFile = file;
+          const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+          statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+          uploadBtn.style.display = 'flex';
+        };
+
+        dropzone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          handleFile(fileInput.files[0]);
+        });
+
+        dropzone.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          dropzone.classList.add('dragover');
+        });
+        dropzone.addEventListener('dragleave', () => {
+          dropzone.classList.remove('dragover');
+        });
+        dropzone.addEventListener('drop', (e) => {
+          e.preventDefault();
+          dropzone.classList.remove('dragover');
+          if (e.dataTransfer.files.length > 0) {
+            handleFile(e.dataTransfer.files[0]);
+          }
+        });
+
+        uploadBtn.addEventListener('click', async () => {
+          if (!selectedFile) return;
+          uploadBtn.disabled = true;
+          uploadBtn.textContent = 'Uploading...';
+          try {
+            await this.uploadTaskDocument(taskId, selectedFile, { category: 'OTHER' });
+            popover.remove();
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
+          } catch (err) {
+            console.error('Failed to upload document', err);
+            errorLabel.textContent = 'Upload Failed: ' + (err.message || 'Unknown error');
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload file';
+          }
+        });
+
+        contentArea.appendChild(panel);
+      } else if (activeTab === 'link') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        const linkInput = el('input', { type: 'text', class: 'notion-popover-input', placeholder: 'Paste in link...' });
+        const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Link file' });
+        
+        submitBtn.addEventListener('click', async () => {
+          const val = linkInput.value.trim();
+          if (!val) return;
+
+          let fileName = 'Linked Document';
+          try {
+            const url = new URL(val);
+            const pathParts = url.pathname.split('/');
+            const lastPart = pathParts[pathParts.length - 1];
+            if (lastPart && lastPart.includes('.')) {
+              fileName = lastPart;
+            }
+          } catch(e) {}
+
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Linking...';
+
+          try {
+            await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
+            popover.remove();
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
+          } catch (err) {
+            console.error('Failed to link document', err);
+            this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Link file';
+          }
+        });
+        
+        panel.appendChild(linkInput);
+        panel.appendChild(submitBtn);
+        contentArea.appendChild(panel);
+      } else if (activeTab === 'gdrive') {
+        const panel = el('div', { class: 'notion-popover-panel' });
+        
+        // Link GDrive URL
+        const linkInput = el('input', { type: 'text', class: 'notion-popover-input', placeholder: 'Paste Google Drive URL...' });
+        const submitBtn = el('button', { class: 'notion-popover-submit', text: 'Link GDrive File' });
+        
+        submitBtn.addEventListener('click', async () => {
+          const val = linkInput.value.trim();
+          if (!val) return;
+
+          let fileName = 'GDrive Document';
+          try {
+            const url = new URL(val);
+            const pathParts = url.pathname.split('/');
+            const lastPart = pathParts[pathParts.length - 1];
+            if (lastPart && lastPart.includes('.')) {
+              fileName = lastPart;
+            }
+          } catch(e) {}
+
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Linking...';
+
+          try {
+            await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
+            popover.remove();
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+              this.showTaskSidePane(taskId, null);
+            }
+            await this.refreshTaskDocumentsList(taskId);
+          } catch (err) {
+            console.error('Failed to link GDrive document', err);
+            this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Link GDrive File';
+          }
+        });
+
+        // Or choose from list divider
+        const divider = el('div', { 
+          text: 'or choose from Google Drive', 
+          style: 'font-size: 0.6875rem; color: var(--color-text-muted); text-align: center; margin: 8px 0; border-top: 1px solid var(--color-border); padding-top: 8px;' 
+        });
+
+        // Browse Google Drive panel
+        const fileList = el('div', { class: 'notion-popover-file-list' });
+        const driveFiles = [
+          { name: 'Operations_Handbook.pdf', size: '2.4 MB' },
+          { name: 'Q2_Strategy_Presentation.pdf', size: '5.1 MB' },
+          { name: 'WR_Vendor_Contracts.xlsx', size: '1.2 MB' },
+          { name: 'Client_Receipts_Archive.zip', size: '15.8 MB' }
+        ];
+        
+        driveFiles.forEach(f => {
+          const item = el('div', { class: 'notion-popover-file-item' });
+          item.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="color: #22c55e;"><path d="M2.5 17h19M4.5 14l3.5-6h8l3.5 6M9 9h6M12 3v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span style="font-weight: 500;">${f.name}</span>
+            </div>
+            <span style="font-size: 0.75rem; color: var(--color-text-muted);">${f.size}</span>
+          `;
+          item.addEventListener('click', async () => {
+            try {
+              await this.linkTaskDocument(taskId, 'https://docs.google.com/document/d/123456/preview', {
+                fileName: f.name,
+                isGoogleDrive: true,
+                category: 'OTHER'
+              });
+              popover.remove();
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
+            } catch (err) {
+              console.error('Failed to embed GDrive document', err);
+              this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+            }
+          });
+          fileList.appendChild(item);
+        });
+
+        panel.appendChild(linkInput);
+        panel.appendChild(submitBtn);
+        panel.appendChild(divider);
+        panel.appendChild(fileList);
+        contentArea.appendChild(panel);
+      }
+    };
+
+    // Build tabs
+    const tab1Btn = el('button', { class: 'notion-tab-btn active', text: 'Upload' });
+    const tab2Btn = el('button', { class: 'notion-tab-btn', text: 'Link' });
+    const tab3Btn = el('button', { class: 'notion-tab-btn', text: 'Google Drive' });
+
+    tab1Btn.addEventListener('click', () => {
+      if (activeTab === 'upload') return;
+      activeTab = 'upload';
+      tab1Btn.classList.add('active');
+      tab2Btn.classList.remove('active');
+      tab3Btn.classList.remove('active');
+      renderContent();
     });
+
+    tab2Btn.addEventListener('click', () => {
+      if (activeTab === 'link') return;
+      activeTab = 'link';
+      tab2Btn.classList.add('active');
+      tab1Btn.classList.remove('active');
+      tab3Btn.classList.remove('active');
+      renderContent();
+    });
+
+    tab3Btn.addEventListener('click', () => {
+      if (activeTab === 'gdrive') return;
+      activeTab = 'gdrive';
+      tab3Btn.classList.add('active');
+      tab1Btn.classList.remove('active');
+      tab2Btn.classList.remove('active');
+      renderContent();
+    });
+
+    tabsHeader.appendChild(tab1Btn);
+    tabsHeader.appendChild(tab2Btn);
+    tabsHeader.appendChild(tab3Btn);
+
+    popover.appendChild(tabsHeader);
+    popover.appendChild(contentArea);
+
+    document.body.appendChild(popover);
+    renderContent();
+
+    // Position popover with edge awareness
+    const position = () => {
+      const popoverWidth = 360;
+      if (!triggerEl) {
+        popover.style.position = 'fixed';
+        popover.style.left = '50%';
+        popover.style.top = '50%';
+        popover.style.transform = 'translate(-50%, -50%)';
+        return;
+      }
+      
+      const triggerRect = triggerEl.getBoundingClientRect();
+      
+      let left = triggerRect.left + window.scrollX;
+      let top = triggerRect.bottom + window.scrollY + 6;
+      
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      if (left + popoverWidth > viewportWidth - 16) {
+        left = viewportWidth - popoverWidth - 16;
+      }
+      if (left < 16) {
+        left = 16;
+      }
+      
+      const popoverHeight = popover.offsetHeight || 280;
+      if (triggerRect.bottom + popoverHeight > viewportHeight - 16) {
+        top = triggerRect.top + window.scrollY - popoverHeight - 6;
+      }
+      
+      popover.style.left = `${left}px`;
+      popover.style.top = `${top}px`;
+    };
+    
+    position();
+    requestAnimationFrame(position);
+
+    // Click outside handler
+    const onMouseDown = (e) => {
+      if (!popover.contains(e.target) && (!triggerEl || !triggerEl.contains(e.target))) {
+        popover.remove();
+        document.removeEventListener('mousedown', onMouseDown);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
   },
 
   async showAttachmentPopover(taskId, triggerEl, mode) {
@@ -9247,51 +11375,23 @@ const Workflow = {
           fileInput.addEventListener('change', async () => {
             const file = fileInput.files[0];
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = async (ev) => {
-              const dataUrl = ev.target.result;
-              const now = new Date().toISOString();
 
-              const entry = {
-                fileName: file.name,
-                uploadDate: now.slice(0, 10),
-                uploaderId: Auth.user.id
-              };
-              const updatedDocs = [...(task.taskDocuments || []), entry];
-              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            chooseBtn.disabled = true;
+            chooseBtn.textContent = 'Uploading...';
 
-              const dmsRecord = {
-                fileName: file.name,
-                workRequestId: task.workRequestId,
-                document_type: 'original_scan',
-                category: 'Requirement Docs',
-                uploader: Auth.user.id,
-                uploadDate: now,
-                description: `Uploaded via task: ${task.title}`,
-                handover_log: [],
-                entity: wr?.entity || Auth.activeEntity,
-                dataUrl: dataUrl,
-                versions: [],
-                comments: [],
-                documentLifecycle: 'collected',
-                scannedBy: '',
-                envelopeId: '',
-                storedLocation: ''
-              };
-              try {
-                await window.apiClient.documents.create(dmsRecord);
-                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
-              } catch (err) {
-                console.error('Failed to create DMS document', err);
-                this.showMessage('Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
-                return;
-              }
-
+            try {
+              await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
               popover.remove();
-              this.showTaskSidePane(taskId, null); // Refresh side pane!
-              App.handleRoute();
-            };
-            reader.readAsDataURL(file);
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
+            } catch (err) {
+              console.error('Failed to upload document', err);
+              this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
+              chooseBtn.disabled = false;
+              chooseBtn.textContent = 'Choose a file';
+            }
           });
           
           panel.appendChild(fileInput);
@@ -9317,46 +11417,22 @@ const Workflow = {
               }
             } catch(e) {}
 
-            const now = new Date().toISOString();
-            const entry = {
-              fileName: fileName,
-              uploadDate: now.slice(0, 10),
-              uploaderId: Auth.user.id,
-              linkUrl: val
-            };
-            const updatedDocs = [...(task.taskDocuments || []), entry];
-            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Linking...';
 
-            const dmsRecord = {
-              fileName: fileName,
-              workRequestId: task.workRequestId,
-              document_type: 'original_scan',
-              category: 'Requirement Docs',
-              uploader: Auth.user.id,
-              uploadDate: now,
-              description: `Linked via task: ${task.title}`,
-              handover_log: [],
-              entity: wr?.entity || Auth.activeEntity,
-              dataUrl: val,
-              versions: [],
-              comments: [],
-              documentLifecycle: 'collected',
-              scannedBy: '',
-              envelopeId: '',
-              storedLocation: ''
-            };
             try {
-              await window.apiClient.documents.create(dmsRecord);
-              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
+              popover.remove();
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
-              console.error('Failed to create DMS document', err);
-              this.showMessage('Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
-              return;
+              console.error('Failed to link document', err);
+              this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Link file';
             }
-
-            popover.remove();
-            this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           });
           
           panel.appendChild(linkInput);
@@ -9386,47 +11462,22 @@ const Workflow = {
               }
             } catch(e) {}
 
-            const now = new Date().toISOString();
-            const entry = {
-              fileName: fileName,
-              uploadDate: now.slice(0, 10),
-              uploaderId: Auth.user.id,
-              isGoogleDrive: true,
-              linkUrl: val
-            };
-            const updatedDocs = [...(task.taskDocuments || []), entry];
-            WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Linking...';
 
-            const dmsRecord = {
-              fileName: fileName,
-              workRequestId: task.workRequestId,
-              document_type: 'original_scan',
-              category: 'Requirement Docs',
-              uploader: Auth.user.id,
-              uploadDate: now,
-              description: `GDrive link via task: ${task.title}`,
-              handover_log: [],
-              entity: wr?.entity || Auth.activeEntity,
-              dataUrl: val,
-              versions: [],
-              comments: [],
-              documentLifecycle: 'collected',
-              scannedBy: '',
-              envelopeId: '',
-              storedLocation: ''
-            };
             try {
-              await window.apiClient.documents.create(dmsRecord);
-              WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+              await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
+              popover.remove();
+              if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                this.showTaskSidePane(taskId, null);
+              }
+              await this.refreshTaskDocumentsList(taskId);
             } catch (err) {
-              console.error('Failed to create DMS document', err);
-              this.showMessage('Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-              return;
+              console.error('Failed to link GDrive document', err);
+              this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
+              submitBtn.disabled = false;
+              submitBtn.textContent = 'Embed Google Drive file';
             }
-
-            popover.remove();
-            this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           });
           
           panel.appendChild(linkInput);
@@ -9455,46 +11506,21 @@ const Workflow = {
               <span style="font-size: 0.75rem; color: var(--color-text-muted);">${f.size}</span>
             `;
             item.addEventListener('click', async () => {
-              const now = new Date().toISOString();
-              const entry = {
-                fileName: f.name,
-                uploadDate: now.slice(0, 10),
-                uploaderId: Auth.user.id,
-                isGoogleDrive: true
-              };
-              const updatedDocs = [...(task.taskDocuments || []), entry];
-              WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-
-              const dmsRecord = {
-                fileName: f.name,
-                workRequestId: task.workRequestId,
-                document_type: 'original_scan',
-                category: 'Requirement Docs',
-                uploader: Auth.user.id,
-                uploadDate: now,
-                description: `Embedded via Google Drive: ${f.name}`,
-                handover_log: [],
-                entity: wr?.entity || Auth.activeEntity,
-                dataUrl: 'mock-google-drive-data-url',
-                versions: [],
-                comments: [],
-                documentLifecycle: 'collected',
-                scannedBy: '',
-                envelopeId: '',
-                storedLocation: ''
-              };
               try {
-                await window.apiClient.documents.create(dmsRecord);
-                WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+                await this.linkTaskDocument(taskId, 'mock-google-drive-data-url', {
+                  fileName: f.name,
+                  isGoogleDrive: true,
+                  category: 'OTHER'
+                });
+                popover.remove();
+                if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+                  this.showTaskSidePane(taskId, null);
+                }
+                await this.refreshTaskDocumentsList(taskId);
               } catch (err) {
-                console.error('Failed to create DMS document', err);
-                this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-                return;
+                console.error('Failed to embed GDrive document', err);
+                this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
               }
-
-              popover.remove();
-              this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             });
             fileList.appendChild(item);
           });
@@ -9613,46 +11639,21 @@ const Workflow = {
       item.appendChild(el('span', { text: f.size, style: 'font-size: 0.75rem; color: var(--color-text-muted);' }));
       
       item.addEventListener('click', async () => {
-        const now = new Date().toISOString();
-        const entry = {
-          fileName: f.name,
-          uploadDate: now.slice(0, 10),
-          uploaderId: Auth.user.id,
-          isGoogleDrive: true
-        };
-        const updatedDocs = [...(task.taskDocuments || []), entry];
-        WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-
-        const dmsRecord = {
-          fileName: f.name,
-          workRequestId: task.workRequestId,
-          document_type: 'original_scan',
-          category: 'Requirement Docs',
-          uploader: Auth.user.id,
-          uploadDate: now,
-          description: `Embedded via Google Drive: ${f.name}`,
-          handover_log: [],
-          entity: Auth.activeEntity,
-          dataUrl: 'mock-google-drive-data-url',
-          versions: [],
-          comments: [],
-          documentLifecycle: 'collected',
-          scannedBy: '',
-          envelopeId: '',
-          storedLocation: ''
-        };
         try {
-          await window.apiClient.documents.create(dmsRecord);
-          WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+          await this.linkTaskDocument(taskId, 'mock-google-drive-data-url', {
+            fileName: f.name,
+            isGoogleDrive: true,
+            category: 'OTHER'
+          });
+          overlay.remove();
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+            this.showTaskSidePane(taskId, null);
+          }
+          await this.refreshTaskDocumentsList(taskId);
         } catch (err) {
-          console.error('Failed to create DMS document', err);
-          this.showMessage('Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
-          return;
+          console.error('Failed to embed GDrive document', err);
+          this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
         }
-
-        overlay.remove();
-        this.showTaskSidePane(taskId, null);
-        App.handleRoute();
       });
       list.appendChild(item);
     });
@@ -9684,30 +11685,44 @@ const Workflow = {
     const overlay = this.showModal('Embed Figma File', container, null);
     
     cancelBtn.addEventListener('click', () => overlay.remove());
-    submitBtn.addEventListener('click', () => {
+    submitBtn.addEventListener('click', async () => {
       const url = input.value.trim();
       if (!url) return;
-      
-      const now = new Date().toISOString();
-      const entry = {
-        fileName: url.startsWith('http') ? 'Figma Design File' : url,
-        uploadDate: now.slice(0, 10),
-        uploaderId: Auth.user.id,
-        isFigma: true,
-        figmaUrl: url
-      };
-      
-      const updatedDocs = [...(task.taskDocuments || []), entry];
-      WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: now });
-      
-      overlay.remove();
-      this.showTaskSidePane(taskId, null);
-      App.handleRoute();
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Linking...';
+
+      try {
+        await this.linkTaskDocument(taskId, url, {
+          fileName: url.startsWith('http') ? 'Figma Design File' : url,
+          isFigma: true,
+          category: 'OTHER'
+        });
+        overlay.remove();
+        if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+          this.showTaskSidePane(taskId, null);
+        }
+        await this.refreshTaskDocumentsList(taskId);
+      } catch (err) {
+        console.error('Failed to link Figma design', err);
+        this.showMessage('Link Error', 'Failed to link Figma design: ' + (err.message || 'Unknown error'), 'danger');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Embed';
+      }
     });
   },
 
   showAddTimeLogModal(taskId, checklistItemId = null) {
-    const task = WorkflowData.getTaskById(taskId);
+    let task = WorkflowData.getTaskById(taskId);
+    if (!task) {
+      const activeWrId = window.SidePaneInstance?.recordId || Workflow.detailWrId;
+      if (activeWrId) {
+        const wr = WorkflowData.getWorkRequestById(activeWrId);
+        if (wr && wr.tasks) {
+          task = wr.tasks.find(tk => tk.id === taskId);
+        }
+      }
+    }
     let defaultWorkerName = '';
     if (checklistItemId) {
       const item = (task?.checklist || []).find(c => c.id === checklistItemId);
@@ -9826,12 +11841,12 @@ const Workflow = {
       }
 
       const currentTask = WorkflowData.getTaskById(taskId);
-      const checklist = currentTask.checklist || [];
+      const checklist = currentTask ? (currentTask.checklist || []) : [];
       const item = checklistItemId ? checklist.find(c => c.id === checklistItemId) : null;
 
       // Guard: prevent the same worker from logging twice on the same day for the same scope.
       // Scope is either a checklist item or the task itself.
-      const scopeLogs = item ? (item.timeLogs || []) : (currentTask.timeLogs || []);
+      const scopeLogs = item ? (item.timeLogs || []) : (currentTask ? (currentTask.timeLogs || []) : []);
       const alreadyLogged = entries.some(entry => scopeLogs.some(l =>
         l.date === entry.date &&
         (l.workerName || '') === workerName
@@ -9853,16 +11868,82 @@ const Workflow = {
         checklistItemId: checklistItemId || null
       }));
 
-      const updates = { updatedAt: new Date().toISOString() };
-      if (item) {
-        item.timeLogs = [...(item.timeLogs || []), ...newEntries];
-        updates.checklist = checklist;
-      } else {
-        updates.timeLogs = [...(currentTask.timeLogs || []), ...newEntries];
+      const wrId = currentTask?.workRequestId || window.SidePaneInstance?.recordId || Workflow.detailWrId;
+      if (!wrId) {
+        this.showMessage('Error', 'Could not resolve Work Request ID for this task.', 'danger');
+        return;
       }
-      WorkflowData.updateTask(taskId, updates);
-      overlay.remove();
-      App.handleRoute();
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving...';
+
+      (async () => {
+        try {
+          const getLogIds = (t) => {
+            const ids = [];
+            if (t) {
+              if (t.timeLogs) t.timeLogs.forEach(l => { if (l.id) ids.push(l.id); });
+              if (t.checklist) {
+                t.checklist.forEach(item => {
+                  if (item.timeLogs) item.timeLogs.forEach(l => { if (l.id) ids.push(l.id); });
+                });
+              }
+            }
+            return ids;
+          };
+          const existing = WorkflowData.getTaskById(taskId);
+          const existingIds = getLogIds(existing);
+
+          const res = await window.apiClient.workRequests.addTimeLogs(wrId, taskId, { logs: newEntries });
+          
+          const serverTask = res?.data;
+          const updatedIds = getLogIds(serverTask);
+          const newLogIds = updatedIds.filter(id => !existingIds.includes(id));
+
+          if (newLogIds.length > 0) {
+            submitBtn.textContent = 'Syncing...';
+            await this._waitUntilTimeLogsListable(wrId, taskId, newLogIds);
+          }
+
+          const finalRes = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+          const finalServerTask = finalRes?.data || serverTask;
+
+          const normalized = WorkflowData.normalizeTask(finalServerTask);
+          if (existing) {
+            // Preserve frontend-only extensions the backend strips
+            normalized.comments = existing.comments || [];
+            normalized.taskDocuments = existing.taskDocuments || [];
+            normalized.coAssignees = existing.coAssignees || [];
+            normalized.priority = existing.priority || normalized.priority || 'Normal';
+            
+            const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+            normalized.checklist = (normalized.checklist || []).map(c => {
+              const ec = existingClById.get(c.id);
+              return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+            });
+
+            Object.assign(existing, normalized);
+          } else {
+            if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+            WorkflowData._tasks.push(normalized);
+          }
+          WorkflowData.invalidateRelatedForWorkRequest(wrId);
+          WorkflowData.invalidateRelatedForTask(taskId);
+
+          overlay.remove();
+
+          if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
+            await this.showTaskSidePane(taskId, null);
+          } else {
+            await this.refreshTaskTimeLogsList(taskId);
+          }
+        } catch (err) {
+          console.error('Failed to log time', err);
+          this.showMessage('Failed to Log Time', err.message || 'Failed to save time log.', 'error');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save Log';
+        }
+      })();
     });
   },
 
@@ -9959,7 +12040,7 @@ const Workflow = {
         prereqSelect.appendChild(el('option', { value: '', text: '— None —' }));
         prereqSelect.appendChild(el('option', { value: '*', text: 'All Task (*)' }));
         checklistItems.slice(0, idx).forEach((prev, pIdx) => {
-          if (!prev.id) prev.id = generateId('chk');
+          if (!prev.id) prev.id = generateUUID();
           prereqSelect.appendChild(el('option', { value: prev.id, text: `${pIdx + 1}. ${prev.text}` }));
         });
         if (checklistItems.length <= 1) {
@@ -9998,7 +12079,7 @@ const Workflow = {
     const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
-      checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
+      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistFromTemplate = false;
       checklistInput.value = '';
       await renderChecklist();
@@ -10018,7 +12099,7 @@ const Workflow = {
         titleInput.value = tmpl.title;
         checklistItems = tmpl.defaultChecklist.map(item => {
           const isObj = typeof item === 'object' && item && item.text;
-          return { id: generateId('chk'), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] };
+          return { id: generateUUID(), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] };
         });
         coAssignees = (tmpl.coAssignees || []).slice();
         checklistFromTemplate = true;
@@ -10222,7 +12303,7 @@ const Workflow = {
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
       const newTask = {
         id: generateId('t'),
@@ -10238,7 +12319,7 @@ const Workflow = {
         updatedAt: new Date().toISOString(),
         predecessors,
         checklist: checklistItems.map(item => ({
-          id: item.id || generateId('chk'),
+          id: item.id || generateUUID(),
           text: item.text,
           category: item.category || 'subtask',
           completed: false,
@@ -10251,33 +12332,51 @@ const Workflow = {
         taskDocuments: [],
         comments: []
       };
-      const result = await PendingChanges.submit('tasks', newTask, true);
-      if (result.approved) {
-        // Optimistic task insert so the WR detail/board task count updates immediately.
-        WorkflowData._addOptimisticTask(newTask);
-        Workflow._skipNextListFetch = true;
-        App.handleRoute();
-        try {
-          await WorkflowData.createTask(newTask);
-          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-        } catch (e) {
-          console.error('Failed to add task', e);
-          WorkflowData._removeTask(newTask.id);
-          Workflow._skipNextListFetch = true;
-          App.handleRoute();
-          this.showMessage('Error', e.message || 'Unable to add task.', 'error');
-          return;
-        }
-      }
-      const msgConfig = {
-        title: 'Task Added',
-        message: result.approved
+
+      let submitResult = null;
+
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Adding Task',
+        message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
+        apiCall: async () => {
+          submitResult = await PendingChanges.submit('tasks', newTask, true);
+          if (submitResult.approved) {
+            // Optimistic insert so counts update immediately under the overlay.
+            WorkflowData._addOptimisticTask(newTask);
+            try {
+              if (submitResult.record) {
+                const serverTask = WorkflowData.normalizeTask(submitResult.record);
+                serverTask.workRequestId = newTask.workRequestId;
+                WorkflowData._removeTask(newTask.id);
+                this._syncTaskToCaches(serverTask);
+                return { data: serverTask };
+              }
+              const created = await WorkflowData.createTask(newTask);
+              this._syncTaskToCaches(created);
+              return { data: created };
+            } catch (e) {
+              console.error('Failed to add task', e);
+              WorkflowData._removeTask(newTask.id);
+              throw e;
+            }
+          } else {
+            return { data: submitResult };
+          }
+        },
+        successTitle: 'Task Added',
+        successMessage: () => submitResult && submitResult.approved
           ? 'Task has been added to the work request.'
           : 'Task addition has been submitted for Manager approval.',
-        type: 'success'
-      };
-      closeFormPanelAndRoute('#operations/detail/' + wrId, msgConfig);
+        errorTitle: 'Failed to Add Task'
+      });
+
+      if (runResult.success) {
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+        this._invalidateCountsAndSidebar();
+        closeFormPanelAndRoute('#operations/detail/' + wrId);
+      } else {
+        App.handleRoute();
+      }
     });
 
     return form;
@@ -10469,7 +12568,7 @@ const Workflow = {
         prereqSelect.appendChild(el('option', { value: '', text: '— None —' }));
         prereqSelect.appendChild(el('option', { value: '*', text: 'All Task (*)' }));
         checklistItems.slice(0, idx).forEach((prev, pIdx) => {
-          if (!prev.id) prev.id = generateId('chk');
+          if (!prev.id) prev.id = generateUUID();
           prereqSelect.appendChild(el('option', { value: prev.id, text: `${pIdx + 1}. ${prev.text}` }));
         });
         if (checklistItems.length <= 1) {
@@ -10507,7 +12606,7 @@ const Workflow = {
     const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
-      checklistItems.push({ id: generateId('chk'), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
+      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
       checklistInput.value = '';
       await renderChecklist();
     };
@@ -10656,7 +12755,7 @@ const Workflow = {
         PendingChanges.editingPendingId = null;
       }
     });
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const groundWorkerName = gwDropdown.searchText.trim();
@@ -10664,20 +12763,35 @@ const Workflow = {
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName);
 
-      WorkflowData.updateTask(task.id, {
-        title: data.title.trim(),
-        assigneeId: res.id,
-        assigneeName: res.name,
-        coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
-        priority: data.priority || 'Priority',
-        dueDate: data.dueDate || '',
-        predecessors: predecessors,
-        checklist: checklistItems,
-        updatedAt: new Date().toISOString()
+      const runResult = await this.runBlockingArchiveAction({
+        title: 'Saving Task',
+        message: `Please wait while "${task.title || 'the task'}" is being updated...`,
+        apiCall: async () => {
+          await WorkflowData.updateTask(task.id, {
+            title: data.title.trim(),
+            assigneeId: res.id,
+            assigneeName: res.name,
+            coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
+            priority: data.priority || 'Priority',
+            dueDate: data.dueDate || '',
+            predecessors: predecessors,
+            checklist: checklistItems,
+            updatedAt: new Date().toISOString()
+          });
+          const updated = WorkflowData.getTaskById(task.id);
+          this._syncTaskToCaches(updated);
+          return { data: updated };
+        },
+        successTitle: 'Task Saved',
+        successMessage: 'Task has been successfully updated.',
+        errorTitle: 'Failed to Save Task'
       });
 
+      if (runResult.success) {
+        this._invalidateCountsAndSidebar();
+      }
       overlay.remove();
       if (onSaved) onSaved();
     });
@@ -10987,24 +13101,32 @@ const Workflow = {
       return el('div');
     }
 
-    await Promise.all([this._loadRetainerTemplates(), window.apiClient.clientCache.ensure()]);
+    await Promise.all([this.ensureRetainerTemplates(), window.apiClient.clientCache.ensure()]);
     const entity = Auth.activeEntity;
-    const templates = (this._retainerTemplates || []).filter(t => t.entity === entity);
+    const templates = (this._retainerTemplates || []).filter(t => this._entityMatchesRetainerTemplate(t, entity));
 
     const wrapper = el('div', { class: 'page-content-section' });
 
     const backlogItems = templates.map(t => {
       const client = window.apiClient.clientCache.getById(t.clientId);
+      const assigneeUser = t.assignedTo ? window.apiClient.userCache.getById(t.assignedTo) : null;
+      const tags = [
+        { text: client?.name || 'No Client', type: 'client' },
+        { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
+      ];
+      if (assigneeUser) {
+        tags.push({ text: assigneeUser.name, type: 'user' });
+      }
+      if (t.priority) {
+        tags.push({ text: t.priority, type: 'priority' });
+      }
+      tags.push({ text: String((t.tasks || []).length), type: 'points', title: 'Tasks count' });
+
       return {
         id: t.id,
         name: t.name,
         iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-        tags: [
-          { text: client?.name || 'No Client', type: 'client' },
-          { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
-          { text: formatPHP(t.pfAmount || 0), type: 'amount' },
-          { text: String((t.tasks || []).length), type: 'points', title: 'Tasks count' }
-        ]
+        tags
       };
     });
 
@@ -11043,11 +13165,8 @@ const Workflow = {
             this.showConfirm(
               title,
               message,
-              async () => {
-                for (const id of ids) {
-                  await this._deleteRetainerTemplate(id);
-                }
-                App.handleRoute();
+              () => {
+                this.deleteRetainerTemplates(ids);
               },
               'danger'
             );
@@ -11077,9 +13196,8 @@ const Workflow = {
           text: 'Delete',
           className: 'btn btn-danger btn-xs',
           onClick: () => {
-            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, async () => {
-              await this._deleteRetainerTemplate(item.id);
-              App.handleRoute();
+            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, () => {
+              this.deleteRetainerTemplates([item.id]);
             }, 'danger');
           }
         }
@@ -11087,6 +13205,13 @@ const Workflow = {
     });
 
     wrapper.appendChild(backlog);
+
+    // Silently merge any new/updated server templates without overwriting
+    // optimistic records.
+    this.backgroundRefreshRetainerTemplates().catch(err => {
+      if (!isAbortError(err)) console.warn('Retainer template background refresh failed', err);
+    });
+
     return wrapper;
   },
 
@@ -11115,10 +13240,7 @@ const Workflow = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
           this.showConfirm('Delete Template', 'Are you sure you want to delete this template?', () => {
-            this._deleteRetainerTemplate(template.id);
-            this.view = 'templates'; 
-            this.templateEditingId = null; 
-            closeFormPanelAndRoute('#operations');
+            this.deleteRetainerTemplates([template.id]);
           }, 'danger');
         });
         topActions.appendChild(delBtn);
@@ -11130,14 +13252,14 @@ const Workflow = {
 
     // ── Title free-form ──
     const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
-    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Template Name' }));
-    const nameInput = el('input', {
-      type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input',
-      placeholder: 'New Work Request Template', required: true, value: template?.name || ''
+    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Title' }));
+    const titleInput = el('input', {
+      type: 'text', name: 'title', class: 'notion-freeform-input notion-title-input',
+      placeholder: 'New Work Request Template', required: true, value: template?.title || template?.name || ''
     });
-    titleSection.appendChild(nameInput);
+    titleSection.appendChild(titleInput);
     if (!template) {
-      setTimeout(() => { nameInput.focus(); }, 60);
+      setTimeout(() => { titleInput.focus(); }, 60);
     }
     form.appendChild(titleSection);
 
@@ -11158,6 +13280,32 @@ const Workflow = {
     clientGroup.appendChild(clientSel);
     form.appendChild(clientGroup);
 
+    const assigneeGroup = el('div', { class: 'form-group' });
+    assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
+    const assigneeSel = el('select', { name: 'assignedTo' });
+    assigneeSel.appendChild(el('option', { value: '', text: '— Select Assignee —' }));
+    (window.apiClient.userCache._users || []).filter(u => {
+      const userEntities = (u.entities || []).map(e => e.toUpperCase());
+      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(entity.toUpperCase());
+    }).forEach(u => {
+      const opt = el('option', { value: u.id, text: u.name });
+      if (template && template.assignedTo === u.id) opt.selected = true;
+      assigneeSel.appendChild(opt);
+    });
+    assigneeGroup.appendChild(assigneeSel);
+    form.appendChild(assigneeGroup);
+
+    const priorityGroup = el('div', { class: 'form-group' });
+    priorityGroup.appendChild(el('label', { text: 'Priority' }));
+    const prioritySel = el('select', { name: 'priority' });
+    ['Normal', 'Urgent'].forEach(p => {
+      const opt = el('option', { value: p, text: p });
+      if (template && template.priority === p) opt.selected = true;
+      prioritySel.appendChild(opt);
+    });
+    priorityGroup.appendChild(prioritySel);
+    form.appendChild(priorityGroup);
+
     const scheduleGroup = el('div', { class: 'form-group' });
     scheduleGroup.appendChild(el('label', { text: 'Schedule *' }));
     const scheduleSel = el('select', { name: 'schedule', required: true });
@@ -11169,11 +13317,6 @@ const Workflow = {
     scheduleGroup.appendChild(scheduleSel);
     form.appendChild(scheduleGroup);
 
-    form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Professional Fee (₱) *' }),
-      el('input', { type: 'number', name: 'pfAmount', min: 0, step: 0.01, required: true, value: template?.pfAmount || '' })
-    ]));
-
     // Template Tasks section — heading outside the line-item container for visual grouping.
     form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Template Tasks' }));
     const tasksSection = el('div', { class: 'notion-line-items' });
@@ -11181,7 +13324,10 @@ const Workflow = {
     tasksSection.appendChild(tasksList);
 
     const addTaskBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Task' });
-    addTaskBtn.addEventListener('click', async () => await this.addTaskRow(tasksList));
+    addTaskBtn.addEventListener('click', async () => {
+      await this.addTaskRow(tasksList);
+      this.updatePredecessorOptions(tasksList);
+    });
     tasksSection.appendChild(addTaskBtn);
 
     form.appendChild(tasksSection);
@@ -11267,28 +13413,70 @@ const Workflow = {
 
     const record = {
       id: this.templateEditingId || generateId('rt'),
-      name: data.name.trim(),
+      title: data.title.trim(),
+      name: data.title.trim(),
       description: data.description?.trim() || '',
-      clientId: data.clientId,
+      clientId: data.clientId || null,
       entity: Auth.activeEntity,
-      schedule: data.schedule,
-      pfAmount: parseFloat(data.pfAmount) || 0,
+      schedule: data.schedule || null,
+      priority: data.priority || 'Normal',
+      assignedTo: data.assignedTo || null,
+      pfAmount: 0,
       tasks: taskRecords,
       updatedAt: now
     };
 
-    if (this.templateEditingId) {
-      record.createdAt = this._getRetainerTemplateById(this.templateEditingId)?.createdAt || now;
-      this._updateRetainerTemplate(this.templateEditingId, record);
-    } else {
-      record.createdAt = now;
-      this._skipNextListFetch = true;
-      await this._addRetainerTemplate(record);
-    }
+    const isEdit = !!this.templateEditingId;
 
-    this.view = 'templates';
-    this.templateEditingId = null;
-    closeFormPanelAndRoute('#operations');
+    const runResult = await this.runBlockingArchiveAction({
+      title: isEdit ? 'Updating Template' : 'Creating Template',
+      message: isEdit
+        ? `Please wait while template "${record.title}" is being updated...`
+        : `Please wait while template "${record.title}" is being created...`,
+      apiCall: async () => {
+        if (isEdit) {
+          record.createdAt = this._getRetainerTemplateById(this.templateEditingId)?.createdAt || now;
+          const res = await window.apiClient.operations.updateTemplate(this.templateEditingId, record);
+          const updated = this._normalizeRetainerTemplate(res.data);
+          if (!updated.entity) updated.entity = record.entity;
+          
+          if (!this._retainerTemplates) this._retainerTemplates = [];
+          const idx = this._retainerTemplates.findIndex(t => t.id === this.templateEditingId);
+          if (idx >= 0) this._retainerTemplates[idx] = updated;
+          else this._retainerTemplates.push(updated);
+          
+          return { data: updated };
+        } else {
+          record.createdAt = now;
+          const res = await window.apiClient.operations.createTemplate(record);
+          const created = this._normalizeRetainerTemplate(res.data);
+          if (!created.entity) created.entity = record.entity;
+          
+          if (!this._retainerTemplates) this._retainerTemplates = [];
+          const idx = this._retainerTemplates.findIndex(t => t.id === record.id);
+          if (idx >= 0) this._retainerTemplates[idx] = created;
+          else this._retainerTemplates.push(created);
+          
+          return { data: created };
+        }
+      },
+      successTitle: isEdit ? 'Template Updated' : 'Template Created',
+      successMessage: isEdit
+        ? 'Retainer template has been successfully updated.'
+        : 'Retainer template has been successfully created.',
+      errorTitle: isEdit ? 'Failed to Update Template' : 'Failed to Create Template'
+    });
+
+    if (runResult.success) {
+      this.view = 'templates';
+      this.templateEditingId = null;
+      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+      this._invalidateCountsAndSidebar();
+      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+      closeFormPanelAndRoute('#operations');
+    } else {
+      App.handleRoute();
+    }
   },
 
   async renderArchive() {
@@ -11297,14 +13485,67 @@ const Workflow = {
     const self = this;
     const isManagerial = Auth.isManagerial();
 
+    // Build a task map that merges the local task cache with any tasks returned
+    // by the archived server fetch. This lets visibility checks use the same
+    // canViewWrWithTasks helper that tab nav uses, and avoids losing staff-level
+    // visibility when the server response carries fresh tasks.
+    const taskMap = { ...(this._tempTaskMap || buildTaskMap()) };
+
     const wrFilter = wr => {
       const wrEnt = (wr.entity || '').toUpperCase();
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt) : wrEnt === entity.toUpperCase());
-      return matchesEntity && Auth.canViewWr(wr);
+      return matchesEntity && Auth.canViewWrWithTasks(wr, taskMap);
     };
 
-    const accomplished = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Completed' && wr.archived === true);
-    const cancelled = WorkflowData.getWorkRequestsWhere(wr => wrFilter(wr) && wr.status === 'Cancelled');
+    const isFirstPageOrSkip = (this._archivePage || 1) === 1 || (this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration);
+    const skipServerFetch = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
+
+    let archivedWrs = [];
+    if (!skipServerFetch) {
+      try {
+        const res = await window.apiClient.workRequests.list({ archived: true, includeTasks: true });
+        archivedWrs = (res.data || []).map(wr => WorkflowData.normalizeWorkRequest(wr));
+      } catch (e) {
+        console.error('Failed to load archived work requests', e);
+      }
+    }
+
+    // Merge server-fetched tasks into the visibility map so staff-level checks
+    // still work for server-only archived rows. Fall back to server tasks when
+    // the local task entry is empty too, since an empty local array would block
+    // visibility even though the server returned assigned tasks.
+    archivedWrs.forEach(wr => {
+      if (wr.tasks && wr.tasks.length && (!taskMap[wr.id] || taskMap[wr.id].length === 0)) {
+        taskMap[wr.id] = wr.tasks;
+      }
+    });
+
+    // On the first page or during an optimistic skip, merge locally archived/cancelled
+    // rows so a just-archived/cancelled WR remains visible without waiting for the server.
+    const localArchived = isFirstPageOrSkip
+      ? WorkflowData.getAllWorkRequests().filter(wr => wrFilter(wr) && (wr.archived === true || wr.status === 'Cancelled'))
+      : [];
+    const wrMap = new Map();
+    archivedWrs.forEach(wr => wrMap.set(wr.id, wr));
+    localArchived.forEach(wr => {
+      if (!wrMap.has(wr.id)) wrMap.set(wr.id, wr);
+    });
+    const accomplished = Array.from(wrMap.values()).filter(wr => {
+      const cached = WorkflowData.getWorkRequestById(wr.id);
+      const state = cached || wr;
+      // Exclude work requests that have been restored to an active state locally.
+      return wrFilter(state) && state.archived === true && state.status === 'Completed';
+    });
+    const cancelledMap = new Map();
+    archivedWrs.concat(WorkflowData.getAllWorkRequests()).forEach(wr => {
+      const cached = WorkflowData.getWorkRequestById(wr.id);
+      const state = cached || wr;
+      // A cancelled row belongs in the archive only if it is NOT currently active.
+      if (wrFilter(state) && state.status === 'Cancelled' && !Workflow._isActiveWorkRequest(state)) {
+        cancelledMap.set(state.id, state);
+      }
+    });
+    const cancelled = Array.from(cancelledMap.values());
 
     const rejectedRecords = WorkflowData.getPendingApprovalsWhere(pc => {
       if (pc.status !== 'rejected') return false;
@@ -11328,7 +13569,7 @@ const Workflow = {
           {
             label: 'View',
             icon: ArchivePage.icons.view,
-            onClick: () => { location.hash = '#operations/detail/' + wr.id; }
+            onClick: () => { this._navigateToWrDetail(wr.id); }
           },
           ...(category === 'accomplished' ? [{
             label: 'Unarchive',
@@ -11343,11 +13584,36 @@ const Workflow = {
             onClick: () => {
               self.showConfirm('Restore Work Request',
                 `Restore "${wr.title}" to Draft? Tasks will remain Cancelled and must be reassigned manually.`,
-                () => {
-                  Workflow._skipNextListFetch = true;
-                  WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() });
-                  App.handleRoute();
-                }, 'warning');
+                async () => {
+                  await self._withArchiveLock(async () => {
+                    await self.runBlockingArchiveAction({
+                      title: 'Restoring Work Request',
+                      message: `Please wait while "${wr.title}" is being restored to Draft...`,
+                      apiCall: () => WorkflowData.updateWorkRequest(wr.id, { status: 'Draft', archived: false, updatedAt: new Date().toISOString() }),
+                      successTitle: 'Restored',
+                      successMessage: `Work request "${wr.title}" has been restored to Draft.`,
+                      errorTitle: 'Failed to Restore Work Request',
+                      onSuccess: async (res) => {
+                        self._applyServerRecordToCache(wr.id, res?.data);
+                      },
+                      onAfterConfirm: async () => {
+                        if (typeof window.apiClient?.workRequestCache?.invalidate === 'function') {
+                          window.apiClient.workRequestCache.invalidate();
+                        }
+                        if (typeof window.apiClient?.workRequests?.invalidateCounts === 'function') {
+                          window.apiClient.workRequests.invalidateCounts();
+                        }
+                        if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+                          WorkflowData.invalidateRelatedForWorkRequest(wr.id);
+                        }
+                        App.updateSidebarNotifications().catch(() => {});
+                        App.handleRoute();
+                      }
+                    });
+                  });
+                },
+                'warning'
+              );
             }
           }] : [])
         ]
@@ -11374,23 +13640,53 @@ const Workflow = {
             label: 'View Request',
             icon: ArchivePage.icons.view,
             onClick: () => {
-              if (wr) location.hash = '#operations/detail/' + wr.id;
+              if (wr) this._navigateToWrDetail(wr.id);
             }
           }
         ]
       };
     };
 
+    const storageKey = 'erp_archive_category_operations';
+    const selectedCategory = sessionStorage.getItem(storageKey) || 'all';
+
+    const accomplishedItems = accomplished.map(wr => buildWrItem(wr, 'accomplished'));
+    const cancelledItems = cancelled.map(wr => buildWrItem(wr, 'cancelled'));
+    const rejectedItems = rejectedRecords.map(buildRejectedItem);
+
+    let totalFiltered = 0;
+    if (selectedCategory === 'all') {
+      totalFiltered = accomplishedItems.length + cancelledItems.length + rejectedItems.length;
+    } else if (selectedCategory === 'accomplished') {
+      totalFiltered = accomplishedItems.length;
+    } else if (selectedCategory === 'cancelled') {
+      totalFiltered = cancelledItems.length;
+    } else if (selectedCategory === 'rejected') {
+      totalFiltered = rejectedItems.length;
+    }
+
+    const page = this._archivePage || 1;
+    const limit = this._archiveLimit || 10;
+
     return ArchivePage.render({
       module: 'operations',
       categoryLabels: { accomplished: 'Completed', cancelled: 'Cancelled', rejected: 'Rejected' },
       categories: {
-        accomplished: accomplished.map(wr => buildWrItem(wr, 'accomplished')),
-        cancelled: cancelled.map(wr => buildWrItem(wr, 'cancelled')),
-        rejected: rejectedRecords.map(buildRejectedItem)
+        accomplished: accomplishedItems,
+        cancelled: cancelledItems,
+        rejected: rejectedItems
       },
       emptyText: 'Archive is empty.',
-      renderCallback: () => { self.renderArchive().catch(() => {}); }
+      renderCallback: () => { self.renderArchive().catch(() => {}); },
+      pagination: {
+        page,
+        limit,
+        total: totalFiltered,
+        onPage: (newPage) => {
+          self._archivePage = newPage;
+          App.handleRoute();
+        }
+      }
     });
   },
 
@@ -11402,7 +13698,6 @@ const Workflow = {
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
 
-    const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
     const workRequest = {
       id: generateId('wr'),
       title: `${template.name} (${titleSuffix})`,
@@ -11414,38 +13709,21 @@ const Workflow = {
       status: 'Draft',
       createdAt: nowIso,
       updatedAt: nowIso,
-      boardOrder: maxOrder + 1000
+      boardOrder: 0
     };
 
-    // Optimistic WR insert so the active list badge updates immediately.
+    // Optimistic WR + tasks insert so the active list badge updates immediately.
     WorkflowData._addOptimisticWorkRequest(workRequest);
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
-    let createdWr;
-    try {
-      createdWr = await WorkflowData.createWorkRequest(workRequest);
-    } catch (e) {
-      console.error('Failed to generate work request from template', e);
-      WorkflowData._removeWorkRequest(workRequest.id);
-      Workflow._skipNextListFetch = true;
-      App.handleRoute();
-      this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
-      return;
-    }
-    const wrId = createdWr ? createdWr.id : workRequest.id;
-
+    this._updateCounts(1, 0);
     const idMap = new Map();
     (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
-
-    // Insert tasks optimistically, then confirm with API. Roll back only failures.
-    const failedTaskTitles = [];
     const taskRecords = [];
-    for (const t of (template.tasks || [])) {
-      const idx = (template.tasks || []).indexOf(t);
+    for (let idx = 0; idx < (template.tasks || []).length; idx++) {
+      const t = template.tasks[idx];
       const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
       const taskRecord = {
         id: idMap.get(t.id),
-        workRequestId: wrId,
+        workRequestId: workRequest.id,
         title: t.title,
         assigneeId: t.assigneeId || null,
         assigneeName: t.assigneeName || null,
@@ -11459,9 +13737,27 @@ const Workflow = {
       taskRecords.push(taskRecord);
       WorkflowData._addOptimisticTask(taskRecord);
     }
-    Workflow._skipNextListFetch = true;
+    const myGen = Workflow._startSkipGeneration();
     App.handleRoute();
+
+    let createdWr;
+    try {
+      createdWr = await WorkflowData.createWorkRequest(workRequest);
+    } catch (e) {
+      console.error('Failed to generate work request from template', e);
+      WorkflowData._removeWorkRequest(workRequest.id);
+      for (const t of taskRecords) WorkflowData._removeTask(t.id);
+      this._updateCounts(-1, 0);
+      Workflow._clearSkipGenerationIfLatest(myGen);
+      App.handleRoute();
+      this.showMessage('Error', e.message || 'Unable to generate work request.', 'error');
+      return;
+    }
+    const wrId = createdWr ? createdWr.id : workRequest.id;
+
+    const failedTaskTitles = [];
     for (const taskRecord of taskRecords) {
+      taskRecord.workRequestId = wrId;
       try {
         await WorkflowData.createTask(taskRecord);
       } catch (e) {
@@ -11475,8 +13771,22 @@ const Workflow = {
       this.showMessage('Warning', `Work request generated but some tasks failed: ${failedTaskTitles.join(', ')}`, 'warning');
     }
 
+    // Sync generated work request to the shared cache so billing/disbursement
+    // forms can select it without a manual refresh.
+    if (createdWr && window.apiClient?.workRequestCache) {
+      const cache = window.apiClient.workRequestCache;
+      if (!Array.isArray(cache._wrs)) cache._wrs = [];
+      const normalizedForCache = { ...createdWr, tasks: createdWr.tasks || [] };
+      const idx = cache._wrs.findIndex(wr => wr.id === normalizedForCache.id);
+      if (idx >= 0) cache._wrs[idx] = normalizedForCache;
+      else cache._wrs.push(normalizedForCache);
+      cache._loadedAt = Date.now();
+    }
+
     if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
     if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+    Workflow._clearSkipGenerationIfLatest(myGen);
+    App.handleRoute();
     location.hash = '#operations/detail/' + wrId;
   },
 
@@ -11489,99 +13799,119 @@ const Workflow = {
     let generatedCount = 0;
     const failedTemplates = [];
 
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
-
-    for (const templateId of templateIds) {
-      const template = this._getRetainerTemplateById(templateId);
-      if (!template) continue;
-
-      const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
-      const maxOrder = Math.max(0, ...WorkflowData.getAllWorkRequests().map(r => r.boardOrder || 0));
-
-      const workRequest = {
-        id: generateId('wr'),
-        title: `${template.name} (${titleSuffix})`,
-        description: template.description || '',
-        clientId: template.clientId,
-        priority: 'Priority',
-        dueDate: dueDate.toISOString().slice(0, 10),
-        entity: template.entity,
-        status: 'Draft',
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        boardOrder: maxOrder + 1000
-      };
-
-      WorkflowData._addOptimisticWorkRequest(workRequest);
-      let createdWr;
-      try {
-        createdWr = await WorkflowData.createWorkRequest(workRequest);
-      } catch (e) {
-        console.error('Failed to generate work request from template', template.name, e);
-        WorkflowData._removeWorkRequest(workRequest.id);
-        failedTemplates.push(template.name || templateId);
-        continue;
-      }
-      const wrId = createdWr ? createdWr.id : workRequest.id;
-
-      const idMap = new Map();
-      (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
-
-      const tmplTasks = template.tasks || [];
-      const failedTaskTitles = [];
-      const taskRecords = [];
-      for (let idx = 0; idx < tmplTasks.length; idx++) {
-        const t = tmplTasks[idx];
-        const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
-        const taskRecord = {
-          id: idMap.get(t.id),
-          workRequestId: wrId,
-          title: t.title,
-          assigneeId: t.assigneeId || null,
-          assigneeName: t.assigneeName || null,
-          predecessors: mappedPreds,
-          status: 'Draft',
-          dueDate: workRequest.dueDate,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-          sortOrder: idx
-        };
-        taskRecords.push(taskRecord);
-        WorkflowData._addOptimisticTask(taskRecord);
-      }
-      for (const taskRecord of taskRecords) {
+    const runResult = await this.runBlockingArchiveAction({
+      title: templateIds.length === 1 ? 'Generating Work Request' : 'Generating Work Requests',
+      message: templateIds.length === 1
+        ? 'Please wait while the Work Request is being generated...'
+        : `Please wait while the Work Requests are being generated from ${templateIds.length} templates...`,
+      apiCall: async () => {
+        const myGen = Workflow._startSkipGeneration();
         try {
-          await WorkflowData.createTask(taskRecord);
-        } catch (e) {
-          console.error('Failed to create generated task', taskRecord.title, e);
-          WorkflowData._removeTask(taskRecord.id);
-          failedTaskTitles.push(taskRecord.title);
+          for (const templateId of templateIds) {
+            const template = this._getRetainerTemplateById(templateId);
+            if (!template) continue;
+
+            const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
+            const workRequest = {
+              id: generateId('wr'),
+              title: `${template.name} (${titleSuffix})`,
+              description: template.description || '',
+              clientId: template.clientId,
+              priority: template.priority || 'Normal',
+              assignedTo: template.assignedTo || null,
+              dueDate: dueDate.toISOString().slice(0, 10),
+              entity: template.entity,
+              status: 'Draft',
+              createdAt: nowIso,
+              updatedAt: nowIso,
+              boardOrder: 0
+            };
+
+            WorkflowData._addOptimisticWorkRequest(workRequest);
+            this._updateCounts(1, 0);
+            let createdWr;
+            try {
+              createdWr = await WorkflowData.createWorkRequest(workRequest);
+            } catch (e) {
+              console.error('Failed to generate work request from template', template.name, e);
+              WorkflowData._removeWorkRequest(workRequest.id);
+              this._updateCounts(-1, 0);
+              failedTemplates.push(template.name || templateId);
+              continue;
+            }
+            const wrId = createdWr ? createdWr.id : workRequest.id;
+
+            const idMap = new Map();
+            (template.tasks || []).forEach(t => idMap.set(t.id, generateId('t')));
+
+            const tmplTasks = template.tasks || [];
+            const failedTaskTitles = [];
+            const taskRecords = [];
+            for (let idx = 0; idx < tmplTasks.length; idx++) {
+              const t = tmplTasks[idx];
+              const mappedPreds = (t.predecessors || []).map(pid => idMap.get(pid)).filter(Boolean);
+              const taskRecord = {
+                id: idMap.get(t.id),
+                workRequestId: wrId,
+                title: t.title,
+                assigneeId: t.assigneeId || null,
+                assigneeName: t.assigneeName || null,
+                predecessors: mappedPreds,
+                status: 'Draft',
+                dueDate: workRequest.dueDate,
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                sortOrder: idx
+              };
+              taskRecords.push(taskRecord);
+              WorkflowData._addOptimisticTask(taskRecord);
+            }
+            for (const taskRecord of taskRecords) {
+              try {
+                await WorkflowData.createTask(taskRecord);
+              } catch (e) {
+                console.error('Failed to create generated task', taskRecord.title, e);
+                WorkflowData._removeTask(taskRecord.id);
+                failedTaskTitles.push(taskRecord.title);
+              }
+            }
+
+            if (failedTaskTitles.length > 0) {
+              failedTemplates.push(`${template.name} (tasks: ${failedTaskTitles.join(', ')})`);
+            } else {
+              generatedCount++;
+            }
+
+            // Sync generated work request to the shared cache so billing/disbursement
+            // forms can select it without a manual refresh.
+            if (createdWr && window.apiClient?.workRequestCache) {
+              const cache = window.apiClient.workRequestCache;
+              if (!Array.isArray(cache._wrs)) cache._wrs = [];
+              const normalizedForCache = { ...createdWr, tasks: taskRecords };
+              const idx = cache._wrs.findIndex(wr => wr.id === normalizedForCache.id);
+              if (idx >= 0) cache._wrs[idx] = normalizedForCache;
+              else cache._wrs.push(normalizedForCache);
+              cache._loadedAt = Date.now();
+            }
+          }
+          
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+          Workflow._clearSkipGenerationIfLatest(myGen);
+
+          if (failedTemplates.length > 0) {
+            throw new Error(`Generation warnings: ${failedTemplates.join('; ')}`);
+          }
+          return { success: true };
+        } catch (err) {
+          Workflow._clearSkipGenerationIfLatest(myGen);
+          throw err;
         }
-      }
-
-      if (failedTaskTitles.length > 0) {
-        failedTemplates.push(`${template.name} (tasks: ${failedTaskTitles.join(', ')})`);
-      } else {
-        generatedCount++;
-      }
-    }
-
-    Workflow._skipNextListFetch = true;
-    App.handleRoute();
-
-    if (failedTemplates.length > 0) {
-      this.showMessage('Error', `Some generations failed: ${failedTemplates.join('; ')}`, 'error');
-    } else {
-      this.showMessage(
-        'Bulk Generation Complete',
-        `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
-        'success'
-      );
-    }
-
-    if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-    if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+      },
+      successTitle: 'Bulk Generation Complete',
+      successMessage: `Successfully generated ${generatedCount} Work Requests in Draft status from the selected templates.`,
+      errorTitle: 'Generation Warnings/Errors'
+    });
 
     this.view = 'list';
     App.handleRoute();

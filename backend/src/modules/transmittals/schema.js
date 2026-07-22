@@ -40,6 +40,7 @@ const updateTransmittalSchema = z.object({
   notes: z.string().max(2000).optional().nullable(),
   recipientName: z.string().max(255).optional().nullable(),
   recipientDetails: z.string().max(1000).optional().nullable(),
+  boardOrder: z.number().int().optional(),
 });
 
 module.exports = {
