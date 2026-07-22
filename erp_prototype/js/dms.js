@@ -52,7 +52,7 @@ const DMS = {
     async _fetchDirect(path) {
       const baseUrl = window.__ERP_API_BASE_URL__ || 'http://localhost:3000/v1';
       const token = (() => {
-        try { return sessionStorage.getItem('erp_access_token'); } catch (e) { return null; }
+        try { return localStorage.getItem('erp_access_token'); } catch (e) { return null; }
       })();
       const headers = { 'Content-Type': 'application/json' };
       if (token) headers.Authorization = `Bearer ${token}`;
@@ -147,7 +147,7 @@ const DMS = {
   async _listDocumentsForEntity(entity) {
     const baseUrl = window.__ERP_API_BASE_URL__ || 'http://localhost:3000/v1';
     const token = (() => {
-      try { return sessionStorage.getItem('erp_access_token'); } catch (e) { return null; }
+      try { return localStorage.getItem('erp_access_token'); } catch (e) { return null; }
     })();
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;

@@ -84,8 +84,8 @@ const Auth = {
     try {
       const res = await window.apiClient.auth.signin({ email, password });
       const { accessToken, refreshToken } = res.data;
-      sessionStorage.setItem(this._tokenKey, accessToken);
-      try { sessionStorage.setItem('erp_refresh_token', refreshToken); } catch (e) {}
+      localStorage.setItem(this._tokenKey, accessToken);
+      try { localStorage.setItem('erp_refresh_token', refreshToken); } catch (e) {}
 
       const me = await window.apiClient.me.get();
       this.user = me.data;
@@ -108,8 +108,8 @@ const Auth = {
     this.activeEntity = null;
     localStorage.removeItem(this._sessionKey);
     try {
-      sessionStorage.removeItem(this._tokenKey);
-      sessionStorage.removeItem('erp_refresh_token');
+      localStorage.removeItem(this._tokenKey);
+      localStorage.removeItem('erp_refresh_token');
       Object.keys(sessionStorage).forEach(key => {
         if (key.startsWith('erp_filters_')) sessionStorage.removeItem(key);
       });
@@ -118,7 +118,7 @@ const Auth = {
   },
 
   async restoreSession() {
-    const token = sessionStorage.getItem(this._tokenKey);
+    const token = localStorage.getItem(this._tokenKey);
     if (!token) {
       this.updateSessionClasses(false);
       return false;
@@ -132,7 +132,7 @@ const Auth = {
       return true;
     } catch (e) {
       // Clear stale token; demo/local fallback removed.
-      try { sessionStorage.removeItem(this._tokenKey); } catch (err) {}
+      try { localStorage.removeItem(this._tokenKey); } catch (err) {}
       this.user = null;
       this.updateSessionClasses(false);
       return false;
