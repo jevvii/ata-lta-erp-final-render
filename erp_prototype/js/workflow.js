@@ -7380,9 +7380,15 @@ const Workflow = {
       });
     }
 
+    const isValidUUID = (v) =>
+      typeof v === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
     const recordId = this.editingId || generateId('wr');
     const idMap = new Map();
-    tasks.forEach(t => idMap.set(t.key, generateId('t')));
+    tasks.forEach(t => {
+      idMap.set(t.key, isValidUUID(t.key) ? t.key : generateId('t'));
+    });
 
     const resolvePredecessors = (t, i) => {
       if (t.predecessorKeys.includes('*')) {
@@ -7505,16 +7511,20 @@ const Workflow = {
                 await WorkflowData._adoptServerWorkRequest(record.id, createdWr, createdTasks);
               } else {
                 createdWr = await WorkflowData.createWorkRequest(record);
-                for (const t of taskRecords) {
+                const taskPromises = taskRecords.map(async (t) => {
                   t.workRequestId = createdWr.id;
                   try {
-                    createdTasks.push(await WorkflowData.createTask(t));
+                    const task = await WorkflowData.createTask(t);
+                    return task;
                   } catch (e) {
                     console.error('Failed to create task', t.title, e);
                     WorkflowData._removeTask(t.id);
                     failedTaskTitles.push(t.title);
+                    return null;
                   }
-                }
+                });
+                const results = await Promise.all(taskPromises);
+                createdTasks = results.filter(Boolean);
               }
               this._syncWorkRequestToCaches({ ...createdWr, tasks: createdTasks });
               return { data: createdWr };
@@ -7574,11 +7584,28 @@ const Workflow = {
           } else {
             await WorkflowData.updateWorkRequest(wrId, record);
             const existing = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
-            for (const t of existing) await WorkflowData.deleteTask(t.id);
-            for (const t of taskRecords) {
+            const existingIds = new Set(existing.map(t => t.id));
+            const submittedIds = new Set(taskRecords.map(t => t.id).filter(id => isValidUUID(id)));
+
+            // 1. Delete tasks that are no longer present
+            const toDelete = existing.filter(t => !submittedIds.has(t.id));
+            const deletePromises = toDelete.map(t => WorkflowData.deleteTask(t.id));
+
+            // 2. Create or Update tasks
+            const savePromises = taskRecords.map(async (t) => {
               t.workRequestId = wrId;
-              await WorkflowData.createTask(t);
-            }
+              if (isValidUUID(t.id) && existingIds.has(t.id)) {
+                // Update existing task
+                const { id, checklist, timeLogs, taskDocuments, comments, ...taskChanges } = t;
+                await WorkflowData.updateTask(t.id, taskChanges);
+              } else {
+                // Create new task
+                await WorkflowData.createTask(t);
+              }
+            });
+
+            await Promise.all([...deletePromises, ...savePromises]);
+
             const updated = WorkflowData.getWorkRequestById(wrId);
             this._syncWorkRequestToCaches(updated);
             return { data: updated };
