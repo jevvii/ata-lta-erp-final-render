@@ -68,16 +68,24 @@ const createTaskSchema = z.object({
 const updateTaskSchema = createTaskSchema.partial();
 
 const taskTemplateSchema = z.object({
+  id: z.string().optional().nullable(),
   title: z.string().min(1).max(255),
   description: z.string().max(2000).optional().nullable(),
+  assigneeId: z.string().uuid().optional().nullable(),
+  assigneeName: z.string().optional().nullable(),
+  coAssignees: z.array(z.string().uuid()).optional().nullable(),
+  predecessors: z.array(z.string()).optional().nullable(),
 });
 
 const retainerTemplateSchema = z.object({
-  name: z.string().min(1).max(255),
+  title: z.string().min(1).max(255).optional(),
+  name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),
   clientId: z.string().uuid().optional().nullable(),
   schedule: z.string().max(50).optional().nullable(),
-  pfAmount: z.number().nonnegative().optional(),
+  priority: z.string().max(50).optional().nullable(),
+  assignedTo: z.string().uuid().optional().nullable(),
+  pfAmount: z.number().nonnegative().optional().nullable(),
   tasks: z.array(taskTemplateSchema).optional(),
 });
 

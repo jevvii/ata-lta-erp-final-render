@@ -814,10 +814,12 @@ const listRetainerTemplates = async ({ entityId }) => {
 const createRetainerTemplate = async ({ entityId, userId, data }) => {
   const row = {
     entity_id: entityId,
-    name: data.name,
+    name: data.title || data.name,
     description: data.description || null,
     client_id: data.clientId || null,
     schedule: data.schedule || null,
+    priority: data.priority || 'Normal',
+    assigned_to: data.assignedTo || null,
     pf_amount: data.pfAmount || 0,
     tasks: data.tasks || [],
     created_by: userId,
@@ -843,10 +845,13 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
 const updateRetainerTemplate = async ({ entityId, id, data }) => {
   const updates = { updated_at: new Date().toISOString() };
 
-  if (data.name !== undefined) updates.name = data.name;
+  if (data.title !== undefined) updates.name = data.title;
+  else if (data.name !== undefined) updates.name = data.name;
   if (data.description !== undefined) updates.description = data.description;
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.schedule !== undefined) updates.schedule = data.schedule;
+  if (data.priority !== undefined) updates.priority = data.priority;
+  if (data.assignedTo !== undefined) updates.assigned_to = data.assignedTo;
   if (data.pfAmount !== undefined) updates.pf_amount = data.pfAmount;
   if (data.tasks !== undefined) updates.tasks = data.tasks;
 

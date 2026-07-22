@@ -1478,8 +1478,12 @@ const Workflow = {
     return {
       ...doc,
       entity,
+      title: doc.name || doc.title || '',
+      name: doc.name || doc.title || '',
+      priority: doc.priority || 'Normal',
+      assignedTo: doc.assigned_to || doc.assignedTo || null,
       tasks: doc.tasks || [],
-      pfAmount: typeof doc.pf_amount === 'number' ? doc.pf_amount : (parseFloat(doc.pf_amount) || 0),
+      pfAmount: 0,
       clientId: doc.client_id || doc.clientId || null,
       schedule: doc.schedule || null
     };
@@ -6940,14 +6944,8 @@ const Workflow = {
     scheduleGroup.appendChild(scheduleSel);
     retainerGroup.appendChild(scheduleGroup);
 
-    const amountGroup = el('div', { class: 'form-group hidden', id: 'retainer-amount' });
-    amountGroup.appendChild(el('label', { text: 'Professional Fee Amount (₱)' }));
-    amountGroup.appendChild(el('input', { type: 'number', name: 'templateAmount', min: 0, step: 0.01 }));
-    retainerGroup.appendChild(amountGroup);
-
     retCb.addEventListener('change', () => {
       scheduleGroup.classList.toggle('hidden', !retCb.checked);
-      amountGroup.classList.toggle('hidden', !retCb.checked);
     });
     form.appendChild(retainerGroup);
 
@@ -7487,24 +7485,30 @@ const Workflow = {
             const tmplId = generateId('rt');
             const tmplMap = new Map();
             tasks.forEach(t => tmplMap.set(t.key, generateId('rtt')));
-            const tmplTasks = tasks.map(t => {
-              const predId = t.predecessorKey ? tmplMap.get(t.predecessorKey) : null;
+            const tmplTasks = tasks.map((t, i) => {
+              const preds = t.predecessorKeys.includes('*')
+                ? tasks.slice(0, i).map(pt => tmplMap.get(pt.key)).filter(Boolean)
+                : t.predecessorKeys.map(k => tmplMap.get(k)).filter(Boolean);
               return {
                 id: tmplMap.get(t.key),
                 title: t.title,
                 assigneeId: t.assigneeId || null,
                 assigneeName: t.assigneeName || null,
-                predecessors: predId ? [predId] : []
+                coAssignees: t.coAssignees || [],
+                predecessors: preds
               };
             });
             await this._addRetainerTemplate({
               id: tmplId,
-              name: record.title + ' Template',
+              name: record.title,
+              title: record.title,
               description: record.description,
               clientId: record.clientId,
               entity: record.entity,
               schedule: data.schedule || 'monthly',
-              pfAmount: parseFloat(data.templateAmount) || 0,
+              priority: record.priority || 'Normal',
+              assignedTo: record.assignedTo || null,
+              pfAmount: 0,
               tasks: tmplTasks,
               createdAt: now,
               updatedAt: now
@@ -12576,16 +12580,24 @@ const Workflow = {
 
     const backlogItems = templates.map(t => {
       const client = window.apiClient.clientCache.getById(t.clientId);
+      const assigneeUser = t.assignedTo ? window.apiClient.userCache.getById(t.assignedTo) : null;
+      const tags = [
+        { text: client?.name || 'No Client', type: 'client' },
+        { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
+      ];
+      if (assigneeUser) {
+        tags.push({ text: assigneeUser.name, type: 'user' });
+      }
+      if (t.priority) {
+        tags.push({ text: t.priority, type: 'priority' });
+      }
+      tags.push({ text: String((t.tasks || []).length), type: 'points', title: 'Tasks count' });
+
       return {
         id: t.id,
         name: t.name,
         iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-        tags: [
-          { text: client?.name || 'No Client', type: 'client' },
-          { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
-          { text: formatPHP(t.pfAmount || 0), type: 'amount' },
-          { text: String((t.tasks || []).length), type: 'points', title: 'Tasks count' }
-        ]
+        tags
       };
     });
 
@@ -12718,14 +12730,14 @@ const Workflow = {
 
     // ── Title free-form ──
     const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
-    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Template Name' }));
-    const nameInput = el('input', {
-      type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input',
-      placeholder: 'New Work Request Template', required: true, value: template?.name || ''
+    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Title' }));
+    const titleInput = el('input', {
+      type: 'text', name: 'title', class: 'notion-freeform-input notion-title-input',
+      placeholder: 'New Work Request Template', required: true, value: template?.title || template?.name || ''
     });
-    titleSection.appendChild(nameInput);
+    titleSection.appendChild(titleInput);
     if (!template) {
-      setTimeout(() => { nameInput.focus(); }, 60);
+      setTimeout(() => { titleInput.focus(); }, 60);
     }
     form.appendChild(titleSection);
 
@@ -12746,6 +12758,32 @@ const Workflow = {
     clientGroup.appendChild(clientSel);
     form.appendChild(clientGroup);
 
+    const assigneeGroup = el('div', { class: 'form-group' });
+    assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
+    const assigneeSel = el('select', { name: 'assignedTo' });
+    assigneeSel.appendChild(el('option', { value: '', text: '— Select Assignee —' }));
+    (window.apiClient.userCache._users || []).filter(u => {
+      const userEntities = (u.entities || []).map(e => e.toUpperCase());
+      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(entity.toUpperCase());
+    }).forEach(u => {
+      const opt = el('option', { value: u.id, text: u.name });
+      if (template && template.assignedTo === u.id) opt.selected = true;
+      assigneeSel.appendChild(opt);
+    });
+    assigneeGroup.appendChild(assigneeSel);
+    form.appendChild(assigneeGroup);
+
+    const priorityGroup = el('div', { class: 'form-group' });
+    priorityGroup.appendChild(el('label', { text: 'Priority' }));
+    const prioritySel = el('select', { name: 'priority' });
+    ['Normal', 'Urgent'].forEach(p => {
+      const opt = el('option', { value: p, text: p });
+      if (template && template.priority === p) opt.selected = true;
+      prioritySel.appendChild(opt);
+    });
+    priorityGroup.appendChild(prioritySel);
+    form.appendChild(priorityGroup);
+
     const scheduleGroup = el('div', { class: 'form-group' });
     scheduleGroup.appendChild(el('label', { text: 'Schedule *' }));
     const scheduleSel = el('select', { name: 'schedule', required: true });
@@ -12756,11 +12794,6 @@ const Workflow = {
     });
     scheduleGroup.appendChild(scheduleSel);
     form.appendChild(scheduleGroup);
-
-    form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Professional Fee (₱) *' }),
-      el('input', { type: 'number', name: 'pfAmount', min: 0, step: 0.01, required: true, value: template?.pfAmount || '' })
-    ]));
 
     // Template Tasks section — heading outside the line-item container for visual grouping.
     form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Template Tasks' }));
@@ -12858,12 +12891,15 @@ const Workflow = {
 
     const record = {
       id: this.templateEditingId || generateId('rt'),
-      name: data.name.trim(),
+      title: data.title.trim(),
+      name: data.title.trim(),
       description: data.description?.trim() || '',
       clientId: data.clientId,
       entity: Auth.activeEntity,
       schedule: data.schedule,
-      pfAmount: parseFloat(data.pfAmount) || 0,
+      priority: data.priority || 'Normal',
+      assignedTo: data.assignedTo || null,
+      pfAmount: 0,
       tasks: taskRecords,
       updatedAt: now
     };
@@ -13214,7 +13250,8 @@ const Workflow = {
         title: `${template.name} (${titleSuffix})`,
         description: template.description || '',
         clientId: template.clientId,
-        priority: 'Normal',
+        priority: template.priority || 'Normal',
+        assignedTo: template.assignedTo || null,
         dueDate: dueDate.toISOString().slice(0, 10),
         entity: template.entity,
         status: 'Draft',
