@@ -2345,59 +2345,68 @@ const Billing = {
     let skipGeneration = 0;
 
     if (isNew) {
-      // Optimistic create: show the confirmation modal first, then persist the
-      // server record once the API responds.
-      const optimisticId = 'temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
-      const client = window.apiClient.clientCache.getById(data.clientId);
-      const optimisticRecord = {
-        ...record,
-        id: optimisticId,
-        status: 'Draft',
-        archived: false,
-        paidAmount: 0,
-        balance: subtotal,
-        fromTemplate: false,
-        clientName: client?.name || null,
-        createdBy: Auth.user.id,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      this._detailCache[optimisticId] = optimisticRecord;
-      this._detailCacheEntity = activeEntity;
-      this._addToListCache(optimisticRecord, { prepend: true });
-      this._updateCounts(1, 0);
-      skipGeneration = this._beginSkipGeneration();
-
       const wrName = data.workRequestId ? (window.apiClient.workRequestCache.getById(data.workRequestId)?.title || '') : '';
       const linkMsg = wrName ? ' Linked to "' + wrName + '".' : '';
-      const msgConfig = {
-        title: 'Invoice Created',
-        message: 'Invoice ' + (record.invoiceNumber || '') + ' has been created successfully.' + linkMsg,
-        type: 'success'
-      };
-      await closeFormPanelAndRoute(targetRoute, msgConfig);
 
-      try {
-        const res = await window.apiClient.invoices.create(apiPayload);
-        serverRecord = this.normalizeInvoice(res.data);
-      } catch (e) {
-        console.error('Failed to create invoice', e);
-        delete this._detailCache[optimisticId];
-        this._removeFromListCache(optimisticId);
-        this._updateCounts(-1, 0);
-        this._endSkipGeneration(skipGeneration);
+      const runResult = await Workflow.runBlockingArchiveAction({
+        title: 'Creating Invoice',
+        message: `Please wait while Invoice "${record.invoiceNumber || ''}" is being saved...`,
+        apiCall: async () => {
+          const optimisticId = 'temp-inv-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+          const client = window.apiClient.clientCache.getById(data.clientId);
+          const optimisticRecord = {
+            ...record,
+            id: optimisticId,
+            status: 'Draft',
+            archived: false,
+            paidAmount: 0,
+            balance: subtotal,
+            fromTemplate: false,
+            clientName: client?.name || null,
+            createdBy: Auth.user.id,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          this._detailCache[optimisticId] = optimisticRecord;
+          this._detailCacheEntity = activeEntity;
+          this._addToListCache(optimisticRecord, { prepend: true });
+          this._updateCounts(1, 0);
+          skipGeneration = this._beginSkipGeneration();
+
+          try {
+            const res = await window.apiClient.invoices.create(apiPayload);
+            serverRecord = this.normalizeInvoice(res.data);
+            if (serverRecord) {
+              this._detailCache[serverRecord.id] = serverRecord;
+              this._detailCacheEntity = activeEntity;
+              delete this._detailCache[optimisticId];
+              this._replaceInListCache(optimisticId, serverRecord);
+              this._updateCounts(0, 0);
+            }
+            return { data: serverRecord };
+          } catch (e) {
+            console.error('Failed to create invoice', e);
+            delete this._detailCache[optimisticId];
+            this._removeFromListCache(optimisticId);
+            this._updateCounts(-1, 0);
+            this._endSkipGeneration(skipGeneration);
+            throw e;
+          }
+        },
+        successTitle: 'Invoice Created',
+        successMessage: 'Invoice ' + (record.invoiceNumber || '') + ' has been created successfully.' + linkMsg,
+        errorTitle: 'Failed to Create Invoice'
+      });
+
+      if (runResult.success) {
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) {
+          Dashboard.invalidateCache();
+        }
+        await closeFormPanelAndRoute(targetRoute);
+      } else {
         App.handleRoute();
-        Workflow.showMessage('Error', e.message || 'Unable to create invoice.', 'error');
-        return;
       }
-
-      if (serverRecord) {
-        this._detailCache[serverRecord.id] = serverRecord;
-        this._detailCacheEntity = activeEntity;
-        delete this._detailCache[optimisticId];
-        this._replaceInListCache(optimisticId, serverRecord);
-        this._updateCounts(0, 0);
-      }
+      return;
     } else {
       try {
         if (record.status === 'Draft' || !requiresApproval) {
