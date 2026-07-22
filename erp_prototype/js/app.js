@@ -246,7 +246,13 @@ const App = {
         const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getPendingForUser === 'function')
           ? (await PendingChanges.getPendingForUser(Auth.user.id))
           : [];
-        const myReqsPending = opsCounts?.data?.pending || 0;
+
+        const departments = Auth.user?.departments || [];
+        const hasOperations = departments.includes('Operations');
+        const hasManagement = departments.includes('Management');
+        const showRequestsTab = hasOperations || hasManagement;
+
+        const myReqsPending = showRequestsTab ? (opsCounts?.data?.pending || 0) : 0;
         let approvalsCount = 0;
         if (Auth.isManagerial() && typeof Users !== 'undefined' && typeof Users.getPendingCategories === 'function') {
           const categories = Users.getPendingCategories();

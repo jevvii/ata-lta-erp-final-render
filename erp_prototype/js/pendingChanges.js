@@ -342,6 +342,10 @@ const PendingChanges = {
     const api = this._api();
     if (!api) return false;
     await api.pendingApprovals.approve(pendingId);
+    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
+    if (usersMod && typeof usersMod.invalidateCache === 'function') {
+      usersMod.invalidateCache();
+    }
     return true;
   },
 
@@ -349,6 +353,10 @@ const PendingChanges = {
     const api = this._api();
     if (!api) return false;
     await api.pendingApprovals.reject(pendingId, { reason });
+    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
+    if (usersMod && typeof usersMod.invalidateCache === 'function') {
+      usersMod.invalidateCache();
+    }
     return true;
   },
 
@@ -367,6 +375,10 @@ const PendingChanges = {
       proposedData: deepClone(pc.proposedData)
     });
     await api.pendingApprovals.reject(pendingId, { reason: 'Resubmitted by submitter' }).catch(() => {});
+    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
+    if (usersMod && typeof usersMod.invalidateCache === 'function') {
+      usersMod.invalidateCache();
+    }
     return true;
   },
 
@@ -382,6 +394,10 @@ const PendingChanges = {
     if (!pc || pc.status === 'approved') return false;
     if (pc.status === 'pending') {
       await api.pendingApprovals.reject(pendingId, { reason: 'Withdrawn by submitter' });
+    }
+    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
+    if (usersMod && typeof usersMod.invalidateCache === 'function') {
+      usersMod.invalidateCache();
     }
     return true;
   },

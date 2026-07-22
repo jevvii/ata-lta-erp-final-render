@@ -450,6 +450,7 @@ const Users = {
    */
   async loadCounts() {
     const canManageUsers = Auth.user?.role === 'Admin';
+    const now = Date.now();
 
     try {
       if (typeof window.apiClient?.admin?.invalidateAuditCount === 'function') {
@@ -465,24 +466,30 @@ const Users = {
       if (!isAbortError(err)) console.error('Failed to load admin counts', err);
     }
 
+    // Cache preloaded lists for 15 seconds to eliminate N+1 fetches and routing lag
+    const cacheAge = now - (this._pendingPreloadTs || 0);
+    if (cacheAge < 15 * 1000 && Array.isArray(this._cachedMyPending)) {
+      return;
+    }
+
     // Pre-load pending changes so getPendingCategories / renderTabNav can use them synchronously.
     try {
       this._cachedAllPending = await PendingChanges.getAllPending();
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to preload pending changes', err);
-      this._cachedAllPending = [];
+      this._cachedAllPending = this._cachedAllPending || [];
     }
     try {
       this._cachedMyPending = await PendingChanges.getPendingForUser(Auth.user?.id);
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to preload my pending', err);
-      this._cachedMyPending = [];
+      this._cachedMyPending = this._cachedMyPending || [];
     }
     try {
       this._cachedMyRejected = await PendingChanges.getRejectedForUser(Auth.user?.id);
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to preload my rejected', err);
-      this._cachedMyRejected = [];
+      this._cachedMyRejected = this._cachedMyRejected || [];
     }
     try {
       const opRes = await window.apiClient.operationsRequests.list({ status: 'pending' });
@@ -491,6 +498,8 @@ const Users = {
       if (!isAbortError(err)) console.error('Failed to preload pending operations requests', err);
       this._cachedPendingOpRequests = [];
     }
+
+    this._pendingPreloadTs = now;
 
     if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
       App.updateSidebarNotifications().catch(() => {});
@@ -787,7 +796,7 @@ const Users = {
             actions
           }));
 
-          const detailContent = await this.renderPendingDetail(pc.id, false, true);
+          const detailContent = await this.renderPendingDetail(pc, false, true);
           container.appendChild(detailContent);
           return container;
         }
@@ -959,10 +968,13 @@ const Users = {
     const isMyPending = this.view === 'myPending';
     const fullPageRoute = isMyPending ? `#admin/myPending/${pc.id}` : `#admin/pending/${pc.id}`;
     const title = `Pending Change: ${pc.title || 'Review'}`;
-    const content = await this.renderPendingDetail(pc.id, true);
+
+    // Open side panel instantly with a loading spinner/skeleton to avoid blank flash/delay
+    const loadingSkeleton = el('div', { class: 'loading-skeleton', style: 'padding: 24px;', text: 'Loading details...' });
+
     window.SidePaneInstance.open({
       title,
-      content,
+      content: loadingSkeleton,
       mode,
       viewContext: 'pending-detail',
       recordId: pc.id,
@@ -975,6 +987,30 @@ const Users = {
         }
       }
     });
+
+    try {
+      const content = await this.renderPendingDetail(pc, true);
+      if (window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === pc.id) {
+        const oldFooter = window.SidePaneInstance.pane.querySelector('.side-pane-form-footer, .side-pane-footer');
+        if (oldFooter) oldFooter.remove();
+        window.SidePaneInstance._lastFooter = null;
+
+        const footer = content.querySelector('.side-pane-form-footer, .side-pane-footer');
+        if (footer) {
+          footer.remove();
+          window.SidePaneInstance._lastFooter = footer;
+          window.SidePaneInstance.body.replaceChildren(content);
+          window.SidePaneInstance.pane.appendChild(footer);
+        } else {
+          window.SidePaneInstance.body.replaceChildren(content);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load pending detail', e);
+      if (window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === pc.id) {
+        window.SidePaneInstance.body.replaceChildren(renderEmptyState('Failed to load details'));
+      }
+    }
   },
 
   renderRequestDetailContent(r, isFullPage = false) {
@@ -1206,11 +1242,17 @@ const Users = {
     this._usersLoaded = false;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
+    this._pendingPreloadTs = 0;
+    this._countTs.myRequests = 0;
   },
 
   hasCachedData(entity) {
-    // Users are global (not entity-scoped); the cache is valid once loaded.
-    return this._usersLoaded && Array.isArray(this.users);
+    const isAdmin = Auth.user?.role === 'Admin';
+    if (isAdmin) {
+      return this._usersLoaded && Array.isArray(this.users);
+    }
+    // For non-admins/staff, the cache is warm if we have preloaded myPending lists
+    return Array.isArray(this._cachedMyPending);
   },
 
   renderUsersSection() {
@@ -3402,8 +3444,13 @@ const Users = {
   },
 
 
-  async renderPendingDetail(pendingId, isSidePeek = false, hideHeader = false) {
-    const pc = await PendingChanges.getById(pendingId);
+  async renderPendingDetail(pendingIdOrPc, isSidePeek = false, hideHeader = false) {
+    let pc;
+    if (pendingIdOrPc && typeof pendingIdOrPc === 'object') {
+      pc = pendingIdOrPc;
+    } else {
+      pc = await PendingChanges.getById(pendingIdOrPc);
+    }
     if (!pc) {
       if (!isSidePeek) this.pendingDetailId = null;
       return renderEmptyStateV2({
