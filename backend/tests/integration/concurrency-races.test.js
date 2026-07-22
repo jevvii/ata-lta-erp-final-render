@@ -150,6 +150,7 @@ describe('Concurrency race conditions', () => {
       .expect(201);
 
     const id = created.body.data.id;
+    mockTables.invoices.get(id).status = 'Sent';
 
     const [res1, res2] = await Promise.all([
       request(app)

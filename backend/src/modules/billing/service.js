@@ -94,6 +94,15 @@ const createInvoice = async ({ entityId, userId, data }) => {
   const total = subtotal; // Tax removed per prototype v3 schema
   const balance = total;
 
+  const requestedStatus = data.status || 'Draft';
+  if (['Paid', 'Partially Paid', 'Sent'].includes(requestedStatus)) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: `New invoices cannot be created directly in "${requestedStatus}" status. Invoices must start in Draft or Pending status.`,
+    });
+  }
+
   const invoiceRow = {
     invoice_number: data.invoiceNumber,
     client_id: data.clientId,
@@ -102,7 +111,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
     entity_id: entityId,
     issue_date: data.issueDate,
     due_date: data.dueDate,
-    status: data.status || 'Draft',
+    status: requestedStatus,
     subtotal,
     tax_amount: 0,
     total,
@@ -221,7 +230,66 @@ const getInvoiceById = async ({ entityId, id }) => {
  * @returns {Promise<object>}
  */
 const updateInvoice = async ({ entityId, id, userId, data }) => {
-  await getInvoiceById({ entityId, id });
+  const existing = await getInvoiceById({ entityId, id });
+
+  if (data.status !== undefined && data.status !== existing.status) {
+    const targetStatus = data.status;
+    const currentStatus = existing.status;
+    const amountPaid = Number(existing.amount_paid || 0);
+    const total = Number(existing.total || 0);
+    const balance = Number(existing.balance || 0);
+
+    // Validate Paid status requirement
+    if (targetStatus === 'Paid') {
+      if (balance > 0 || amountPaid < total || total <= 0) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: `Cannot set status to Paid — invoice balance is ₱${balance.toFixed(2)}. Full payment must be recorded first.`,
+        });
+      }
+    }
+
+    // Validate Partially Paid status requirement
+    if (targetStatus === 'Partially Paid') {
+      if (amountPaid <= 0) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Cannot set status to Partially Paid — no payments have been recorded yet.',
+        });
+      }
+      if (balance <= 0) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Invoice is fully paid and cannot be set to Partially Paid.',
+        });
+      }
+    }
+
+    // Validate Overdue status requirement
+    if (targetStatus === 'Overdue') {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const isPastDue = existing.due_date && existing.due_date.slice(0, 10) < todayStr;
+      if (!isPastDue || balance <= 0) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Invoice can only be marked Overdue if the due date has passed and balance remains unpaid.',
+        });
+      }
+    }
+
+    // Block direct jump from Draft / Pending to Sent, Paid, or Partially Paid via API without approval/release
+    if (['Draft', 'Pending'].includes(currentStatus) && ['Sent', 'Paid', 'Partially Paid'].includes(targetStatus)) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: `Cannot transition invoice directly from ${currentStatus} to ${targetStatus}. Invoices must be approved and released first.`,
+      });
+    }
+  }
 
   const updates = {
     updated_by: userId,
@@ -333,6 +401,17 @@ const deleteInvoice = async ({ entityId, id, userId }) => {
  * @returns {Promise<object>}
  */
 const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
+  const invoice = await getInvoiceById({ entityId, id: invoiceId });
+  const releasedStatuses = ['Sent', 'Partially Paid', 'Overdue'];
+
+  if (!releasedStatuses.includes(invoice.status)) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: `Cannot record payment on invoice in "${invoice.status}" status. Payments can only be recorded once the invoice is released (Sent, Partially Paid, or Overdue).`,
+    });
+  }
+
   const { data: result, error: rpcError } = await supabaseAdmin.rpc('invoice_record_payment', {
     p_invoice_id: invoiceId,
     p_amount: data.amount,
