@@ -4020,7 +4020,7 @@ const Workflow = {
         const receiptInput = form.querySelector('input[name="receipt"]');
         const receiptFile = receiptInput?.files?.[0];
 
-        record.linkedTaskId = linkedTaskId || '';
+        record.linkedTaskId = linkedTaskId || null;
         record.amount = amount;
         record.notes = notes;
         record.receiptFilename = receiptFile ? receiptFile.name : null;
@@ -4045,7 +4045,7 @@ const Workflow = {
         record.paymentMethod = payMethod;
         record.notes = notes;
         record.receiptFilename = receiptFile ? receiptFile.name : null;
-        record.linkedTaskId = preselectedTask ? preselectedTask.id : '';
+        record.linkedTaskId = preselectedTask ? preselectedTask.id : null;
       }
       else if (type === 'transmittal') {
         const checkedDocs = Array.from(form.querySelectorAll('.dms-doc-checkbox:checked')).map(chk => chk.value);
@@ -4070,22 +4070,22 @@ const Workflow = {
         record.notes = notes;
       }
 
-      try {
-        await window.apiClient.operationsRequests.create(record);
-      } catch (e) {
-        console.error('Failed to create operations request', e);
-        this.showMessage('Error', 'Failed to submit request: ' + (e.message || 'Unknown error'), 'danger');
-        return;
-      }
-      overlay.remove();
-
-      this.showMessage(
-        'Request Submitted',
-        `Your request for ${label} has been submitted to Accounting/Documentation for review.`,
-        'success'
-      );
-
-      App.handleRoute();
+      this.runBlockingArchiveAction({
+        title: 'Submitting Request',
+        message: `Please wait while your request for ${label} is being submitted...`,
+        apiCall: async () => {
+          return await window.apiClient.operationsRequests.create(record);
+        },
+        successTitle: 'Request Submitted',
+        successMessage: `Your request for ${label} has been submitted to Accounting/Documentation for review.`,
+        errorTitle: 'Request Failed',
+        onSuccess: async (res) => {
+          overlay.remove();
+        },
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
     });
   },
 

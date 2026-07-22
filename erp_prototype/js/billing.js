@@ -1637,12 +1637,14 @@ const Billing = {
         const newOrder = (idx + 1) * 1000;
         if (inv.boardOrder === newOrder) return;
         inv.boardOrder = newOrder;
-        window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => {
-          if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
-            return;
-          }
-          console.error('Failed to update board order', e);
-        });
+        if (canEdit) {
+          window.apiClient.invoices.update(inv.id, { boardOrder: newOrder }).catch(e => {
+            if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
+              return;
+            }
+            console.error('Failed to update board order', e);
+          });
+        }
       });
       const colPendingInvs = invoices.filter(inv => phase.statuses.includes(inv.status) && inv.pendingChangeId);
       sortedInvs.push(...colInvs, ...colPendingInvs);
@@ -2663,25 +2665,28 @@ const Billing = {
         type: 'billing',
         workRequestId: wrId,
         clientId: wr?.clientId || null,
+        linkedTaskId: linkedTaskId || null,
         amount: amount,
-        notes: notes
+        notes: notes,
+        receiptFilename: receiptFile ? receiptFile.name : null
       };
 
-      try {
-        await window.apiClient.operationsRequests.create(record);
-        overlay.remove();
-        Workflow.showMessage(
-          'Request Submitted',
-          'Your invoice request has been submitted to Accounting for review.',
-          'success'
-        );
-      } catch (err) {
-        console.error('Failed to create billing request', err);
-        Workflow.showMessage('Request Failed', err.message || 'Unable to submit billing request.', 'error');
-        return;
-      }
-
-      App.handleRoute();
+      Workflow.runBlockingArchiveAction({
+        title: 'Submitting Billing Request',
+        message: 'Please wait while your billing request is being submitted...',
+        apiCall: async () => {
+          return await window.apiClient.operationsRequests.create(record);
+        },
+        successTitle: 'Request Submitted',
+        successMessage: 'Your invoice request has been submitted to Accounting for review.',
+        errorTitle: 'Request Failed',
+        onSuccess: async (res) => {
+          overlay.remove();
+        },
+        onAfterConfirm: async () => {
+          App.handleRoute();
+        }
+      });
     });
   },
 
