@@ -46,4 +46,43 @@ const signIn = async (req, res, next) => {
   }
 };
 
-module.exports = { authController: { signIn } };
+/**
+ * POST /v1/auth/refresh
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ */
+const refresh = async (req, res, next) => {
+  try {
+    const { refreshToken } = req.body || {};
+    if (!refreshToken) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Refresh token is required',
+      });
+    }
+
+    const { data, error } = await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
+
+    if (error || !data?.session) {
+      logger.warn('refresh failed', { error: error?.message, statusCode: error?.status });
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: error?.message || 'Invalid or expired refresh token',
+      });
+    }
+
+    res.status(200).json({
+      data: {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresAt: data.session.expires_at,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { authController: { signIn, refresh } };

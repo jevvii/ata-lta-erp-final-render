@@ -118,9 +118,43 @@
     });
 
     if (res.status === 401 && !path.startsWith('/auth/')) {
+      const rToken = sessionStorage.getItem('erp_refresh_token');
+      if (rToken) {
+        try {
+          const refreshRes = await fetch(`${API_BASE_URL}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken: rToken }),
+          });
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json();
+            const { accessToken, refreshToken: newRefreshToken } = refreshData.data;
+            sessionStorage.setItem('erp_access_token', accessToken);
+            if (newRefreshToken) {
+              sessionStorage.setItem('erp_refresh_token', newRefreshToken);
+            }
+            headers.Authorization = `Bearer ${accessToken}`;
+            const retryRes = await fetch(url, {
+              ...restOptions,
+              headers,
+              signal,
+            });
+            if (retryRes.status !== 401) {
+              if (retryRes.status === 204) {
+                return null;
+              }
+              return retryRes.json();
+            }
+          }
+        } catch (refreshErr) {
+          console.error('[apiClient] Automatic token refresh failed:', refreshErr);
+        }
+      }
+
       // Clear stale session and redirect to login.
       try {
         sessionStorage.removeItem('erp_access_token');
+        sessionStorage.removeItem('erp_refresh_token');
       } catch (e) {
         // ignore
       }
