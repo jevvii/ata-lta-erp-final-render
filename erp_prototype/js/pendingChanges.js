@@ -191,7 +191,34 @@ const PendingChanges = {
     const api = this._api();
     if (!api) return [];
     const res = await api.pendingApprovals.list({ status: 'pending' });
-    return (res?.data || []).map(pc => this._normalize(pc));
+    const pending = (res?.data || []).map(pc => this._normalize(pc));
+
+    try {
+      if (api.invoices) {
+        const invRes = await api.invoices.list({});
+        const items = invRes?.data || [];
+        const pendingStatuses = ['Pending', 'Release Pending Approval', 'Submitted', 'Under Review'];
+        const pendingInvs = items.filter(inv => pendingStatuses.includes(inv.status));
+        pendingInvs.forEach(inv => {
+          if (!pending.some(pc => pc.table === 'invoices' && (pc.parentRecordId === inv.id || pc.proposedData?.id === inv.id))) {
+            pending.push({
+              id: inv.id,
+              table: 'invoices',
+              tableName: 'invoices',
+              parentRecordId: inv.id,
+              status: 'pending',
+              submittedBy: inv.createdBy || inv.created_by,
+              submittedAt: inv.createdAt || inv.created_at || inv.updatedAt || new Date().toISOString(),
+              proposedData: inv
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to query invoices in getAllPending', e);
+    }
+
+    return pending;
   },
 
   async getPendingForUser(userId) {
@@ -226,6 +253,34 @@ const PendingChanges = {
       }
     } catch (e) {
       console.error('Failed to query disbursements in getPendingForUser', e);
+    }
+
+    try {
+      if (api.invoices) {
+        const invRes = await api.invoices.list({});
+        const items = invRes?.data || [];
+        const pendingStatuses = ['Pending', 'Release Pending Approval', 'Submitted', 'Under Review'];
+        const userInvs = items.filter(inv => 
+          pendingStatuses.includes(inv.status) &&
+          (!userId || inv.createdBy === userId || inv.created_by === userId)
+        );
+        userInvs.forEach(inv => {
+          if (!pending.some(pc => pc.table === 'invoices' && (pc.parentRecordId === inv.id || pc.proposedData?.id === inv.id))) {
+            pending.push({
+              id: inv.id,
+              table: 'invoices',
+              tableName: 'invoices',
+              parentRecordId: inv.id,
+              status: 'pending',
+              submittedBy: inv.createdBy || inv.created_by || userId,
+              submittedAt: inv.createdAt || inv.created_at || inv.updatedAt || new Date().toISOString(),
+              proposedData: inv
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to query invoices in getPendingForUser', e);
     }
 
     return pending;
@@ -263,6 +318,34 @@ const PendingChanges = {
       }
     } catch (e) {
       console.error('Failed to query disbursements in getRejectedForUser', e);
+    }
+
+    try {
+      if (api.invoices) {
+        const invRes = await api.invoices.list({});
+        const items = invRes?.data || [];
+        const userInvs = items.filter(inv => 
+          inv.status === 'Rejected' &&
+          (!userId || inv.createdBy === userId || inv.created_by === userId)
+        );
+        userInvs.forEach(inv => {
+          if (!rejected.some(pc => pc.table === 'invoices' && (pc.parentRecordId === inv.id || pc.proposedData?.id === inv.id))) {
+            rejected.push({
+              id: inv.id,
+              table: 'invoices',
+              tableName: 'invoices',
+              parentRecordId: inv.id,
+              status: 'rejected',
+              rejectionReason: inv.rejectionReason || inv.rejection_reason || 'Invoice rejected',
+              submittedBy: inv.createdBy || inv.created_by || userId,
+              submittedAt: inv.createdAt || inv.created_at || inv.updatedAt || new Date().toISOString(),
+              proposedData: inv
+            });
+          }
+        });
+      }
+    } catch (e) {
+      console.error('Failed to query invoices in getRejectedForUser', e);
     }
 
     return rejected;
