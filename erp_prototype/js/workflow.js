@@ -7257,7 +7257,7 @@ const Workflow = {
     });
 
     // Lock/unlock task rows
-    const tasksSection = tasksList.closest('.form-section');
+    const tasksSection = tasksList.closest('.notion-line-items, .form-section') || tasksList;
     if (locked) {
       tasksSection.classList.add('tasks-template-locked');
       tasksList.querySelectorAll('.task-row').forEach(row => {
