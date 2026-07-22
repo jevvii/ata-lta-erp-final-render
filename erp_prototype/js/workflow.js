@@ -9638,7 +9638,7 @@ const Workflow = {
 
         (async () => {
           try {
-            const docsRes = await window.apiClient.documents.list({ linkedTaskId: t.id });
+            const docsRes = await window.apiClient.documents.list({ linkedTaskId: t.id, _t: Date.now() });
             const taskDocs = docsRes?.data || [];
             docsList.innerHTML = '';
             if (taskDocs.length === 0) {
