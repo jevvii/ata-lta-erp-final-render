@@ -1,1 +1,1 @@
-ALTER TABLE documents ADD COLUMN external_url TEXT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS external_url TEXT;

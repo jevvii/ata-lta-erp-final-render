@@ -230,4 +230,44 @@ describe('/v1/documents', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
   });
+
+  it('persists document comments through update and get round-trip', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const created = await request(app)
+      .post('/v1/documents')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validDocument)
+      .expect(201);
+
+    const docId = created.body.data.document.id;
+    const comments = [
+      { id: 'comment-1', userId: 'user-a', date: new Date().toISOString(), text: 'First comment' },
+      { id: 'comment-2', userId: 'user-b', date: new Date().toISOString(), text: 'Second comment' },
+    ];
+
+    await request(app)
+      .put(`/v1/documents/${docId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ comments })
+      .expect(200);
+
+    const docRes = await request(app)
+      .get(`/v1/documents/${docId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(docRes.body.data.comments).toHaveLength(2);
+    expect(docRes.body.data.comments[0].text).toBe('First comment');
+    expect(docRes.body.data.comments[1].text).toBe('Second comment');
+    expect(docRes.body.data.comments[0].id).toBe('comment-1');
+  });
 });

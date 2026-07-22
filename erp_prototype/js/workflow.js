@@ -5784,13 +5784,16 @@ const Workflow = {
     if (!task) return;
     this.ensureTaskChecklistNormalized(task);
 
-    let wrDocs = [];
     const wr = pendingWr || (task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null);
-    if (wr?.id) {
-      try {
-        const docsRes = await window.apiClient.documents.list({ workRequestId: wr.id });
-        wrDocs = docsRes?.data || [];
-      } catch (e) {
+
+    // Load task-specific documents from the DMS. These rows are persisted,
+    // so attachments survive refresh unlike the legacy taskDocuments array.
+    let taskDocs = [];
+    try {
+      const docsRes = await window.apiClient.documents.list({ linkedTaskId: task.id });
+      taskDocs = docsRes?.data || [];
+    } catch (e) {
+      if (!isAbortError(e)) {
         console.error('[Workflow] failed to load DMS documents for task side pane', e);
       }
     }
@@ -6269,13 +6272,16 @@ const Workflow = {
     paneContent.appendChild(checklistContentToggle);
 
     // 3. Supporting Files / Documents Collapsible Section
-    const [docsHeaderToggle, docsContentToggle] = createCollapsibleSection('Supporting Files', false, (cont) => {
+    // Auto-expand when the task has persisted DMS documents so the user gets
+    // immediate visual feedback after uploading.
+    const [docsHeaderToggle, docsContentToggle] = createCollapsibleSection('Supporting Files', taskDocs.length > 0, (cont) => {
       const docHeaderActions = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;' });
-      const docCount = (task.taskDocuments || []).length;
+      const docCount = taskDocs.length;
       docHeaderActions.appendChild(el('span', { text: `${docCount} attached files`, style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
-      
+
       const isDocStaff = Auth.user?.name?.toLowerCase().includes('documentation') ||
                          Auth.user?.email?.toLowerCase().startsWith('docs@');
+      const isAdmin = Auth.user?.role === 'Admin';
       const isArchived = wr && (wr.status === 'Completed' || wr.status === 'Cancelled' || wr.isPendingApproval);
 
       if (isDocStaff && !isArchived) {
@@ -6289,94 +6295,16 @@ const Workflow = {
       cont.appendChild(docHeaderActions);
 
       const docsList = el('div', { class: 'details-content-list' });
-      if ((task.taskDocuments || []).length === 0) {
+      if (taskDocs.length === 0) {
         docsList.appendChild(renderEmptyState('No documents attached', null, { style: 'margin-bottom: 8px;' }));
       } else {
-        const canEditDms = Auth.can('dms:edit');
-        task.taskDocuments.forEach((d, dIdx) => {
-          const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center; padding: 8px 0; border-bottom: 1px solid var(--color-border);' });
-          const leftSide = el('div', { style: 'display:flex; flex-direction:column; gap: 2px;' });
-          const fName = d.fileName || d.filename;
-
-          if (d.isFigma) {
-            const figmaLink = el('a', {
-              href: d.figmaUrl,
-              target: '_blank',
-              style: 'color: #a855f7; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem; display: flex; align-items: center; gap: 6px;'
-            });
-            figmaLink.innerHTML = `
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color: #a855f7;"><path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H12v5H7.5A2.5 2.5 0 0 1 5 5.5z"></path><path d="M12 3h4.5A2.5 2.5 0 0 1 19 5.5 2.5 2.5 0 0 1 16.5 8H12V3z"></path><path d="M5 12.5A2.5 2.5 0 0 1 7.5 10H12v5H7.5A2.5 2.5 0 0 1 5 12.5z"></path><path d="M12 10h4.5a2.5 2.5 0 0 1 0 5H12v-5z"></path><path d="M5 19.5A2.5 2.5 0 0 1 7.5 17H12v5H7.5A2.5 2.5 0 0 1 5 19.5z"></path></svg>
-              <span>${fName}</span>
-            `;
-            leftSide.appendChild(figmaLink);
-          } else {
-            const canViewDms = Auth.can('dms:view');
-            if (canViewDms) {
-              let dmsDoc = null;
-              if (d.documentId) {
-                dmsDoc = wrDocs.find(doc => doc.id === d.documentId);
-              } else {
-                const matches = wrDocs.filter(doc => doc.original_name === fName || doc.file_name === fName || doc.fileName === fName);
-                if (matches.length === 1) {
-                  dmsDoc = matches[0];
-                  d.documentId = dmsDoc.id;
-                }
-              }
-
-              if (dmsDoc) {
-                const link = el('a', {
-                  href: '#',
-                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
-                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--color-primary)'}; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;`
-                });
-                link.addEventListener('click', (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  this.showDocumentPreview(dmsDoc.id);
-                });
-                leftSide.appendChild(link);
-              } else if (d.linkUrl) {
-                const link = el('a', {
-                  href: d.linkUrl,
-                  target: '_blank',
-                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
-                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--color-primary)'}; font-weight:600; text-decoration:underline; cursor:pointer; font-size: 0.8125rem;`
-                });
-                leftSide.appendChild(link);
-              } else {
-                leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''), style: 'font-size: 0.8125rem; font-weight: 500;' }));
-              }
-            } else {
-              leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''), style: 'font-size: 0.8125rem; font-weight: 500;' }));
-            }
-          }
-          leftSide.appendChild(el('span', { text: `Uploaded: ${formatDate(d.uploadDate)}`, style: 'font-size: 10px; color: var(--color-text-muted);' }));
-          item.appendChild(leftSide);
-
-          if (isDocStaff || isAdmin) {
-            const delBtn = el('button', { class: 'btn btn-ghost btn-xs', text: '×', style: 'color:var(--color-danger); font-size:1.2rem; padding:0 4px;' });
-            if (!disableIfPending(delBtn, wr)) {
-              delBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
-                  const updatedTaskDocs = task.taskDocuments.filter((_, i) => i !== dIdx);
-                  WorkflowData.updateTask(task.id, { taskDocuments: updatedTaskDocs });
-                  const docIdToDelete = d.documentId || (wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id) || {}).id;
-                  if (docIdToDelete) {
-                    try {
-                      await window.apiClient.documents.remove(docIdToDelete);
-                    } catch (err) {
-                      console.error('Failed to delete DMS document', err);
-                    }
-                  }
-                  await this.showTaskSidePane(taskId, triggerElement);
-                  App.handleRoute();
-                }, 'danger');
-              });
-            }
-            item.appendChild(delBtn);
-          }
-          docsList.appendChild(item);
+        taskDocs.forEach((dmsDoc) => {
+          docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, {
+            wr,
+            isArchived,
+            showComments: true,
+            onDelete: () => this.showTaskSidePane(taskId, triggerElement)
+          }));
         });
       }
       cont.appendChild(docsList);
@@ -6385,7 +6313,7 @@ const Workflow = {
       const canUploadDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload');
       if (!isArchived && canUploadDocs) {
         const embedContainer = el('div', { class: 'embed-options', style: 'margin-top: 16px; display: flex; flex-direction: column; gap: 8px;' });
-        
+
         // 1. Upload Document
         const pdfOpt = el('button', { class: 'notion-embed-option', type: 'button' });
         pdfOpt.innerHTML = `
@@ -6398,7 +6326,7 @@ const Workflow = {
           e.stopPropagation();
           this.showAttachmentPopover(task.id, pdfOpt, 'upload');
         });
-        
+
         // 2. Link GDrive File
         const gdOpt = el('button', { class: 'notion-embed-option', type: 'button' });
         gdOpt.innerHTML = `
@@ -7776,15 +7704,6 @@ const Workflow = {
     await WorkflowData.loadPendingApprovals();
     await this._loadGroundWorkers();
     let wr = WorkflowData.getWorkRequestById(this.detailWrId);
-    let wrDocs = [];
-    if (this.detailWrId) {
-      try {
-        const docsRes = await window.apiClient.documents.list({ workRequestId: this.detailWrId });
-        wrDocs = docsRes?.data || [];
-      } catch (e) {
-        console.error('[Workflow] failed to load DMS documents for detail view', e);
-      }
-    }
     if (!wr) {
       const pc = WorkflowData.getPendingApprovalByRecordId(this.detailWrId, 'workRequests');
       if (pc && pc.table === 'workRequests') {
@@ -9710,197 +9629,30 @@ const Workflow = {
         docsSection.appendChild(docsHeader);
 
         const docsList = el('div', { class: 'details-content-list' });
-        if ((t.taskDocuments || []).length === 0) {
-          docsList.appendChild(renderEmptyState('No documents attached'));
-        } else {
-          t.taskDocuments.forEach((d, dIdx) => {
-            const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center;' });
-            const leftSide = el('div', { style: 'display:flex; flex-direction:column;' });
-            const fName = d.fileName || d.filename;
-
-            const canViewDms = Auth.can('dms:view');
-            if (canViewDms) {
-              let dmsDoc = null;
-              if (d.documentId) {
-                dmsDoc = wrDocs.find(doc => doc.id === d.documentId);
-              } else {
-                const matches = wrDocs.filter(doc => doc.original_name === fName || doc.file_name === fName || doc.fileName === fName);
-                if (matches.length === 1) {
-                  dmsDoc = matches[0];
-                  d.documentId = dmsDoc.id;
-                }
-              }
-
-              if (dmsDoc) {
-                const link = el('a', {
-                  href: '#',
-                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
-                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
-                });
-                link.addEventListener('click', (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  this.showDocumentPreview(dmsDoc.id);
-                });
-                leftSide.appendChild(link);
-              } else if (d.linkUrl) {
-                const link = el('a', {
-                  href: d.linkUrl,
-                  target: '_blank',
-                  text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : ''),
-                  style: `color:${d.isGoogleDrive ? '#22c55e' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
-                });
-                leftSide.appendChild(link);
-              } else {
-                leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : '') }));
-              }
-            } else {
-              leftSide.appendChild(el('span', { text: (d.isGoogleDrive ? '🟢 ' : '📎 ') + fName + (d.isGoogleDrive ? ' (Google Drive)' : '') }));
-            }
-            leftSide.appendChild(el('span', { class: 'kpi-label', text: formatDate(d.uploadDate) }));
-            item.appendChild(leftSide);
-
-            // Delete Button: Documentation and Admin can remove
-            if (Auth.can('dms:handover')) {
-              const delBtn = el('button', { 
-                class: 'btn btn-ghost btn-xs', 
-                text: '×', 
-                style: 'color:var(--danger); font-size:1.2rem; padding:0 4px; line-height:1;' 
-              });
-              if (!disableIfPending(delBtn, wr)) {
-                delBtn.title = 'Remove Attachment';
-                delBtn.addEventListener('click', (e) => {
-                  e.stopPropagation();
-                  this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
-                    const updatedTaskDocs = t.taskDocuments.filter((_, i) => i !== dIdx);
-                    WorkflowData.updateTask(t.id, { taskDocuments: updatedTaskDocs });
-                    const docIdToDelete = d.documentId || (wrDocs.find(doc => doc.fileName === fName && doc.workRequestId === wr.id) || {}).id;
-                    if (docIdToDelete) {
-                      try {
-                        await window.apiClient.documents.remove(docIdToDelete);
-                      } catch (err) {
-                        console.error('Failed to delete DMS document', err);
-                      }
-                    }
-                    App.handleRoute();
-                  }, 'danger');
-                });
-              }
-              item.appendChild(delBtn);
-            }
-            docsList.appendChild(item);
-
-            // Comments
-            const commentToggle = el('button', { class: 'btn btn-ghost btn-xs', text: '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : ''), style: 'margin-left: 10px; font-size: var(--text-xs); color: var(--muted);' });
-            const commentContainer = el('div', { class: 'doc-comments-container hidden', style: 'margin: 8px 0 16px 20px; padding: 12px; background: var(--bg); border-radius: var(--radius-sm); border-left: 3px solid var(--border);' });
-            commentToggle.addEventListener('click', (e) => { e.stopPropagation(); commentContainer.classList.toggle('hidden'); });
-
-            const renderComments = () => {
-              commentContainer.innerHTML = '';
-              const list = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
-              if (!d.comments || d.comments.length === 0) {
-                list.appendChild(renderEmptyState('No comments for this document', null, { style: 'padding: 4px 0;' }));
-              } else {
-                d.comments.forEach((c, cIdx) => {
-                  const commentRow = el('div', { style: 'background:var(--surface); padding:8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); position:relative;' });
-                  const cUser = window.apiClient.userCache.getById(c.userId);
-                  const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.75rem;' });
-                  header.appendChild(el('span', { text: cUser?.name || 'Unknown', style: 'font-weight:600; color:var(--accent);' }));
-                  header.appendChild(el('span', { text: formatDate(c.date), style: 'color:var(--muted);' }));
-                  commentRow.appendChild(header);
-
-                  const contentArea = el('div', { style: 'font-size:var(--text-sm); color:var(--fg); line-height:1.4;' });
-                  contentArea.textContent = c.text;
-                  commentRow.appendChild(contentArea);
-
-                  // Admin Actions: Edit/Delete (disabled in archive)
-                  if (Auth.can('workflow:approve') && !isArchived) {
-                    const cActions = el('div', { style: 'display:flex; gap:8px; margin-top:8px; border-top:1px solid var(--border); padding-top:4px;' });
-                    const editBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Edit', style: 'padding:0; font-size:0.7rem;' });
-                    if (!disableIfPending(editBtn, wr)) {
-                      editBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const originalText = c.text;
-                        contentArea.innerHTML = '';
-                        const editInput = el('textarea', { class: 'form-control', style: 'width:100%; min-height:40px; font-size:0.875rem;', text: originalText });
-                        contentArea.appendChild(editInput);
-                        cActions.classList.add('hidden');
-                        const editActions = el('div', { style: 'display:flex; gap:8px; margin-top:4px;' });
-                        const saveEditBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Save' });
-                        const cancelEditBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Cancel' });
-                        saveEditBtn.addEventListener('click', (ev) => {
-                          ev.stopPropagation();
-                          const newText = editInput.value.trim();
-                          if (newText) {
-                            c.text = newText;
-                            c.date = new Date().toISOString();
-                            WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                            renderComments();
-                          }
-                        });
-                        cancelEditBtn.addEventListener('click', (ev) => { ev.stopPropagation(); renderComments(); });
-                        editActions.appendChild(saveEditBtn);
-                        editActions.appendChild(cancelEditBtn);
-                        contentArea.appendChild(editActions);
-                      });
-                    }
-                    const delCommentBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Delete', style: 'padding:0; font-size:var(--text-xs); color:var(--danger);' });
-                    if (!disableIfPending(delCommentBtn, wr)) {
-                      delCommentBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        this.showConfirm('Delete Comment', 'Are you sure you want to delete this comment?', () => {
-                          d.comments.splice(cIdx, 1);
-                          WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                          renderComments();
-                          commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
-                        }, 'danger');
-                      });
-                    }
-                    cActions.appendChild(editBtn);
-                    cActions.appendChild(delCommentBtn);
-                    commentRow.appendChild(cActions);
-                  }
-                  list.appendChild(commentRow);
-                });
-              }
-              commentContainer.appendChild(list);
-
-              if (Auth.can('workflow:approve') && !isArchived) {
-                const addForm = el('div', { style: 'margin-top:12px; padding-top:12px; border-top: 1px solid var(--border);' });
-                const addInput = el('textarea', { placeholder: 'Write a comment...', class: 'form-control', style: 'width:100%; min-height:50px; font-size:0.875rem;' });
-                const addBtnRow = el('div', { style: 'display:flex; gap:8px; margin-top:8px;' });
-                const saveNewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Save Comment' });
-                if (wr.isPendingApproval) {
-                  disableForApproval(addInput);
-
-                  disableForApproval(saveNewBtn);
-                } else {
-                  saveNewBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const text = addInput.value.trim();
-                    if (text) {
-                      if (!d.comments) d.comments = [];
-                      d.comments.push({ userId: Auth.user.id, date: new Date().toISOString(), text });
-                      WorkflowData.updateTask(t.id, { taskDocuments: t.taskDocuments });
-                      addInput.value = '';
-                      renderComments();
-                      commentToggle.textContent = '💬 Comments' + (d.comments?.length ? ` (${d.comments.length})` : '');
-                    }
-                  });
-                }
-                addBtnRow.appendChild(saveNewBtn);
-                addForm.appendChild(addInput);
-                addForm.appendChild(addBtnRow);
-                commentContainer.appendChild(addForm);
-              }
-            };
-            renderComments();
-            docsList.appendChild(commentToggle);
-            docsList.appendChild(commentContainer);
-          });
-        }
+        docsList.appendChild(renderEmptyState('Loading documents...'));
         docsSection.appendChild(docsList);
         rightPane.appendChild(docsSection);
+
+        (async () => {
+          try {
+            const docsRes = await window.apiClient.documents.list({ linkedTaskId: t.id });
+            const taskDocs = docsRes?.data || [];
+            docsList.innerHTML = '';
+            if (taskDocs.length === 0) {
+              docsList.appendChild(renderEmptyState('No documents attached'));
+            } else {
+              taskDocs.forEach((dmsDoc) => {
+                docsList.appendChild(this._renderTaskDocumentItem(dmsDoc, { wr, isArchived, showComments: true }));
+              });
+            }
+          } catch (err) {
+            if (!isAbortError(err)) {
+              console.error('Failed to load task documents in detail view', err);
+              docsList.innerHTML = '';
+              docsList.appendChild(renderEmptyState('Failed to load documents'));
+            }
+          }
+        })();
 
         // Time Log History Section
         const timeSection = el('div', { class: 'detail-block' });
@@ -10275,6 +10027,35 @@ const Workflow = {
     });
   },
 
+  async _saveDocumentComments(documentId, comments) {
+    try {
+      await window.apiClient.documents.update(documentId, { comments });
+    } catch (err) {
+      console.error('Failed to save document comments', err);
+      this.showMessage('Error', 'Failed to save comment. Please try again.', 'danger');
+      throw err;
+    }
+  },
+
+  async _waitUntilDocumentListable(taskId, documentId, { timeoutMs = 10000, intervalMs = 300 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await window.apiClient.documents.list({ linkedTaskId: taskId });
+        const docs = res?.data || [];
+        if (docs.some(d => d.id === documentId)) {
+          return docs.find(d => d.id === documentId);
+        }
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.warn('[Workflow] waiting for document listability failed', e);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Document was created but is not yet available in the task document list');
+  },
+
   async uploadTaskDocument(taskId, file, options = {}) {
     if (file.size > 50 * 1024 * 1024) {
       this.showMessage('File Too Large', 'Files must be 50 MB or smaller.', 'warning');
@@ -10320,6 +10101,12 @@ const Workflow = {
     await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
 
     WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    WorkflowData.invalidateRelatedForTask(taskId);
+
+    // Keep the upload loading state until the document is actually fetchable
+    // in the task document list, so the side pane and detail panel can render
+    // it immediately when they refresh.
+    await this._waitUntilDocumentListable(taskId, dmsDoc.id);
     return dmsDoc;
   },
 
@@ -10366,6 +10153,11 @@ const Workflow = {
     await WorkflowData.updateTask(taskId, { taskDocuments: updatedDocs, updatedAt: new Date().toISOString() });
 
     WorkflowData.invalidateRelatedForWorkRequest(task.workRequestId);
+    WorkflowData.invalidateRelatedForTask(taskId);
+
+    // Linked documents are active immediately, but still wait until they are
+    // listable so callers can safely refresh the UI without showing stale data.
+    await this._waitUntilDocumentListable(taskId, dmsDoc.id);
     return dmsDoc;
   },
 
@@ -10465,6 +10257,241 @@ const Workflow = {
       console.error('Failed to load document preview', err);
       this.showMessage('Preview Error', 'Failed to load preview: ' + (err.message || 'Unknown error'), 'danger');
     }
+  },
+
+  /**
+   * Render a single task-attached DMS document row.
+   * Works for both the task side-pane and the detail view.
+   * @param {object} dmsDoc - Document row from the DMS
+   * @param {object} [options]
+   * @param {object} [options.wr] - Parent work request (for pending/archive checks)
+   * @param {boolean} [options.isArchived] - Whether the WR is archived
+   * @param {boolean} [options.showComments] - Whether to include the comments sub-section
+   * @returns {HTMLElement}
+   */
+  _renderTaskDocumentItem(dmsDoc, { wr, isArchived, showComments = false, onDelete } = {}) {
+    const item = el('div', { class: 'detail-item-v2', style: 'display:flex; justify-content:space-between; align-items:center;' });
+    const leftSide = el('div', { style: 'display:flex; flex-direction:column;' });
+    const fName = dmsDoc.original_name || dmsDoc.file_name || 'Document';
+    const extUrl = dmsDoc.external_url;
+    const isGDrive = extUrl && (extUrl.includes('drive.google.com') || extUrl === 'mock-google-drive-data-url');
+    const isFigma = extUrl && extUrl.includes('figma.com');
+
+    const canViewDms = Auth.can('dms:view');
+    if (canViewDms) {
+      if (extUrl) {
+        const link = el('a', {
+          href: extUrl,
+          target: '_blank',
+          text: (isGDrive ? '🟢 ' : isFigma ? '🟣 ' : '📎 ') + fName + (isGDrive ? ' (Google Drive)' : isFigma ? ' (Figma)' : ''),
+          style: `color:${isGDrive ? '#22c55e' : isFigma ? '#a855f7' : 'var(--accent)'}; font-weight:600; text-decoration:underline; cursor:pointer;`
+        });
+        leftSide.appendChild(link);
+      } else {
+        const link = el('a', {
+          href: '#',
+          text: '📎 ' + fName,
+          style: 'color:var(--accent); font-weight:600; text-decoration:underline; cursor:pointer;'
+        });
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.showDocumentPreview(dmsDoc.id);
+        });
+        leftSide.appendChild(link);
+      }
+    } else {
+      leftSide.appendChild(el('span', { text: '📎 ' + fName }));
+    }
+    leftSide.appendChild(el('span', { class: 'kpi-label', text: formatDate(dmsDoc.created_at) }));
+    item.appendChild(leftSide);
+
+    // Delete Button: only roles that can delete DMS rows may remove attachments
+    if (Auth.can('dms:delete')) {
+      const delBtn = el('button', {
+        class: 'btn btn-ghost btn-xs',
+        text: '×',
+        style: 'color:var(--danger); font-size:1.2rem; padding:0 4px; line-height:1;'
+      });
+      if (!disableIfPending(delBtn, wr)) {
+        delBtn.title = 'Remove Attachment';
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.showConfirm('Confirm Removal', `Are you sure you want to remove "${fName}" from this task?`, async () => {
+            if (!dmsDoc.id) {
+              this.showMessage('Error', 'Cannot remove attachment: missing document ID.', 'danger');
+              return;
+            }
+            try {
+              await window.apiClient.documents.remove(dmsDoc.id);
+            } catch (err) {
+              const errStr = String(err.message || err || '').toLowerCase();
+              const alreadyGone = errStr.includes('not found') || errStr.includes('404');
+              if (alreadyGone) {
+                // Document is already deleted; refresh so it disappears from the UI.
+                console.warn('Document already removed or not found, refreshing UI', dmsDoc.id);
+              } else {
+                console.error('Failed to delete DMS document', err);
+                this.showMessage('Error', 'Failed to remove attachment: ' + (err.message || 'Unknown error'), 'danger');
+                return;
+              }
+            }
+            // Invalidate task-level cache so table/detail and side pane reload clean data.
+            if (dmsDoc.linked_task_id) {
+              WorkflowData.invalidateRelatedForTask(dmsDoc.linked_task_id);
+            }
+            if (dmsDoc.work_request_id) {
+              WorkflowData.invalidateRelatedForWorkRequest(dmsDoc.work_request_id);
+            }
+            if (typeof onDelete === 'function') {
+              onDelete();
+            } else {
+              App.handleRoute();
+            }
+          }, 'danger');
+        });
+      }
+      item.appendChild(delBtn);
+    }
+
+    if (!showComments) return item;
+
+    const commentToggle = el('button', { class: 'btn btn-ghost btn-xs', text: '💬 Comments' + (dmsDoc.comments?.length ? ` (${dmsDoc.comments.length})` : ''), style: 'margin-left: 10px; font-size: var(--text-xs); color: var(--muted);' });
+    const commentContainer = el('div', { class: 'doc-comments-container hidden', style: 'margin: 8px 0 16px 20px; padding: 12px; background: var(--bg); border-radius: var(--radius-sm); border-left: 3px solid var(--border);' });
+    commentToggle.addEventListener('click', (e) => { e.stopPropagation(); commentContainer.classList.toggle('hidden'); });
+
+    const updateCommentToggle = () => {
+      commentToggle.textContent = '💬 Comments' + (dmsDoc.comments?.length ? ` (${dmsDoc.comments.length})` : '');
+    };
+
+    const ensureCommentIds = () => {
+      if (!dmsDoc.comments) return;
+      dmsDoc.comments.forEach((c) => {
+        if (!c.id) c.id = generateUUID();
+      });
+    };
+
+    const renderComments = () => {
+      ensureCommentIds();
+      commentContainer.innerHTML = '';
+      const list = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+      if (!dmsDoc.comments || dmsDoc.comments.length === 0) {
+        list.appendChild(renderEmptyState('No comments for this document', null, { style: 'padding: 4px 0;' }));
+      } else {
+        dmsDoc.comments.forEach((c) => {
+          const commentRow = el('div', { style: 'background:var(--surface); padding:8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); position:relative;' });
+          const cUser = window.apiClient.userCache.getById(c.userId);
+          const header = el('div', { style: 'display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.75rem;' });
+          header.appendChild(el('span', { text: cUser?.name || 'Unknown', style: 'font-weight:600; color:var(--accent);' }));
+          header.appendChild(el('span', { text: formatDate(c.date), style: 'color:var(--muted);' }));
+          commentRow.appendChild(header);
+
+          const contentArea = el('div', { style: 'font-size:var(--text-sm); color:var(--fg); line-height:1.4;' });
+          contentArea.textContent = c.text;
+          commentRow.appendChild(contentArea);
+
+          // Comment actions: Edit/Delete (disabled in archive)
+          if (Auth.can('dms:edit') && !isArchived) {
+            const cActions = el('div', { style: 'display:flex; gap:8px; margin-top:8px; border-top:1px solid var(--border); padding-top:4px;' });
+            const editBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Edit', style: 'padding:0; font-size:0.7rem;' });
+            if (!disableIfPending(editBtn, wr)) {
+              editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const originalText = c.text;
+                contentArea.textContent = '';
+                const editInput = el('textarea', { class: 'form-control', style: 'width:100%; min-height:40px; font-size:0.875rem;', text: originalText });
+                contentArea.appendChild(editInput);
+                cActions.classList.add('hidden');
+                const editActions = el('div', { style: 'display:flex; gap:8px; margin-top:4px;' });
+                const saveEditBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Save' });
+                const cancelEditBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Cancel' });
+                saveEditBtn.addEventListener('click', (ev) => {
+                  ev.stopPropagation();
+                  const newText = editInput.value.trim();
+                  if (newText && c.id) {
+                    const comment = dmsDoc.comments.find(x => x.id === c.id);
+                    if (comment) {
+                      comment.text = newText;
+                      comment.date = new Date().toISOString();
+                      this._saveDocumentComments(dmsDoc.id, dmsDoc.comments)
+                        .then(() => { updateCommentToggle(); renderComments(); })
+                        .catch(() => { comment.text = originalText; comment.date = c.date; renderComments(); });
+                    }
+                  }
+                });
+                cancelEditBtn.addEventListener('click', (ev) => { ev.stopPropagation(); renderComments(); });
+                editActions.appendChild(saveEditBtn);
+                editActions.appendChild(cancelEditBtn);
+                contentArea.appendChild(editActions);
+              });
+            }
+            const delCommentBtn = el('button', { class: 'btn btn-link btn-xs', text: 'Delete', style: 'padding:0; font-size:var(--text-xs); color:var(--danger);' });
+            if (!disableIfPending(delCommentBtn, wr)) {
+              delCommentBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showConfirm('Delete Comment', 'Are you sure you want to delete this comment?', () => {
+                  if (!c.id) return;
+                  const originalComments = [...dmsDoc.comments];
+                  dmsDoc.comments = dmsDoc.comments.filter(x => x.id !== c.id);
+                  updateCommentToggle();
+                  renderComments();
+                  this._saveDocumentComments(dmsDoc.id, dmsDoc.comments)
+                    .catch(() => {
+                      dmsDoc.comments = originalComments;
+                      updateCommentToggle();
+                      renderComments();
+                    });
+                }, 'danger');
+              });
+            }
+            cActions.appendChild(editBtn);
+            cActions.appendChild(delCommentBtn);
+            commentRow.appendChild(cActions);
+          }
+          list.appendChild(commentRow);
+        });
+      }
+      commentContainer.appendChild(list);
+
+      if (Auth.can('dms:edit') && !isArchived) {
+        const addForm = el('div', { style: 'margin-top:12px; padding-top:12px; border-top: 1px solid var(--border);' });
+        const addInput = el('textarea', { placeholder: 'Write a comment...', class: 'form-control', style: 'width:100%; min-height:50px; font-size:0.875rem;' });
+        const addBtnRow = el('div', { style: 'display:flex; gap:8px; margin-top:8px;' });
+        const saveNewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Save Comment' });
+        if (wr.isPendingApproval) {
+          disableForApproval(addInput);
+          disableForApproval(saveNewBtn);
+        } else {
+          saveNewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const text = addInput.value.trim();
+            if (text) {
+              if (!dmsDoc.comments) dmsDoc.comments = [];
+              const newComment = { id: generateUUID(), userId: Auth.user.id, date: new Date().toISOString(), text };
+              dmsDoc.comments.push(newComment);
+              addInput.value = '';
+              updateCommentToggle();
+              renderComments();
+              this._saveDocumentComments(dmsDoc.id, dmsDoc.comments).catch(() => {
+                dmsDoc.comments = dmsDoc.comments.filter(x => x.id !== newComment.id);
+                updateCommentToggle();
+                renderComments();
+              });
+            }
+          });
+        }
+        addBtnRow.appendChild(saveNewBtn);
+        addForm.appendChild(addInput);
+        addForm.appendChild(addBtnRow);
+        commentContainer.appendChild(addForm);
+      }
+    };
+    renderComments();
+    const wrapper = el('div');
+    wrapper.appendChild(item);
+    wrapper.appendChild(commentToggle);
+    wrapper.appendChild(commentContainer);
+    return wrapper;
   },
 
   async showAddDocumentModal(taskId, triggerEl) {
@@ -10569,7 +10596,6 @@ const Workflow = {
             await this.uploadTaskDocument(taskId, selectedFile, { category: 'OTHER' });
             popover.remove();
             this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           } catch (err) {
             console.error('Failed to upload document', err);
             errorLabel.textContent = 'Upload Failed: ' + (err.message || 'Unknown error');
@@ -10605,7 +10631,6 @@ const Workflow = {
             await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
             popover.remove();
             this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           } catch (err) {
             console.error('Failed to link document', err);
             this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10645,7 +10670,6 @@ const Workflow = {
             await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
             popover.remove();
             this.showTaskSidePane(taskId, null);
-            App.handleRoute();
           } catch (err) {
             console.error('Failed to link GDrive document', err);
             this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10687,7 +10711,6 @@ const Workflow = {
               });
               popover.remove();
               this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             } catch (err) {
               console.error('Failed to embed GDrive document', err);
               this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10832,7 +10855,6 @@ const Workflow = {
               await this.uploadTaskDocument(taskId, file, { category: 'OTHER' });
               popover.remove();
               this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             } catch (err) {
               console.error('Failed to upload document', err);
               this.showMessage('Upload Error', 'Failed to upload document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10871,7 +10893,6 @@ const Workflow = {
               await this.linkTaskDocument(taskId, val, { fileName, category: 'OTHER' });
               popover.remove();
               this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             } catch (err) {
               console.error('Failed to link document', err);
               this.showMessage('Link Error', 'Failed to link document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10914,7 +10935,6 @@ const Workflow = {
               await this.linkTaskDocument(taskId, val, { fileName, isGoogleDrive: true, category: 'OTHER' });
               popover.remove();
               this.showTaskSidePane(taskId, null);
-              App.handleRoute();
             } catch (err) {
               console.error('Failed to link GDrive document', err);
               this.showMessage('Link Error', 'Failed to link Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -10957,7 +10977,6 @@ const Workflow = {
                 });
                 popover.remove();
                 this.showTaskSidePane(taskId, null);
-                App.handleRoute();
               } catch (err) {
                 console.error('Failed to embed GDrive document', err);
                 this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -11088,7 +11107,6 @@ const Workflow = {
           });
           overlay.remove();
           this.showTaskSidePane(taskId, null);
-          App.handleRoute();
         } catch (err) {
           console.error('Failed to embed GDrive document', err);
           this.showMessage('Embed Error', 'Failed to embed Google Drive document: ' + (err.message || 'Unknown error'), 'danger');
@@ -11139,7 +11157,6 @@ const Workflow = {
         });
         overlay.remove();
         this.showTaskSidePane(taskId, null);
-        App.handleRoute();
       } catch (err) {
         console.error('Failed to link Figma design', err);
         this.showMessage('Link Error', 'Failed to link Figma design: ' + (err.message || 'Unknown error'), 'danger');
