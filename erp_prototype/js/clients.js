@@ -795,8 +795,10 @@ const Clients = {
     headerRow.appendChild(el('th', { class: 'jira-backlog-col-header', text: 'Contact Details', style: 'width: 180px;' }));
 
     // Actions column header
-    const thActions = el('th', { class: 'jira-backlog-col-header', style: 'width: 80px; text-align: center;', text: 'Actions' });
-    headerRow.appendChild(thActions);
+    if (isAdmin) {
+      const thActions = el('th', { class: 'jira-backlog-col-header', style: 'width: 80px; text-align: center;', text: 'Actions' });
+      headerRow.appendChild(thActions);
+    }
 
     // Tbody
     const tbody = el('tbody');
@@ -998,30 +1000,29 @@ const Clients = {
       const tdCd = el('td', { text: cdList });
       tr.appendChild(tdCd);
 
-      // Actions column (Edit and Archive actions)
-      const tdActions = el('td', { style: 'text-align: center; white-space: nowrap;' });
-      
-      // Edit button (pen icon)
-      const editBtn = el('button', { class: 'jira-row-action-btn', title: 'Edit Client', style: 'margin-right: 6px; background: none; border: none; cursor: pointer; padding: 2px; color: var(--color-primary);' });
-      const editSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      editSvg.setAttribute('viewBox', '0 0 24 24');
-      editSvg.setAttribute('width', '14');
-      editSvg.setAttribute('height', '14');
-      editSvg.setAttribute('fill', 'none');
-      editSvg.setAttribute('stroke', 'currentColor');
-      editSvg.setAttribute('stroke-width', '2');
-      editSvg.setAttribute('stroke-linecap', 'round');
-      editSvg.setAttribute('stroke-linejoin', 'round');
-      editSvg.innerHTML = '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>';
-      editBtn.appendChild(editSvg);
-      editBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.showForm(client.id);
-      });
-      tdActions.appendChild(editBtn);
-
-      // Archive button (trash icon - only for admins)
+      // Actions column (Edit and Archive actions - only for admins)
       if (isAdmin) {
+        const tdActions = el('td', { style: 'text-align: center; white-space: nowrap;' });
+        
+        // Edit button (pen icon)
+        const editBtn = el('button', { class: 'jira-row-action-btn', title: 'Edit Client', style: 'margin-right: 6px; background: none; border: none; cursor: pointer; padding: 2px; color: var(--color-primary);' });
+        const editSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        editSvg.setAttribute('viewBox', '0 0 24 24');
+        editSvg.setAttribute('width', '14');
+        editSvg.setAttribute('height', '14');
+        editSvg.setAttribute('fill', 'none');
+        editSvg.setAttribute('stroke', 'currentColor');
+        editSvg.setAttribute('stroke-width', '2');
+        editSvg.setAttribute('stroke-linecap', 'round');
+        editSvg.setAttribute('stroke-linejoin', 'round');
+        editSvg.innerHTML = '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>';
+        editBtn.appendChild(editSvg);
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.showForm(client.id);
+        });
+        tdActions.appendChild(editBtn);
+
         const trashBtn = el('button', { class: 'jira-trash-btn', title: 'Archive Client', style: 'background: none; border: none; cursor: pointer; padding: 2px;' });
         const trashSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         trashSvg.setAttribute('viewBox', '0 0 24 24');
@@ -1039,14 +1040,15 @@ const Clients = {
           this.archiveClientDirectly(client.id);
         });
         tdActions.appendChild(trashBtn);
+        
+        tr.appendChild(tdActions);
       }
-      tr.appendChild(tdActions);
 
       tbody.appendChild(tr);
 
       // Accordion Row
       const accordionRow = el('tr', { class: 'jira-accordion-tr hidden' });
-      const accordionTd = el('td', { colspan: isAdmin ? '12' : '11', class: 'jira-accordion-td' });
+      const accordionTd = el('td', { colspan: isAdmin ? '12' : '10', class: 'jira-accordion-td' });
       accordionRow.appendChild(accordionTd);
       tbody.appendChild(accordionRow);
 
@@ -1166,6 +1168,10 @@ const Clients = {
   },
 
   async showForm(clientId, mode = null) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
+      return;
+    }
     this.editingId = clientId || 'new';
     const isNew = this.editingId === 'new';
     let client = null;
@@ -1455,6 +1461,10 @@ const Clients = {
   },
 
   async submitForm(form) {
+    if (Auth.user?.role !== 'Admin') {
+      Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
+      return;
+    }
     if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 

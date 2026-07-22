@@ -7,6 +7,10 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const { randomUUID } = require('crypto');
 
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const VALID_TRANSITIONS = {
   Draft: ['Pre-processing', 'In Progress', 'Processing', 'Cancelled'],
   'Pre-processing': ['Processing', 'In Progress', 'For Review', 'Cancelled'],
@@ -370,7 +374,7 @@ const listWorkRequests = async ({
 };
 
 const createWorkRequest = async ({ entityId, data, user }) => {
-  const id = data.id || randomUUID();
+  const id = data.id && isValidUUID(data.id) ? data.id : randomUUID();
   const now = new Date().toISOString();
   const record = {
     id,
@@ -606,7 +610,7 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
 };
 
 const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
-  const id = data.id || randomUUID();
+  const id = data.id && isValidUUID(data.id) ? data.id : randomUUID();
   const now = new Date().toISOString();
   const record = {
     id,
@@ -616,7 +620,7 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
     status: data.status || 'Draft',
     assignee_id: data.assigneeId || null,
     assignee_name: data.assigneeName || null,
-    predecessors: data.predecessors || [],
+    predecessors: Array.isArray(data.predecessors) ? data.predecessors.filter(isValidUUID) : [],
     due_date: data.dueDate || null,
     display_order: data.displayOrder ?? 0,
     created_at: now,
@@ -656,18 +660,30 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
   return getTaskById({ workRequestId, taskId: id, entityId });
 };
 
-const isValidUUID = (v) =>
-  typeof v === 'string' &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-
 const upsertChecklist = async (taskId, checklist) => {
   await supabaseAdmin.from('task_checklists').delete().eq('task_id', taskId);
+
+  // Map temporary checklist IDs to new valid UUIDs to resolve dependsOn dependencies
+  const chkIdMap = new Map();
+  checklist.forEach((item) => {
+    if (item.id) {
+      const newId = isValidUUID(item.id) ? item.id : randomUUID();
+      chkIdMap.set(item.id, newId);
+    }
+  });
+
   const rows = checklist.map((item) => {
-    const dependsOn = Array.isArray(item.dependsOn)
+    let dependsOn = Array.isArray(item.dependsOn)
       ? item.dependsOn
       : (item.dependsOn ? [item.dependsOn] : []);
+
+    // Resolve dependencies using the map and ensure only valid UUIDs are persisted
+    dependsOn = dependsOn.map((id) => chkIdMap.get(id) || id).filter(isValidUUID);
+
+    const itemId = item.id ? (chkIdMap.get(item.id) || item.id) : randomUUID();
+
     return {
-      id: isValidUUID(item.id) ? item.id : undefined,
+      id: isValidUUID(itemId) ? itemId : randomUUID(),
       task_id: taskId,
       text: item.text,
       category: item.category || null,
@@ -776,7 +792,9 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     status: data.status ?? existing.status,
     assignee_id: data.assigneeId ?? existing.assigneeId,
     assignee_name: data.assigneeName ?? existing.assigneeName,
-    predecessors: data.predecessors ?? existing.predecessors,
+    predecessors: data.predecessors !== undefined
+      ? (Array.isArray(data.predecessors) ? data.predecessors.filter(isValidUUID) : [])
+      : existing.predecessors,
     due_date: data.dueDate ?? existing.dueDate,
     display_order: data.displayOrder ?? existing.displayOrder,
     updated_at: new Date().toISOString(),
