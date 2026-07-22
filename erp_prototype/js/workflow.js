@@ -10367,6 +10367,40 @@ const Workflow = {
     throw new Error('Document was created but is not yet available in the task document list');
   },
 
+  async _waitUntilTimeLogsListable(wrId, taskId, logIds, { timeoutMs = 15000, intervalMs = 400 } = {}) {
+    if (!logIds || logIds.length === 0) return;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+        const serverTask = res?.data;
+        if (serverTask) {
+          const serverLogIds = [];
+          if (serverTask.timeLogs) {
+            serverTask.timeLogs.forEach(l => { if (l.id) serverLogIds.push(l.id); });
+          }
+          if (serverTask.checklist) {
+            serverTask.checklist.forEach(item => {
+              if (item.timeLogs) {
+                item.timeLogs.forEach(l => { if (l.id) serverLogIds.push(l.id); });
+              }
+            });
+          }
+          const allFound = logIds.every(id => serverLogIds.includes(id));
+          if (allFound) {
+            return;
+          }
+        }
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.warn('[Workflow] waiting for time logs listability failed', e);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+    throw new Error('Time log was saved but is not yet available in the task details due to synchronization delay.');
+  },
+
   async uploadTaskDocument(taskId, file, options = {}) {
     if (file.size > 50 * 1024 * 1024) {
       this.showMessage('File Too Large', 'Files must be 50 MB or smaller.', 'warning');
@@ -11845,15 +11879,49 @@ const Workflow = {
 
       (async () => {
         try {
-          const res = await window.apiClient.workRequests.addTimeLogs(wrId, taskId, { logs: newEntries });
-          const normalized = WorkflowData.normalizeTask(res.data);
+          const getLogIds = (t) => {
+            const ids = [];
+            if (t) {
+              if (t.timeLogs) t.timeLogs.forEach(l => { if (l.id) ids.push(l.id); });
+              if (t.checklist) {
+                t.checklist.forEach(item => {
+                  if (item.timeLogs) item.timeLogs.forEach(l => { if (l.id) ids.push(l.id); });
+                });
+              }
+            }
+            return ids;
+          };
           const existing = WorkflowData.getTaskById(taskId);
+          const existingIds = getLogIds(existing);
+
+          const res = await window.apiClient.workRequests.addTimeLogs(wrId, taskId, { logs: newEntries });
+          
+          const serverTask = res?.data;
+          const updatedIds = getLogIds(serverTask);
+          const newLogIds = updatedIds.filter(id => !existingIds.includes(id));
+
+          if (newLogIds.length > 0) {
+            submitBtn.textContent = 'Syncing...';
+            await this._waitUntilTimeLogsListable(wrId, taskId, newLogIds);
+          }
+
+          const finalRes = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+          const finalServerTask = finalRes?.data || serverTask;
+
+          const normalized = WorkflowData.normalizeTask(finalServerTask);
           if (existing) {
             // Preserve frontend-only extensions the backend strips
             normalized.comments = existing.comments || [];
             normalized.taskDocuments = existing.taskDocuments || [];
             normalized.coAssignees = existing.coAssignees || [];
             normalized.priority = existing.priority || normalized.priority || 'Normal';
+            
+            const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
+            normalized.checklist = (normalized.checklist || []).map(c => {
+              const ec = existingClById.get(c.id);
+              return ec ? { ...ec, ...c, dependsOn: ec.dependsOn || null, timeLogs: c.timeLogs || ec.timeLogs || [], coAssignees: ec.coAssignees || [] } : c;
+            });
+
             Object.assign(existing, normalized);
           } else {
             if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];

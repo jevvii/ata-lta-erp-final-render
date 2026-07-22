@@ -491,7 +491,11 @@
       unarchive: (id) => post(`/work-requests/${id}/unarchive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       remove: (id) => del(`/work-requests/${id}`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       getRelated: (id) => get(`/work-requests/${id}/related`),
-      getTask: (wrId, taskId) => get(`/work-requests/${wrId}/tasks/${taskId}`),
+      getTask: (wrId, taskId, queryParams = {}) => {
+        const query = new URLSearchParams(queryParams).toString();
+        const path = `/work-requests/${wrId}/tasks/${taskId}` + (query ? `?${query}` : '');
+        return get(path);
+      },
       listTasks: (wrId) => get(`/work-requests/${wrId}/tasks`),
       createTask: (wrId, data) => post(`/work-requests/${wrId}/tasks`, data),
       updateTask: (wrId, taskId, data) => put(`/work-requests/${wrId}/tasks/${taskId}`, data),
