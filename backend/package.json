@@ -28,6 +28,8 @@
     "create-bucket:uat": "node scripts/create-storage-bucket.js uat",
     "reset:remote": "node scripts/reset-remote.js",
     "reset:remote:uat": "node scripts/reset-remote.js uat",
+    "clear-data:remote": "node scripts/clear-remote-data.js",
+    "clear-data:remote:uat": "node scripts/clear-remote-data.js uat",
     "verify:auth": "node scripts/verify-supabase-auth.js",
     "setup:env": "cp .env.example .env"
   },

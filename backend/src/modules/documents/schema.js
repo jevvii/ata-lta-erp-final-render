@@ -21,13 +21,28 @@ const DOCUMENT_CATEGORIES = [
 
 const LIFECYCLE_STATES = ['collected', 'with_documentations', 'scanned', 'in_envelope', 'stored'];
 
+const MAX_FILE_SIZE_BYTES = process.env.MAX_FILE_SIZE_BYTES
+  ? parseInt(process.env.MAX_FILE_SIZE_BYTES, 10)
+  : 50 * 1024 * 1024; // 50 MB
+
 /**
  * Schema for creating document metadata (step 1 of upload flow).
  */
 const createDocumentSchema = z.object({
   fileName: z.string().min(1).max(255),
-  contentType: z.string().min(1).max(100),
-  fileSize: z.number().int().nonnegative(),
+  contentType: z.string().min(1).max(100).optional().nullable(),
+  fileSize: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .nullable()
+    .refine((val) => {
+      if (val === null || val === undefined) return true;
+      return val <= MAX_FILE_SIZE_BYTES;
+    }, {
+      message: `File size exceeds maximum allowed limit of ${MAX_FILE_SIZE_BYTES} bytes`,
+    }),
   originalName: z.string().max(255).optional(),
   workRequestId: z.string().uuid().optional().nullable(),
   linkedTaskId: z.string().uuid().optional().nullable(),
@@ -35,6 +50,7 @@ const createDocumentSchema = z.object({
   documentType: z.string().max(100).optional(),
   category: z.enum(DOCUMENT_CATEGORIES).optional(),
   description: z.string().max(2000).optional(),
+  externalUrl: z.string().max(2000).optional().nullable(),
 });
 
 /**
@@ -45,6 +61,7 @@ const updateDocumentSchema = z.object({
   category: z.enum(DOCUMENT_CATEGORIES).optional(),
   description: z.string().max(2000).optional(),
   linkedTaskId: z.string().uuid().optional().nullable(),
+  externalUrl: z.string().max(2000).optional().nullable(),
   scannedBy: z.string().max(255).optional(),
   envelopeId: z.string().max(100).optional(),
   storedLocation: z.string().max(255).optional(),
@@ -62,6 +79,7 @@ const updateDocumentSchema = z.object({
   comments: z
     .array(
       z.object({
+        id: z.string().min(1).optional(),
         userId: z.string().min(1),
         date: z.string().min(1),
         text: z.string().min(1),

@@ -18,6 +18,7 @@ const DEPARTMENT_PERMISSIONS = {
     'clients:edit',
     'workflow:view',
     'workflow:edit',
+    'workflow:task_add',
     'workflow:task_approve',
     'billing:view',
     'billing:edit',

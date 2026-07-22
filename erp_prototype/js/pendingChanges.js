@@ -111,15 +111,19 @@ const PendingChanges = {
       } else {
         const res = await api.workRequests.update(record.id, cleanRecord);
         wr = res?.data || null;
-        const existing = await api.workRequests.listTasks(record.id);
-        for (const t of existing || []) {
+        const existingRes = await api.workRequests.listTasks(record.id);
+        const existing = existingRes?.data || [];
+        for (const t of existing) {
           await api.workRequests.removeTask(record.id, t.id);
         }
       }
       const createdTasks = [];
       const targetWrId = wr?.id || record.id;
+      const allowedTaskFields = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist'];
       for (const t of tasks) {
-        const taskRes = await api.workRequests.createTask(targetWrId, t);
+        const cleanTask = {};
+        allowedTaskFields.forEach(key => { if (t[key] !== undefined) cleanTask[key] = t[key]; });
+        const taskRes = await api.workRequests.createTask(targetWrId, cleanTask);
         createdTasks.push(taskRes?.data || t);
       }
       return { wr, tasks: createdTasks };
@@ -127,6 +131,12 @@ const PendingChanges = {
 
     if (table === 'tasks') {
       const wrId = record.workRequestId;
+      // The task endpoint only accepts a fixed set of fields; drop UI-only extras
+      // so they are not serialized and sent to the backend.
+      const allowed = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist'];
+      Object.keys(cleanRecord).forEach(key => {
+        if (!allowed.includes(key)) delete cleanRecord[key];
+      });
       let task = null;
       if (isNew) {
         const res = await api.workRequests.createTask(wrId, cleanRecord);

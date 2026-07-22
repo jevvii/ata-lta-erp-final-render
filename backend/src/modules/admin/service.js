@@ -450,13 +450,22 @@ const applyPendingChange = async (change, user) => {
   }
 
   if (tableName === 'tasks' && proposed.workRequestId) {
-    await operationsService.updateTask({
-      workRequestId: proposed.workRequestId,
-      taskId: change.parent_record_id,
-      entityId: change.entity_id,
-      data: proposed,
-      user,
-    });
+    if (change.parent_record_id) {
+      await operationsService.updateTask({
+        workRequestId: proposed.workRequestId,
+        taskId: change.parent_record_id,
+        entityId: change.entity_id,
+        data: proposed,
+        user,
+      });
+    } else {
+      await operationsService.createTask({
+        workRequestId: proposed.workRequestId,
+        entityId: change.entity_id,
+        data: proposed,
+        user,
+      });
+    }
     return;
   }
 };

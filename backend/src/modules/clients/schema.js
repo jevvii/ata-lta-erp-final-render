@@ -24,7 +24,8 @@ const createClientSchema = z.object({
   entity: z.enum(['ATA', 'LTA']),
   retainer: z.boolean().default(false),
   tradeName: z.string().max(255).optional(),
-  contactUserId: z.string().uuid().optional(),
+  contactUserId: z.preprocess(val => (val === '' || val === undefined || val === null) ? null : val, z.string().uuid().nullable().optional()),
+  contactPerson: z.string().max(255).optional().nullable(),
   contactDetails: z.array(contactDetailSchema).optional(),
   relatedCompanies: z.array(relatedCompanySchema).optional(),
 });

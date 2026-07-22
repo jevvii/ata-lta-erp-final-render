@@ -209,6 +209,17 @@ function generateId(prefix) {
   return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 }
 
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 function isTempId(id) {
   return typeof id === 'string' && /^(tmp-|temp-|opt-|usr-opt-|tx-temp-)/.test(id);
 }
@@ -224,7 +235,7 @@ async function nextInvoiceNumber(entity) {
   const prefix = entity + '-SI-' + year + '-';
   try {
     const api = (typeof window !== 'undefined' && window.apiClient) || null;
-    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }) : null;
+    const res = api ? await api.invoices.list({ limit: 100, sortBy: 'createdAt', sortOrder: 'desc' }, { headers: { 'X-Active-Entity': entity } }) : null;
     const list = res?.data || [];
     const maxNum = list.reduce((max, inv) => {
       const numStr = inv.invoice_number || inv.invoiceNumber || '';
@@ -631,6 +642,20 @@ const PaymentIcons = {
  * @param {string} [opts.maxWidth] - Optional max-width CSS value
  * @returns {HTMLElement} wrapper element with .value property
  */
+const _searchableDropdowns = new Set();
+let _searchableDropdownDocListener = false;
+function _ensureSearchableDropdownDocListener() {
+  if (_searchableDropdownDocListener) return;
+  _searchableDropdownDocListener = true;
+  document.addEventListener('mousedown', (e) => {
+    _searchableDropdowns.forEach((dropdown) => {
+      if (!dropdown.wrapper.contains(e.target)) {
+        dropdown.close();
+      }
+    });
+  });
+}
+
 function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
@@ -740,6 +765,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = true;
     highlightIdx = -1;
     wrapper.classList.add('open');
+    _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
   }
 
@@ -747,6 +773,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     if (!isOpen) return;
     isOpen = false;
     wrapper.classList.remove('open');
+    _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {
       selectedValue = input.value.trim();
@@ -756,12 +783,21 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     clearBtn.style.display = input.value ? 'flex' : 'none';
   }
 
-  input.addEventListener('focus', () => {
+  const dropdownRef = { wrapper, close };
+  _ensureSearchableDropdownDocListener();
+
+  const listeners = [];
+  const on = (target, type, fn, opts) => {
+    target.addEventListener(type, fn, opts);
+    listeners.push({ target, type, fn, opts });
+  };
+
+  on(input, 'focus', () => {
     input.select();
     open();
   });
 
-  input.addEventListener('input', () => {
+  on(input, 'input', () => {
     highlightIdx = -1;
     if (!isOpen) open();
     renderList(input.value);
@@ -769,11 +805,11 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     wrapper.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
-  input.addEventListener('blur', () => {
+  on(input, 'blur', () => {
     close();
   });
 
-  input.addEventListener('keydown', (e) => {
+  on(input, 'keydown', (e) => {
     const items = listbox.querySelectorAll('.searchable-dropdown-item');
     if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -799,22 +835,17 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     }
   });
 
-  clearBtn.addEventListener('mousedown', (e) => {
+  on(clearBtn, 'mousedown', (e) => {
     e.preventDefault();
     e.stopPropagation();
     selectOption('', '');
     close();
   });
 
-  arrow.addEventListener('mousedown', (e) => {
+  on(arrow, 'mousedown', (e) => {
     e.preventDefault();
     if (isOpen) { close(); input.blur(); }
     else { input.focus(); if (!isOpen) open(); }
-  });
-
-  // Close when clicking outside
-  document.addEventListener('mousedown', (e) => {
-    if (!wrapper.contains(e.target)) close();
   });
 
   // Expose .value as getter/setter for drop-in compatibility with <select>
@@ -839,6 +870,14 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   Object.defineProperty(wrapper, 'searchText', {
     get() { return input.value; }
   });
+
+  wrapper.destroy = () => {
+    close();
+    listeners.forEach(({ target, type, fn, opts }) => {
+      target.removeEventListener(type, fn, opts);
+    });
+    listeners.length = 0;
+  };
 
   // Expose addEventListener on wrapper (already works since it's a div)
   return wrapper;

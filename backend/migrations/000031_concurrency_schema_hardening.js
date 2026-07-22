@@ -42,12 +42,12 @@ exports.up = (pgm) => {
     ALTER TABLE work_requests
       DROP CONSTRAINT IF EXISTS chk_work_requests_status,
       ADD CONSTRAINT chk_work_requests_status
-      CHECK (status IN ('Draft', 'In Progress', 'On Hold', 'Completed', 'Cancelled'));
+      CHECK (status IN ('Draft', 'Pre-processing', 'In Progress', 'Processing', 'For Review', 'Billing', 'Disbursement', 'On Hold', 'Completed', 'Cancelled'));
 
     ALTER TABLE tasks
       DROP CONSTRAINT IF EXISTS chk_tasks_status,
       ADD CONSTRAINT chk_tasks_status
-      CHECK (status IN ('Draft', 'In Progress', 'Completed', 'Cancelled'));
+      CHECK (status IN ('Draft', 'Assigned', 'In Progress', 'For Review', 'Completed', 'Cancelled'));
 
     ALTER TABLE operations_requests
       DROP CONSTRAINT IF EXISTS chk_operations_requests_status,
