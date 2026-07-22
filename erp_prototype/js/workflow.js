@@ -10852,12 +10852,28 @@ const Workflow = {
 
   async refreshTaskTimeLogsList(taskId) {
     let task = WorkflowData.getTaskById(taskId);
+    const activeWrId = window.SidePaneInstance?.recordId || Workflow.detailWrId;
+
+    if (!task && activeWrId) {
+      try {
+        const res = await window.apiClient.workRequests.getTask(activeWrId, taskId);
+        if (res?.data) {
+          task = WorkflowData.normalizeTask(res.data);
+          if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+          WorkflowData._tasks.push(task);
+        }
+      } catch (e) {
+        console.error('Failed to resolve task for refreshTaskTimeLogsList', e);
+      }
+    }
+
     if (!task) return;
 
     const listContainers = document.querySelectorAll(`.task-time-logs-list[data-task-id="${taskId}"]`);
     if (listContainers.length === 0) return;
 
-    const wr = task.workRequestId ? WorkflowData.getWorkRequestById(task.workRequestId) : null;
+    const wrId = task.workRequestId || activeWrId;
+    const wr = wrId ? WorkflowData.getWorkRequestById(wrId) : null;
     const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
 
     // Show a loading indicator inside each list container (exactly like document loading)
@@ -10870,7 +10886,7 @@ const Workflow = {
 
     try {
       // Fetch the latest task from the backend to get freshly persisted time logs
-      const res = await window.apiClient.workRequests.getTask(task.workRequestId, taskId);
+      const res = await window.apiClient.workRequests.getTask(wrId, taskId);
       const serverTask = res?.data;
       if (serverTask) {
         const normalized = WorkflowData.normalizeTask(serverTask);
@@ -11819,6 +11835,9 @@ const Workflow = {
             normalized.coAssignees = existing.coAssignees || [];
             normalized.priority = existing.priority || normalized.priority || 'Normal';
             Object.assign(existing, normalized);
+          } else {
+            if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+            WorkflowData._tasks.push(normalized);
           }
           WorkflowData.invalidateRelatedForWorkRequest(currentTask.workRequestId);
           WorkflowData.invalidateRelatedForTask(taskId);
