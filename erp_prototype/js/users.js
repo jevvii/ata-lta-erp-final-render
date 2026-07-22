@@ -2974,8 +2974,12 @@ const Users = {
         const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Withdraw' });
         withdrawBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => {
-            PendingChanges.delete(pc.id);
+          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
             if (location.hash.includes('/')) {
               location.hash = location.hash.split('/')[0];
             } else {
@@ -2988,8 +2992,12 @@ const Users = {
         const dismissBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Dismiss' });
         dismissBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => {
-            PendingChanges.delete(pc.id);
+          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
             if (location.hash.includes('/')) {
               location.hash = location.hash.split('/')[0];
             } else {
@@ -3051,7 +3059,14 @@ const Users = {
           label: 'Withdraw',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
-          onClick: () => Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
+            App.handleRoute();
+          }, 'danger')
         });
       }
       if (pc.status === 'rejected') {
@@ -3059,7 +3074,14 @@ const Users = {
           label: 'Dismiss',
           className: 'danger',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-          onClick: () => Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger')
+          onClick: () => Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
+            App.handleRoute();
+          }, 'danger')
         });
       }
       return menu;
@@ -3105,14 +3127,28 @@ const Users = {
       if (pc.status === 'pending') {
         const withdrawBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Withdraw' });
         withdrawBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this pending submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
+            App.handleRoute();
+          }, 'danger');
         });
         rightActions.appendChild(withdrawBtn);
       }
       if (pc.status === 'rejected') {
         const dismissBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Dismiss' });
         dismissBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', () => { PendingChanges.delete(pc.id); App.handleRoute(); }, 'danger');
+          Workflow.showConfirm('Confirm Dismissal', 'Are you sure you want to dismiss and clear this rejected submission?', async () => {
+            try {
+              await PendingChanges.delete(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
+            App.handleRoute();
+          }, 'danger');
         });
         rightActions.appendChild(dismissBtn);
       }
@@ -3521,8 +3557,12 @@ const Users = {
     } else if (isSubmitter && pc.status === 'pending') {
       const withdrawBtn = el('button', { class: 'btn btn-secondary', text: 'Withdraw Submission' });
       withdrawBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', () => {
-          PendingChanges.delete(pc.id);
+        Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', async () => {
+          try {
+            await PendingChanges.delete(pc.id);
+          } catch (err) {
+            if (err.message !== 'route-change') console.error(err);
+          }
           handleCloseAndRoute();
         }, 'danger');
       });
