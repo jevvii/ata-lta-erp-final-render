@@ -1521,7 +1521,6 @@ const Workflow = {
       title: doc.name || doc.title || '',
       name: doc.name || doc.title || '',
       priority: doc.priority || 'Normal',
-      assignedTo: doc.assigned_to || doc.assignedTo || null,
       tasks: doc.tasks || [],
       pfAmount: 0,
       clientId: doc.client_id || doc.clientId || null,
@@ -1728,8 +1727,6 @@ const Workflow = {
 
   getWorkRequestAssigneeNames(r, taskMap) {
     const names = new Set();
-    const assignedUser = r.assignedTo ? window.apiClient.userCache.getById(r.assignedTo) : null;
-    if (assignedUser?.name) names.add(assignedUser.name);
     const resolvedTaskMap = taskMap || this._tempTaskMap || buildTaskMap();
     const tasks = resolvedTaskMap[r.id] || [];
     tasks.forEach(t => {
@@ -7607,7 +7604,6 @@ const Workflow = {
       priority: data.priority?.trim() || 'Priority',
       dueDate: data.dueDate || '',
       entity: entity,
-      assignedTo: data.assignedTo || null,
       status: this.editingId ? (WorkflowData.getWorkRequestById(this.editingId)?.status || 'Draft') : 'Draft',
       updatedAt: now
     };
@@ -7761,7 +7757,6 @@ const Workflow = {
                 entity: record.entity,
                 schedule: data.schedule || 'monthly',
                 priority: record.priority || 'Normal',
-                assignedTo: record.assignedTo || null,
                 pfAmount: 0,
                 tasks: tmplTasks
               });
@@ -8254,10 +8249,10 @@ const Workflow = {
     const isArchived = wr.status === 'Cancelled';
 
     // End-of-day time log reminder banner (Manila 5 PM+)
-    // Show to the Work Request owner (assignedTo or requestedBy) when ground worker checklist items are missing today's log.
+    // Show to the Work Request owner (requestedBy) when ground worker checklist items are missing today's log.
     const now = new Date();
     const manilaHour = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Manila' })).getHours();
-    const isWrOwner = wr.assignedTo === Auth.user.id || wr.requestedBy === Auth.user.id;
+    const isWrOwner = wr.requestedBy === Auth.user.id;
     const todayStr = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Manila' })).toISOString().slice(0, 10);
     if (manilaHour >= 17 && !isArchived && isWrOwner && !wr.isPendingApproval) {
       const missingItems = [];
@@ -13658,7 +13653,6 @@ const Workflow = {
       entity: Auth.activeEntity,
       schedule: data.schedule || null,
       priority: data.priority || 'Normal',
-      assignedTo: data.assignedTo || null,
       pfAmount: 0,
       tasks: taskRecords,
       updatedAt: now
@@ -14056,7 +14050,6 @@ const Workflow = {
               description: template.description || '',
               clientId: template.clientId,
               priority: template.priority || 'Normal',
-              assignedTo: template.assignedTo || null,
               dueDate: dueDate.toISOString().slice(0, 10),
               entity: template.entity,
               status: 'Draft',

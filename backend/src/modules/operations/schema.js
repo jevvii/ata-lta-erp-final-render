@@ -34,7 +34,6 @@ const createWorkRequestSchema = z.object({
   entity: z.enum(['ATA', 'LTA']),
   status: z.string().max(50).optional(),
   requestedBy: z.string().uuid().optional(),
-  assignedTo: z.string().uuid().optional(),
   dueDate: z.string().optional(),
   priority: z.string().max(50).optional(),
 });
@@ -92,7 +91,6 @@ const retainerTemplateSchema = z.object({
   clientId: nullableUuid,
   schedule: z.string().max(50).optional().nullable(),
   priority: z.string().max(50).optional().nullable(),
-  assignedTo: nullableUuid,
   pfAmount: z.number().nonnegative().optional().nullable(),
   tasks: z.array(taskTemplateSchema).optional(),
 });

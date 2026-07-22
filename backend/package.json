@@ -30,6 +30,8 @@
     "reset:remote:uat": "node scripts/reset-remote.js uat",
     "clear-data:remote": "node scripts/clear-remote-data.js",
     "clear-data:remote:uat": "node scripts/clear-remote-data.js uat",
+    "clear-data-all-users:remote": "node scripts/clear-remote-data-preserve-users.js",
+    "clear-data-all-users:remote:uat": "node scripts/clear-remote-data-preserve-users.js uat",
     "verify:auth": "node scripts/verify-supabase-auth.js",
     "setup:env": "cp .env.example .env"
   },

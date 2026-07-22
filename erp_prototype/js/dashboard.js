@@ -650,7 +650,6 @@ const Dashboard = {
         entity: entity,
         status: 'In Progress', // Legacy prototype used 'Processing'; backend operations status is 'In Progress'.
         requestedBy: Auth.user?.id,
-        assignedTo: Auth.user?.id,
         dueDate: dateStr
       };
       try {

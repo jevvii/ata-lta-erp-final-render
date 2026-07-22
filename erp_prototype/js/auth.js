@@ -215,11 +215,11 @@ const Auth = {
     // Managerial users (Management department or legacy Manager role) can view
     // work requests they own or are directly involved in.
     if (this.isManagerial()) {
-      return wr && (wr.assignedTo === this.user.id || wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
+      return wr && (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
     }
     // Staff-level users can see owned/assigned work requests.
     if (!wr) return false;
-    if (wr.submittedBy === this.user.id || wr.assignedTo === this.user.id || wr.requestedBy === this.user.id) return true;
+    if (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id) return true;
     
     // Check tasks from the cached work request (workRequestCache always includes tasks).
     const tasks = wr.tasks || [];
@@ -240,10 +240,10 @@ const Auth = {
     if (!this.user) return false;
     if (this.user.role === 'Admin') return true;
     if (this.isManagerial()) {
-      return wr && (wr.assignedTo === this.user.id || wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
+      return wr && (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
     }
     if (!wr) return false;
-    if (wr.submittedBy === this.user.id || wr.assignedTo === this.user.id || wr.requestedBy === this.user.id) return true;
+    if (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id) return true;
     const tasks = wr.isPendingApproval ? (wr.tasks || []) : (taskMap[wr.id] || []);
     return tasks.some(t => {
       if (t.assigneeId === this.user.id || t.assignedTo === this.user.id) return true;

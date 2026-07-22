@@ -389,7 +389,6 @@ const createWorkRequest = async ({ entityId, data, user }) => {
     status: data.status || 'Draft',
     priority: data.priority || 'Normal',
     requested_by: data.requestedBy || user.id,
-    assigned_to: data.assignedTo || null,
     due_date: data.dueDate || null,
     created_at: now,
     updated_at: now,
@@ -455,7 +454,6 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     client_id: data.clientId ?? existing.clientId,
     status: data.status ?? existing.status,
     priority: data.priority ?? existing.priority,
-    assigned_to: data.assignedTo ?? existing.assignedTo,
     due_date: data.dueDate ?? existing.dueDate,
     updated_at: new Date().toISOString(),
   };
@@ -1013,7 +1011,6 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
     client_id: data.clientId || null,
     schedule: data.schedule || null,
     priority: data.priority || 'Normal',
-    assigned_to: data.assignedTo || null,
     pf_amount: data.pfAmount || 0,
     tasks: data.tasks || [],
     created_by: userId,
@@ -1045,7 +1042,6 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.schedule !== undefined) updates.schedule = data.schedule;
   if (data.priority !== undefined) updates.priority = data.priority;
-  if (data.assignedTo !== undefined) updates.assigned_to = data.assignedTo;
   if (data.pfAmount !== undefined) updates.pf_amount = data.pfAmount;
   if (data.tasks !== undefined) updates.tasks = data.tasks;
 
