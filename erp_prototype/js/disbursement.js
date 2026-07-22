@@ -2348,29 +2348,59 @@ const Disbursement = {
     let record;
 
     if (isNew) {
-      // Optimistic create: show the confirmation modal first, then persist the
-      // server record once the API responds.
-      const optimisticRecord = this._buildOptimisticDisbursement(payload);
-      this._addOptimisticDisbursement(optimisticRecord, { skipRoute: true });
       const completedGen = this._activeSkipGeneration;
+      const optimisticRecord = this._buildOptimisticDisbursement(payload);
 
-      const msgConfig = {
-        title: 'Expense Submitted',
-        message: 'Disbursement expense has been submitted successfully.',
-        type: 'success'
-      };
-      await closeFormPanelAndRoute(targetRoute, msgConfig);
+      const runResult = await Workflow.runBlockingArchiveAction({
+        title: 'Submitting Expense',
+        message: 'Please wait while the disbursement expense is being saved...',
+        apiCall: async () => {
+          // Optimistic local add
+          this._addOptimisticDisbursement(optimisticRecord, { skipRoute: true });
 
-      try {
-        const res = await window.apiClient.disbursements.create(payload);
-        record = this.normalizeDisbursement(res.data);
-        this._replaceOptimisticCreate(optimisticRecord.id, record);
-        this._clearSkipGenerationIfCurrent(completedGen);
-      } catch (e) {
-        this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Save Failed');
-        this._clearSkipGenerationIfCurrent(completedGen);
-        return;
+          try {
+            const res = await window.apiClient.disbursements.create(payload);
+            record = this.normalizeDisbursement(res.data);
+            this._replaceOptimisticCreate(optimisticRecord.id, record);
+            this._clearSkipGenerationIfCurrent(completedGen);
+
+            // Fulfill pending operations request if any
+            try {
+              let reqId = this.prefilledRequestId || null;
+              if (!reqId && record.linkedWorkRequestId) {
+                const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'disbursement', workRequestId: record.linkedWorkRequestId, limit: 1 });
+                reqId = (opReqRes.data || [])[0]?.id || null;
+              }
+              if (reqId) {
+                await window.apiClient.operationsRequests.update(reqId, { status: 'fulfilled', fulfilledBy: Auth.user.id });
+              }
+            } catch (e) {
+              console.error('Failed to fulfill disbursement operations request', e);
+            }
+            this.prefilledRequestId = null;
+            this.prefilledWrId = null;
+            this.prefilledClientId = null;
+            this._prefilledOpReq = null;
+
+            return { data: record };
+          } catch (e) {
+            console.error('Failed to create disbursement', e);
+            this._rollbackOptimisticCreate(optimisticRecord.id, e, 'Save Failed');
+            this._clearSkipGenerationIfCurrent(completedGen);
+            throw e;
+          }
+        },
+        successTitle: 'Expense Submitted',
+        successMessage: 'Disbursement expense has been submitted successfully.',
+        errorTitle: 'Failed to Submit Expense'
+      });
+
+      if (runResult.success) {
+        await closeFormPanelAndRoute(targetRoute);
+      } else {
+        App.handleRoute();
       }
+      return;
     } else {
       try {
         const res = await window.apiClient.disbursements.update(this.detailId, payload);
@@ -2393,26 +2423,6 @@ const Disbursement = {
       closeFormPanelAndRoute(targetRoute, msgConfig);
       return;
     }
-
-    // Fulfill pending operations request if any (only reached for new creates)
-    try {
-      let reqId = this.prefilledRequestId || null;
-      if (!reqId && record.linkedWorkRequestId) {
-        const opReqRes = await window.apiClient.operationsRequests.list({ status: 'pending', type: 'disbursement', workRequestId: record.linkedWorkRequestId, limit: 1 });
-        reqId = (opReqRes.data || [])[0]?.id || null;
-      }
-      if (reqId) {
-        await window.apiClient.operationsRequests.update(reqId, { status: 'fulfilled', fulfilledBy: Auth.user.id });
-      }
-    } catch (e) {
-      console.error('Failed to fulfill disbursement operations request', e);
-    }
-    this.prefilledRequestId = null;
-    this.prefilledWrId = null;
-    this.prefilledClientId = null;
-    this._prefilledOpReq = null;
-
-    App.handleRoute();
   },
 
   async showRequestDisbursementModal() {
