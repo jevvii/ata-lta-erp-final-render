@@ -10853,38 +10853,27 @@ const Workflow = {
   },
 
   async refreshTaskTimeLogsList(taskId) {
-    let task = WorkflowData.getTaskById(taskId);
-    const activeWrId = window.SidePaneInstance?.recordId || Workflow.detailWrId;
-
-    if (!task && activeWrId) {
-      try {
-        const res = await window.apiClient.workRequests.getTask(activeWrId, taskId);
-        if (res?.data) {
-          task = WorkflowData.normalizeTask(res.data);
-          if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
-          WorkflowData._tasks.push(task);
-        }
-      } catch (e) {
-        console.error('Failed to resolve task for refreshTaskTimeLogsList', e);
-      }
-    }
-
-    if (!task) return;
-
     const listContainers = document.querySelectorAll(`.task-time-logs-list[data-task-id="${taskId}"]`);
     if (listContainers.length === 0) return;
 
-    const wrId = task.workRequestId || activeWrId;
-    const wr = wrId ? WorkflowData.getWorkRequestById(wrId) : null;
-    const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
+    // Show "Loading logs..." in all containers immediately
+    for (const container of listContainers) {
+      container.innerHTML = '';
+      container.appendChild(renderEmptyState('Loading logs...'));
+    }
 
-    // Show a loading indicator inside each list container (exactly like document loading)
-    listContainers.forEach(container => {
-      if (container.children.length === 0) {
+    let task = WorkflowData.getTaskById(taskId);
+    const activeWrId = window.SidePaneInstance?.recordId || this.detailWrId;
+    const wrId = task?.workRequestId || activeWrId;
+
+    if (!wrId) {
+      console.error('Could not resolve workRequestId for taskId', taskId);
+      for (const container of listContainers) {
         container.innerHTML = '';
-        container.appendChild(renderEmptyState('Loading logs...'));
+        container.appendChild(renderEmptyState('Failed to resolve work request context'));
       }
-    });
+      return;
+    }
 
     try {
       // Fetch the latest task from the backend to get freshly persisted time logs
@@ -10904,13 +10893,24 @@ const Workflow = {
           Object.assign(existing, normalized);
           task = existing;
         } else {
+          if (!Array.isArray(WorkflowData._tasks)) WorkflowData._tasks = [];
+          WorkflowData._tasks.push(normalized);
           task = normalized;
         }
       }
     } catch (err) {
       console.error('Failed to load task details for time logs', err);
+      // Fallback: if fetch failed, we try to use the cached task if available
+      if (!task) {
+        for (const container of listContainers) {
+          container.innerHTML = '';
+          container.appendChild(renderEmptyState('Failed to load logs'));
+        }
+        return;
+      }
     }
 
+    // Now task is populated (either fetched and cached, or fallback to cached)
     const totalHours = getTaskTotalHours(task);
     const totalLabels = document.querySelectorAll(`.task-total-hours-label[data-task-id="${taskId}"]`);
     totalLabels.forEach(lbl => {
@@ -10921,6 +10921,9 @@ const Workflow = {
     timeCells.forEach(cell => {
       cell.textContent = totalHours > 0 ? `${totalHours}h` : 'N/A';
     });
+
+    const wr = wrId ? WorkflowData.getWorkRequestById(wrId) : null;
+    const isArchived = wr?.status === 'Cancelled' || wr?.status === 'Completed' || wr?.isPendingApproval;
 
     for (const container of listContainers) {
       container.innerHTML = '';
@@ -11862,9 +11865,10 @@ const Workflow = {
           overlay.remove();
 
           if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance.recordId === taskId) {
-            this.showTaskSidePane(taskId, null);
+            await this.showTaskSidePane(taskId, null);
+          } else {
+            await this.refreshTaskTimeLogsList(taskId);
           }
-          await this.refreshTaskTimeLogsList(taskId);
         } catch (err) {
           console.error('Failed to log time', err);
           this.showMessage('Failed to Log Time', err.message || 'Failed to save time log.', 'error');
