@@ -2246,7 +2246,63 @@ const Disbursement = {
     // Receipt upload
     const receiptGroup = el('div', { class: 'notion-freeform' });
     receiptGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Receipt' }));
-    receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt', class: 'notion-file-input' }));
+
+    const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
+    dropzone.innerHTML = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <div>Drag & drop receipt here, or click to browse</div>
+      <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+    `;
+
+    const fileInput = el('input', { type: 'file', name: 'receipt', style: 'display: none;' });
+    const statusLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-text); margin-top: 4px;' });
+    const errorLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-danger); margin-top: 4px; font-weight: 500;' });
+
+    const handleFile = (file) => {
+      errorLabel.textContent = '';
+      statusLabel.textContent = '';
+      if (!file) return;
+
+      const limit = 50 * 1024 * 1024;
+      if (file.size > limit) {
+        errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+        fileInput.value = '';
+        return;
+      }
+
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+      
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+    };
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      handleFile(fileInput.files[0]);
+    });
+
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('dragover');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    receiptGroup.appendChild(fileInput);
+    receiptGroup.appendChild(dropzone);
+    receiptGroup.appendChild(statusLabel);
+    receiptGroup.appendChild(errorLabel);
+
     if (existing && existing.receiptFilename) {
       const currentWrap = el('p', { text: 'Current: ', style: 'font-size:0.75rem;color:var(--color-text-muted);' });
       const viewLink = el('a', {
@@ -2257,18 +2313,13 @@ const Disbursement = {
       viewLink.addEventListener('click', async () => {
         try {
           if (existing.receiptS3Key) {
-            const urlRes = await window.apiClient.documents.downloadUrl(existing.receiptS3Key);
-            if (urlRes.data && urlRes.data.url) {
-              window.open(urlRes.data.url, '_blank');
-            } else {
-              throw new Error('Download URL not found in response');
-            }
+            await Workflow.showDocumentPreview(existing.receiptS3Key);
           } else {
             Workflow.showMessage('Error', 'Receipt file key is missing.', 'danger');
           }
         } catch (err) {
-          console.error('Failed to get download URL', err);
-          Workflow.showMessage('Download Failed', 'Failed to retrieve download link: ' + (err.message || 'Unknown error'), 'danger');
+          console.error('Failed to show preview', err);
+          Workflow.showMessage('Preview Failed', 'Failed to display document preview: ' + (err.message || 'Unknown error'), 'danger');
         }
       });
       viewLink.addEventListener('mouseenter', () => { viewLink.style.textDecoration = 'underline'; });
@@ -2595,18 +2646,13 @@ const Disbursement = {
       receiptLink.addEventListener('click', async () => {
         try {
           if (d.receiptS3Key) {
-            const urlRes = await window.apiClient.documents.downloadUrl(d.receiptS3Key);
-            if (urlRes.data && urlRes.data.url) {
-              window.open(urlRes.data.url, '_blank');
-            } else {
-              throw new Error('Download URL not found in response');
-            }
+            await Workflow.showDocumentPreview(d.receiptS3Key);
           } else {
             Workflow.showMessage('Error', 'Receipt file key is missing.', 'danger');
           }
         } catch (err) {
-          console.error('Failed to get download URL', err);
-          Workflow.showMessage('Download Failed', 'Failed to retrieve download link: ' + (err.message || 'Unknown error'), 'danger');
+          console.error('Failed to show preview', err);
+          Workflow.showMessage('Preview Failed', 'Failed to display document preview: ' + (err.message || 'Unknown error'), 'danger');
         }
       });
       receiptLink.addEventListener('mouseenter', () => { receiptLink.style.textDecoration = 'underline'; });

@@ -3279,7 +3279,62 @@ const Workflow = {
     // ---------- Receipt (optional) ----------
     const receiptGroup = el('div', { class: 'form-group' });
     receiptGroup.appendChild(el('label', { text: 'Receipt (optional)' }));
-    receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt' }));
+
+    const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
+    dropzone.innerHTML = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      <div>Drag & drop receipt here, or click to browse</div>
+      <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+    `;
+
+    const fileInput = el('input', { type: 'file', name: 'receipt', style: 'display: none;' });
+    const statusLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-text); margin-top: 4px;' });
+    const errorLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-danger); margin-top: 4px; font-weight: 500;' });
+
+    const handleFile = (file) => {
+      errorLabel.textContent = '';
+      statusLabel.textContent = '';
+      if (!file) return;
+
+      const limit = 50 * 1024 * 1024;
+      if (file.size > limit) {
+        errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+        fileInput.value = '';
+        return;
+      }
+
+      const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+      
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+    };
+
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => {
+      handleFile(fileInput.files[0]);
+    });
+
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('dragover');
+    });
+    dropzone.addEventListener('dragleave', () => {
+      dropzone.classList.remove('dragover');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    receiptGroup.appendChild(fileInput);
+    receiptGroup.appendChild(dropzone);
+    receiptGroup.appendChild(statusLabel);
+    receiptGroup.appendChild(errorLabel);
     form.appendChild(receiptGroup);
 
     wrapper.appendChild(form);
@@ -3694,8 +3749,62 @@ const Workflow = {
       // 3. Attachment / Proof
       const fileGroup = el('div', { class: 'form-group' });
       fileGroup.appendChild(el('label', { text: 'Proof of Completion (optional)' }));
-      const fileIn = el('input', { type: 'file', name: 'receipt' });
-      fileGroup.appendChild(fileIn);
+
+      const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
+      dropzone.innerHTML = `
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div>Drag & drop file here, or click to browse</div>
+        <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+      `;
+
+      const fileInput = el('input', { type: 'file', name: 'receipt', style: 'display: none;' });
+      const statusLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-text); margin-top: 4px;' });
+      const errorLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-danger); margin-top: 4px; font-weight: 500;' });
+
+      const handleFile = (file) => {
+        errorLabel.textContent = '';
+        statusLabel.textContent = '';
+        if (!file) return;
+
+        const limit = 50 * 1024 * 1024;
+        if (file.size > limit) {
+          errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+          fileInput.value = '';
+          return;
+        }
+
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+        statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+        
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        fileInput.files = dt.files;
+      };
+
+      dropzone.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        handleFile(fileInput.files[0]);
+      });
+
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragover');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+          handleFile(e.dataTransfer.files[0]);
+        }
+      });
+
+      fileGroup.appendChild(fileInput);
+      fileGroup.appendChild(dropzone);
+      fileGroup.appendChild(statusLabel);
+      fileGroup.appendChild(errorLabel);
       form.appendChild(fileGroup);
 
       // 4. Notes
@@ -3760,8 +3869,62 @@ const Workflow = {
       const fileGroup = el('div', { class: 'form-group' });
       const fileLabel = el('label', { text: 'Receipt (Recommended)' });
       fileGroup.appendChild(fileLabel);
-      const fileIn = el('input', { type: 'file', name: 'receipt' });
-      fileGroup.appendChild(fileIn);
+
+      const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
+      dropzone.innerHTML = `
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div>Drag & drop file here, or click to browse</div>
+        <div style="font-size: 10px; color: var(--color-text-muted);">Max size: 50MB</div>
+      `;
+
+      const fileInput = el('input', { type: 'file', name: 'receipt', style: 'display: none;' });
+      const statusLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-text); margin-top: 4px;' });
+      const errorLabel = el('div', { style: 'font-size: 0.75rem; color: var(--color-danger); margin-top: 4px; font-weight: 500;' });
+
+      const handleFile = (file) => {
+        errorLabel.textContent = '';
+        statusLabel.textContent = '';
+        if (!file) return;
+
+        const limit = 50 * 1024 * 1024;
+        if (file.size > limit) {
+          errorLabel.textContent = 'Error: File exceeds the 50MB size limit.';
+          fileInput.value = '';
+          return;
+        }
+
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+        statusLabel.innerHTML = `<span style="font-weight: 600; color: var(--color-text);">${file.name}</span> (${sizeMB} MB)`;
+        
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        fileInput.files = dt.files;
+      };
+
+      dropzone.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        handleFile(fileInput.files[0]);
+      });
+
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
+      dropzone.addEventListener('dragleave', () => {
+        dropzone.classList.remove('dragover');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+          handleFile(e.dataTransfer.files[0]);
+        }
+      });
+
+      fileGroup.appendChild(fileInput);
+      fileGroup.appendChild(dropzone);
+      fileGroup.appendChild(statusLabel);
+      fileGroup.appendChild(errorLabel);
       form.appendChild(fileGroup);
 
       // Toggle receipt label based on Reimbursement vs Cash Advance
