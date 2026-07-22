@@ -39,7 +39,7 @@ projects:
                 fromService:
                   name: ata-lta-erp-spa-uat
                   type: web
-                  property: host
+                  property: url
               - fromGroup: erp-uat-secrets
 
           # ─── UAT Frontend Static Site ──────────────────────────────────
@@ -57,4 +57,4 @@ projects:
                 fromService:
                   name: ata-lta-erp-api-uat
                   type: web
-                  property: host
+                  property: url
