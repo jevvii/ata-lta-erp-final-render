@@ -3096,7 +3096,7 @@ const Billing = {
             errorTitle: 'Submit Failed'
           });
           if (runResult.success) {
-            PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
+            await PendingChanges.submit('invoices', { ...inv, status: 'Approved' }, false);
             this._invalidateCountsAndSidebar();
           } else if (snapshot) {
             this._rollbackCachedItem(inv.id, snapshot);
