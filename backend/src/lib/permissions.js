@@ -154,6 +154,7 @@ const buildPermissionSet = ({ role, departments = [] }) => {
       .forEach((p) => granted.add(p));
     granted.add('users:manage');
     granted.add('clients:edit');
+    granted.add('transmittal:approve');
   }
 
   return granted;

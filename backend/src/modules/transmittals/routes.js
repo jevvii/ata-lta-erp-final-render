@@ -42,6 +42,13 @@ router.put(
 );
 
 router.post(
+  '/:id/approve',
+  requirePermission('transmittal:approve'),
+  audit('transmittal.approve', { table: 'transmittals' }),
+  transmittalsController.approveTransmittal
+);
+
+router.post(
   '/:id/send',
   requirePermission('transmittal:mark'),
   audit('transmittal.send', { table: 'transmittals' }),

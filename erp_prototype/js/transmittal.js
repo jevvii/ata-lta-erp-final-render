@@ -321,6 +321,31 @@ const Transmittal = {
     App.handleRoute();
   },
 
+  async approveTransmittal(id) {
+    const t = (this._items || []).find(item => item.id === id) || (this._detailCache[id] ? this.normalizeTransmittal(this._detailCache[id]) : null);
+    if (!t) return;
+    const snapshot = this._updateCachedItem(id, {});
+    const runResult = await Workflow.runBlockingArchiveAction({
+      title: 'Approving Transmittal',
+      message: 'Please wait while the transmittal draft is being approved...',
+      apiCall: async () => {
+        this._updateCachedItem(id, { approved: true });
+        const res = await window.apiClient.transmittals.approve(id);
+        this._syncTransmittalToCaches(res.data);
+        return { data: res.data };
+      },
+      successTitle: 'Approved',
+      successMessage: `Transmittal "${t.trackingNumber}" draft has been approved.`,
+      errorTitle: 'Approval Failed'
+    });
+    if (runResult.success) {
+      this._invalidateCountsAndSidebar();
+    } else if (snapshot) {
+      this._updateCachedItem(id, snapshot);
+    }
+    App.handleRoute();
+  },
+
   /**
    * Acknowledge a transmittal using the blocking archive/restore-style flow.
    */
@@ -506,6 +531,7 @@ const Transmittal = {
       acknowledgedAt: t.acknowledged_at || t.acknowledgedAt,
       acknowledgedBy: t.acknowledged_by || t.acknowledgedBy,
       archived: t.archived || false,
+      approved: t.approved || false,
       receivedByName: t.received_by_name || t.receivedByName || '',
       boardOrder: t.board_order || t.boardOrder,
       pendingChangeId: t.pending_change_id || t.pendingChangeId,
@@ -613,8 +639,21 @@ const Transmittal = {
               editBtn.addEventListener('click', () => { this.showForm(t.id); });
               actions.appendChild(editBtn);
             }
+            if (Auth.user?.role === 'Admin' && !t.approved) {
+              const approveBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Approve Draft', style: 'margin-right:8px;' });
+              approveBtn.addEventListener('click', () => {
+                Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this transmittal draft?', () => {
+                  this.approveTransmittal(t.id);
+                }, 'success');
+              });
+              actions.appendChild(approveBtn);
+            }
             const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
             sendBtn.addEventListener('click', () => {
+              if (Auth.user?.role !== 'Admin' && !t.approved) {
+                Workflow.showMessage('Approval Required', 'This transmittal draft must be approved by an Admin before it can be marked as sent.', 'warning');
+                return;
+              }
               Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
                 this._sendTransmittal(t.id);
               }, 'success');
@@ -1214,11 +1253,25 @@ const Transmittal = {
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
         wrapper.appendChild(editBtn);
       }
+      if (Auth.user?.role === 'Admin' && t.status === 'Draft' && !t.approved) {
+        const approveBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Approve Draft', style: 'margin-left:4px;' });
+        approveBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this transmittal draft?', () => {
+            self.approveTransmittal(t.id);
+          }, 'success');
+        });
+        wrapper.appendChild(approveBtn);
+      }
       const canMark = Auth.can('transmittal:mark');
       if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent', style: 'margin-left:4px;' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (Auth.user?.role !== 'Admin' && !t.approved) {
+            Workflow.showMessage('Approval Required', 'This transmittal draft must be approved by an Admin before it can be marked as sent.', 'warning');
+            return;
+          }
           Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
             self._sendTransmittal(t.id);
           }, 'success');
@@ -1377,17 +1430,36 @@ const Transmittal = {
           onClick: () => self.showForm(t.id)
         });
       }
+      if (Auth.user?.role === 'Admin' && t.status === 'Draft' && !t.approved) {
+        menu.push({
+          label: 'Approve Draft',
+          className: 'success',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+          onClick: () => Workflow.showConfirm(
+            'Confirm Approval',
+            'Are you sure you want to approve this transmittal draft?',
+            () => { self.approveTransmittal(t.id); },
+            'success'
+          )
+        });
+      }
       if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
         menu.push({
           label: 'Mark as Sent',
           className: 'primary',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
-          onClick: () => Workflow.showConfirm(
-            'Confirm Sent',
-            'Are you sure you want to mark this transmittal as sent?',
-            () => { self._sendTransmittal(t.id); },
-            'success'
-          )
+          onClick: () => {
+            if (Auth.user?.role !== 'Admin' && !t.approved) {
+              Workflow.showMessage('Approval Required', 'This transmittal draft must be approved by an Admin before it can be marked as sent.', 'warning');
+              return;
+            }
+            Workflow.showConfirm(
+              'Confirm Sent',
+              'Are you sure you want to mark this transmittal as sent?',
+              () => { self._sendTransmittal(t.id); },
+              'success'
+            );
+          }
         });
       }
       if (canMark && t.status === 'Sent') {
@@ -1466,6 +1538,10 @@ const Transmittal = {
         const isAck = item.status === 'Sent' && targetStatus === 'Acknowledged';
         if (!isSend && !isAck) {
           Workflow.showMessage('Invalid Move', `Cannot move transmittal from ${item.status} to ${targetStatus}.`, 'warning');
+          return;
+        }
+        if (isSend && Auth.user?.role !== 'Admin' && !item.approved) {
+          Workflow.showMessage('Approval Required', 'This transmittal draft must be approved by an Admin before it can be sent.', 'warning');
           return;
         }
         if (!canMark) {
@@ -1563,10 +1639,24 @@ const Transmittal = {
         editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
         actionWrap.appendChild(editBtn);
       }
+      if (Auth.user?.role === 'Admin' && t.status === 'Draft' && !t.approved) {
+        const approveBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Approve Draft' });
+        approveBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this transmittal draft?', () => {
+            self.approveTransmittal(t.id);
+          }, 'success');
+        });
+        actionWrap.appendChild(approveBtn);
+      }
       if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (Auth.user?.role !== 'Admin' && !t.approved) {
+            Workflow.showMessage('Approval Required', 'This transmittal draft must be approved by an Admin before it can be marked as sent.', 'warning');
+            return;
+          }
           Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
             self._sendTransmittal(t.id);
           }, 'success');
