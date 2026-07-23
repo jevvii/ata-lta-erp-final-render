@@ -35,6 +35,7 @@ const adminRouter = require('./modules/admin/routes');
 const operationsRequestsRouter = require('./modules/operationsRequests/routes');
 
 const app = express();
+app.set('trust proxy', 1); // Trust Render/reverse proxy headers (X-Forwarded-For)
 
 // Security middleware
 app.use(helmet({ crossOriginResourcePolicy: false }));
@@ -86,7 +87,7 @@ app.use((req, res, next) => {
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: env.isDevelopment ? 1000 : 200,
+    max: 1000, // Allow 1000 requests per 15 minutes per client IP
     standardHeaders: true,
     legacyHeaders: false,
     message: {
