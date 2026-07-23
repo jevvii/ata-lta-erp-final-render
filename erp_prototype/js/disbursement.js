@@ -1639,11 +1639,22 @@ const Disbursement = {
     const role = Auth.user?.role;
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
+    const isManager = role === 'Manager' || departments.includes('Management');
+    const isOperations = departments.includes('Operations');
 
-    if (isAdmin || isAccounting) {
+    if (isAdmin || isAccounting || isManager) {
       return [
         { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
         { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
+        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
+        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
+        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
+      ];
+    }
+
+    if (isOperations) {
+      return [
+        { key: 'Pending', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
         { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
         { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
         { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
@@ -1711,12 +1722,14 @@ const Disbursement = {
         const newOrder = (idx + 1) * 1000;
         if (d.boardOrder !== newOrder) {
           d.boardOrder = newOrder;
-          window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
-            if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
-              return;
-            }
-            console.error('Failed to update disbursement board order', d.id, e);
-          });
+          if (canEdit) {
+            window.apiClient.disbursements.update(d.id, { boardOrder: newOrder }).catch(e => {
+              if (e.status === 404 || e.statusCode === 404 || e.message?.includes('404') || e.message?.includes('not found') || e.message === 'route-change' || e.message?.includes('aborted')) {
+                return;
+              }
+              console.error('Failed to update disbursement board order', d.id, e);
+            });
+          }
         }
       });
       const colPendingItems = items.filter(d => phase.statuses.includes(d.status) && d.pendingChangeId);
