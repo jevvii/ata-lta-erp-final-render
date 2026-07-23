@@ -3602,7 +3602,21 @@ const Users = {
     let recordTitle = '';
     let titleIcon = '';
 
-    if (pc.table === 'tasks') {
+    if (pc.isOperationsRequest) {
+      if (proposed.type === 'billing') {
+        recordTitle = proposed.invoiceNumber || '(No Invoice Number)';
+        titleIcon = Icons.invoice;
+      } else if (proposed.type === 'disbursement') {
+        recordTitle = proposed.voucherNumber || 'Disbursement Request';
+        titleIcon = Icons.amount;
+      } else if (proposed.type === 'transmittal') {
+        recordTitle = 'Transmittal Request';
+        titleIcon = Icons.document;
+      } else {
+        recordTitle = 'Operations Request';
+        titleIcon = Icons.document;
+      }
+    } else if (pc.table === 'tasks') {
       recordTitle = proposed.title || '(Untitled)';
       titleIcon = Icons.checklist;
     } else if (pc.table === 'workRequests') {
@@ -3643,7 +3657,16 @@ const Users = {
     // 4. Notion Property Grid
     const propertyGrid = el('div', { class: 'notion-property-grid' });
 
-    if (pc.table === 'tasks') {
+    if (pc.isOperationsRequest) {
+      const typeLabel = proposed.type ? (proposed.type.charAt(0).toUpperCase() + proposed.type.slice(1)) : 'None';
+      propertyGrid.appendChild(createPropertyRow('Request type', Icons.status, el('span', { text: typeLabel })));
+      if (proposed.amount) {
+        propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
+      }
+      if (proposed.notes) {
+        propertyGrid.appendChild(createPropertyRow('Description', Icons.document, el('span', { text: proposed.notes })));
+      }
+    } else if (pc.table === 'tasks') {
       // Work Request
       const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
       const wrVal = wr 
@@ -3844,6 +3867,10 @@ const Users = {
     if (canApprove) {
       const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Change' });
       approveBtn.addEventListener('click', () => {
+        if (pc.isOperationsRequest) {
+          this.approvePendingItem({ type: 'operations_request', raw: pc.proposedData });
+          return;
+        }
         Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
           Workflow.runBlockingArchiveAction({
             title: 'Approving Change',
@@ -3863,6 +3890,10 @@ const Users = {
 
       const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject' });
       rejectBtn.addEventListener('click', () => {
+        if (pc.isOperationsRequest) {
+          this.rejectPendingItem({ type: 'operations_request', raw: pc.proposedData });
+          return;
+        }
         const reason = prompt('Enter rejection reason:');
         if (reason !== null) {
           Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
@@ -3885,6 +3916,17 @@ const Users = {
     } else if (isSubmitter && pc.status === 'pending') {
       const withdrawBtn = el('button', { class: 'btn btn-secondary', text: 'Withdraw Submission' });
       withdrawBtn.addEventListener('click', () => {
+        if (pc.isOperationsRequest) {
+          Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this request?', async () => {
+            try {
+              await window.apiClient.operationsRequests.remove(pc.id);
+            } catch (err) {
+              if (err.message !== 'route-change') console.error(err);
+            }
+            handleCloseAndRoute();
+          }, 'danger');
+          return;
+        }
         Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', async () => {
           try {
             await PendingChanges.delete(pc.id);
