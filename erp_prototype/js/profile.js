@@ -34,7 +34,7 @@ const Profile = {
     // Fetch latest user details on revisit/load
     (async () => {
       try {
-        const res = await window.apiClient.me.get();
+        const res = await window.apiClient.me.get({ query: { _t: Date.now() } });
         Auth.user = res.data;
       } catch (e) {
         console.error('Failed to refresh user profile details on revisit:', e);
@@ -185,7 +185,10 @@ const Profile = {
       }
 
       try {
-        await window.apiClient.me.update({ name, avatarUrl: newAvatarUrl });
+        const updateRes = await window.apiClient.me.update({ name, avatarUrl: newAvatarUrl });
+        if (updateRes && updateRes.data) {
+          Auth.user = updateRes.data;
+        }
         await Auth.restoreSession(); // refresh Auth.user
         window.hideGoogleLoader(card);
         Workflow.showMessage('Profile', 'Details saved.', 'success');
@@ -369,7 +372,7 @@ const Profile = {
       }
 
       try {
-        await window.apiClient.me.update({
+        const updateRes = await window.apiClient.me.update({
           preferences: {
             ...prefs,
             defaultView,
@@ -377,6 +380,10 @@ const Profile = {
             defaultFormView
           }
         });
+
+        if (updateRes && updateRes.data) {
+          Auth.user = updateRes.data;
+        }
 
         if (typeof Auth !== 'undefined' && typeof Auth.restoreSession === 'function') {
           await Auth.restoreSession();

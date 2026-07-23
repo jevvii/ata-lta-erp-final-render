@@ -87,7 +87,7 @@ const Auth = {
       localStorage.setItem(this._tokenKey, accessToken);
       try { localStorage.setItem('erp_refresh_token', refreshToken); } catch (e) {}
 
-      const me = await window.apiClient.me.get();
+      const me = await window.apiClient.me.get({ query: { _t: Date.now() } });
       this.user = me.data;
       this.activeEntity = this.user.activeEntity || (this.user.entities.includes('ATA') ? 'ATA' : 'LTA');
       localStorage.setItem(this._sessionKey, JSON.stringify({ activeEntity: this.activeEntity }));
@@ -124,7 +124,7 @@ const Auth = {
       return false;
     }
     try {
-      const me = await window.apiClient.me.get();
+      const me = await window.apiClient.me.get({ query: { _t: Date.now() } });
       this.user = me.data;
       const saved = JSON.parse(localStorage.getItem(this._sessionKey) || '{}');
       this.activeEntity = saved.activeEntity || this.user.activeEntity || (this.user.entities.includes('ATA') ? 'ATA' : 'LTA');

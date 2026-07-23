@@ -286,7 +286,10 @@
     },
 
     me: {
-      get: () => get('/me'),
+      get: (options) => {
+        const query = options?.query ? '?' + new URLSearchParams(options.query).toString() : '';
+        return get(`/me${query}`, options);
+      },
       permissions: () => get('/me/permissions'),
       team: () => get('/me/team'),
       update: (body) => patch('/me', body),
