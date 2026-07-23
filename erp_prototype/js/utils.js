@@ -2109,6 +2109,26 @@ function renderRouteSkeleton(routeName) {
     </div>`;
 }
 
+function showGoogleLoader(cardElement) {
+  if (!cardElement) return null;
+  let loader = cardElement.querySelector('.google-loader');
+  if (loader) return loader;
+  loader = el('div', { class: 'google-loader' });
+  const bar = el('div', { class: 'google-loader-bar' });
+  loader.appendChild(bar);
+  cardElement.appendChild(loader);
+  return loader;
+}
+
+function hideGoogleLoader(cardElement) {
+  if (!cardElement) return;
+  const loader = cardElement.querySelector('.google-loader');
+  if (loader) loader.remove();
+}
+
+window.showGoogleLoader = showGoogleLoader;
+window.hideGoogleLoader = hideGoogleLoader;
+
 window.Utils = {
   escapeHtml,
   showToast,

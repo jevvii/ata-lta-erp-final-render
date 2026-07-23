@@ -15,12 +15,43 @@ const Profile = {
     container.appendChild(titleBar);
 
     const grid = el('div', { class: 'profile-grid' });
-
-    grid.appendChild(this.renderDetailsCard());
-    grid.appendChild(this.renderPasswordCard());
-    grid.appendChild(this.renderPreferencesCard());
-
     container.appendChild(grid);
+
+    // Initial render with loading loaders
+    const detailsCard = this.renderDetailsCard(true);
+    const passwordCard = this.renderPasswordCard(true);
+    const preferencesCard = this.renderPreferencesCard(true);
+
+    grid.appendChild(detailsCard);
+    grid.appendChild(passwordCard);
+    grid.appendChild(preferencesCard);
+
+    // Show Google loaders on cards immediately
+    showGoogleLoader(detailsCard);
+    showGoogleLoader(passwordCard);
+    showGoogleLoader(preferencesCard);
+
+    // Fetch latest user details on revisit/load
+    (async () => {
+      try {
+        const res = await window.apiClient.me.get();
+        Auth.user = res.data;
+      } catch (e) {
+        console.error('Failed to refresh user profile details on revisit:', e);
+      } finally {
+        // Hide loaders
+        hideGoogleLoader(detailsCard);
+        hideGoogleLoader(passwordCard);
+        hideGoogleLoader(preferencesCard);
+
+        // Replace content with fresh forms
+        grid.replaceChildren();
+        grid.appendChild(this.renderDetailsCard(false));
+        grid.appendChild(this.renderPasswordCard(false));
+        grid.appendChild(this.renderPreferencesCard(false));
+      }
+    })();
+
     return container;
   },
 
@@ -31,7 +62,7 @@ const Profile = {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   },
 
-  renderDetailsCard() {
+  renderDetailsCard(isLoading = false) {
     const card = el('div', { class: 'card profile-card' });
 
     // Card Header
@@ -70,6 +101,9 @@ const Profile = {
     const uploadStatus = el('span', { id: 'profile-avatar-status', class: 'profile-upload-status' });
 
     uploadBtn.addEventListener('click', () => fileInput.click());
+    if (isLoading) {
+      uploadBtn.disabled = true;
+    }
 
     fileInput.addEventListener('change', () => {
       const file = fileInput.files[0];
@@ -95,17 +129,33 @@ const Profile = {
 
     // Form
     const form = el('form', { id: 'profile-details-form', class: 'profile-form' });
-    form.appendChild(this.formGroup('FULL NAME', 'text', 'profile-name', userName, true));
+    form.appendChild(this.formGroup('FULL NAME', 'text', 'profile-name', userName, !isLoading));
     form.appendChild(this.formGroup('EMAIL ADDRESS', 'email', 'profile-email', Auth.user?.email || 'test-account@ata-lta.ph', false));
 
     const actions = el('div', { class: 'profile-form-actions' });
-    const saveBtn = el('button', { type: 'submit', class: 'btn btn-primary profile-save-btn', text: 'Save Details' });
+    const saveBtn = el('button', {
+      type: 'submit',
+      class: 'btn btn-primary profile-save-btn',
+      text: isLoading ? 'Loading...' : 'Save Details',
+      disabled: isLoading
+    });
     actions.appendChild(saveBtn);
     form.appendChild(actions);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const name = document.getElementById('profile-name').value.trim();
+      const nameInput = document.getElementById('profile-name');
+      const submitBtn = form.querySelector('.profile-save-btn');
+      
+      showGoogleLoader(card);
+      nameInput.disabled = true;
+      fileInput.disabled = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+      }
+
+      const name = nameInput.value.trim();
       const file = fileInput.files[0];
       let newAvatarUrl = Auth.user?.avatarUrl || null;
 
@@ -123,6 +173,13 @@ const Profile = {
           uploadStatus.textContent = 'Avatar updated.';
         } catch (err) {
           uploadStatus.textContent = err.message || 'Avatar upload failed.';
+          hideGoogleLoader(card);
+          nameInput.disabled = false;
+          fileInput.disabled = false;
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Save Details';
+          }
           return;
         }
       }
@@ -130,9 +187,17 @@ const Profile = {
       try {
         await window.apiClient.me.update({ name, avatarUrl: newAvatarUrl });
         await Auth.restoreSession(); // refresh Auth.user
+        hideGoogleLoader(card);
         Workflow.showMessage('Profile', 'Details saved.', 'success');
         App.handleRoute();
       } catch (err) {
+        hideGoogleLoader(card);
+        nameInput.disabled = false;
+        fileInput.disabled = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save Details';
+        }
         Workflow.showMessage('Profile', err.message || 'Unable to save details.', 'error');
       }
     });
@@ -142,7 +207,7 @@ const Profile = {
     return card;
   },
 
-  renderPasswordCard() {
+  renderPasswordCard(isLoading = false) {
     const card = el('div', { class: 'card profile-card' });
 
     // Card Header
@@ -156,27 +221,37 @@ const Profile = {
     const form = el('form', { id: 'profile-password-form', class: 'profile-form' });
 
     // Current Password
-    form.appendChild(this.formGroup('CURRENT PASSWORD', 'password', 'profile-current-password', '', true, '•••••••••••••'));
+    form.appendChild(this.formGroup('CURRENT PASSWORD', 'password', 'profile-current-password', '', !isLoading, '•••••••••••••'));
 
     // Grid for New Password and Confirm Password
     const grid = el('div', { class: 'profile-form-grid' });
-    grid.appendChild(this.formGroup('NEW PASSWORD', 'password', 'profile-new-password', '', true, 'Min. 8 characters'));
-    grid.appendChild(this.formGroup('CONFIRM NEW PASSWORD', 'password', 'profile-confirm-password', '', true, 'Repeat password'));
+    grid.appendChild(this.formGroup('NEW PASSWORD', 'password', 'profile-new-password', '', !isLoading, 'Min. 8 characters'));
+    grid.appendChild(this.formGroup('CONFIRM NEW PASSWORD', 'password', 'profile-confirm-password', '', !isLoading, 'Repeat password'));
     form.appendChild(grid);
 
     const errorEl = el('div', { class: 'field-error hidden', style: 'margin-top: var(--spacing-sm);' });
     form.appendChild(errorEl);
 
     const actions = el('div', { class: 'profile-form-actions' });
-    const saveBtn = el('button', { type: 'submit', class: 'btn btn-primary profile-save-btn', text: 'Update Password' });
+    const saveBtn = el('button', {
+      type: 'submit',
+      class: 'btn btn-primary profile-save-btn',
+      text: isLoading ? 'Loading...' : 'Update Password',
+      disabled: isLoading
+    });
     actions.appendChild(saveBtn);
     form.appendChild(actions);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const current = document.getElementById('profile-current-password').value;
-      const newPass = document.getElementById('profile-new-password').value;
-      const confirm = document.getElementById('profile-confirm-password').value;
+      const currentInput = document.getElementById('profile-current-password');
+      const newPassInput = document.getElementById('profile-new-password');
+      const confirmInput = document.getElementById('profile-confirm-password');
+      const submitBtn = form.querySelector('.profile-save-btn');
+
+      const current = currentInput.value;
+      const newPass = newPassInput.value;
+      const confirm = confirmInput.value;
 
       errorEl.classList.add('hidden');
       if (newPass.length < 8) {
@@ -190,11 +265,30 @@ const Profile = {
         return;
       }
 
+      showGoogleLoader(card);
+      currentInput.disabled = true;
+      newPassInput.disabled = true;
+      confirmInput.disabled = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Updating...';
+      }
+
       try {
         await window.apiClient.me.changePassword({ currentPassword: current, newPassword: newPass });
+        hideGoogleLoader(card);
         Workflow.showMessage('Password', 'Password updated.', 'success');
         form.reset();
+        App.handleRoute();
       } catch (err) {
+        hideGoogleLoader(card);
+        currentInput.disabled = false;
+        newPassInput.disabled = false;
+        confirmInput.disabled = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Update Password';
+        }
         errorEl.textContent = err.message || 'Unable to update password.';
         errorEl.classList.remove('hidden');
       }
@@ -205,7 +299,7 @@ const Profile = {
     return card;
   },
 
-  renderPreferencesCard() {
+  renderPreferencesCard(isLoading = false) {
     const card = el('div', { class: 'card profile-card' });
 
     // Card Header
@@ -227,33 +321,52 @@ const Profile = {
       { value: 'light', label: 'Light' },
       { value: 'dark', label: 'Dark' },
       { value: 'system', label: 'System default' }
-    ], storedTheme));
+    ], storedTheme, isLoading));
 
     grid.appendChild(this.selectGroup('DEFAULT LIST VIEW', 'profile-default-view', [
       { value: 'table', label: 'Table' },
       { value: 'list', label: 'List' },
       { value: 'board', label: 'Board' }
-    ], prefs.defaultView || storedDefaultView));
+    ], prefs.defaultView || storedDefaultView, isLoading));
 
     grid.appendChild(this.selectGroup('DEFAULT FORM VIEW', 'profile-default-form-view', [
       { value: 'side-peek', label: 'Side peek' },
       { value: 'center-peek', label: 'Center peek' },
       { value: 'full-page', label: 'Full page' },
       { value: 'new-tab', label: 'New tab' }
-    ], prefs.defaultFormView || 'side-peek'));
+    ], prefs.defaultFormView || 'side-peek', isLoading));
 
     form.appendChild(grid);
 
     const actions = el('div', { class: 'profile-form-actions' });
-    const saveBtn = el('button', { type: 'submit', class: 'btn btn-primary profile-save-btn', text: 'Save Preferences' });
+    const saveBtn = el('button', {
+      type: 'submit',
+      class: 'btn btn-primary profile-save-btn',
+      text: isLoading ? 'Loading...' : 'Save Preferences',
+      disabled: isLoading
+    });
     actions.appendChild(saveBtn);
     form.appendChild(actions);
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const theme = document.getElementById('profile-theme').value;
-      const defaultView = document.getElementById('profile-default-view').value;
-      const defaultFormView = document.getElementById('profile-default-form-view').value;
+      const themeSelect = document.getElementById('profile-theme');
+      const viewSelect = document.getElementById('profile-default-view');
+      const formViewSelect = document.getElementById('profile-default-form-view');
+      const submitBtn = form.querySelector('.profile-save-btn');
+
+      const theme = themeSelect.value;
+      const defaultView = viewSelect.value;
+      const defaultFormView = formViewSelect.value;
+
+      showGoogleLoader(card);
+      themeSelect.disabled = true;
+      viewSelect.disabled = true;
+      formViewSelect.disabled = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+      }
 
       try {
         await window.apiClient.me.update({
@@ -283,8 +396,19 @@ const Profile = {
         App.setPreferredViewMode('disbursement', defaultView);
         App.setPreferredViewMode('transmittals', defaultView);
 
+        hideGoogleLoader(card);
         Workflow.showMessage('Preferences', 'Preferences saved.', 'success');
+
+        App.handleRoute();
       } catch (err) {
+        hideGoogleLoader(card);
+        themeSelect.disabled = false;
+        viewSelect.disabled = false;
+        formViewSelect.disabled = false;
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Save Preferences';
+        }
         Workflow.showMessage('Preferences', err.message || 'Unable to save preferences.', 'error');
       }
     });
@@ -298,21 +422,22 @@ const Profile = {
     const group = el('div', { class: 'profile-form-group' });
     group.appendChild(el('label', { htmlFor: id, text: label }));
     const input = el('input', {
-      type,
-      id,
-      class: 'form-input profile-input',
-      value: value || '',
-      placeholder,
-      disabled: !editable
+      type: type,
+      id: id,
+      name: id,
+      value: value,
+      disabled: !editable,
+      placeholder: placeholder,
+      class: 'form-input'
     });
     group.appendChild(input);
     return group;
   },
 
-  selectGroup(label, id, options, selectedValue) {
+  selectGroup(label, id, options, selectedValue, disabled = false) {
     const group = el('div', { class: 'profile-form-group' });
     group.appendChild(el('label', { htmlFor: id, text: label }));
-    const select = el('select', { id, class: 'form-select profile-select' });
+    const select = el('select', { id, class: 'form-select profile-select', disabled });
     options.forEach((opt) => {
       const option = el('option', { value: opt.value, text: opt.label });
       if (opt.value === selectedValue) option.selected = true;

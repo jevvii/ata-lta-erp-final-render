@@ -953,11 +953,37 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (loginForm) {
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('email').value.trim();
-      const password = document.getElementById('password').value;
+      const emailInput = document.getElementById('email');
+      const passwordInput = document.getElementById('password');
+      const submitBtn = loginForm.querySelector('button[type="submit"]');
       const errorEl = document.getElementById('login-error');
 
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+
+      const loginCard = loginForm.closest('.login-card');
+      if (loginCard) showGoogleLoader(loginCard);
+
+      // Disable inputs and button
+      emailInput.disabled = true;
+      passwordInput.disabled = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Signing In...';
+      }
+
       const loginResult = await Auth.login(email, password);
+
+      if (loginCard) hideGoogleLoader(loginCard);
+
+      // Re-enable inputs and button
+      emailInput.disabled = false;
+      passwordInput.disabled = false;
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+
       if (loginResult === true) {
         if (errorEl) errorEl.classList.add('hidden');
         document.getElementById('login-screen').classList.add('hidden');
