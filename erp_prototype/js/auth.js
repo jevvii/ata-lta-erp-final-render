@@ -256,6 +256,7 @@ const Auth = {
     if (!this.user) return false;
     const departments = this.user.departments || [];
     if (this.user.role === 'Admin' || departments.includes('Accounting')) return true;
+    if (['Released', 'Funded', 'Rejected'].includes(d.status)) return true;
     // Resolve the linked work request from the API cache only.
     const wr = d.linkedWorkRequestId && window.apiClient?.workRequestCache
       ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId)
@@ -263,8 +264,10 @@ const Auth = {
 
     // Managerial users can see linked disbursements when they can view the work request.
     if (this.isManagerial()) {
-      if (!d.linkedWorkRequestId) return false;
-      return wr && this.canViewWr(wr);
+      if (d.linkedWorkRequestId) {
+        return wr && this.canViewWr(wr);
+      }
+      return d.requestedBy === this.user.id;
     }
     // Staff users can see WR-linked disbursements if they can view the WR,
     // or non-linked disbursements they personally requested.

@@ -1639,22 +1639,11 @@ const Disbursement = {
     const role = Auth.user?.role;
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
-    const isManager = role === 'Manager' || departments.includes('Management');
-    const isOperations = departments.includes('Operations');
 
-    if (isAdmin || isAccounting || isManager) {
+    if (isAdmin || isAccounting) {
       return [
         { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
         { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
-        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
-        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
-        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
-      ];
-    }
-
-    if (isOperations) {
-      return [
-        { key: 'Pending', label: 'Requested', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
         { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
         { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
         { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }

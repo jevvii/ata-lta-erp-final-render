@@ -228,7 +228,7 @@ const PendingChanges = {
     const pending = (res?.data || []).map(pc => this._normalize(pc));
 
     try {
-      if (api.disbursements) {
+      if (api.disbursements && typeof Auth !== 'undefined' && Auth.can('disbursement:view')) {
         const disbRes = await api.disbursements.list({});
         const items = disbRes?.data || [];
         const pendingStatuses = ['Pending', 'Submitted', 'Under Review'];
@@ -256,7 +256,7 @@ const PendingChanges = {
     }
 
     try {
-      if (api.invoices) {
+      if (api.invoices && typeof Auth !== 'undefined' && Auth.can('billing:view')) {
         const invRes = await api.invoices.list({});
         const items = invRes?.data || [];
         const pendingStatuses = ['Pending', 'Release Pending Approval', 'Submitted', 'Under Review'];
@@ -293,7 +293,7 @@ const PendingChanges = {
     const rejected = (res?.data || []).map(pc => this._normalize(pc));
 
     try {
-      if (api.disbursements) {
+      if (api.disbursements && typeof Auth !== 'undefined' && Auth.can('disbursement:view')) {
         const disbRes = await api.disbursements.list({});
         const items = disbRes?.data || [];
         const userDisbs = items.filter(d => 
@@ -321,7 +321,7 @@ const PendingChanges = {
     }
 
     try {
-      if (api.invoices) {
+      if (api.invoices && typeof Auth !== 'undefined' && Auth.can('billing:view')) {
         const invRes = await api.invoices.list({});
         const items = invRes?.data || [];
         const userInvs = items.filter(inv => 
