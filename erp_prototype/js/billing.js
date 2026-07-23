@@ -60,6 +60,9 @@ const Billing = {
   _isActiveInvoice(inv, entity) {
     const e = inv?.entity || inv?.entityCode || inv?.entity_code;
     const allowedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue'];
+    if (Auth.user?.role === 'Admin' || (Auth.user?.departments || []).includes('Accounting')) {
+      allowedStatuses.push('Draft', 'Pending');
+    }
     return this._entityMatches(e, entity) &&
       inv?.status !== 'Cancelled' &&
       !inv?.archived &&
@@ -1324,6 +1327,9 @@ const Billing = {
       }
 
       const allowedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue'];
+      if (Auth.user?.role === 'Admin' || (Auth.user?.departments || []).includes('Accounting')) {
+        allowedStatuses.push('Draft', 'Pending');
+      }
       const hasInvoices = baseInvoices.length > 0 || pendingInvs.length > 0;
       let invoices = [...baseInvoices, ...pendingInvs].filter(inv => allowedStatuses.includes(inv.status));
 

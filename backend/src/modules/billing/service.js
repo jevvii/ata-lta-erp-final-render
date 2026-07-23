@@ -24,7 +24,7 @@ const { resolveEntityCode } = require('../../lib/entityResolver');
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listInvoices = async ({ entityId, filters = {} }) => {
+const listInvoices = async ({ entityId, filters = {}, user }) => {
   const {
     status,
     clientId,
@@ -53,7 +53,24 @@ const listInvoices = async ({ entityId, filters = {} }) => {
   } else if (archived === false || archived === 'false') {
     query = query.eq('archived', false).neq('status', 'Cancelled');
   }
-  if (status) query = query.eq('status', status);
+
+  // Role restriction: non-admin and non-accounting cannot see Draft or Pending invoices.
+  const isAdmin = user?.role === 'Admin';
+  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  if (!isAdmin && !isAccounting) {
+    if (status) {
+      if (['Draft', 'Pending'].includes(status)) {
+        query = query.eq('status', '___NONE___');
+      } else {
+        query = query.eq('status', status);
+      }
+    } else {
+      query = query.in('status', ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue']);
+    }
+  } else {
+    if (status) query = query.eq('status', status);
+  }
+
   if (clientId) query = query.eq('client_id', clientId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
@@ -192,7 +209,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
  * @param {string} params.id
  * @returns {Promise<object>}
  */
-const getInvoiceById = async ({ entityId, id }) => {
+const getInvoiceById = async ({ entityId, id, user }) => {
   const { data: invoice, error } = await supabaseAdmin
     .from('invoices')
     .select('*, clients(name, tin, address)')
@@ -207,6 +224,19 @@ const getInvoiceById = async ({ entityId, id }) => {
       title: 'Not Found',
       detail: `Invoice ${id} not found`,
     });
+  }
+
+  // Role restriction
+  if (user) {
+    const isAdmin = user.role === 'Admin';
+    const isAccounting = (user.departments || []).includes('Accounting') || user.role === 'Accounting';
+    if (!isAdmin && !isAccounting && ['Draft', 'Pending'].includes(invoice.status)) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'You do not have permission to view this invoice in its current status.',
+      });
+    }
   }
 
   // Fetch line items
@@ -826,9 +856,17 @@ const getInvoiceCounts = async ({ entityId, user }) => {
       .in('entity_id', entityIds)
       .is('deleted_at', null);
 
-  const [total, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
+  const isAdmin = user?.role === 'Admin';
+  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+
+  let activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
+  if (!isAdmin && !isAccounting) {
+    activeQuery = activeQuery.in('status', ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue']);
+  }
+
+  const [active, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
     await Promise.all([
-      runCount(baseQuery()),
+      runCount(activeQuery),
       runCount(baseQuery().eq('status', 'Cancelled')),
       runCount(baseQuery().eq('status', 'Paid').eq('archived', true)),
       runCount(
@@ -856,7 +894,6 @@ const getInvoiceCounts = async ({ entityId, user }) => {
       ),
     ]);
 
-  const active = total - cancelled - paidArchived;
   const archived = cancelled + paidArchived;
   const rejected = pendingRejected + opsRejected;
 

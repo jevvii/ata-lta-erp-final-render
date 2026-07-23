@@ -106,6 +106,9 @@ const tableQuery = (table) => {
     if (fop === 'in') {
       return Array.isArray(value) && value.includes(rowValue);
     }
+    if (fop === 'neq') {
+      return rowValue !== value;
+    }
     if (fop === 'gt') {
       return rowValue !== null && rowValue !== undefined && Number(rowValue) > Number(value);
     }
@@ -240,6 +243,10 @@ const tableQuery = (table) => {
     },
     ilike: (column, value) => {
       filters.push({ column, value, op: 'ilike' });
+      return builder;
+    },
+    neq: (column, value) => {
+      filters.push({ column, value, op: 'neq' });
       return builder;
     },
     or: (expression) => {

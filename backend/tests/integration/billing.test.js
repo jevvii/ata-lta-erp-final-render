@@ -451,4 +451,81 @@ describe('/v1/invoices', () => {
     expect(list.body.data).toHaveLength(1);
     expect(list.body.data[0].linked_task_id).toBe(taskId);
   });
+
+  it('enforces role-based visibility restrictions on invoices', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const ops = registerUser({
+      email: 'ops@ata-lta.ph',
+      name: 'Ops',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    // Create a draft invoice
+    const draftRes = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validInvoice, invoiceNumber: 'ATA-SI-2026-DRAFT', status: 'Draft' })
+      .expect(201);
+
+    // Create a sent invoice
+    await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validInvoice, invoiceNumber: 'ATA-SI-2026-SENT', status: 'Draft' })
+      .expect(201);
+
+    // Hardcode status Sent for the second invoice to simulate a released state
+    const sentInvoiceId = Array.from(mockTables.invoices.values()).find(i => i.invoice_number === 'ATA-SI-2026-SENT').id;
+    mockTables.invoices.get(sentInvoiceId).status = 'Sent';
+
+    // 1. Admin lists invoices -> sees both
+    const adminList = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(adminList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
+    expect(adminList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
+
+    // 2. Ops lists invoices -> sees only Sent
+    const opsList = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(opsList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(opsList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
+
+    // 3. Ops tries to fetch draft invoice directly -> 403 Forbidden
+    await request(app)
+      .get(`/v1/invoices/${draftRes.body.data.id}`)
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(403);
+
+    // 4. Ops gets counts -> count does not include draft/pending
+    const opsCounts = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(opsCounts.body.data.active).toBe(1); // Only the Sent one
+
+    // 5. Admin gets counts -> count includes both
+    const adminCounts = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(adminCounts.body.data.active).toBe(2);
+  });
 });

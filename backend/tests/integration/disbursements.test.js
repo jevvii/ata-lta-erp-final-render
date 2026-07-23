@@ -304,4 +304,80 @@ describe('/v1/disbursements', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(404);
   });
+
+  it('enforces role-based visibility restrictions on disbursements', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const ops = registerUser({
+      email: 'ops@ata-lta.ph',
+      name: 'Ops',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    // Create a draft disbursement
+    const draftRes = await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validDisbursement, category: 'DraftCategory' })
+      .expect(201);
+
+    // Create a released disbursement
+    const releasedRes = await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validDisbursement, category: 'ReleasedCategory' })
+      .expect(201);
+
+    // Hardcode status Released for the second disbursement
+    mockTables.disbursements.get(releasedRes.body.data.id).status = 'Released';
+
+    // 1. Admin lists disbursements -> sees both
+    const adminList = await request(app)
+      .get('/v1/disbursements')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(adminList.body.data.some(d => d.category === 'DraftCategory')).toBe(true);
+    expect(adminList.body.data.some(d => d.category === 'ReleasedCategory')).toBe(true);
+
+    // 2. Ops lists disbursements -> sees only Released
+    const opsList = await request(app)
+      .get('/v1/disbursements')
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(opsList.body.data.some(d => d.category === 'DraftCategory')).toBe(false);
+    expect(opsList.body.data.some(d => d.category === 'ReleasedCategory')).toBe(true);
+
+    // 3. Ops tries to fetch draft disbursement directly -> 403 Forbidden
+    await request(app)
+      .get(`/v1/disbursements/${draftRes.body.data.id}`)
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(403);
+
+    // 4. Ops gets counts -> count does not include draft/pending
+    const opsCounts = await request(app)
+      .get('/v1/disbursements/counts')
+      .set('Authorization', `Bearer ${ops}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(opsCounts.body.data.active).toBe(1); // Only the Released one
+
+    // 5. Admin gets counts -> count includes both
+    const adminCounts = await request(app)
+      .get('/v1/disbursements/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(adminCounts.body.data.active).toBe(2);
+  });
 });

@@ -109,9 +109,17 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
 
-  const [total, archivedCount, cancelledCount, pendingRejected, opsRejected, awaitingRelease] =
+  const isAdmin = user?.role === 'Admin';
+  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+
+  let activeQuery = baseQuery().neq('archived', true).neq('status', 'Cancelled');
+  if (!isAdmin && !isAccounting) {
+    activeQuery = activeQuery.in('status', ['Released', 'Funded', 'Rejected']);
+  }
+
+  const [active, archivedCount, cancelledCount, pendingRejected, opsRejected, awaitingRelease] =
     await Promise.all([
-      runCount(baseQuery()),
+      runCount(activeQuery),
       runCount(baseQuery().eq('archived', true)),
       runCount(baseQuery().eq('status', 'Cancelled').eq('archived', false)),
       runCount(
@@ -133,7 +141,6 @@ const getDisbursementCounts = async ({ entityId, user }) => {
       canRelease ? runCount(baseQuery().eq('status', 'Approved').eq('archived', false)) : Promise.resolve(0),
     ]);
 
-  const active = total - archivedCount - cancelledCount;
   const archived = archivedCount + cancelledCount;
   const rejected = pendingRejected + opsRejected;
 
@@ -152,7 +159,7 @@ const getDisbursementCounts = async ({ entityId, user }) => {
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listDisbursements = async ({ entityId, filters = {} }) => {
+const listDisbursements = async ({ entityId, filters = {}, user }) => {
   const {
     status,
     category,
@@ -179,7 +186,24 @@ const listDisbursements = async ({ entityId, filters = {} }) => {
   } else if (archived === false || archived === 'false') {
     query = query.eq('archived', false);
   }
-  if (status) query = query.eq('status', status);
+
+  // Role restriction: non-admin and non-accounting cannot see Draft or Pending phases/statuses.
+  const isAdmin = user?.role === 'Admin';
+  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  if (!isAdmin && !isAccounting) {
+    if (status) {
+      if (['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(status)) {
+        query = query.eq('status', '___NONE___');
+      } else {
+        query = query.eq('status', status);
+      }
+    } else {
+      query = query.in('status', ['Released', 'Funded', 'Rejected']);
+    }
+  } else {
+    if (status) query = query.eq('status', status);
+  }
+
   if (category) query = query.eq('category', category);
   if (fundSource) query = query.eq('fund_source', fundSource);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
@@ -301,7 +325,7 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
  * @param {string} params.id
  * @returns {Promise<object>}
  */
-const getDisbursementById = async ({ entityId, id }) => {
+const getDisbursementById = async ({ entityId, id, user }) => {
   const { data, error } = await supabaseAdmin
     .from('disbursements')
     .select('*, clients(name)')
@@ -316,6 +340,19 @@ const getDisbursementById = async ({ entityId, id }) => {
       title: 'Not Found',
       detail: `Disbursement ${id} not found`,
     });
+  }
+
+  // Role restriction
+  if (user) {
+    const isAdmin = user.role === 'Admin';
+    const isAccounting = (user.departments || []).includes('Accounting') || user.role === 'Accounting';
+    if (!isAdmin && !isAccounting && ['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(data.status)) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'You do not have permission to view this disbursement in its current status.',
+      });
+    }
   }
 
   const entityCode = await resolveEntityCode(data.entity_id);
