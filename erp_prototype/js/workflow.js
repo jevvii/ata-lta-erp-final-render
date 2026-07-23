@@ -6644,8 +6644,15 @@ const Workflow = {
       }
       cont.appendChild(docsList);
 
-      // Notion-style Embed Options — only for roles that can upload (Admin, Manager, Operations)
-      const canUploadDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload');
+      // Notion-style Embed Options — only for roles that can upload (Admin, Manager, Operations) or if assigned to the task
+      const isAssigned = task && (
+        task.assigneeId === Auth.user?.id ||
+        task.assignedTo === Auth.user?.id ||
+        task.assigneeName === Auth.user?.name ||
+        (Array.isArray(task.coAssignees) && task.coAssignees.includes(Auth.user?.name)) ||
+        (Array.isArray(task.checklist) && task.checklist.some(item => item.assigneeName === Auth.user?.name))
+      );
+      const canUploadDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload') || isAssigned;
       if (!isArchived && canUploadDocs) {
         const embedContainer = el('div', { class: 'embed-options', style: 'margin-top: 16px; display: flex; flex-direction: column; gap: 8px;' });
 
@@ -10060,7 +10067,14 @@ const Workflow = {
         const docsSection = el('div', { class: 'detail-block' });
         const docsHeader = el('div', { class: 'detail-section-title' });
         docsHeader.appendChild(el('span', { text: 'Attached Documents' }));
-        const canUploadTaskDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload');
+        const isAssigned = t && (
+          t.assigneeId === Auth.user?.id ||
+          t.assignedTo === Auth.user?.id ||
+          t.assigneeName === Auth.user?.name ||
+          (Array.isArray(t.coAssignees) && t.coAssignees.includes(Auth.user?.name)) ||
+          (Array.isArray(t.checklist) && t.checklist.some(item => item.assigneeName === Auth.user?.name))
+        );
+        const canUploadTaskDocs = Auth.can('workflow:edit') || Auth.can('workflow:task_upload') || isAssigned;
         if ((canHandover || canUploadTaskDocs) && !isArchived) {
           const addDocBtn = el('button', { class: 'btn btn-primary btn-xs btn-add-inline', text: '+ Upload' });
           if (!disableIfPending(addDocBtn, wr)) {
