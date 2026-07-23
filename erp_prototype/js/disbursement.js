@@ -3840,8 +3840,14 @@ const Disbursement = {
 
     const scheduleGroup = el('div', { class: 'form-group' });
     scheduleGroup.appendChild(el('label', { text: 'Schedule' }));
-    const schedInput = el('input', { type: 'text', name: 'schedule', placeholder: 'e.g. Monthly, Weekly, Quarterly', value: template?.schedule || '' });
-    scheduleGroup.appendChild(schedInput);
+    const schedSel = el('select', { name: 'schedule', class: 'form-select' });
+    schedSel.appendChild(el('option', { value: '', text: '— Select Schedule (optional) —' }));
+    ['monthly', 'weekly', 'quarterly'].forEach(s => {
+      const opt = el('option', { value: s, text: s });
+      if (template && template.schedule === s) opt.selected = true;
+      schedSel.appendChild(opt);
+    });
+    scheduleGroup.appendChild(schedSel);
     form.appendChild(scheduleGroup);
 
     const descGroup = el('div', { class: 'form-group' });
@@ -3849,43 +3855,6 @@ const Disbursement = {
     const descInput = el('textarea', { name: 'description', rows: 3, text: template?.description || '' });
     descGroup.appendChild(descInput);
     form.appendChild(descGroup);
-
-    const wrGroup = el('div', { class: 'form-group' });
-    wrGroup.appendChild(el('label', { text: 'Linked Work Request (optional)' }));
-    const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
-    wrSel.appendChild(el('option', { value: '', text: '— None —' }));
-    const templateWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
-    const activeWrIds = new Set(templateWrs.map(wr => wr.id));
-    const existingWr = template?.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(template.linkedWorkRequestId) : null;
-    if (existingWr && !activeWrIds.has(existingWr.id)) {
-      const client = window.apiClient.clientCache.getById(existingWr.clientId);
-      const inactiveSuffix = existingWr.archived ? ' [Archived]' : (existingWr.status === 'Cancelled' ? ' [Cancelled]' : '');
-      wrSel.appendChild(el('option', { value: existingWr.id, text: existingWr.title + ' — ' + (client?.name || '—') + inactiveSuffix, selected: true }));
-    }
-    templateWrs.forEach(wr => {
-      const client = window.apiClient.clientCache.getById(wr.clientId);
-      wrSel.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
-    });
-    if (template) wrSel.value = template.linkedWorkRequestId || '';
-    wrGroup.appendChild(wrSel);
-    form.appendChild(wrGroup);
-
-    const invGroup = el('div', { class: 'form-group' });
-    invGroup.appendChild(el('label', { text: 'Linked Invoice (optional)' }));
-    const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
-    invSel.appendChild(el('option', { value: '', text: '— None —' }));
-    invGroup.appendChild(invSel);
-    form.appendChild(invGroup);
-
-    window.apiClient.invoices.list({ status: 'Draft,Sent,Partially Paid,Paid', limit: 200 }).then(res => {
-      const invoices = (res.data || []).filter(inv => matchesEntity(inv.entity, entity) && inv.status !== 'Cancelled');
-      invoices.forEach(inv => {
-        const client = window.apiClient.clientCache.getById(inv.clientId);
-        const opt = el('option', { value: inv.id, text: inv.invoiceNumber + ' — ' + (client?.name || '—') });
-        if (template && template.linkedInvoiceId === inv.id) opt.selected = true;
-        invSel.appendChild(opt);
-      });
-    }).catch(e => console.error('Failed to load invoices for template form', e));
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
