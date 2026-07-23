@@ -201,4 +201,23 @@ describe('/v1/transmittals', () => {
 
     expect(res.body.data.status).toBe('Sent');
   });
+
+  it('allows an admin user to create a transmittal when active entity is ALL (resolves to fallback)', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin User',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .post('/v1/transmittals')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ALL')
+      .send(validTransmittal)
+      .expect(201);
+
+    expect(res.body.data.status).toBe('Draft');
+    expect(res.body.data.entity_id).toBe('ent-ata'); // Fallback resolves to first entity UUID/ID
+  });
 });
