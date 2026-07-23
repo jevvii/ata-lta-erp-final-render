@@ -1403,6 +1403,28 @@ const Transmittal = {
       const wr = window.apiClient.workRequestCache.getById(t.workRequestId);
       const detail = wr ? wr.title : '';
 
+      const creatorUser = t.createdBy ? window.apiClient.userCache.getById(t.createdBy) : null;
+      const avatars = creatorUser
+        ? [{ name: creatorUser.name, avatarUrl: creatorUser.avatarUrl }]
+        : [{ name: 'System' }];
+
+      const isAck = t.status === 'Acknowledged';
+      const checkmarkCount = isAck ? '1/1' : '0/1';
+      const checklistCount = isAck ? `${itemCount}/${itemCount}` : `0/${itemCount}`;
+
+      const counts = [
+        {
+          icon: BoardCardIcons.task,
+          value: checkmarkCount,
+          title: isAck ? 'Acknowledged' : 'Pending acknowledgment'
+        },
+        {
+          icon: BoardCardIcons.checklist,
+          value: checklistCount,
+          title: `${isAck ? itemCount : 0} of ${itemCount} items acknowledged`
+        }
+      ];
+
       return buildCompactBoardCard({
         key: 'TX-' + (seqMap.get(t.id) || 1),
         progress,
@@ -1413,6 +1435,8 @@ const Transmittal = {
         date: date ? formatDate(date) : '',
         priority: displayStatus,
         priorityClass: statusPriorityClass,
+        avatars,
+        counts,
         onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
       });
     };
