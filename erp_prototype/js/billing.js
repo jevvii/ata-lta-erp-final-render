@@ -738,7 +738,7 @@ const Billing = {
         ]
       }));
     } else {
-      const isLimitedView = Auth.user?.departments?.includes('Operations') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
+      const isLimitedView = Auth.user?.departments?.includes('Operations') || Auth.user?.departments?.includes('Documentation') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
       if (isLimitedView && ['templates', 'aging', 'templateForm'].includes(this.view)) {
         this.view = 'list';
         location.hash = '#billing';
@@ -802,7 +802,7 @@ const Billing = {
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
     const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
 
-    const isLimitedView = Auth.user?.departments?.includes('Operations') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
+    const isLimitedView = Auth.user?.departments?.includes('Operations') || Auth.user?.departments?.includes('Documentation') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
     const tabs = [
       { key: 'list', label: 'Invoices', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: invoiceCount }
     ];
@@ -1542,7 +1542,7 @@ const Billing = {
         wrapper.appendChild(trashBtn);
       }
 
-      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
+      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations') && !Auth.user?.departments?.includes('Documentation')) {
         const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
         archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); this.archiveInvoice(inv.id); });
         wrapper.appendChild(archiveBtn);
@@ -1587,7 +1587,7 @@ const Billing = {
       { key: 'actions', label: 'Actions', render: (inv) => buildActions(inv), class: 'dt-actions-col', width: '180px' }
     ];
 
-    const isOperations = Auth.user?.departments?.includes('Operations');
+    const isOperations = Auth.user?.departments?.includes('Operations') || Auth.user?.departments?.includes('Documentation');
     const tableView = DataTable.render({
       items: invoices,
       columns,
@@ -1635,7 +1635,7 @@ const Billing = {
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
 
-    const isOperations = departments.includes('Operations');
+    const isOperations = departments.includes('Operations') || departments.includes('Documentation');
 
     const releasedStatuses = ['Sent', 'Approved'];
 
@@ -1809,7 +1809,7 @@ const Billing = {
         });
       }
 
-      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
+      if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations') && !Auth.user?.departments?.includes('Documentation')) {
         items.push({
           label: 'Archive',
           className: 'primary',
@@ -3289,7 +3289,7 @@ const Billing = {
         App.handleRoute();
       });
       actions.appendChild(sentBtn);
-    } else if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations')) {
+    } else if (inv.status === 'Paid' && !inv.archived && !Auth.user?.departments?.includes('Operations') && !Auth.user?.departments?.includes('Documentation')) {
       const archiveBtn = el('button', { class: 'btn btn-primary', text: 'Archive Invoice', style: 'margin-right:8px;' });
       archiveBtn.addEventListener('click', () => this.archiveInvoice(inv.id));
       actions.appendChild(archiveBtn);
@@ -5069,13 +5069,13 @@ const Billing = {
             icon: ArchivePage.icons.view,
             onClick: () => { location.hash = '#billing/detail/' + inv.id; }
           },
-          ...(category === 'accomplished' && !Auth.user?.departments?.includes('Operations') ? [{
+          ...(category === 'accomplished' && !Auth.user?.departments?.includes('Operations') && !Auth.user?.departments?.includes('Documentation') ? [{
             label: 'Unarchive',
             icon: ArchivePage.icons.unarchive,
             className: 'primary',
             onClick: () => self.unarchiveInvoice(inv.id)
           }] : []),
-          ...(category === 'cancelled' && !Auth.user?.departments?.includes('Operations') ? [{
+          ...(category === 'cancelled' && !Auth.user?.departments?.includes('Operations') && !Auth.user?.departments?.includes('Documentation') ? [{
             label: 'Restore to Draft',
             icon: ArchivePage.icons.restore,
             className: 'primary',
