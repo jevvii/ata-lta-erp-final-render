@@ -412,11 +412,12 @@ const Billing = {
   _refreshCounts() {
     const entity = Auth.activeEntity;
     const cached = (Array.isArray(this._listCache) && this._listCacheEntity === entity) ? this._listCache : [];
+    const templateCount = (this._templates || []).filter(t => this._entityMatches(t.entity, entity)).length;
     this._counts = {
       active: cached.filter(inv => this._isActiveInvoice(inv, entity)).length,
       archived: cached.filter(inv => this._isArchiveInvoice(inv, entity)).length,
       rejected: (this._counts && this._countsEntity === entity) ? (this._counts.rejected || 0) : 0,
-      templates: (this._counts && this._countsEntity === entity) ? (this._counts.templates || 0) : 0
+      templates: this._templatesEntity === entity ? templateCount : ((this._counts && this._countsEntity === entity) ? (this._counts.templates || 0) : 0)
     };
     this._countsEntity = entity;
   },
@@ -1886,6 +1887,16 @@ const Billing = {
         const isRelease = targetStatus === 'Sent';
         const canReleaseDirectly = Auth.user?.role === 'Admin' || Auth.isManagerial() || Auth.can('billing:release');
         const nextStatus = (isRelease && !canReleaseDirectly) ? 'Release Pending Approval' : targetStatus;
+
+        // Blocker guardrails for disallowed transitions
+        if (item.status === 'Draft' && ['Sent', 'Paid', 'Partially Paid'].includes(nextStatus)) {
+          Workflow.showMessage('Submission Required', `Invoice "${item.invoiceNumber}" must be submitted for approval (Pending status) before it can be advanced.`, 'warning');
+          return;
+        }
+        if (item.status === 'Pending' && ['Paid', 'Partially Paid'].includes(nextStatus)) {
+          Workflow.showMessage('Invoice Not Released', `Invoice "${item.invoiceNumber}" must be released before recording payments.`, 'warning');
+          return;
+        }
 
         // Same status: reorder only
         if (fromStatus === targetStatus) {
@@ -4226,16 +4237,26 @@ const Billing = {
             className: 'btn btn-danger btn-xs',
             onClick: () => {
               Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, async () => {
-                try {
-                  await window.apiClient.invoices.deleteTemplate(t.id);
-                  this._templates = this._templates.filter(tm => tm.id !== t.id);
-                  this._counts = null; // invalidate counts
-                } catch (e) {
-                  console.error('Failed to delete template', t.id, e);
-                  Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
-                  return;
-                }
-                App.handleRoute();
+                await Workflow.runBlockingArchiveAction({
+                  title: 'Deleting Template',
+                  message: `Please wait while template "${t.name}" is being deleted...`,
+                  apiCall: () => window.apiClient.invoices.deleteTemplate(t.id),
+                  successTitle: 'Template Deleted',
+                  successMessage: `Template "${t.name}" has been deleted successfully.`,
+                  errorTitle: 'Delete Failed',
+                  onSuccess: async () => {
+                    this._templates = this._templates.filter(tm => tm.id !== t.id);
+                    this._refreshCounts();
+                    await this.loadCounts(true);
+                  },
+                  onAfterConfirm: async () => {
+                    if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                      window.apiClient.invoices.invalidateCounts();
+                    }
+                    App.updateSidebarNotifications().catch(() => {});
+                    App.handleRoute();
+                  }
+                });
               }, 'danger');
             }
           }
@@ -4396,18 +4417,28 @@ const Billing = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
           Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, async () => {
-            try {
-              await window.apiClient.invoices.deleteTemplate(template.id);
-              this._templates = this._templates.filter(t => t.id !== template.id);
-              this._counts = null; // invalidate counts
-            } catch (e) {
-              console.error('Failed to delete template', template.id, e);
-              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
-              return;
-            }
-            this.view = 'templates';
-            this.templateEditingId = null;
-            closeFormPanelAndRoute('#billing');
+            await Workflow.runBlockingArchiveAction({
+              title: 'Deleting Template',
+              message: `Please wait while template "${template.name}" is being deleted...`,
+              apiCall: () => window.apiClient.invoices.deleteTemplate(template.id),
+              successTitle: 'Template Deleted',
+              successMessage: `Template "${template.name}" has been deleted successfully.`,
+              errorTitle: 'Delete Failed',
+              onSuccess: async () => {
+                this._templates = this._templates.filter(t => t.id !== template.id);
+                this._refreshCounts();
+                await this.loadCounts(true);
+              },
+              onAfterConfirm: async () => {
+                if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+                  window.apiClient.invoices.invalidateCounts();
+                }
+                App.updateSidebarNotifications().catch(() => {});
+                this.view = 'templates';
+                this.templateEditingId = null;
+                closeFormPanelAndRoute('#billing');
+              }
+            });
           }, 'danger');
         });
         topActions.appendChild(delBtn);
@@ -4512,7 +4543,8 @@ const Billing = {
             this._templates.push(norm);
           }
           this._templatesEntity = entity;
-          this._counts = null; // invalidate counts
+          this._refreshCounts();
+          await this.loadCounts(true);
         }
       },
       onAfterConfirm: async () => {

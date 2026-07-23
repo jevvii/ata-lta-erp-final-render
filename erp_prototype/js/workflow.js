@@ -2629,7 +2629,7 @@ const Workflow = {
         err => {
           if (timerId) clearTimeout(timerId);
           if (timedOut) return null;
-          throw err;
+          return { error: err };
         }
       );
 

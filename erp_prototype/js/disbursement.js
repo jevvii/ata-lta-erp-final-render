@@ -3643,14 +3643,20 @@ const Disbursement = {
             className: 'btn btn-danger btn-xs',
             onClick: () => {
               Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${t.name}"?`, async () => {
-                try {
-                  await window.apiClient.disbursements.deleteTemplate(t.id);
-                  this._templates = this._templates.filter(temp => temp.id !== t.id);
-                  App.handleRoute();
-                } catch (e) {
-                  console.error('Failed to delete template', t.id, e);
-                  Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
-                }
+                await Workflow.runBlockingArchiveAction({
+                  title: 'Deleting Template',
+                  message: `Please wait while template "${t.name}" is being deleted...`,
+                  apiCall: () => window.apiClient.disbursements.deleteTemplate(t.id),
+                  successTitle: 'Template Deleted',
+                  successMessage: `Template "${t.name}" has been deleted successfully.`,
+                  errorTitle: 'Delete Failed',
+                  onSuccess: async () => {
+                    this._templates = this._templates.filter(temp => temp.id !== t.id);
+                  },
+                  onAfterConfirm: async () => {
+                    App.handleRoute();
+                  }
+                });
               }, 'danger');
             }
           }
@@ -3767,16 +3773,22 @@ const Disbursement = {
         const delBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete', style: 'margin-left: 8px;' });
         delBtn.addEventListener('click', () => {
           Workflow.showConfirm('Delete Template', `Are you sure you want to delete "${template.name}"?`, async () => {
-            try {
-              await window.apiClient.disbursements.deleteTemplate(template.id);
-              this._templates = this._templates.filter(t => t.id !== template.id);
-              this.view = 'templates';
-              this.templateEditingId = null;
-              closeFormPanelAndRoute('#disbursement');
-            } catch (e) {
-              console.error('Failed to delete template', template.id, e);
-              Workflow.showMessage('Delete Failed', e.message || 'Unable to delete template.', 'error');
-            }
+            await Workflow.runBlockingArchiveAction({
+              title: 'Deleting Template',
+              message: `Please wait while template "${template.name}" is being deleted...`,
+              apiCall: () => window.apiClient.disbursements.deleteTemplate(template.id),
+              successTitle: 'Template Deleted',
+              successMessage: `Template "${template.name}" has been deleted successfully.`,
+              errorTitle: 'Delete Failed',
+              onSuccess: async () => {
+                this._templates = this._templates.filter(t => t.id !== template.id);
+              },
+              onAfterConfirm: async () => {
+                this.view = 'templates';
+                this.templateEditingId = null;
+                closeFormPanelAndRoute('#disbursement');
+              }
+            });
           }, 'danger');
         });
         topActions.appendChild(delBtn);
@@ -3898,57 +3910,47 @@ const Disbursement = {
       linkedInvoiceId: data.linkedInvoiceId || null
     };
 
-    let optimisticTemplate = null;
-    let templateGen = 0;
-    try {
-      if (template) {
-        const res = await window.apiClient.disbursements.updateTemplate(template.id, payload);
-        const updated = this.normalizeTemplate(res.data);
-        const idx = this._templates.findIndex(t => t.id === updated.id);
-        if (idx >= 0) this._templates[idx] = updated;
-        else this._templates.push(updated);
-      } else {
-        const recordEntity = this._getOptimisticEntity();
-        optimisticTemplate = this.normalizeTemplate({
-          ...payload,
-          id: this._tempId('tpl'),
-          entity: recordEntity,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
-        this._templates.push(optimisticTemplate);
-        this._templatesEntity = Auth.activeEntity;
-        templateGen = this._setActiveSkipGeneration();
-        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
-          App.handleRoute();
-        }
-        const res = await window.apiClient.disbursements.createTemplate(payload);
-        const created = this.normalizeTemplate(res.data);
-        if (!created.entity) created.entity = recordEntity;
-        const idx = this._templates.findIndex(t => t.id === optimisticTemplate.id);
-        if (idx >= 0) this._templates[idx] = created;
-        else this._templates.push(created);
-        this._clearSkipGenerationIfCurrent(templateGen);
-        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
-          App.handleRoute();
-        }
-      }
-    } catch (e) {
-      console.error('Failed to save disbursement template', e);
-      if (!template && optimisticTemplate) {
-        this._templates = this._templates.filter(t => t.id !== optimisticTemplate.id);
-        this._clearSkipGenerationIfCurrent(templateGen);
-        if (this.view !== 'form' && this.view !== 'templateForm' && this.view !== 'detail') {
-          App.handleRoute();
-        }
-      }
-      Workflow.showMessage('Save Failed', e.message || 'Unable to save template.', 'error');
-      return;
-    }
+    const isEdit = !!template;
+    const entity = Auth.activeEntity;
 
-    this.view = 'templates';
-    this.templateEditingId = null;
-    closeFormPanelAndRoute('#disbursement');
+    await Workflow.runBlockingArchiveAction({
+      title: isEdit ? 'Updating Template' : 'Creating Template',
+      message: isEdit 
+        ? `Please wait while template "${payload.name}" is being updated...` 
+        : `Please wait while template "${payload.name}" is being created...`,
+      apiCall: async () => {
+        if (isEdit) {
+          return await window.apiClient.disbursements.updateTemplate(template.id, payload);
+        } else {
+          return await window.apiClient.disbursements.createTemplate(payload);
+        }
+      },
+      successTitle: isEdit ? 'Template Updated' : 'Template Created',
+      successMessage: isEdit 
+        ? `Template "${payload.name}" has been updated successfully.` 
+        : `Template "${payload.name}" has been created successfully.`,
+      errorTitle: 'Save Failed',
+      onSuccess: async (res) => {
+        if (res && res.data) {
+          const updated = this.normalizeTemplate(res.data);
+          if (!updated.entity) updated.entity = isEdit ? (template.entity || entity) : entity;
+          if (isEdit) {
+            const idx = this._templates.findIndex(t => t.id === updated.id);
+            if (idx >= 0) this._templates[idx] = updated;
+            else this._templates.push(updated);
+          } else {
+            this._templates.push(updated);
+          }
+          this._templatesEntity = entity;
+        }
+      },
+      onAfterConfirm: async () => {
+        this.view = 'templates';
+        this.templateEditingId = null;
+        closeFormPanelAndRoute('#disbursement');
+        App.handleRoute();
+      }
+    });
   },
 
   async showTemplateForm(existing = null, mode = null) {
