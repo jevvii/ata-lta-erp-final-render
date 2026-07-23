@@ -194,6 +194,56 @@ describe('/v1/admin pending approvals and audit', () => {
     expect(res.body.title).toMatch(/not found/i);
   });
 
+  it('allows table-specific approvers (Accounting) to view/list authorized tables but blocks unauthorized', async () => {
+    // Dynamically seed pc-4 disbursements change so it doesn't pollute other tests
+    mockTables.pending_changes.set('pc-4', {
+      id: 'pc-4',
+      entity_id: 'ent-ata',
+      table_name: 'disbursements',
+      parent_record_id: null,
+      proposed_data: { amount: 1500, category: 'Travel' },
+      submitted_by: 'user-other',
+      status: 'pending',
+      created_at: '2026-07-19T07:00:00.000Z',
+    });
+
+    const token = registerUser({
+      id: 'user-accounting',
+      email: 'accounting@ata-lta.ph',
+      name: 'Accounting User',
+      role: 'Accounting',
+      entities: ['ATA'],
+      departments: ['Accounting'],
+    });
+
+    // 1. List pending approvals: Accounting can see pc-4 (disbursements) but not pc-3 (work_requests) or pc-1 (clients, submitted by other)
+    const listRes = await request(app)
+      .get('/v1/admin/pending-approvals?status=pending')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    const visibleIds = listRes.body.data.map(item => item.id);
+    expect(visibleIds).toContain('pc-4');
+    expect(visibleIds).not.toContain('pc-3');
+    expect(visibleIds).not.toContain('pc-1');
+
+    // 2. Get pending approval by ID: should allow viewing pc-4
+    const getOk = await request(app)
+      .get('/v1/admin/pending-approvals/pc-4')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(getOk.body.data.id).toBe('pc-4');
+
+    // 3. Get pending approval by ID: should block viewing pc-3 (work_requests)
+    await request(app)
+      .get('/v1/admin/pending-approvals/pc-3')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(403);
+  });
+
   it('lists audit logs with pagination', async () => {
     seedAuditLogs(25);
 

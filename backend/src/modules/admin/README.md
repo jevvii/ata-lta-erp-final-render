@@ -17,7 +17,7 @@ Phase: 8
 ## Permissions
 
 - `users:view` / `users:manage` for user management
-- `approve_change:*` or `bypass_review:*` for pending approvals
+- `approve_change:*`, `approve_change:tasks`, `approve_change:invoices`, `approve_change:disbursements`, or `bypass_review:*` for pending approvals
 
 ## Notes
 

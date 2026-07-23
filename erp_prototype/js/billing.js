@@ -112,7 +112,16 @@ const Billing = {
         if (existing && existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt)) {
           return;
         }
-        this._detailCache[inv.id] = inv;
+        if (existing && existing.isFullDetail) {
+          this._detailCache[inv.id] = {
+            ...inv,
+            lineItems: existing.lineItems,
+            payments: existing.payments,
+            isFullDetail: true
+          };
+        } else {
+          this._detailCache[inv.id] = inv;
+        }
       });
       this._detailCacheEntity = entity;
       this._lastInvoiceMeta = res.meta || {};
@@ -424,7 +433,7 @@ const Billing = {
     try {
       const res = await window.apiClient.invoices.get(id);
       if (res?.data) {
-        this._detailCache[id] = this.normalizeInvoice(res.data);
+        this._detailCache[id] = { ...this.normalizeInvoice(res.data), isFullDetail: true };
         this._detailCacheEntity = Auth.activeEntity;
         App.handleRoute();
       }
@@ -625,7 +634,7 @@ const Billing = {
     if (!this._isEntityFresh()) this.invalidateCache();
 
     const needsInvoice = (this.view === 'detail' || this.view === 'form') && this.detailId;
-    if (needsInvoice && !this.getInvoiceById(this.detailId)) {
+    if (needsInvoice && (!this._detailCache[this.detailId] || !this._detailCache[this.detailId].isFullDetail)) {
       this._fetchInvoiceAndRerender(this.detailId);
       container.appendChild(el('div', { class: 'loading-skeleton', style: 'padding: 24px;', text: 'Loading invoice...' }));
       return container;
@@ -1058,7 +1067,16 @@ const Billing = {
         if (existing && existing.updatedAt && inv.updatedAt && new Date(existing.updatedAt) > new Date(inv.updatedAt)) {
           return;
         }
-        this._detailCache[inv.id] = inv;
+        if (existing && existing.isFullDetail) {
+          this._detailCache[inv.id] = {
+            ...inv,
+            lineItems: existing.lineItems,
+            payments: existing.payments,
+            isFullDetail: true
+          };
+        } else {
+          this._detailCache[inv.id] = inv;
+        }
       });
       this._detailCacheEntity = entity;
       // Merge fetched entity invoices into the all-invoice cache so active and

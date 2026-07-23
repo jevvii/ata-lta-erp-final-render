@@ -604,6 +604,30 @@ const approvePending = async ({ id, user }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Pending change not found' });
   }
 
+  const permissions = computePermissions(user);
+  const TABLE_NAME_MAP = {
+    workRequests: 'work_requests',
+    work_requests: 'work_requests',
+    clients: 'clients',
+    tasks: 'tasks',
+    workRequestPhaseRouting: 'work_request_phase_routing',
+    work_request_phase_routing: 'work_request_phase_routing',
+    invoices: 'invoices',
+    disbursements: 'disbursements',
+    transmittals: 'transmittals',
+  };
+  const norm = TABLE_NAME_MAP[change.table_name] || change.table_name;
+  const canApprove = hasPermission(permissions, 'approve_change:*') ||
+                     hasPermission(permissions, `approve_change:${norm}`) ||
+                     hasPermission(permissions, `approve_change:${change.table_name}`);
+  if (!canApprove) {
+    throw new AppError({
+      statusCode: 403,
+      title: 'Forbidden',
+      detail: 'You are not authorized to approve this pending change',
+    });
+  }
+
   const { data: rows, error: rpcError } = await supabaseAdmin.rpc('pending_change_approve', {
     p_id: id,
     p_user_id: user.id,
@@ -742,7 +766,21 @@ const rejectPending = async ({ id, user, reason }) => {
   }
 
   const permissions = computePermissions(user);
-  const canApprove = hasPermission(permissions, 'approve_change:*');
+  const TABLE_NAME_MAP = {
+    workRequests: 'work_requests',
+    work_requests: 'work_requests',
+    clients: 'clients',
+    tasks: 'tasks',
+    workRequestPhaseRouting: 'work_request_phase_routing',
+    work_request_phase_routing: 'work_request_phase_routing',
+    invoices: 'invoices',
+    disbursements: 'disbursements',
+    transmittals: 'transmittals',
+  };
+  const norm = TABLE_NAME_MAP[change.table_name] || change.table_name;
+  const canApprove = hasPermission(permissions, 'approve_change:*') ||
+                     hasPermission(permissions, `approve_change:${norm}`) ||
+                     hasPermission(permissions, `approve_change:${change.table_name}`);
   if (change.submitted_by !== user.id && !canApprove) {
     throw new AppError({
       statusCode: 403,
