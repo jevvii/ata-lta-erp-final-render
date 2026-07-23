@@ -27,9 +27,9 @@ const Profile = {
     grid.appendChild(preferencesCard);
 
     // Show Google loaders on cards immediately
-    showGoogleLoader(detailsCard);
-    showGoogleLoader(passwordCard);
-    showGoogleLoader(preferencesCard);
+    window.showGoogleLoader(detailsCard);
+    window.showGoogleLoader(passwordCard);
+    window.showGoogleLoader(preferencesCard);
 
     // Fetch latest user details on revisit/load
     (async () => {
@@ -40,9 +40,9 @@ const Profile = {
         console.error('Failed to refresh user profile details on revisit:', e);
       } finally {
         // Hide loaders
-        hideGoogleLoader(detailsCard);
-        hideGoogleLoader(passwordCard);
-        hideGoogleLoader(preferencesCard);
+        window.hideGoogleLoader(detailsCard);
+        window.hideGoogleLoader(passwordCard);
+        window.hideGoogleLoader(preferencesCard);
 
         // Replace content with fresh forms
         grid.replaceChildren();
@@ -147,7 +147,7 @@ const Profile = {
       const nameInput = document.getElementById('profile-name');
       const submitBtn = form.querySelector('.profile-save-btn');
       
-      showGoogleLoader(card);
+      window.showGoogleLoader(card);
       nameInput.disabled = true;
       fileInput.disabled = true;
       if (submitBtn) {
@@ -173,7 +173,7 @@ const Profile = {
           uploadStatus.textContent = 'Avatar updated.';
         } catch (err) {
           uploadStatus.textContent = err.message || 'Avatar upload failed.';
-          hideGoogleLoader(card);
+          window.hideGoogleLoader(card);
           nameInput.disabled = false;
           fileInput.disabled = false;
           if (submitBtn) {
@@ -187,11 +187,11 @@ const Profile = {
       try {
         await window.apiClient.me.update({ name, avatarUrl: newAvatarUrl });
         await Auth.restoreSession(); // refresh Auth.user
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         Workflow.showMessage('Profile', 'Details saved.', 'success');
         App.handleRoute();
       } catch (err) {
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         nameInput.disabled = false;
         fileInput.disabled = false;
         if (submitBtn) {
@@ -265,7 +265,7 @@ const Profile = {
         return;
       }
 
-      showGoogleLoader(card);
+      window.showGoogleLoader(card);
       currentInput.disabled = true;
       newPassInput.disabled = true;
       confirmInput.disabled = true;
@@ -276,12 +276,12 @@ const Profile = {
 
       try {
         await window.apiClient.me.changePassword({ currentPassword: current, newPassword: newPass });
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         Workflow.showMessage('Password', 'Password updated.', 'success');
         form.reset();
         App.handleRoute();
       } catch (err) {
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         currentInput.disabled = false;
         newPassInput.disabled = false;
         confirmInput.disabled = false;
@@ -359,7 +359,7 @@ const Profile = {
       const defaultView = viewSelect.value;
       const defaultFormView = formViewSelect.value;
 
-      showGoogleLoader(card);
+      window.showGoogleLoader(card);
       themeSelect.disabled = true;
       viewSelect.disabled = true;
       formViewSelect.disabled = true;
@@ -396,12 +396,12 @@ const Profile = {
         App.setPreferredViewMode('disbursement', defaultView);
         App.setPreferredViewMode('transmittals', defaultView);
 
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         Workflow.showMessage('Preferences', 'Preferences saved.', 'success');
 
         App.handleRoute();
       } catch (err) {
-        hideGoogleLoader(card);
+        window.hideGoogleLoader(card);
         themeSelect.disabled = false;
         viewSelect.disabled = false;
         formViewSelect.disabled = false;

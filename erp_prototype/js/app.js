@@ -962,7 +962,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const password = passwordInput.value;
 
       const loginCard = loginForm.closest('.login-card');
-      if (loginCard) showGoogleLoader(loginCard);
+      if (loginCard) window.showGoogleLoader(loginCard);
 
       // Disable inputs and button
       emailInput.disabled = true;
@@ -974,7 +974,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       const loginResult = await Auth.login(email, password);
 
-      if (loginCard) hideGoogleLoader(loginCard);
+      if (loginCard) window.hideGoogleLoader(loginCard);
 
       // Re-enable inputs and button
       emailInput.disabled = false;
