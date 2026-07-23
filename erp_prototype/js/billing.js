@@ -1788,7 +1788,7 @@ const Billing = {
     const boardDrag = {
       enabled: true,
       canDrag: inv => {
-        if (this._isTempId(inv.id)) return false;
+        if (self._isTempId(inv.id)) return false;
         const canManage = canEdit || Auth.can('billing:approve') || Auth.can('billing:mark_paid') || Auth.can('billing:release') || Auth.isManagerial();
         return canManage && !inv.pendingChangeId;
       },
@@ -1847,7 +1847,7 @@ const Billing = {
         }
       },
       onDrop({ item, targetStatus, newOrder, fromStatus }) {
-        if (this._isTempId(item.id)) {
+        if (self._isTempId(item.id)) {
           Workflow.showMessage('Saving...', 'Please wait for the invoice to finish saving before moving it.', 'info');
           return;
         }
@@ -1858,14 +1858,14 @@ const Billing = {
 
         // Same status: reorder only
         if (fromStatus === targetStatus) {
-          const snapshot = this._updateCachedItem(item.id, {});
+          const snapshot = self._updateCachedItem(item.id, {});
           Workflow.runBlockingArchiveAction({
             title: 'Updating Invoice Order',
             message: `Please wait while "${item.invoiceNumber}" is being reordered...`,
             apiCall: async () => {
-              this._updateCachedItem(item.id, { boardOrder: newOrder });
+              self._updateCachedItem(item.id, { boardOrder: newOrder });
               const res = await window.apiClient.invoices.update(item.id, { boardOrder: newOrder });
-              this._syncInvoiceToCaches(res.data);
+              self._syncInvoiceToCaches(res.data);
               return { data: res.data };
             },
             successTitle: 'Order Updated',
@@ -1873,9 +1873,9 @@ const Billing = {
             errorTitle: 'Update Failed'
           }).then(runResult => {
             if (runResult.success) {
-              this._invalidateCountsAndSidebar();
+              self._invalidateCountsAndSidebar();
             } else if (snapshot) {
-              this._rollbackCachedItem(item.id, snapshot);
+              self._rollbackCachedItem(item.id, snapshot);
             }
             App.handleRoute();
           });
@@ -1941,14 +1941,14 @@ const Billing = {
         }
 
         const applyMove = async () => {
-          const snapshot = this._updateCachedItem(item.id, {});
+          const snapshot = self._updateCachedItem(item.id, {});
           const runResult = await Workflow.runBlockingArchiveAction({
             title: nextStatus === 'Release Pending Approval' ? 'Submitting for Release Approval' : 'Routing Invoice',
             message: `Please wait while "${item.invoiceNumber}" is being moved to ${nextStatus}...`,
             apiCall: async () => {
-              this._updateCachedItem(item.id, { status: nextStatus, boardOrder: newOrder });
+              self._updateCachedItem(item.id, { status: nextStatus, boardOrder: newOrder });
               const res = await window.apiClient.invoices.update(item.id, { boardOrder: newOrder, status: nextStatus });
-              this._syncInvoiceToCaches(res.data);
+              self._syncInvoiceToCaches(res.data);
               return { data: res.data };
             },
             successTitle: 'Invoice Updated',
@@ -1956,9 +1956,9 @@ const Billing = {
             errorTitle: 'Update Failed'
           });
           if (runResult.success) {
-            this._invalidateCountsAndSidebar();
+            self._invalidateCountsAndSidebar();
           } else if (snapshot) {
-            this._rollbackCachedItem(item.id, snapshot);
+            self._rollbackCachedItem(item.id, snapshot);
           }
           App.handleRoute();
         };
