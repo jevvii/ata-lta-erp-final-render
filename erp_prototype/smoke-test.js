@@ -332,6 +332,76 @@ async function runTests() {
   }
   await log('Transmittal Save Top-Right (#2)', txHasSaveTop, `buttons=${txHeaderBtns.length}`);
 
+  // Close the transmittal side pane to remove the click-blocking backdrop
+  const txCancelBtn = page.locator('#global-side-pane.open .side-pane-close-btn');
+  if (await txCancelBtn.isVisible()) {
+    await txCancelBtn.click();
+    await page.waitForTimeout(300);
+  }
+
+  // ─── TEST 19: Pending request preview and click ──────────────────
+  await logout();
+  await loginAs(SEED_USERS[2]); // dev-docs Elevated to Manager (has both billing:edit and billing:request)
+  
+  // Create an operations request
+  const invoiceNumber = await page.evaluate(async () => {
+    const clientRes = await window.apiClient.clients.list();
+    const client = clientRes.data[0];
+    const invNum = 'INV-SMOKE-' + Math.floor(Math.random() * 1000000);
+    const invoiceRes = await window.apiClient.invoices.create({
+      invoiceNumber: invNum,
+      clientId: client.id,
+      total: 500,
+      status: 'Approved',
+      dueDate: new Date().toISOString().slice(0, 10),
+      issueDate: new Date().toISOString().slice(0, 10),
+      entity: 'ATA',
+      lineItems: [{ description: 'Mock Description', amount: 500, type: 'Professional Fee' }]
+    });
+    const invoice = invoiceRes.data;
+    
+    await window.apiClient.operationsRequests.create({
+      type: 'billing',
+      notes: `Request to route invoice to Paid phase. Invoice ID: ${invoice.id} (Invoice ${invNum})`,
+      amount: 500,
+      status: 'pending',
+      entity: 'ATA',
+      invoiceId: invoice.id,
+      invoiceNumber: invNum
+    });
+    return invNum;
+  });
+
+  await logout();
+  await loginAs(SEED_USERS[0]); // Admin (will approve/view the request)
+
+  await page.goto(BASE + '/#admin');
+  await page.waitForTimeout(800);
+  
+  // Click on "Pending Approvals" tab
+  const pendingTab = page.locator('.module-tab-link', { hasText: 'Pending Approvals' });
+  await pendingTab.click();
+  await page.waitForTimeout(600);
+
+  // Click on the newly created card containing invoiceNumber
+  const pendingCard = page.locator('.approval-item', { hasText: invoiceNumber });
+  await pendingCard.click();
+  await page.waitForTimeout(600);
+
+  // Check if side pane is open and contains details
+  const pendingSidePane = page.locator('#global-side-pane.open');
+  const hasTitle = await pendingSidePane.locator('h3.notion-title-text', { hasText: invoiceNumber }).isVisible();
+  const hasDesc = await pendingSidePane.locator('.notion-property-value', { hasText: 'Request to route invoice to Paid phase' }).isVisible();
+  
+  await log('Pending Request Click/Preview (#19)', hasTitle && hasDesc, `hasTitle=${hasTitle}, hasDesc=${hasDesc}`);
+
+  // Let's close the side pane
+  const closeBtn = page.locator('#global-side-pane.open .side-pane-close-btn');
+  if (await closeBtn.isVisible()) {
+    await closeBtn.click();
+    await page.waitForTimeout(300);
+  }
+
   // ─── Summary ─────────────────────────────────────────────────────
   console.log('\n========== SMOKE TEST SUMMARY ==========');
   const passed = results.filter(r => r.passed).length;

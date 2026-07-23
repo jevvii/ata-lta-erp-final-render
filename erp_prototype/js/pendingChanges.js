@@ -407,6 +407,63 @@ const PendingChanges = {
           // ignore fallback errors
         }
       }
+      // Fallback for operations requests (e.g. billing routing, transmittals, disbursements)
+      if (api && api.operationsRequests) {
+        try {
+          const opRes = await api.operationsRequests.get(id);
+          const r = opRes?.data;
+          if (r) {
+            const invoiceId = r.invoice_id || r.invoiceId || (typeof r.notes === 'string' ? (r.notes.match(/Invoice ID: ([^\s)]+)/) || [])[1] : null);
+            const invoiceNumber = r.invoice_number || r.invoiceNumber || (typeof r.notes === 'string' ? (r.notes.match(/Invoice (INV-[^\s)]+)/) || [])[1] : null);
+            const norm = {
+              ...r,
+              id: r.id,
+              type: r.type,
+              status: r.status,
+              requestedBy: r.requested_by || r.requestedBy,
+              requestedAt: r.requested_at || r.requestedAt || r.created_at || r.createdAt,
+              fulfilledBy: r.fulfilled_by || r.fulfilledBy,
+              fulfilledAt: r.fulfilled_at || r.fulfilledAt,
+              rejectionReason: r.rejection_reason || r.rejectionReason,
+              workRequestId: r.work_request_id || r.workRequestId,
+              clientId: r.client_id || r.clientId,
+              amount: typeof r.amount === 'number' ? r.amount : (parseFloat(r.amount) || 0),
+              notes: r.notes,
+              linkedTaskId: r.linked_task_id || r.linkedTaskId,
+              receiptFilename: r.receipt_filename || r.receiptFilename,
+              disbursementType: r.disbursement_type || r.disbursementType,
+              paymentMethod: r.payment_method || r.paymentMethod,
+              recipientDetails: r.recipient_details || r.recipientDetails,
+              documents: r.documents,
+              invoiceId,
+              invoiceNumber,
+              requestedRouting: r.requested_routing || r.requestedRouting || (typeof r.notes === 'string' && r.notes.includes('Paid phase') ? 'Paid' : null)
+            };
+            const isRejected = norm.status === 'Rejected' || norm.status === 'rejected';
+            const isApproved = norm.status === 'Approved' || norm.status === 'approved' || norm.status === 'fulfilled' || norm.status === 'Fulfilled';
+            
+            let table = 'operations_requests';
+            if (norm.type === 'billing') table = 'invoices';
+            else if (norm.type === 'disbursement') table = 'disbursements';
+            else if (norm.type === 'transmittal') table = 'transmittals';
+
+            return {
+              id: norm.id,
+              table: table,
+              tableName: table,
+              parentRecordId: norm.invoiceId || norm.workRequestId || norm.id,
+              status: isApproved ? 'approved' : (isRejected ? 'rejected' : 'pending'),
+              rejectionReason: norm.rejectionReason || null,
+              submittedBy: norm.requestedBy,
+              submittedAt: norm.requestedAt || norm.createdAt || new Date().toISOString(),
+              proposedData: norm,
+              isOperationsRequest: true
+            };
+          }
+        } catch (opErr) {
+          // ignore
+        }
+      }
     }
     return null;
   },
