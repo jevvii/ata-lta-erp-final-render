@@ -1022,6 +1022,7 @@ const Disbursement = {
       // Pre-load cached disbursements and rejected archive counts so
       // renderTabNav can derive badges from local data instead of the API.
       await this.ensure();
+      await this.ensureTemplates();
       await this._loadRejectedArchiveCounts();
       this._refreshCounts();
 

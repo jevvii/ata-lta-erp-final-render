@@ -752,6 +752,9 @@ const Billing = {
       // Ensure cache is fresh for the active entity, then recompute tab counts
       // synchronously from the local cache before rendering the tab nav.
       await this.ensure();
+      await this.ensureTemplates();
+      await this.loadCounts();
+      await this.loadRejectedCount();
       this._refreshCounts();
       // Tab navigation (counts are derived from the local cache; no /counts API call).
       container.appendChild(this.renderTabNav());
