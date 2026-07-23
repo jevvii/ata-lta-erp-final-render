@@ -959,14 +959,14 @@ const Disbursement = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'expense-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const expenseId = this.detailId;
-          closeFormPanelAndRoute('#disbursement');
+          await closeFormPanelAndRoute('#disbursement');
           this.showForm(expenseId, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const expenseId = this.detailId;
-          closeFormPanelAndRoute('#disbursement');
+          await closeFormPanelAndRoute('#disbursement');
           this.showForm(expenseId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -991,12 +991,12 @@ const Disbursement = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'disbursement-template-form',
-        onSidePeek: () => {
-          closeFormPanelAndRoute('#disbursement');
+        onSidePeek: async () => {
+          await closeFormPanelAndRoute('#disbursement');
           this.showTemplateForm(template, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
-          closeFormPanelAndRoute('#disbursement');
+        onCenterPeek: async () => {
+          await closeFormPanelAndRoute('#disbursement');
           this.showTemplateForm(template, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {

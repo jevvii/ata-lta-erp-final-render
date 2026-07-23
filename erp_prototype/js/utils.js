@@ -1079,6 +1079,9 @@ const PaneMode = {
 const VALID_PANE_MODES = Object.values(PaneMode);
 
 function getPaneDefault(viewContext) {
+  const userPref = typeof Auth !== 'undefined' && Auth.user?.preferences?.defaultFormView;
+  if (VALID_PANE_MODES.includes(userPref)) return userPref;
+
   if (!viewContext) return null;
   try {
     const stored = localStorage.getItem(`erp_pane_default_${viewContext}`);
@@ -1089,6 +1092,19 @@ function getPaneDefault(viewContext) {
 function setPaneDefault(viewContext, mode) {
   if (!viewContext || !VALID_PANE_MODES.includes(mode)) return;
   try { localStorage.setItem(`erp_pane_default_${viewContext}`, mode); } catch (e) {}
+
+  if (typeof Auth !== 'undefined' && Auth.user) {
+    if (!Auth.user.preferences) Auth.user.preferences = {};
+    Auth.user.preferences.defaultFormView = mode;
+    if (window.apiClient && window.apiClient.me && typeof window.apiClient.me.update === 'function') {
+      window.apiClient.me.update({
+        preferences: {
+          ...Auth.user.preferences,
+          defaultFormView: mode
+        }
+      }).catch(err => console.error('Failed to update universal defaultFormView preference', err));
+    }
+  }
 }
 
 function getPaneWidth() {
@@ -1447,6 +1463,18 @@ class SidePane {
       e.stopPropagation();
       if (this.viewContext) {
         try { localStorage.removeItem(`erp_pane_default_${this.viewContext}`); } catch (e) {}
+        if (typeof Auth !== 'undefined' && Auth.user) {
+          if (!Auth.user.preferences) Auth.user.preferences = {};
+          Auth.user.preferences.defaultFormView = 'side-peek';
+          if (window.apiClient && window.apiClient.me && typeof window.apiClient.me.update === 'function') {
+            window.apiClient.me.update({
+              preferences: {
+                ...Auth.user.preferences,
+                defaultFormView: 'side-peek'
+              }
+            }).catch(err => console.error('Failed to reset defaultFormView preference', err));
+          }
+        }
         this.toggleViewDefaultSubmenu(menu, viewItems);
         this.toggleViewDefaultSubmenu(menu, viewItems);
       }
@@ -1814,6 +1842,18 @@ function buildFormViewSwitcher({
       e.stopPropagation();
       if (viewContext) {
         try { localStorage.removeItem(`erp_pane_default_${viewContext}`); } catch (e) {}
+        if (typeof Auth !== 'undefined' && Auth.user) {
+          if (!Auth.user.preferences) Auth.user.preferences = {};
+          Auth.user.preferences.defaultFormView = 'side-peek';
+          if (window.apiClient && window.apiClient.me && typeof window.apiClient.me.update === 'function') {
+            window.apiClient.me.update({
+              preferences: {
+                ...Auth.user.preferences,
+                defaultFormView: 'side-peek'
+              }
+            }).catch(err => console.error('Failed to reset defaultFormView preference', err));
+          }
+        }
         toggleDefaultSubmenu();
         toggleDefaultSubmenu();
       }

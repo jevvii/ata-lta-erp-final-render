@@ -598,14 +598,14 @@ const Users = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'user-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const userId = this.editingId === 'new' ? null : this.editingId;
-          closeFormPanelAndRoute('#admin/users');
+          await closeFormPanelAndRoute('#admin/users');
           this.showUserForm(userId, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const userId = this.editingId === 'new' ? null : this.editingId;
-          closeFormPanelAndRoute('#admin/users');
+          await closeFormPanelAndRoute('#admin/users');
           this.showUserForm(userId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -672,12 +672,12 @@ const Users = {
           const viewSwitcher = buildFormViewSwitcher({
             currentMode: PaneMode.FULL_PAGE,
             viewContext: 'request-detail',
-            onSidePeek: () => {
-              closeFormPanelAndRoute('#admin');
+            onSidePeek: async () => {
+              await closeFormPanelAndRoute('#admin');
               this.openRequestDetailSidePeek(r, PaneMode.SIDE_PEEK);
             },
-            onCenterPeek: () => {
-              closeFormPanelAndRoute('#admin');
+            onCenterPeek: async () => {
+              await closeFormPanelAndRoute('#admin');
               this.openRequestDetailSidePeek(r, PaneMode.CENTER_PEEK);
             },
             onNewTab: () => {
@@ -780,12 +780,12 @@ const Users = {
           const viewSwitcher = buildFormViewSwitcher({
             currentMode: PaneMode.FULL_PAGE,
             viewContext: 'pending-detail',
-            onSidePeek: () => {
-              closeFormPanelAndRoute('#admin');
+            onSidePeek: async () => {
+              await closeFormPanelAndRoute('#admin');
               this.openPendingDetailSidePeek(pc, PaneMode.SIDE_PEEK);
             },
-            onCenterPeek: () => {
-              closeFormPanelAndRoute('#admin');
+            onCenterPeek: async () => {
+              await closeFormPanelAndRoute('#admin');
               this.openPendingDetailSidePeek(pc, PaneMode.CENTER_PEEK);
             },
             onNewTab: () => {

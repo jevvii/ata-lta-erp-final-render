@@ -235,6 +235,13 @@ const Profile = {
       { value: 'board', label: 'Board' }
     ], prefs.defaultView || storedDefaultView));
 
+    grid.appendChild(this.selectGroup('DEFAULT FORM VIEW', 'profile-default-form-view', [
+      { value: 'side-peek', label: 'Side peek' },
+      { value: 'center-peek', label: 'Center peek' },
+      { value: 'full-page', label: 'Full page' },
+      { value: 'new-tab', label: 'New tab' }
+    ], prefs.defaultFormView || 'side-peek'));
+
     form.appendChild(grid);
 
     const actions = el('div', { class: 'profile-form-actions' });
@@ -246,14 +253,21 @@ const Profile = {
       e.preventDefault();
       const theme = document.getElementById('profile-theme').value;
       const defaultView = document.getElementById('profile-default-view').value;
+      const defaultFormView = document.getElementById('profile-default-form-view').value;
 
       try {
         await window.apiClient.me.update({
           preferences: {
+            ...prefs,
             defaultView,
-            theme
+            theme,
+            defaultFormView
           }
         });
+
+        if (typeof Auth !== 'undefined' && typeof Auth.restoreSession === 'function') {
+          await Auth.restoreSession();
+        }
 
         // Apply theme immediately
         if (theme === 'system') {

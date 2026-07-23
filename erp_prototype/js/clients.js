@@ -467,14 +467,14 @@ const Clients = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'client-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const clientId = this.editingId === 'new' ? null : this.editingId;
-          closeFormPanelAndRoute('#clients');
+          await closeFormPanelAndRoute('#clients');
           this.showForm(clientId, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const clientId = this.editingId === 'new' ? null : this.editingId;
-          closeFormPanelAndRoute('#clients');
+          await closeFormPanelAndRoute('#clients');
           this.showForm(clientId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -1608,12 +1608,18 @@ const Clients = {
               else if (Dashboard._dataCache) Dashboard._dataCache = null;
             }
           }
-        },
-        onAfterConfirm: async () => {
           this.editingId = null;
           const targetRoute = isResubmitting ? '#admin' : '#clients';
-          closeFormPanelAndRoute(targetRoute);
-          App.handleRoute();
+          await closeFormPanelAndRoute(targetRoute);
+        },
+        onAfterConfirm: async () => {
+          const targetRoute = isResubmitting ? '#admin' : '#clients';
+          const msgConfig = {
+            title: 'Client Created',
+            message: `Client "${record.name}" has been successfully created.`,
+            type: 'success'
+          };
+          await triggerSyncReload(targetRoute, msgConfig);
         }
       });
       return;

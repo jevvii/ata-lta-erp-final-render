@@ -4224,6 +4224,19 @@ const Workflow = {
       Workflow._refreshCounts();
       container.appendChild(this.renderTabNav());
     } else if (this.view === 'form') {
+      const userViewMode = window.SidePaneInstance ? window.SidePaneInstance.resolveMode({ viewContext: 'work-request-form' }) : 'side-peek';
+      if (userViewMode !== 'full-page' && userViewMode !== 'new-tab') {
+        const editingId = this.editingId;
+        this.view = 'list';
+        this.editingId = null;
+        location.hash = '#operations';
+        setTimeout(() => {
+          this.editingId = editingId;
+          this.openWorkRequestForm(userViewMode);
+        }, 50);
+        return el('div');
+      }
+
       // Full-page work-request form: breadcrumb with view switcher + save/cancel
       container.classList.add('operations-tab-page');
       const isNew = !this.editingId;
@@ -4232,15 +4245,15 @@ const Workflow = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'work-request-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const editingId = this.editingId;
-          closeFormPanelAndRoute('#operations');
+          await closeFormPanelAndRoute('#operations');
           this.editingId = editingId;
           this.openWorkRequestForm(PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const editingId = this.editingId;
-          closeFormPanelAndRoute('#operations');
+          await closeFormPanelAndRoute('#operations');
           this.editingId = editingId;
           this.openWorkRequestForm(PaneMode.CENTER_PEEK);
         },
@@ -4269,13 +4282,13 @@ const Workflow = {
         viewContext: 'retainer-template-form',
         onSidePeek: async () => {
           const templateEditingId = this.templateEditingId;
-          closeFormPanelAndRoute('#operations');
+          await closeFormPanelAndRoute('#operations');
           this.templateEditingId = templateEditingId;
           await this.openRetainerTemplateForm(PaneMode.SIDE_PEEK);
         },
         onCenterPeek: async () => {
           const templateEditingId = this.templateEditingId;
-          closeFormPanelAndRoute('#operations');
+          await closeFormPanelAndRoute('#operations');
           this.templateEditingId = templateEditingId;
           await this.openRetainerTemplateForm(PaneMode.CENTER_PEEK);
         },
@@ -4302,12 +4315,12 @@ const Workflow = {
         viewContext: 'add-task-form',
         onSidePeek: async () => {
           const wrId = this.addTaskWrId;
-          closeFormPanelAndRoute('#operations/detail/' + wrId);
+          await closeFormPanelAndRoute('#operations/detail/' + wrId);
           await this.showAddTaskPanel(wrId, PaneMode.SIDE_PEEK);
         },
         onCenterPeek: async () => {
           const wrId = this.addTaskWrId;
-          closeFormPanelAndRoute('#operations/detail/' + wrId);
+          await closeFormPanelAndRoute('#operations/detail/' + wrId);
           await this.showAddTaskPanel(wrId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -5268,7 +5281,11 @@ const Workflow = {
             class: 'btn btn-secondary btn-sm',
             html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px; vertical-align:middle;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>Edit'
           });
-          editBtn.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#operations/form/' + wr.id; });
+          editBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.editingId = wr.id;
+            this.openWorkRequestForm();
+          });
           wrapper.appendChild(editBtn);
         }
 
@@ -5547,7 +5564,10 @@ const Workflow = {
         items.push({
           label: 'Edit',
           icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
-          onClick: () => { location.hash = '#operations/form/' + wr.id; }
+          onClick: () => {
+            this.editingId = wr.id;
+            this.openWorkRequestForm();
+          }
         });
       }
 
@@ -7896,24 +7916,28 @@ const Workflow = {
       },
       successTitle: 'Work Request Saved',
       successMessage: 'Work Request has been successfully updated.',
-      errorTitle: 'Failed to Save Work Request'
+      errorTitle: 'Failed to Save Work Request',
+      onSuccess: async (res) => {
+        this.editingId = null;
+        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+        this._invalidateCountsAndSidebar();
+        if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        await closeFormPanelAndRoute(targetRoute);
+      },
+      onAfterConfirm: async (res) => {
+        const isApproved = submitResult && submitResult.approved;
+        const msgConfig = {
+          title: 'Work Request Saved',
+          message: isApproved
+            ? 'Work Request has been successfully updated.'
+            : 'Work Request update request has been submitted for Admin approval.',
+          type: 'success'
+        };
+        await triggerSyncReload(targetRoute, msgConfig);
+      }
     });
 
-    if (runResult.success) {
-      this.editingId = null;
-      if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-      this._invalidateCountsAndSidebar();
-      if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
-
-      const msgConfig = {
-        title: 'Work Request Saved',
-        message: submitResult && submitResult.approved
-          ? 'Work Request has been successfully updated.'
-          : 'Work Request update request has been submitted for Admin approval.',
-        type: 'success'
-      };
-      closeFormPanelAndRoute(targetRoute, msgConfig);
-    } else {
+    if (!runResult.success) {
       App.handleRoute();
     }
   },

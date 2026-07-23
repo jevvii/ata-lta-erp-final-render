@@ -676,6 +676,18 @@ const Billing = {
       titleBar.appendChild(actions);
       container.appendChild(titleBar);
     } else if (this.view === 'form') {
+      const userViewMode = window.SidePaneInstance ? window.SidePaneInstance.resolveMode({ viewContext: 'invoice-form' }) : 'side-peek';
+      if (userViewMode !== 'full-page' && userViewMode !== 'new-tab') {
+        const detailId = this.detailId;
+        this.view = 'list';
+        this.detailId = null;
+        location.hash = '#billing';
+        setTimeout(() => {
+          this.showForm(detailId, userViewMode);
+        }, 50);
+        return el('div');
+      }
+
       container.classList.add('billing-tab-page');
       const isNew = !this.detailId;
       const inv = isNew ? null : this.getInvoiceById(this.detailId);
@@ -683,14 +695,14 @@ const Billing = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'invoice-form',
-        onSidePeek: () => {
+        onSidePeek: async () => {
           const invoiceId = this.detailId;
-          closeFormPanelAndRoute('#billing');
+          await closeFormPanelAndRoute('#billing');
           this.showForm(invoiceId, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
+        onCenterPeek: async () => {
           const invoiceId = this.detailId;
-          closeFormPanelAndRoute('#billing');
+          await closeFormPanelAndRoute('#billing');
           this.showForm(invoiceId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -715,12 +727,12 @@ const Billing = {
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'billing-template-form',
-        onSidePeek: () => {
-          closeFormPanelAndRoute('#billing');
+        onSidePeek: async () => {
+          await closeFormPanelAndRoute('#billing');
           this.showTemplateForm(template, PaneMode.SIDE_PEEK);
         },
-        onCenterPeek: () => {
-          closeFormPanelAndRoute('#billing');
+        onCenterPeek: async () => {
+          await closeFormPanelAndRoute('#billing');
           this.showTemplateForm(template, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
@@ -2646,6 +2658,7 @@ const Billing = {
           this.prefilledRequestId = null;
           this.prefilledWrId = null;
           this.prefilledClientId = null;
+          await closeFormPanelAndRoute(targetRoute);
         },
         onAfterConfirm: async () => {
           const isApproved = result ? result.approved : true;
@@ -2656,7 +2669,7 @@ const Billing = {
               : 'Invoice ' + record.invoiceNumber + ' update request has been submitted for Admin approval.',
             type: 'success'
           };
-          await closeFormPanelAndRoute(targetRoute, msgConfig);
+          await triggerSyncReload(targetRoute, msgConfig);
         }
       });
     }

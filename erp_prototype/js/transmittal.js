@@ -708,14 +708,14 @@ const Transmittal = {
         const viewSwitcher = buildFormViewSwitcher({
           currentMode: PaneMode.FULL_PAGE,
           viewContext: 'transmittal-form',
-          onSidePeek: () => {
+          onSidePeek: async () => {
             const transmittalId = this.detailId;
-            closeFormPanelAndRoute('#transmittal');
+            await closeFormPanelAndRoute('#transmittal');
             this.showForm(transmittalId, PaneMode.SIDE_PEEK);
           },
-          onCenterPeek: () => {
+          onCenterPeek: async () => {
             const transmittalId = this.detailId;
-            closeFormPanelAndRoute('#transmittal');
+            await closeFormPanelAndRoute('#transmittal');
             this.showForm(transmittalId, PaneMode.CENTER_PEEK);
           },
           onNewTab: () => {
