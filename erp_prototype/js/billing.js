@@ -1014,10 +1014,23 @@ const Billing = {
 
   normalizeTemplate(doc) {
     if (!doc) return doc;
+    let entity = doc.entities?.code
+      || doc.entity_code
+      || (typeof doc.entity === 'string' && ['ATA', 'LTA'].includes(doc.entity.toUpperCase()) ? doc.entity : null)
+      || this._entityCodeFromId(doc.entity_id || doc.entityId)
+      || Auth.activeEntity;
+
+    if ((!entity || entity === 'ALL') && (doc.client_id || doc.clientId)) {
+      const client = window.apiClient.clientCache.getById(doc.client_id || doc.clientId);
+      if (client?.entity) {
+        entity = client.entity;
+      }
+    }
+
     return {
       id: doc.id,
       name: doc.name,
-      entity: doc.entity_id || doc.entity,
+      entity,
       clientId: doc.client_id || doc.clientId,
       schedule: doc.schedule,
       pfAmount: parseFloat(doc.pf_amount) || 0,
