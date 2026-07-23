@@ -518,6 +518,7 @@ const Users = {
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
     const isManager = hasManagement || Auth.isManagerial();
+    const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
 
     // Initialize view state dynamically to prevent view state bleed-through.
     // Respect URL-driven admin subviews (e.g. #admin/myRequests/:id) so direct
@@ -534,7 +535,6 @@ const Users = {
         }
       } else {
         const showRequestsTab = hasOperations || hasManagement;
-        const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
         const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
         const validViews = ['myPending'];
         if (showRequestsTab) validViews.push('myRequests');
@@ -557,7 +557,6 @@ const Users = {
       if (!validAdminViews.includes(this.view) && !isUrlDrivenDetail) this.view = 'users';
     } else {
       const showRequestsTab = hasOperations || hasManagement;
-      const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
       const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
       const validViews = ['myPending'];
       if (showRequestsTab) validViews.push('myRequests');
