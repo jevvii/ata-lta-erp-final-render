@@ -3044,7 +3044,10 @@ const Disbursement = {
       },
       successTitle: 'Funds Released',
       successMessage: 'Disbursement has been released.',
-      errorTitle: 'Release Failed'
+      errorTitle: 'Release Failed',
+      onAfterConfirm: async () => {
+        App.handleRoute();
+      }
     });
     if (runResult.success) {
       this._invalidateCountsAndSidebar();
