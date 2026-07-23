@@ -467,7 +467,12 @@ const Disbursement = {
   },
 
   _activeBadgeFilter(d) {
-    return !d.archived && d.status !== 'Cancelled' && d.status !== 'Draft';
+    const isAdmin = Auth.user?.role === 'Admin';
+    const isAccounting = (Auth.user?.departments || []).includes('Accounting');
+    if (isAdmin || isAccounting) {
+      return !d.archived && d.status !== 'Cancelled';
+    }
+    return !d.archived && d.status !== 'Cancelled' && ['Released', 'Funded', 'Rejected'].includes(d.status);
   },
 
   _archiveBadgeFilter(d) {
@@ -1343,12 +1348,24 @@ const Disbursement = {
       { value: 'Client Fund', label: 'Client Fund' }
     ];
 
-    const getStatusOptions = () => [
-      { value: 'Pending', label: 'Pending' },
-      { value: 'Released', label: 'Released' },
-      { value: 'Funded', label: 'Funded' },
-      { value: 'Rejected', label: 'Rejected' }
-    ];
+    const getStatusOptions = () => {
+      const isAdmin = Auth.user?.role === 'Admin';
+      const isAccounting = (Auth.user?.departments || []).includes('Accounting');
+      if (isAdmin || isAccounting) {
+        return [
+          { value: 'Draft', label: 'Draft' },
+          { value: 'Pending', label: 'Pending' },
+          { value: 'Released', label: 'Released' },
+          { value: 'Funded', label: 'Funded' },
+          { value: 'Rejected', label: 'Rejected' }
+        ];
+      }
+      return [
+        { value: 'Released', label: 'Released' },
+        { value: 'Funded', label: 'Funded' },
+        { value: 'Rejected', label: 'Rejected' }
+      ];
+    };
 
     const getDueDateOptions = () => [
       { value: 'Overdue', label: 'Overdue' },
@@ -1621,10 +1638,10 @@ const Disbursement = {
     const role = Auth.user?.role;
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
-    const isOperations = departments.includes('Operations');
 
     if (isAdmin || isAccounting) {
       return [
+        { key: 'Draft', label: 'Draft', statuses: ['Draft'], targetStatus: 'Draft', color: '#94a3b8' },
         { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
         { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
         { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
@@ -1632,16 +1649,7 @@ const Disbursement = {
       ];
     }
 
-    if (isOperations) {
-      return [
-        { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
-        { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
-        { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
-      ];
-    }
-
     return [
-      { key: 'Pending', label: 'Pending', statuses: this.PENDING_APPROVAL_STATUSES, targetStatus: 'Pending', color: '#f59e0b' },
       { key: 'Released', label: 'Released', statuses: ['Released'], targetStatus: 'Released', color: '#3b82f6' },
       { key: 'Funded', label: 'Funded', statuses: ['Funded'], targetStatus: 'Funded', color: '#059669' },
       { key: 'Rejected', label: 'Rejected', statuses: ['Rejected'], targetStatus: 'Rejected', color: '#ef4444' }
