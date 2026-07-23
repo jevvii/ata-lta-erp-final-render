@@ -1587,7 +1587,7 @@ const Billing = {
       { key: 'actions', label: 'Actions', render: (inv) => buildActions(inv), class: 'dt-actions-col', width: '180px' }
     ];
 
-    const isOperations = Auth.user?.departments?.includes('Operations') || Auth.user?.departments?.includes('Documentation');
+    const isOperations = Auth.user?.departments?.includes('Operations') || Auth.user?.departments?.includes('Documentation') || (Auth.isManagerial() && Auth.user?.role !== 'Admin');
     const tableView = DataTable.render({
       items: invoices,
       columns,
@@ -1635,7 +1635,7 @@ const Billing = {
     const isAdmin = role === 'Admin';
     const isAccounting = departments.includes('Accounting');
 
-    const isOperations = departments.includes('Operations') || departments.includes('Documentation');
+    const isOperations = departments.includes('Operations') || departments.includes('Documentation') || (Auth.isManagerial() && role !== 'Admin');
 
     const releasedStatuses = ['Sent', 'Approved'];
 
@@ -3295,43 +3295,84 @@ const Billing = {
       actions.appendChild(archiveBtn);
     }
 
-    if (Auth.isManagerial() && Auth.user?.role !== 'Admin' && inv.status !== 'Paid' && !inv.pendingChangeId) {
-      const routePaidBtn = el('button', { class: 'btn btn-success', text: 'Route to Paid Phase (Request Approval)', style: 'margin-right:8px;' });
-      routePaidBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Request Paid Phase Routing', `Submit request to route invoice "${inv.invoiceNumber}" (${formatPHP(inv.total)}) to Paid phase for Admin approval?`, () => {
-          Workflow.runBlockingArchiveAction({
-            title: 'Submitting Paid Routing Request',
-            message: `Please wait while routing request for "${inv.invoiceNumber}" is being submitted...`,
-            apiCall: async () => {
-              const record = {
-                type: 'billing',
-                workRequestId: inv.workRequestId || null,
-                clientId: inv.clientId || null,
-                linkedTaskId: inv.linkedTaskId || null,
-                amount: inv.total || 0,
-                notes: `Request to route Invoice ${inv.invoiceNumber} to Paid phase (Invoice ID: ${inv.id})`,
-                invoiceId: inv.id,
-                invoiceNumber: inv.invoiceNumber,
-                requestedRouting: 'Paid'
-              };
-              return await window.apiClient.operationsRequests.create(record);
-            },
-            successTitle: 'Routing Request Submitted',
-            successMessage: `Routing request for invoice "${inv.invoiceNumber}" to Paid phase has been submitted for Admin approval. It is centralized in My Submissions -> My Requests.`,
-            errorTitle: 'Request Failed',
-            onAfterConfirm: async () => {
-              if (typeof Users !== 'undefined' && typeof Users.invalidateMyRequestsCount === 'function') {
-                Users.invalidateMyRequestsCount();
+    if (Auth.isManagerial() && Auth.user?.role !== 'Admin' && !inv.pendingChangeId) {
+      if (inv.status !== 'Paid') {
+        const routePaidBtn = el('button', { class: 'btn btn-success', text: 'Route to Paid Phase (Request Approval)', style: 'margin-right:8px;' });
+        routePaidBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Request Paid Phase Routing', `Submit request to route invoice "${inv.invoiceNumber}" (${formatPHP(inv.total)}) to Paid phase for Admin approval?`, () => {
+            Workflow.runBlockingArchiveAction({
+              title: 'Submitting Paid Routing Request',
+              message: `Please wait while routing request for "${inv.invoiceNumber}" is being submitted...`,
+              apiCall: async () => {
+                const record = {
+                  type: 'billing',
+                  workRequestId: inv.workRequestId || null,
+                  clientId: inv.clientId || null,
+                  linkedTaskId: inv.linkedTaskId || null,
+                  amount: inv.total || 0,
+                  notes: `Request to route Invoice ${inv.invoiceNumber} to Paid phase (Invoice ID: ${inv.id})`,
+                  invoiceId: inv.id,
+                  invoiceNumber: inv.invoiceNumber,
+                  requestedRouting: 'Paid'
+                };
+                return await window.apiClient.operationsRequests.create(record);
+              },
+              successTitle: 'Routing Request Submitted',
+              successMessage: `Routing request for invoice "${inv.invoiceNumber}" to Paid phase has been submitted for Admin approval. It is centralized in My Submissions -> My Requests.`,
+              errorTitle: 'Request Failed',
+              onAfterConfirm: async () => {
+                if (typeof Users !== 'undefined' && typeof Users.invalidateMyRequestsCount === 'function') {
+                  Users.invalidateMyRequestsCount();
+                }
+                if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+                  window.apiClient.operationsRequests.invalidateCounts();
+                }
+                App.handleRoute();
               }
-              if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
-                window.apiClient.operationsRequests.invalidateCounts();
+            });
+          }, 'success');
+        });
+        actions.appendChild(routePaidBtn);
+      }
+
+      if (inv.status !== 'Partially Paid' && inv.status !== 'Paid') {
+        const routePartialBtn = el('button', { class: 'btn btn-success', text: 'Route to Partially Paid Phase (Request Approval)', style: 'margin-right:8px;' });
+        routePartialBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Request Partially Paid Phase Routing', `Submit request to route invoice "${inv.invoiceNumber}" (${formatPHP(inv.total)}) to Partially Paid phase for Admin approval?`, () => {
+            Workflow.runBlockingArchiveAction({
+              title: 'Submitting Partially Paid Routing Request',
+              message: `Please wait while routing request for "${inv.invoiceNumber}" is being submitted...`,
+              apiCall: async () => {
+                const record = {
+                  type: 'billing',
+                  workRequestId: inv.workRequestId || null,
+                  clientId: inv.clientId || null,
+                  linkedTaskId: inv.linkedTaskId || null,
+                  amount: inv.total || 0,
+                  notes: `Request to route Invoice ${inv.invoiceNumber} to Partially Paid phase (Invoice ID: ${inv.id})`,
+                  invoiceId: inv.id,
+                  invoiceNumber: inv.invoiceNumber,
+                  requestedRouting: 'Partially Paid'
+                };
+                return await window.apiClient.operationsRequests.create(record);
+              },
+              successTitle: 'Routing Request Submitted',
+              successMessage: `Routing request for invoice "${inv.invoiceNumber}" to Partially Paid phase has been submitted for Admin approval. It is centralized in My Submissions -> My Requests.`,
+              errorTitle: 'Request Failed',
+              onAfterConfirm: async () => {
+                if (typeof Users !== 'undefined' && typeof Users.invalidateMyRequestsCount === 'function') {
+                  Users.invalidateMyRequestsCount();
+                }
+                if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+                  window.apiClient.operationsRequests.invalidateCounts();
+                }
+                App.handleRoute();
               }
-              App.handleRoute();
-            }
-          });
-        }, 'success');
-      });
-      actions.appendChild(routePaidBtn);
+            });
+          }, 'success');
+        });
+        actions.appendChild(routePartialBtn);
+      }
     }
 
     container.appendChild(actions);

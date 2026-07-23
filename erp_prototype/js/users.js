@@ -441,7 +441,7 @@ const Users = {
       documents: r.documents,
       invoiceId,
       invoiceNumber,
-      requestedRouting: r.requested_routing || r.requestedRouting || (typeof r.notes === 'string' && r.notes.includes('Paid phase') ? 'Paid' : null)
+      requestedRouting: r.requested_routing || r.requestedRouting || (typeof r.notes === 'string' && r.notes.includes('Partially Paid phase') ? 'Partially Paid' : (typeof r.notes === 'string' && r.notes.includes('Paid phase') ? 'Paid' : null))
     };
   },
 
@@ -2595,18 +2595,26 @@ const Users = {
             if (targetInv) {
               const paid = Billing.getPaidAmount(targetInv);
               const total = targetInv.total || parseFloat(norm.amount) || 0;
-              await window.apiClient.invoices.update(targetInv.id, {
-                status: 'Paid',
-                amount_paid: total,
-                balance: 0
-              });
-              if (window.apiClient.invoices.recordPayment && paid < total) {
-                await window.apiClient.invoices.recordPayment(targetInv.id, {
-                  amount: Math.max(0, total - paid),
-                  payment_date: new Date().toISOString().slice(0, 10),
-                  method: 'Admin Approved Routing',
-                  notes: 'Routed to Paid phase via Admin approval'
-                }).catch(e => console.warn('Payment record warning', e));
+              const targetStatus = norm.requestedRouting === 'Partially Paid' ? 'Partially Paid' : 'Paid';
+
+              if (targetStatus === 'Partially Paid') {
+                await window.apiClient.invoices.update(targetInv.id, {
+                  status: 'Partially Paid'
+                });
+              } else {
+                await window.apiClient.invoices.update(targetInv.id, {
+                  status: 'Paid',
+                  amount_paid: total,
+                  balance: 0
+                });
+                if (window.apiClient.invoices.recordPayment && paid < total) {
+                  await window.apiClient.invoices.recordPayment(targetInv.id, {
+                    amount: Math.max(0, total - paid),
+                    payment_date: new Date().toISOString().slice(0, 10),
+                    method: 'Admin Approved Routing',
+                    notes: 'Routed to Paid phase via Admin approval'
+                  }).catch(e => console.warn('Payment record warning', e));
+                }
               }
               Billing.invalidateCache();
             }
