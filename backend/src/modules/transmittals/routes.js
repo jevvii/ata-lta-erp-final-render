@@ -15,15 +15,17 @@ const { resolveEntity } = require('../../middleware/resolveEntity');
 // Resolve entity code → UUID for all routes in this module.
 // allowAll: true lets the consolidated entity selector return counts/lists across
 // both ATA and LTA, which the frontend then filters by user permissions.
-router.use(resolveEntity({ allowAll: true }));
-
-router.get('/', requirePermission('transmittal:view'), transmittalsController.listTransmittals);
+router.get('/', resolveEntity({ allowAll: true }), requirePermission('transmittal:view'), transmittalsController.listTransmittals);
 
 router.get(
   '/counts',
+  resolveEntity({ allowAll: true }),
   requirePermission('transmittal:view'),
   transmittalsController.getTransmittalCounts
 );
+
+// For all write/detail routes in this module, resolve specific entity
+router.use(resolveEntity());
 
 router.post(
   '/',
