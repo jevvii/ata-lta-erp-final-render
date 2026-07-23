@@ -1818,6 +1818,9 @@ const Billing = {
         if (currentIdx === -1 || targetIdx === -1) return false;
         if (targetIdx <= currentIdx) return false;
 
+        // Cannot transition from Draft directly to anything other than Pending
+        if (item.status === 'Draft' && targetStatus !== 'Pending') return false;
+
         // Payment status transitions require recorded payments that match the target AND invoice must be released.
         const paid = self.getPaidAmount(item);
         const isReleased = ['Sent', 'Approved', 'Partially Paid', 'Overdue'].includes(item.status);
@@ -1825,8 +1828,9 @@ const Billing = {
           return isReleased && paid > 0 && paid < item.total;
         }
         if (targetStatus === 'Paid') {
+          if (!isReleased) return false;
           if (Auth.isManagerial()) return true;
-          return isReleased && item.total > 0 && paid >= item.total;
+          return item.total > 0 && paid >= item.total;
         }
         return true;
       },
@@ -1837,6 +1841,11 @@ const Billing = {
         const targetIdx = flow.indexOf(targetStatus);
         // Silently ignore backward moves so cards return to their original position.
         if (currentIdx !== -1 && targetIdx !== -1 && targetIdx < currentIdx) return;
+
+        if (item.status === 'Draft' && targetStatus !== 'Pending') {
+          Workflow.showMessage('Submission Required', `Invoice "${item.invoiceNumber}" must be submitted for approval (Pending status) before it can be advanced.`, 'warning');
+          return;
+        }
 
         if (targetStatus !== 'Partially Paid' && targetStatus !== 'Paid') return;
         const paid = self.getPaidAmount(item);
@@ -1853,7 +1862,11 @@ const Billing = {
           } else if (paid >= item.total) {
             Workflow.showMessage('Already Fully Paid', `Invoice "${item.invoiceNumber}" has payments totaling ${formatPHP(paid)}. Use the Paid status instead.`, 'warning');
           }
-        } else if (targetStatus === 'Paid' && !Auth.isManagerial()) {
+        } else if (targetStatus === 'Paid') {
+          if (!isReleased) {
+            Workflow.showMessage('Invoice Not Released', `Invoice "${item.invoiceNumber}" is in ${item.status} status and has not been released yet. Payments can only be recorded after an invoice is approved and released to the client.`, 'warning');
+            return;
+          }
           if (item.total <= 0) {
             Workflow.showMessage('Invalid Invoice', `Invoice "${item.invoiceNumber}" has no billable amount and cannot be marked Paid.`, 'warning');
           } else if (paid <= 0) {
@@ -4469,69 +4482,50 @@ const Billing = {
       ]
     };
 
-    // Optimistic local cache update BEFORE the API call.
-    const optimisticId = !template ? ('temp-tpl-' + Date.now() + '-' + Math.random().toString(36).slice(2)) : null;
-    const priorTemplate = template ? deepClone(template) : null;
+    const isNew = !template;
 
-    if (!template) {
-      const client = window.apiClient.clientCache.getById(payload.clientId);
-      const recordEntity = (entity && entity !== 'ALL') ? entity : (client?.entity || Auth.user?.entities?.[0] || 'ATA');
-      const optimisticTemplate = {
-        ...payload,
-        id: optimisticId,
-        entity: recordEntity,
-        active: true,
-        clientName: client?.name || null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      this._templates.push(optimisticTemplate);
-      this._templatesEntity = entity;
-    } else {
-      const idx = this._templates.findIndex(t => t.id === template.id);
-      if (idx >= 0) {
-        this._templates[idx] = { ...this._templates[idx], ...payload, updatedAt: new Date().toISOString() };
+    await Workflow.runBlockingArchiveAction({
+      title: isNew ? 'Creating Template' : 'Updating Template',
+      message: isNew 
+        ? `Please wait while template "${payload.name}" is being created...` 
+        : `Please wait while template "${payload.name}" is being updated...`,
+      apiCall: async () => {
+        if (template) {
+          return await window.apiClient.invoices.updateTemplate(template.id, payload);
+        } else {
+          return await window.apiClient.invoices.createTemplate(payload);
+        }
+      },
+      successTitle: isNew ? 'Template Created' : 'Template Updated',
+      successMessage: isNew 
+        ? `Template "${payload.name}" has been created successfully.` 
+        : `Template "${payload.name}" has been updated successfully.`,
+      errorTitle: 'Save Failed',
+      onSuccess: async (res) => {
+        if (res && res.data) {
+          const norm = this.normalizeTemplate(res.data);
+          if (template) {
+            const idx = this._templates.findIndex(t => t.id === template.id);
+            if (idx >= 0) this._templates[idx] = norm;
+            else this._templates.push(norm);
+          } else {
+            this._templates.push(norm);
+          }
+          this._templatesEntity = entity;
+          this._counts = null; // invalidate counts
+        }
+      },
+      onAfterConfirm: async () => {
+        if (typeof window.apiClient?.invoices?.invalidateCounts === 'function') {
+          window.apiClient.invoices.invalidateCounts();
+        }
+        App.updateSidebarNotifications().catch(() => {});
+        this.view = 'templates';
+        this.templateEditingId = null;
+        closeFormPanelAndRoute('#billing');
+        App.handleRoute();
       }
-    }
-    this.view = 'templates';
-    this.templateEditingId = null;
-    const skipGeneration = this._beginSkipGeneration();
-    closeFormPanelAndRoute('#billing');
-
-    let serverTemplate = null;
-    try {
-      if (template) {
-        const res = await window.apiClient.invoices.updateTemplate(template.id, payload);
-        serverTemplate = this.normalizeTemplate(res.data);
-      } else {
-        const res = await window.apiClient.invoices.createTemplate(payload);
-        serverTemplate = this.normalizeTemplate(res.data);
-      }
-    } catch (e) {
-      console.error('Failed to save billing template', e);
-      if (optimisticId) {
-        this._templates = this._templates.filter(t => t.id !== optimisticId);
-      } else if (priorTemplate) {
-        const idx = this._templates.findIndex(t => t.id === priorTemplate.id);
-        if (idx >= 0) this._templates[idx] = priorTemplate;
-      }
-      this._endSkipGeneration(skipGeneration);
-      App.handleRoute();
-      Workflow.showMessage('Error', e.message || 'Unable to save template.', 'error');
-      return;
-    }
-
-    if (serverTemplate) {
-      const idx = this._templates.findIndex(t => t.id === serverTemplate.id || (optimisticId && t.id === optimisticId));
-      if (idx >= 0) this._templates[idx] = serverTemplate;
-      else this._templates.push(serverTemplate);
-    }
-    this._counts = null; // invalidate counts
-
-    // Refresh from the server with the server-approved template and toast.
-    this._endSkipGeneration(skipGeneration);
-    App.handleRoute();
-    Workflow.showMessage('Template Saved', `Template "${serverTemplate?.name || payload.name}" saved successfully.`, 'success');
+    });
   },
 
   async showTemplateForm(existing = null, mode = null) {
