@@ -614,6 +614,7 @@
       get: (id) => get(`/transmittals/${id}`),
       update: (id, data) => put(`/transmittals/${id}`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       send: (id, data) => post(`/transmittals/${id}/send`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
+      approve: (id) => post(`/transmittals/${id}/approve`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       acknowledge: (id, data) => post(`/transmittals/${id}/acknowledge`, data).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       archive: (id) => post(`/transmittals/${id}/archive`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),
       unarchive: (id) => post(`/transmittals/${id}/unarchive`).then((res) => { invalidateCountCache('transmittals.counts'); return res; }),

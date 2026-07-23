@@ -99,6 +99,20 @@ const updateTransmittal = async (req, res, next) => {
 };
 
 /** @type {import('express').RequestHandler} */
+const approveTransmittal = async (req, res, next) => {
+  try {
+    const data = await service.approveTransmittal({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
 const sendTransmittal = async (req, res, next) => {
   try {
     const data = await service.sendTransmittal({
@@ -177,6 +191,7 @@ module.exports = {
     createTransmittal,
     getTransmittal,
     updateTransmittal,
+    approveTransmittal,
     sendTransmittal,
     acknowledgeTransmittal,
     archiveTransmittal,

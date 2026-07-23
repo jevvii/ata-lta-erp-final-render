@@ -125,6 +125,7 @@ const createTransmittal = async ({ entityId, userId, data }) => {
     client_id: data.clientId,
     work_request_id: data.workRequestId || null,
     status: 'Draft',
+    approved: false,
     board_order: data.boardOrder ?? 0,
     notes: data.notes || null,
     recipient_name: data.recipientName || null,
@@ -306,6 +307,59 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
  * @param {string} params.userId
  * @returns {Promise<object>}
  */
+/**
+ * Approve a transmittal.
+ * @param {object} params
+ * @param {string} params.entityId
+ * @param {string} params.id
+ * @param {string} params.userId
+ * @returns {Promise<object>}
+ */
+const approveTransmittal = async ({ entityId, id, userId }) => {
+  const existing = await getTransmittalById({ entityId, id });
+
+  if (existing.status !== 'Draft') {
+    throw new AppError({
+      statusCode: 409,
+      title: 'Invalid State',
+      detail: `Cannot approve a transmittal in "${existing.status}" status. Must be Draft.`,
+    });
+  }
+
+  const updates = {
+    approved: true,
+    updated_by: userId,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('transmittals')
+    .update(updates)
+    .eq('id', id)
+    .eq('entity_id', entityId)
+    .select()
+    .single();
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to approve transmittal',
+    });
+  }
+
+  await auditService.log({
+    action: 'transmittal.approve',
+    table: 'transmittals',
+    recordId: id,
+    entity: entityId,
+    userId,
+    details: { trackingNumber: existing.tracking_number },
+  });
+
+  return updated;
+};
+
 const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
   const existing = await getTransmittalById({ entityId, id });
 
@@ -314,6 +368,30 @@ const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
       statusCode: 409,
       title: 'Invalid Transition',
       detail: `Cannot send a transmittal in "${existing.status}" status. Must be Draft.`,
+    });
+  }
+
+  // Load the user's role to apply the admin approval guardrail
+  const { data: userProfile, error: userError } = await supabaseAdmin
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (userError) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to retrieve user profile for verification.',
+    });
+  }
+
+  const isUserAdmin = userProfile?.role === 'Admin';
+  if (!isUserAdmin && !existing.approved) {
+    throw new AppError({
+      statusCode: 403,
+      title: 'Forbidden',
+      detail: 'Cannot send transmittal because it has not been approved by Admin.',
     });
   }
 
@@ -516,6 +594,7 @@ module.exports = {
   createTransmittal,
   getTransmittalById,
   updateTransmittal,
+  approveTransmittal,
   sendTransmittal,
   acknowledgeTransmittal,
   archiveTransmittal,
