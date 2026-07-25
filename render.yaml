@@ -24,6 +24,7 @@ projects:
           - type: web
             name: ata-lta-erp-api-uat
             runtime: docker
+            region: singapore
             plan: free
             repo: https://github.com/jevvii/ata-lta-erp-final-render.git
             branch: uat
