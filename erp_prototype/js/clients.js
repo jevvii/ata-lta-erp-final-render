@@ -1037,8 +1037,23 @@ const Clients = {
       tr.appendChild(tdRc);
 
       // 11. Contact Details
-      const cdList = (client.contactDetails || []).map(cd => cd.type + ': ' + cd.value).join(', ') || '—';
-      const tdCd = el('td', { text: cdList });
+      const tdCd = el('td');
+      const cdItems = client.contactDetails || [];
+      if (cdItems.length > 0) {
+        const cdWrapper = el('div', { style: 'display: flex; flex-direction: column; gap: 4px;' });
+        cdItems.forEach(cd => {
+          const cdEntry = el('div', { style: 'line-height: 1.35;' });
+          if (cd.label) {
+            cdEntry.appendChild(el('div', { text: cd.label, style: 'font-weight: 500;' }));
+          }
+          const typeLabel = cd.type ? cd.type.charAt(0).toUpperCase() + cd.type.slice(1) : '';
+          cdEntry.appendChild(el('div', { text: (typeLabel ? typeLabel + ': ' : '') + (cd.value || ''), style: 'font-size: 12px; color: var(--color-text-muted);' }));
+          cdWrapper.appendChild(cdEntry);
+        });
+        tdCd.appendChild(cdWrapper);
+      } else {
+        tdCd.textContent = '—';
+      }
       tr.appendChild(tdCd);
 
       // Actions column (Edit and Archive actions - only for admins)
@@ -1125,7 +1140,7 @@ const Clients = {
       }).join(', ');
       addGridRow('Related Companies', relCos);
 
-      const contactDets = (client.contactDetails || []).map(cd => cd.type + ': ' + cd.value + (cd.label ? ` (${cd.label})` : '')).join(', ');
+      const contactDets = (client.contactDetails || []).map(cd => (cd.label ? cd.label + ' — ' : '') + cd.type + ': ' + cd.value).join(', ');
       addGridRow('Contact Details', contactDets);
 
       detailsContainer.appendChild(leftSec);
@@ -1500,7 +1515,7 @@ const Clients = {
     typeSel.addEventListener('change', updatePlaceholder);
     updatePlaceholder();
 
-    const labelInput = el('input', { type: 'text', class: 'notion-line-item-desc', style: 'flex: 0 0 140px;', placeholder: 'Label', name: 'cd-label-' + idx, value: data ? (data.label || '') : '' });
+    const labelInput = el('input', { type: 'text', class: 'notion-line-item-desc', style: 'flex: 0 0 140px;', placeholder: 'Contact Name', name: 'cd-label-' + idx, value: data ? (data.label || '') : '' });
     const removeBtn = el('button', {
       type: 'button',
       class: 'notion-line-item-remove',
@@ -1602,7 +1617,7 @@ const Clients = {
 
         if (value || label) {
           if (!label) {
-            showFieldError(labelInput, 'Label is required.');
+            showFieldError(labelInput, 'Contact Name is required.');
             hasContactError = true;
           }
           if (!value) {
