@@ -1741,8 +1741,8 @@ const Workflow = {
   },
 
   getDefaultPeriodValue(itemVal) {
-    if (itemVal !== undefined && itemVal !== null) {
-      return itemVal;
+    if (itemVal !== undefined) {
+      return itemVal || '';
     }
     return `FY ${new Date().getFullYear()}`;
   },
@@ -1756,8 +1756,13 @@ const Workflow = {
       value: this.getDefaultPeriodValue(itemVal),
       maxlength: '100'
     });
+    inputEl.addEventListener('input', () => {
+      const sanitized = inputEl.value.replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 100);
+      if (inputEl.value !== sanitized) {
+        inputEl.value = sanitized;
+      }
+    });
     inputEl.addEventListener('change', () => {
-      inputEl.value = inputEl.value.replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 100);
       if (onChange) {
         onChange(inputEl.value);
       }
@@ -1799,11 +1804,11 @@ const Workflow = {
     });
   },
 
-  confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, onConfirmChange) {
+  async confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, onConfirmChange) {
     if (!item.timeLogs || item.timeLogs.length === 0) {
       normalizedChecklist.splice(idx, 1);
       WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-      onConfirmChange();
+      await onConfirmChange();
     } else {
       const content = el('div');
       content.appendChild(el('p', { text: `This item has ${item.timeLogs.length} logged time record(s). Choose how to proceed:` }));
@@ -1816,22 +1821,22 @@ const Workflow = {
 
       const overlay = this.showModal('Delete Checklist Item', content, null);
 
-      reassignBtn.addEventListener('click', () => {
+      reassignBtn.addEventListener('click', async () => {
         overlay.remove();
         const tObj = WorkflowData.getTaskById(task.id) || task;
         const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
         tObj.timeLogs = [...(tObj.timeLogs || []), ...logsToMove];
         tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
         WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, timeLogs: tObj.timeLogs, updatedAt: new Date().toISOString() });
-        onConfirmChange();
+        await onConfirmChange();
       });
 
-      deleteAllBtn.addEventListener('click', () => {
+      deleteAllBtn.addEventListener('click', async () => {
         overlay.remove();
         const tObj = WorkflowData.getTaskById(task.id) || task;
         tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
         WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
-        onConfirmChange();
+        await onConfirmChange();
       });
     }
   },
@@ -6588,9 +6593,9 @@ const Workflow = {
 
             const delBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-xs', text: '×', style: 'color:var(--color-text-muted); font-size: 14px; padding: 2px 4px; border-color:transparent; background:transparent;' });
             if (!disableIfPending(delBtn, wr)) {
-              delBtn.addEventListener('click', (e) => {
+              delBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                this.confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, () => {
+                await this.confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, async () => {
                   this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
                 });
@@ -6694,7 +6699,7 @@ const Workflow = {
         const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row'), style: 'margin-top: 12px;' });
         const newItemInput = el('input', { type: 'text', placeholder: 'Add sub-task...', class: 'form-control', style: 'flex: 1;' });
 
-        const periodSel = this.createPeriodInput(null, 'width: 100px; flex-shrink: 0;');
+        const periodSel = this.createPeriodInput(undefined, 'width: 100px; flex-shrink: 0;');
 
         // Category selector for new checklist items
         const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -10025,7 +10030,7 @@ const Workflow = {
                 delBtn.title = 'Delete checklist item';
                 delBtn.addEventListener('click', async (e) => {
                   e.stopPropagation();
-                  this.confirmDeleteChecklistItem(t, normalizedChecklist, idx, item, async () => {
+                  await this.confirmDeleteChecklistItem(t, normalizedChecklist, idx, item, async () => {
                     await renderChecklist();
                     populatePrereqSelect();
                     App.handleRoute();
@@ -10127,7 +10132,7 @@ const Workflow = {
           const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row') });
           const newItemInput = el('input', { type: 'text', placeholder: 'Add checklist item...', id: 'newCheckInput', style: 'flex: 1;' });
 
-          const periodSel = this.createPeriodInput(null, 'width: 100px; flex-shrink: 0;');
+          const periodSel = this.createPeriodInput(undefined, 'width: 100px; flex-shrink: 0;');
 
           // Category selector for new checklist items
           const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -12580,7 +12585,7 @@ const Workflow = {
     const checklistBuilder = el('div', { class: 'checklist-builder-row' });
     const checklistInput = el('input', { type: 'text', placeholder: 'Add a checklist item...', style: 'flex:1;' });
 
-    const checklistPeriodSel = this.createPeriodInput(null, 'width:100px; flex-shrink:0;');
+    const checklistPeriodSel = this.createPeriodInput(undefined, 'width:100px; flex-shrink:0;');
 
     const checklistCategorySel = el('select', { style: 'width:110px; flex-shrink:0;' });
     checklistCategorySel.appendChild(el('option', { value: 'subtask', text: 'Sub-task' }));
