@@ -137,6 +137,7 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
         dependsOn: Array.isArray(c.depends_on)
           ? (c.depends_on[0] || null)
           : (c.depends_on || null),
+        periodYear: c.period_year || null,
         timeLogs: itemLogs.map((t) => ({
           id: t.id,
           startTime: formatTimeManila(t.start_time),
@@ -695,6 +696,7 @@ const upsertChecklist = async (taskId, checklist) => {
       assignee_id: item.assigneeId || null,
       assignee_name: item.assigneeName || null,
       depends_on: dependsOn,
+      period_year: item.periodYear || null,
     };
   });
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);

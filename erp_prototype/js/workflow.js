@@ -6433,6 +6433,11 @@ const Workflow = {
             const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
             const row = el('div', { class: classNames('checklist-item', blocked && 'locked', this.getCompletedClass(item)) });
 
+            row.style.display = 'flex';
+            row.style.flexDirection = 'column';
+            row.style.gap = '8px';
+            row.style.alignItems = 'stretch';
+
             const cb = el('input', { type: 'checkbox' });
             cb.checked = !!item.completed;
             if (!disableIfPending(cb, wr)) {
@@ -6452,81 +6457,63 @@ const Workflow = {
             const textWrap = el('div', { class: 'checklist-text' });
             textWrap.appendChild(el('span', { text: textValue, class: classNames(this.getCompletedClass(item)), title: textValue }));
             const categoryBadge = el('span', {
-              text: item.category === 'document' ? 'Document' : 'Sub-task',
+              text: item.category === 'document' ? 'Doc' : 'Sub-task',
               class: 'checklist-category-badge',
               style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
             });
             textWrap.appendChild(categoryBadge);
-            row.appendChild(cb);
-            row.appendChild(textWrap);
 
-            if (allowAssignChecklist) {
-              const assigneeWrap = el('div', { class: 'task-assignee-wrapper' });
-              const assigneeDropdown = await this.createGroundWorkerDropdown({
-                selectedGroundWorkerName: item.assigneeName,
-                placeholder: 'Assign...',
-                className: 'checklist-assignee-dropdown',
-                priorityNames: getTaskAllAssigneeNames(task),
-                onChange: ({ assigneeId, assigneeName }) => {
-                  item.assigneeName = assigneeName || null;
-                  item.assigneeId = assigneeId || null;
-                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                  this.showTaskSidePane(taskId, triggerElement);
-                  App.handleRoute();
-                }
-              });
-              if (isPendingWr(wr)) {
-                const input = assigneeDropdown.querySelector('input');
-                if (input) disableForApproval(input);
-                disableForApproval(assigneeDropdown);
-              }
-              assigneeWrap.appendChild(assigneeDropdown);
+            const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+            topRow.appendChild(cb);
+            topRow.appendChild(textWrap);
 
-              const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
-                task,
-                item,
-                { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
-                !isArchived,
-                true,
-                () => {
-                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                  this.showTaskSidePane(taskId, triggerElement);
-                  App.handleRoute();
-                }
-              );
-              assigneeWrap.appendChild(coAssigneePicker);
-              row.appendChild(assigneeWrap);
-            } else {
-              const itemAssigneeNames = [];
-              if (item.assigneeName) {
-                itemAssigneeNames.push(item.assigneeName);
-              }
-              if (item.coAssignees && Array.isArray(item.coAssignees)) {
-                item.coAssignees.forEach(name => {
-                  if (name && !itemAssigneeNames.includes(name)) {
-                    itemAssigneeNames.push(name);
+            const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+
+            const editBtn = el('button', {
+              type: 'button',
+              class: 'action-btn',
+              style: 'border-color:transparent; padding: 2px 4px; display:flex; align-items:center;',
+              html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #6366f1;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>',
+              title: 'Edit checklist item'
+            });
+            if (!disableIfPending(editBtn, wr)) {
+              editBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const span = textWrap.querySelector('span');
+                if (!span) return;
+                const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
+                textWrap.replaceChild(input, span);
+                input.focus();
+                
+                const saveChange = async () => {
+                  const val = input.value.trim();
+                  if (val && val !== item.text) {
+                    item.text = val;
+                    WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    this.showTaskSidePane(taskId, triggerElement);
+                    App.handleRoute();
+                  } else {
+                    this.showTaskSidePane(taskId, triggerElement);
+                  }
+                };
+                
+                input.addEventListener('keydown', (e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveChange();
+                  } else if (e.key === 'Escape') {
+                    this.showTaskSidePane(taskId, triggerElement);
                   }
                 });
-              }
-              const assigneeWrap = this.renderAssigneeAvatarsList(itemAssigneeNames);
-              row.appendChild(assigneeWrap);
-            }
-
-            const itemHours = getChecklistItemTotalHours(item);
-            const timePill = el('span', { class: 'hours-pill', text: itemHours + 'h' });
-            row.appendChild(timePill);
-
-            const actionsDiv = el('div', { style: 'display:flex; gap: 4px;' });
-            const logBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-xs', text: 'Log' });
-            if (!disableIfPending(logBtn, wr)) {
-              logBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.showAddTimeLogModal(task.id, item.id);
+                
+                input.addEventListener('blur', () => {
+                  saveChange();
+                });
               });
             }
-            actionsDiv.appendChild(logBtn);
+            topActions.appendChild(editBtn);
 
-            const delBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-xs', text: '×', style: 'color:var(--color-text-muted); font-size: 14px;' });
+            const delBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-xs', text: '×', style: 'color:var(--color-text-muted); font-size: 14px; padding: 2px 4px; border-color:transparent; background:transparent;' });
             if (!disableIfPending(delBtn, wr)) {
               delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -6569,8 +6556,93 @@ const Workflow = {
                 }
               });
             }
-            actionsDiv.appendChild(delBtn);
-            row.appendChild(actionsDiv);
+            topActions.appendChild(delBtn);
+            topRow.appendChild(topActions);
+            row.appendChild(topRow);
+
+            const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding-left:28px;' });
+            const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
+            const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
+
+            const periodSel = el('select', { class: 'form-select checklist-period-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
+            ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+              periodSel.appendChild(el('option', { value: y, text: y }));
+            });
+            periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
+            periodSel.addEventListener('change', async () => {
+              item.periodYear = periodSel.value;
+              WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+              this.showTaskSidePane(taskId, triggerElement);
+              App.handleRoute();
+            });
+            bottomLeft.appendChild(periodSel);
+
+            if (allowAssignChecklist) {
+              const assigneeDropdown = await this.createGroundWorkerDropdown({
+                selectedGroundWorkerName: item.assigneeName,
+                placeholder: 'Assign...',
+                className: 'checklist-assignee-dropdown',
+                priorityNames: getTaskAllAssigneeNames(task),
+                onChange: ({ assigneeId, assigneeName }) => {
+                  item.assigneeName = assigneeName || null;
+                  item.assigneeId = assigneeId || null;
+                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  this.showTaskSidePane(taskId, triggerElement);
+                  App.handleRoute();
+                }
+              });
+              if (isPendingWr(wr)) {
+                const input = assigneeDropdown.querySelector('input');
+                if (input) disableForApproval(input);
+                disableForApproval(assigneeDropdown);
+              }
+              bottomLeft.appendChild(assigneeDropdown);
+
+              const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
+                task,
+                item,
+                { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
+                !isArchived,
+                true,
+                () => {
+                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  this.showTaskSidePane(taskId, triggerElement);
+                  App.handleRoute();
+                }
+              );
+              bottomLeft.appendChild(coAssigneePicker);
+            } else {
+              const itemAssigneeNames = [];
+              if (item.assigneeName) {
+                itemAssigneeNames.push(item.assigneeName);
+              }
+              if (item.coAssignees && Array.isArray(item.coAssignees)) {
+                item.coAssignees.forEach(name => {
+                  if (name && !itemAssigneeNames.includes(name)) {
+                    itemAssigneeNames.push(name);
+                  }
+                });
+              }
+              const assigneeWrap = this.renderAssigneeAvatarsList(itemAssigneeNames);
+              bottomLeft.appendChild(assigneeWrap);
+            }
+
+            const itemHours = getChecklistItemTotalHours(item);
+            const timePill = el('span', { class: 'hours-pill', text: itemHours + 'h' });
+            bottomRight.appendChild(timePill);
+
+            const logBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-xs', text: 'Log' });
+            if (!disableIfPending(logBtn, wr)) {
+              logBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.showAddTimeLogModal(task.id, item.id);
+              });
+            }
+            bottomRight.appendChild(logBtn);
+
+            bottomRow.appendChild(bottomLeft);
+            bottomRow.appendChild(bottomRight);
+            row.appendChild(bottomRow);
 
             listContainer.appendChild(row);
           }
@@ -6582,6 +6654,12 @@ const Workflow = {
       if (allowAddRequirements) {
         const addChecklistRow = el('div', { class: 'add-checklist', style: 'margin-top: 12px; display: flex; gap: 8px; align-items: center;' });
         const newItemInput = el('input', { type: 'text', placeholder: 'Add sub-task...', class: 'form-control', style: 'flex: 1;' });
+
+        const periodSel = el('select', { class: 'form-select', style: 'width: 100px; flex-shrink: 0;' });
+        ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+          periodSel.appendChild(el('option', { value: y, text: y }));
+        });
+        periodSel.value = `FY ${new Date().getFullYear()}`;
 
         // Category selector for new checklist items
         const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -6665,6 +6743,7 @@ const Workflow = {
 
         if (wr && wr.isPendingApproval) {
           disableForApproval(newItemInput);
+          disableForApproval(periodSel);
           disableForApproval(categorySel);
           disableForApproval(predBtn);
           disableForApproval(addItemBtn);
@@ -6682,7 +6761,7 @@ const Workflow = {
             const val = newItemInput.value.trim();
             if (!val) return;
             const prereqId = selectedPrereqId || null;
-            normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+            normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, periodYear: periodSel.value, timeLogs: [] });
             WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
             this.showTaskSidePane(taskId, triggerElement);
             App.handleRoute();
@@ -6690,6 +6769,7 @@ const Workflow = {
         }
 
         addChecklistRow.appendChild(newItemInput);
+        addChecklistRow.appendChild(periodSel);
         addChecklistRow.appendChild(categorySel);
         addChecklistRow.appendChild(predWrapper);
         addChecklistRow.appendChild(addItemBtn);
@@ -7396,7 +7476,25 @@ const Workflow = {
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add task'
     });
     addTaskBtn.addEventListener('click', async () => {
-      await this.addTaskRow(tasksList, null, true);
+      let checklist = [];
+      if (confirm("Would you like to add checklist items to this task?")) {
+        let itemText = prompt("Enter checklist item text (or leave blank to finish):");
+        while (itemText && itemText.trim()) {
+          checklist.push({
+            id: generateUUID(),
+            text: itemText.trim(),
+            category: 'subtask',
+            completed: false,
+            assigneeId: null,
+            assigneeName: null,
+            dependsOn: null,
+            periodYear: `FY ${new Date().getFullYear()}`,
+            timeLogs: []
+          });
+          itemText = prompt("Enter next checklist item text (or leave blank to finish):");
+        }
+      }
+      await this.addTaskRow(tasksList, null, true, checklist);
       this.updatePredecessorOptions(tasksList);
     });
     tasksSection.appendChild(addTaskBtn);
@@ -7418,7 +7516,7 @@ const Workflow = {
     return container;
   },
 
-  async addTaskRow(container, taskData, collapseOthers = false) {
+  async addTaskRow(container, taskData, collapseOthers = false, initialChecklist = null) {
     if (collapseOthers) {
       container.querySelectorAll('.task-row, .notion-line-item-row, .wr-task-row').forEach(r => r.classList.add('collapsed'));
     }
@@ -7468,6 +7566,7 @@ const Workflow = {
     // Inline co-assignees (closure state on the row element)
     const coAssignees = taskData?.coAssignees ? [...taskData.coAssignees] : [];
     row._coAssignees = coAssignees;
+    row._checklist = initialChecklist || taskData?.checklist || [];
 
     const coAssigneeWrap = el('div', { class: 'wr-task-row-coassignees' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
@@ -7760,7 +7859,8 @@ const Workflow = {
         assigneeId: res.id,
         assigneeName: res.name,
         coAssignees: row._coAssignees || [],
-        predecessorKeys: predecessorKeys
+        predecessorKeys: predecessorKeys,
+        checklist: row._checklist || []
       });
     }
 
@@ -7817,7 +7917,7 @@ const Workflow = {
         createdAt: existing?.createdAt || now,
         updatedAt: now,
         sortOrder: i,
-        checklist: existing?.checklist || [],
+        checklist: t.checklist || existing?.checklist || [],
         timeLogs: existing?.timeLogs || [],
         taskDocuments: existing?.taskDocuments || [],
         comments: existing?.comments || []
@@ -9841,90 +9941,82 @@ const Workflow = {
               const blocked = isChecklistBlocked(item, normalizedChecklist);
               const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
               const row = el('div', { class: 'checklist-item' + (blocked ? ' locked' : '') + (item.completed ? ' completed' : '') });
+              
+              row.style.display = 'flex';
+              row.style.flexDirection = 'column';
+              row.style.gap = '8px';
+              row.style.alignItems = 'stretch';
+
               const cb = el('input', { type: 'checkbox' });
               cb.checked = !!item.completed;
               cb.disabled = blocked;
-              
-              const textValue = blocked ? ('🔒 Waiting for: ' + (item.dependsOn === '*' ? 'All Task (*)' : (prereq ? prereq.text : 'Unknown'))) : item.text;
-              
-              // Wrapping text in checklist-text span/div structure
-              const textWrap = el('div', { class: 'checklist-text' });
-              textWrap.appendChild(el('span', { text: textValue, class: classNames(this.getCompletedClass(item)), title: textValue }));
-              const categoryBadge = el('span', {
-                text: item.category === 'document' ? 'Document' : 'Sub-task',
-                class: 'checklist-category-badge',
-                style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
-              });
-              textWrap.appendChild(categoryBadge);
 
               cb.addEventListener('change', async (e) => {
                 e.stopPropagation();
                 this.toggleChecklistItem(t, item.id, cb.checked);
                 await renderChecklist();
               });
-              row.appendChild(cb);
-              row.appendChild(textWrap);
 
-              if (allowAssignChecklist) {
-                const assigneeWrap = el('div', { class: 'task-assignee-wrapper' });
-                const assigneeDropdown = await this.createGroundWorkerDropdown({
-                  selectedGroundWorkerName: item.assigneeName,
-                  placeholder: 'Assign...',
-                  className: 'checklist-assignee-dropdown',
-                  priorityNames: getTaskAllAssigneeNames(t),
-                  onChange: async ({ assigneeId, assigneeName }) => {
-                    item.assigneeName = assigneeName || null;
-                    item.assigneeId = assigneeId || null;
-                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                    await renderChecklist();
-                    App.handleRoute();
-                  }
-                });
-                assigneeWrap.appendChild(assigneeDropdown);
+              const textValue = blocked ? ('🔒 Waiting for: ' + (item.dependsOn === '*' ? 'All Task (*)' : (prereq ? prereq.text : 'Unknown'))) : item.text;
+              
+              const textWrap = el('div', { class: 'checklist-text' });
+              textWrap.appendChild(el('span', { text: textValue, class: classNames(this.getCompletedClass(item)), title: textValue }));
+              const categoryBadge = el('span', {
+                text: item.category === 'document' ? 'Doc' : 'Sub-task',
+                class: 'checklist-category-badge',
+                style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
+              });
+              textWrap.appendChild(categoryBadge);
 
-                const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
-                  t,
-                  item,
-                  { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
-                  !isArchived,
-                  true,
-                  async () => {
-                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                    await renderChecklist();
-                    App.handleRoute();
-                  }
-                );
-                assigneeWrap.appendChild(coAssigneePicker);
-                row.appendChild(assigneeWrap);
-              } else {
-                const itemAssigneeNames = [];
-                if (item.assigneeName) {
-                  itemAssigneeNames.push(item.assigneeName);
-                }
-                if (item.coAssignees && Array.isArray(item.coAssignees)) {
-                  item.coAssignees.forEach(name => {
-                    if (name && !itemAssigneeNames.includes(name)) {
-                      itemAssigneeNames.push(name);
+              const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+              topRow.appendChild(cb);
+              topRow.appendChild(textWrap);
+
+              const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+
+              const editBtn = el('button', {
+                type: 'button',
+                class: 'action-btn',
+                style: 'border-color:transparent; padding: 2px 4px; display:flex; align-items:center;',
+                html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #6366f1;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>',
+                title: 'Edit checklist item'
+              });
+              if (!disableIfPending(editBtn, wr)) {
+                editBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  const span = textWrap.querySelector('span');
+                  if (!span) return;
+                  const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
+                  textWrap.replaceChild(input, span);
+                  input.focus();
+                  
+                  const saveChange = async () => {
+                    const val = input.value.trim();
+                    if (val && val !== item.text) {
+                      item.text = val;
+                      WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                      await renderChecklist();
+                      App.handleRoute();
+                    } else {
+                      await renderChecklist();
+                    }
+                  };
+                  
+                  input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      saveChange();
+                    } else if (e.key === 'Escape') {
+                      renderChecklist();
                     }
                   });
-                }
-                const assigneeWrap = this.renderAssigneeAvatarsList(itemAssigneeNames);
-                row.appendChild(assigneeWrap);
-              }
-
-              const itemHours = getChecklistItemTotalHours(item);
-              const timePill = el('span', { class: 'hours-pill', text: itemHours + 'h' });
-              row.appendChild(timePill);
-
-              const checklistActions = el('div', { style: 'display:flex;gap:var(--space-1);' });
-              const logBtn = el('button', { type: 'button', class: 'action-btn', text: 'Log Time' });
-              if (!disableIfPending(logBtn, wr)) {
-                logBtn.addEventListener('click', (e) => {
-                  e.stopPropagation();
-                  this.showAddTimeLogModal(t.id, item.id);
+                  
+                  input.addEventListener('blur', () => {
+                    saveChange();
+                  });
                 });
               }
-              checklistActions.appendChild(logBtn);
+              topActions.appendChild(editBtn);
 
               const delBtn = el('button', { type: 'button', class: 'action-btn', text: '×', style: 'border-color:transparent;color:var(--muted);' });
               if (!disableIfPending(delBtn, wr)) {
@@ -9965,8 +10057,88 @@ const Workflow = {
                   }
                 });
               }
-              checklistActions.appendChild(delBtn);
-              row.appendChild(checklistActions);
+              topActions.appendChild(delBtn);
+              topRow.appendChild(topActions);
+              row.appendChild(topRow);
+
+              const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding-left:28px;' });
+              const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
+              const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
+
+              const periodSel = el('select', { class: 'form-select checklist-period-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
+              ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+                periodSel.appendChild(el('option', { value: y, text: y }));
+              });
+              periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
+              periodSel.addEventListener('change', async () => {
+                item.periodYear = periodSel.value;
+                WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                await renderChecklist();
+                App.handleRoute();
+              });
+              bottomLeft.appendChild(periodSel);
+
+              if (allowAssignChecklist) {
+                const assigneeDropdown = await this.createGroundWorkerDropdown({
+                  selectedGroundWorkerName: item.assigneeName,
+                  placeholder: 'Assign...',
+                  className: 'checklist-assignee-dropdown',
+                  priorityNames: getTaskAllAssigneeNames(t),
+                  onChange: async ({ assigneeId, assigneeName }) => {
+                    item.assigneeName = assigneeName || null;
+                    item.assigneeId = assigneeId || null;
+                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    await renderChecklist();
+                    App.handleRoute();
+                  }
+                });
+                bottomLeft.appendChild(assigneeDropdown);
+
+                const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
+                  t,
+                  item,
+                  { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
+                  !isArchived,
+                  true,
+                  async () => {
+                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                    await renderChecklist();
+                    App.handleRoute();
+                  }
+                );
+                bottomLeft.appendChild(coAssigneePicker);
+              } else {
+                const itemAssigneeNames = [];
+                if (item.assigneeName) {
+                  itemAssigneeNames.push(item.assigneeName);
+                }
+                if (item.coAssignees && Array.isArray(item.coAssignees)) {
+                  item.coAssignees.forEach(name => {
+                    if (name && !itemAssigneeNames.includes(name)) {
+                      itemAssigneeNames.push(name);
+                    }
+                  });
+                }
+                const assigneeWrap = this.renderAssigneeAvatarsList(itemAssigneeNames);
+                bottomLeft.appendChild(assigneeWrap);
+              }
+
+              const itemHours = getChecklistItemTotalHours(item);
+              const timePill = el('span', { class: 'hours-pill', text: itemHours + 'h' });
+              bottomRight.appendChild(timePill);
+
+              const logBtn = el('button', { type: 'button', class: 'action-btn', text: 'Log Time' });
+              if (!disableIfPending(logBtn, wr)) {
+                logBtn.addEventListener('click', (e) => {
+                  e.stopPropagation();
+                  this.showAddTimeLogModal(t.id, item.id);
+                });
+              }
+              bottomRight.appendChild(logBtn);
+
+              bottomRow.appendChild(bottomLeft);
+              bottomRow.appendChild(bottomRight);
+              row.appendChild(bottomRow);
 
               checklistList.appendChild(row);
             }
@@ -9980,6 +10152,12 @@ const Workflow = {
         if (allowAddRequirements) {
           const addChecklistRow = el('div', { class: 'add-checklist', style: 'display: flex; gap: 8px; align-items: center;' });
           const newItemInput = el('input', { type: 'text', placeholder: 'Add checklist item...', id: 'newCheckInput', style: 'flex: 1;' });
+
+          const periodSel = el('select', { class: 'form-select', style: 'width: 100px; flex-shrink: 0;' });
+          ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+            periodSel.appendChild(el('option', { value: y, text: y }));
+          });
+          periodSel.value = `FY ${new Date().getFullYear()}`;
 
           // Category selector for new checklist items
           const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -10071,6 +10249,7 @@ const Workflow = {
           const addItemBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Add' });
           if (wr.isPendingApproval) {
             disableForApproval(newItemInput);
+            disableForApproval(periodSel);
             disableForApproval(categorySel);
             disableForApproval(predBtn);
             disableForApproval(addItemBtn);
@@ -10079,7 +10258,7 @@ const Workflow = {
               const val = newItemInput.value.trim();
               if (!val) return;
               const prereqId = selectedPrereqId || null;
-              normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, timeLogs: [] });
+              normalizedChecklist.push({ id: generateUUID(), text: val, category: categorySel.value || 'subtask', completed: false, assigneeId: null, assigneeName: null, dependsOn: prereqId, periodYear: periodSel.value, timeLogs: [] });
               WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
               newItemInput.value = '';
               selectedPrereqId = null;
@@ -10089,6 +10268,7 @@ const Workflow = {
             });
           }
           addChecklistRow.appendChild(newItemInput);
+          addChecklistRow.appendChild(periodSel);
           addChecklistRow.appendChild(categorySel);
           addChecklistRow.appendChild(predWrapper);
           addChecklistRow.appendChild(addItemBtn);
@@ -12423,17 +12603,25 @@ const Workflow = {
     form.appendChild(titleSection);
 
     // Checklist builder
-    const checklistGroup = el('div', { class: 'form-group' });
+    const checklistGroup = el('div', { class: 'form-group' + (opts.showChecklist ? '' : ' hidden') });
     checklistGroup.appendChild(el('label', { text: 'Checklist Items' }));
     const checklistContainer = el('div', { class: 'checklist-items-container' });
 
     const checklistBuilder = el('div', { style: 'display:flex; gap:8px; align-items:center;' });
     const checklistInput = el('input', { type: 'text', placeholder: 'Add a checklist item...', style: 'flex:1;' });
+
+    const checklistPeriodSel = el('select', { style: 'width:100px; flex-shrink:0;' });
+    ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+      checklistPeriodSel.appendChild(el('option', { value: y, text: y }));
+    });
+    checklistPeriodSel.value = `FY ${new Date().getFullYear()}`;
+
     const checklistCategorySel = el('select', { style: 'width:110px; flex-shrink:0;' });
     checklistCategorySel.appendChild(el('option', { value: 'subtask', text: 'Sub-task' }));
     checklistCategorySel.appendChild(el('option', { value: 'document', text: 'Document' }));
     const addChecklistBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Add' });
     checklistBuilder.appendChild(checklistInput);
+    checklistBuilder.appendChild(checklistPeriodSel);
     checklistBuilder.appendChild(checklistCategorySel);
     checklistBuilder.appendChild(addChecklistBtn);
     checklistContainer.appendChild(checklistBuilder);
@@ -12445,17 +12633,92 @@ const Workflow = {
       if (existingList) existingList.remove();
       if (checklistItems.length === 0) return;
 
-      const list = el('div', { class: 'checklist-items-list', style: 'display:flex; flex-direction:column; gap:6px; margin-top:8px;' });
+      const list = el('div', { class: 'checklist-items-list', style: 'display:flex; flex-direction:column; gap:8px; margin-top:8px;' });
       for (const [idx, item] of checklistItems.entries()) {
-        const row = el('div', { style: 'display:flex; align-items:center; gap:8px; padding:6px 8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius: 12px;' });
-        row.appendChild(el('span', { text: item.text, style: 'flex:1; font-size:0.85rem;' }));
-        const categoryBadge = el('span', {
-          text: item.category === 'document' ? 'Document' : 'Sub-task',
-          style: 'font-size:0.7rem; padding:2px 6px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600;'
-        });
-        row.appendChild(categoryBadge);
+        const row = el('div', { style: 'display:flex; flex-direction:column; gap:8px; align-items:stretch; padding:8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius: 12px;' });
+        
+        const cb = el('input', { type: 'checkbox' });
+        cb.disabled = true;
 
-        const prereqSelect = el('select', { style: 'font-size:0.8rem; max-width:140px;' });
+        const textValue = item.text;
+        const textWrap = el('div', { class: 'checklist-text', style: 'display:flex; align-items:center; gap:4px; flex:1; min-width:0;' });
+        textWrap.appendChild(el('span', { text: textValue, style: 'font-size:0.9rem; font-weight:500;' }));
+        const categoryBadge = el('span', {
+          text: item.category === 'document' ? 'Doc' : 'Sub-task',
+          class: 'checklist-category-badge',
+          style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
+        });
+        textWrap.appendChild(categoryBadge);
+
+        const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+        topRow.appendChild(cb);
+        topRow.appendChild(textWrap);
+
+        const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+
+        const editBtn = el('button', {
+          type: 'button',
+          class: 'action-btn',
+          style: 'border-color:transparent; padding: 2px 4px; display:flex; align-items:center; background:transparent;',
+          html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #6366f1;"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>',
+          title: 'Edit checklist item'
+        });
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const span = textWrap.querySelector('span');
+          if (!span) return;
+          const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
+          textWrap.replaceChild(input, span);
+          input.focus();
+          
+          const saveChange = async () => {
+            const val = input.value.trim();
+            if (val && val !== item.text) {
+              item.text = val;
+              await renderChecklist();
+            } else {
+              await renderChecklist();
+            }
+          };
+          
+          input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              saveChange();
+            } else if (e.key === 'Escape') {
+              renderChecklist();
+            }
+          });
+          
+          input.addEventListener('blur', () => {
+            saveChange();
+          });
+        });
+        topActions.appendChild(editBtn);
+
+        const delBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: '×', style: 'padding:2px 6px; font-size:12px; line-height:1;' });
+        delBtn.addEventListener('click', async () => {
+          checklistItems.splice(idx, 1);
+          checklistFromTemplate = false;
+          await renderChecklist();
+        });
+        topActions.appendChild(delBtn);
+        topRow.appendChild(topActions);
+        row.appendChild(topRow);
+
+        const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; gap:8px; width:100%; padding-left:24px;' });
+        
+        const periodSel = el('select', { class: 'form-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
+        ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
+          periodSel.appendChild(el('option', { value: y, text: y }));
+        });
+        periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
+        periodSel.addEventListener('change', () => {
+          item.periodYear = periodSel.value;
+        });
+        bottomRow.appendChild(periodSel);
+
+        const prereqSelect = el('select', { class: 'form-select', style: 'font-size:0.8125rem; max-width:140px; height: 28px; padding: 2px 6px;' });
         prereqSelect.appendChild(el('option', { value: '', text: '— None —' }));
         prereqSelect.appendChild(el('option', { value: '*', text: 'All Task (*)' }));
         checklistItems.slice(0, idx).forEach((prev, pIdx) => {
@@ -12469,7 +12732,7 @@ const Workflow = {
         prereqSelect.addEventListener('change', () => {
           item.dependsOn = prereqSelect.value || null;
         });
-        row.appendChild(prereqSelect);
+        bottomRow.appendChild(prereqSelect);
 
         const assigneeDropdown = await this.createGroundWorkerDropdown({
           selectedGroundWorkerName: item.assigneeName,
@@ -12481,15 +12744,9 @@ const Workflow = {
             item.assigneeName = assigneeName || null;
           }
         });
-        row.appendChild(assigneeDropdown);
+        bottomRow.appendChild(assigneeDropdown);
 
-        const delBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: '×' });
-        delBtn.addEventListener('click', async () => {
-          checklistItems.splice(idx, 1);
-          checklistFromTemplate = false;
-          await renderChecklist();
-        });
-        row.appendChild(delBtn);
+        row.appendChild(bottomRow);
         list.appendChild(row);
       }
       checklistContainer.insertBefore(list, checklistBuilder);
@@ -12498,7 +12755,7 @@ const Workflow = {
     const addChecklistItem = async () => {
       const val = checklistInput.value.trim();
       if (!val) return;
-      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] });
+      checklistItems.push({ id: generateUUID(), text: val, category: checklistCategorySel.value || 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, periodYear: checklistPeriodSel.value, timeLogs: [] });
       checklistFromTemplate = false;
       checklistInput.value = '';
       await renderChecklist();
@@ -12518,7 +12775,7 @@ const Workflow = {
         titleInput.value = tmpl.title;
         checklistItems = tmpl.defaultChecklist.map(item => {
           const isObj = typeof item === 'object' && item && item.text;
-          return { id: generateUUID(), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, timeLogs: [] };
+          return { id: generateUUID(), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, periodYear: `FY ${new Date().getFullYear()}`, timeLogs: [] };
         });
         coAssignees = (tmpl.coAssignees || []).slice();
         checklistFromTemplate = true;
@@ -12745,6 +13002,7 @@ const Workflow = {
           assigneeId: item.assigneeId || null,
           assigneeName: item.assigneeName || null,
           dependsOn: item.dependsOn || null,
+          periodYear: item.periodYear || null,
           timeLogs: []
         })),
         timeLogs: [],
@@ -12802,7 +13060,11 @@ const Workflow = {
   },
 
   async showAddTaskPanel(wrId, mode = null) {
-    const form = await this.renderAddTaskForm(wrId, { hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null });
+    const addChecklist = confirm("Would you like to add checklist items to this task?");
+    const form = await this.renderAddTaskForm(wrId, { 
+      hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null,
+      showChecklist: addChecklist
+    });
     if (!form) return;
     const fullPageRoute = '#operations/addTask/' + wrId;
     openFormPanel({
