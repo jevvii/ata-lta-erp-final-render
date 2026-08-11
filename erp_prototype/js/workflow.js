@@ -1740,6 +1740,107 @@ const Workflow = {
     return this.isCompleted(itemOrTask) ? 'is-completed' : '';
   },
 
+  getPeriodOptions() {
+    return ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'];
+  },
+
+  getDefaultPeriodValue(itemVal) {
+    const options = this.getPeriodOptions();
+    if (itemVal && options.includes(itemVal)) {
+      return itemVal;
+    }
+    const currentFY = `FY ${new Date().getFullYear()}`;
+    if (options.includes(currentFY)) {
+      return currentFY;
+    }
+    return options[0] || '';
+  },
+
+  createPeriodSelect(itemVal, styleStr, onChange) {
+    const selectEl = el('select', { class: 'form-select checklist-period-select', style: styleStr });
+    this.getPeriodOptions().forEach(y => {
+      selectEl.appendChild(el('option', { value: y, text: y }));
+    });
+    selectEl.value = this.getDefaultPeriodValue(itemVal);
+    if (onChange) {
+      selectEl.addEventListener('change', () => {
+        onChange(selectEl.value);
+      });
+    }
+    return selectEl;
+  },
+
+  initInlineEdit(textWrap, currentText, onSave, onCancel) {
+    const span = textWrap.querySelector('span');
+    if (!span) return;
+    const input = el('input', { type: 'text', value: currentText, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
+    textWrap.replaceChild(input, span);
+    input.focus();
+    
+    let finished = false;
+    const saveChange = () => {
+      if (finished) return;
+      finished = true;
+      const val = input.value.trim();
+      if (val && val !== currentText) {
+        onSave(val);
+      } else {
+        if (onCancel) onCancel();
+      }
+    };
+    
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        saveChange();
+      } else if (e.key === 'Escape') {
+        finished = true;
+        if (onCancel) onCancel();
+      }
+    });
+    
+    input.addEventListener('blur', () => {
+      saveChange();
+    });
+  },
+
+  confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, onConfirmChange) {
+    if (!item.timeLogs || item.timeLogs.length === 0) {
+      normalizedChecklist.splice(idx, 1);
+      WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+      onConfirmChange();
+    } else {
+      const content = el('div');
+      content.appendChild(el('p', { text: `This item has ${item.timeLogs.length} logged time record(s). Choose how to proceed:` }));
+      const actions = el('div', { class: 'checklist-delete-modal-actions', style: 'display:flex; gap:8px; margin-top:12px;' });
+      const reassignBtn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: 'Reassign to task' });
+      const deleteAllBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: 'Delete logs & item' });
+      actions.appendChild(reassignBtn);
+      actions.appendChild(deleteAllBtn);
+      content.appendChild(actions);
+
+      const overlay = this.showModal('Delete Checklist Item', content, null);
+
+      reassignBtn.addEventListener('click', () => {
+        overlay.remove();
+        const tObj = WorkflowData.getTaskById(task.id) || task;
+        const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
+        tObj.timeLogs = [...(tObj.timeLogs || []), ...logsToMove];
+        tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
+        WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, timeLogs: tObj.timeLogs, updatedAt: new Date().toISOString() });
+        onConfirmChange();
+      });
+
+      deleteAllBtn.addEventListener('click', () => {
+        overlay.remove();
+        const tObj = WorkflowData.getTaskById(task.id) || task;
+        tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
+        WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
+        onConfirmChange();
+      });
+    }
+  },
+
   getWorkRequestAssigneeNames(r, taskMap) {
     const names = new Set();
     const resolvedTaskMap = taskMap || this._tempTaskMap || buildTaskMap();
@@ -6479,36 +6580,17 @@ const Workflow = {
             if (!disableIfPending(editBtn, wr)) {
               editBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const span = textWrap.querySelector('span');
-                if (!span) return;
-                const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
-                textWrap.replaceChild(input, span);
-                input.focus();
-                
-                const saveChange = async () => {
-                  const val = input.value.trim();
-                  if (val && val !== item.text) {
-                    item.text = val;
+                this.initInlineEdit(textWrap, item.text,
+                  (newVal) => {
+                    item.text = newVal;
                     WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                     this.showTaskSidePane(taskId, triggerElement);
                     App.handleRoute();
-                  } else {
+                  },
+                  () => {
                     this.showTaskSidePane(taskId, triggerElement);
                   }
-                };
-                
-                input.addEventListener('keydown', (e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    saveChange();
-                  } else if (e.key === 'Escape') {
-                    this.showTaskSidePane(taskId, triggerElement);
-                  }
-                });
-                
-                input.addEventListener('blur', () => {
-                  saveChange();
-                });
+                );
               });
             }
             topActions.appendChild(editBtn);
@@ -6517,43 +6599,10 @@ const Workflow = {
             if (!disableIfPending(delBtn, wr)) {
               delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                if (!item.timeLogs || item.timeLogs.length === 0) {
-                  normalizedChecklist.splice(idx, 1);
-                  WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                this.confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, () => {
                   this.showTaskSidePane(taskId, triggerElement);
                   App.handleRoute();
-                } else {
-                  const content = el('div');
-                  content.appendChild(el('p', { text: `This item has ${item.timeLogs.length} logged time record(s). Choose how to proceed:` }));
-                  const actions = el('div', { class: 'checklist-delete-modal-actions', style: 'display:flex; gap:8px; margin-top:12px;' });
-                  const reassignBtn = el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: 'Reassign to task' });
-                  const deleteAllBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: 'Delete logs & item' });
-                  actions.appendChild(reassignBtn);
-                  actions.appendChild(deleteAllBtn);
-                  content.appendChild(actions);
-
-                  const overlay = this.showModal('Delete Checklist Item', content, null);
-
-                  reassignBtn.addEventListener('click', () => {
-                    overlay.remove();
-                    const tObj = WorkflowData.getTaskById(task.id) || task;
-                    const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
-                    tObj.timeLogs = [...(tObj.timeLogs || []), ...logsToMove];
-                    tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
-                    WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, timeLogs: tObj.timeLogs, updatedAt: new Date().toISOString() });
-                    this.showTaskSidePane(taskId, triggerElement);
-                    App.handleRoute();
-                  });
-
-                  deleteAllBtn.addEventListener('click', () => {
-                    overlay.remove();
-                    const tObj = WorkflowData.getTaskById(task.id) || task;
-                    tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
-                    WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
-                    this.showTaskSidePane(taskId, triggerElement);
-                    App.handleRoute();
-                  });
-                }
+                });
               });
             }
             topActions.appendChild(delBtn);
@@ -6564,17 +6613,16 @@ const Workflow = {
             const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
             const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
 
-            const periodSel = el('select', { class: 'form-select checklist-period-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
-            ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-              periodSel.appendChild(el('option', { value: y, text: y }));
-            });
-            periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
-            periodSel.addEventListener('change', async () => {
-              item.periodYear = periodSel.value;
-              WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-              this.showTaskSidePane(taskId, triggerElement);
-              App.handleRoute();
-            });
+            const periodSel = this.createPeriodSelect(
+              item.periodYear,
+              'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+              (val) => {
+                item.periodYear = val;
+                WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                this.showTaskSidePane(taskId, triggerElement);
+                App.handleRoute();
+              }
+            );
             bottomLeft.appendChild(periodSel);
 
             if (allowAssignChecklist) {
@@ -7498,6 +7546,16 @@ const Workflow = {
     return container;
   },
 
+  /**
+   * Appends a task row to the work request form's tasks list.
+   *
+   * @param {HTMLElement} container - The container element to append the row to.
+   * @param {Object} [taskData] - Existing task data to pre-populate.
+   * @param {boolean} [collapseOthers=false] - If true, collapses all other task rows.
+   * @param {Array<Object>} [initialChecklist=null] - Pre-defined checklist items to initialize the task with. 
+   *        This checklist is temporarily held on the row element as `row._checklist` until the form is submitted,
+   *        at which point it is mapped to the final task record.
+   */
   async addTaskRow(container, taskData, collapseOthers = false, initialChecklist = null) {
     if (collapseOthers) {
       container.querySelectorAll('.task-row, .notion-line-item-row, .wr-task-row').forEach(r => r.classList.add('collapsed'));
@@ -9966,36 +10024,17 @@ const Workflow = {
               if (!disableIfPending(editBtn, wr)) {
                 editBtn.addEventListener('click', (e) => {
                   e.stopPropagation();
-                  const span = textWrap.querySelector('span');
-                  if (!span) return;
-                  const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
-                  textWrap.replaceChild(input, span);
-                  input.focus();
-                  
-                  const saveChange = async () => {
-                    const val = input.value.trim();
-                    if (val && val !== item.text) {
-                      item.text = val;
+                  this.initInlineEdit(textWrap, item.text,
+                    async (newVal) => {
+                      item.text = newVal;
                       WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
                       await renderChecklist();
                       App.handleRoute();
-                    } else {
+                    },
+                    async () => {
                       await renderChecklist();
                     }
-                  };
-                  
-                  input.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      saveChange();
-                    } else if (e.key === 'Escape') {
-                      renderChecklist();
-                    }
-                  });
-                  
-                  input.addEventListener('blur', () => {
-                    saveChange();
-                  });
+                  );
                 });
               }
               topActions.appendChild(editBtn);
@@ -10005,38 +10044,11 @@ const Workflow = {
                 delBtn.title = 'Delete checklist item';
                 delBtn.addEventListener('click', async (e) => {
                   e.stopPropagation();
-                  if (!item.timeLogs || item.timeLogs.length === 0) {
-                    normalizedChecklist.splice(idx, 1);
-                    WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  this.confirmDeleteChecklistItem(t, normalizedChecklist, idx, item, async () => {
                     await renderChecklist();
                     populatePrereqSelect();
-                  } else {
-                    const content = el('div');
-                    content.appendChild(el('p', { text: `This item has ${item.timeLogs.length} logged time record(s). Choose how to proceed:` }));
-                    const actions = el('div', { class: 'checklist-delete-modal-actions' });
-                    const reassignBtn = el('button', { type: 'button', class: 'btn btn-primary', text: 'Reassign to task' });
-                    const deleteAllBtn = el('button', { type: 'button', class: 'btn btn-danger', text: 'Delete logs & item' });
-                    actions.appendChild(reassignBtn);
-                    actions.appendChild(deleteAllBtn);
-                    content.appendChild(actions);
-                    const overlay = this.showModal('Delete Checklist Item', content, null);
-                    reassignBtn.addEventListener('click', () => {
-                      overlay.remove();
-                      const task = WorkflowData.getTaskById(t.id) || t;
-                      const logsToMove = (item.timeLogs || []).map(l => ({ ...l, checklistItemId: null }));
-                      task.timeLogs = [...(task.timeLogs || []), ...logsToMove];
-                      task.checklist = (task.checklist || []).filter(c => c.id !== item.id);
-                      WorkflowData.updateTask(task.id, { checklist: task.checklist, timeLogs: task.timeLogs, updatedAt: new Date().toISOString() });
-                      App.handleRoute();
-                    });
-                    deleteAllBtn.addEventListener('click', () => {
-                      overlay.remove();
-                      const task = WorkflowData.getTaskById(t.id) || t;
-                      task.checklist = (task.checklist || []).filter(c => c.id !== item.id);
-                      WorkflowData.updateTask(task.id, { checklist: task.checklist, updatedAt: new Date().toISOString() });
-                      App.handleRoute();
-                    });
-                  }
+                    App.handleRoute();
+                  });
                 });
               }
               topActions.appendChild(delBtn);
@@ -10047,17 +10059,16 @@ const Workflow = {
               const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
               const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
 
-              const periodSel = el('select', { class: 'form-select checklist-period-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
-              ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-                periodSel.appendChild(el('option', { value: y, text: y }));
-              });
-              periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
-              periodSel.addEventListener('change', async () => {
-                item.periodYear = periodSel.value;
-                WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
-                await renderChecklist();
-                App.handleRoute();
-              });
+              const periodSel = this.createPeriodSelect(
+                item.periodYear,
+                'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+                async (val) => {
+                  item.periodYear = val;
+                  WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+                  await renderChecklist();
+                  App.handleRoute();
+                }
+              );
               bottomLeft.appendChild(periodSel);
 
               if (allowAssignChecklist) {
@@ -12592,11 +12603,7 @@ const Workflow = {
     const checklistBuilder = el('div', { style: 'display:flex; gap:8px; align-items:center;' });
     const checklistInput = el('input', { type: 'text', placeholder: 'Add a checklist item...', style: 'flex:1;' });
 
-    const checklistPeriodSel = el('select', { style: 'width:100px; flex-shrink:0;' });
-    ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-      checklistPeriodSel.appendChild(el('option', { value: y, text: y }));
-    });
-    checklistPeriodSel.value = `FY ${new Date().getFullYear()}`;
+    const checklistPeriodSel = this.createPeriodSelect(null, 'width:100px; flex-shrink:0;');
 
     const checklistCategorySel = el('select', { style: 'width:110px; flex-shrink:0;' });
     checklistCategorySel.appendChild(el('option', { value: 'subtask', text: 'Sub-task' }));
@@ -12647,34 +12654,15 @@ const Workflow = {
         });
         editBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const span = textWrap.querySelector('span');
-          if (!span) return;
-          const input = el('input', { type: 'text', value: item.text, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
-          textWrap.replaceChild(input, span);
-          input.focus();
-          
-          const saveChange = async () => {
-            const val = input.value.trim();
-            if (val && val !== item.text) {
-              item.text = val;
+          this.initInlineEdit(textWrap, item.text,
+            async (newVal) => {
+              item.text = newVal;
               await renderChecklist();
-            } else {
+            },
+            async () => {
               await renderChecklist();
             }
-          };
-          
-          input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              saveChange();
-            } else if (e.key === 'Escape') {
-              renderChecklist();
-            }
-          });
-          
-          input.addEventListener('blur', () => {
-            saveChange();
-          });
+          );
         });
         topActions.appendChild(editBtn);
 
@@ -12690,14 +12678,13 @@ const Workflow = {
 
         const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; gap:8px; width:100%; padding-left:24px;' });
         
-        const periodSel = el('select', { class: 'form-select', style: 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;' });
-        ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-          periodSel.appendChild(el('option', { value: y, text: y }));
-        });
-        periodSel.value = item.periodYear || `FY ${new Date().getFullYear()}`;
-        periodSel.addEventListener('change', () => {
-          item.periodYear = periodSel.value;
-        });
+        const periodSel = this.createPeriodSelect(
+          item.periodYear,
+          'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+          (val) => {
+            item.periodYear = val;
+          }
+        );
         bottomRow.appendChild(periodSel);
 
         const prereqSelect = el('select', { class: 'form-select', style: 'font-size:0.8125rem; max-width:140px; height: 28px; padding: 2px 6px;' });

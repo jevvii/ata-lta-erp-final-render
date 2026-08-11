@@ -24,7 +24,7 @@ const checklistItemSchema = z.object({
   assigneeId: z.string().uuid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
   dependsOn: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional().nullable(),
-  periodYear: z.string().optional().nullable(),
+  periodYear: z.string().regex(/^FY \d{4}$/).optional().nullable(),
   timeLogs: z.array(timeLogSchema).optional(),
 });
 
