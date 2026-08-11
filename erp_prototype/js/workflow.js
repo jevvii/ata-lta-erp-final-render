@@ -1741,7 +1741,12 @@ const Workflow = {
   },
 
   getPeriodOptions() {
-    return ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'];
+    const currentYear = new Date().getFullYear();
+    const options = [];
+    for (let i = -2; i <= 2; i += 1) {
+      options.push(`FY ${currentYear + i}`);
+    }
+    return options;
   },
 
   getDefaultPeriodValue(itemVal) {
@@ -1773,7 +1778,7 @@ const Workflow = {
   initInlineEdit(textWrap, currentText, onSave, onCancel) {
     const span = textWrap.querySelector('span');
     if (!span) return;
-    const input = el('input', { type: 'text', value: currentText, class: 'form-control inline-edit-input', style: 'font-size: 0.9rem; padding: 2px 6px; height: 26px; width: 100%;' });
+    const input = el('input', { type: 'text', value: currentText, class: 'form-control inline-edit-input' });
     textWrap.replaceChild(input, span);
     input.focus();
     
@@ -6532,12 +6537,7 @@ const Workflow = {
           for (const [idx, item] of normalizedChecklist.entries()) {
             const blocked = isChecklistBlocked(item, normalizedChecklist);
             const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
-            const row = el('div', { class: classNames('checklist-item', blocked && 'locked', this.getCompletedClass(item)) });
-
-            row.style.display = 'flex';
-            row.style.flexDirection = 'column';
-            row.style.gap = '8px';
-            row.style.alignItems = 'stretch';
+            const row = el('div', { class: classNames('checklist-item', blocked && 'locked', this.getCompletedClass(item), 'checklist-item-flex') });
 
             const cb = el('input', { type: 'checkbox' });
             cb.checked = !!item.completed;
@@ -6559,16 +6559,15 @@ const Workflow = {
             textWrap.appendChild(el('span', { text: textValue, class: classNames(this.getCompletedClass(item)), title: textValue }));
             const categoryBadge = el('span', {
               text: item.category === 'document' ? 'Doc' : 'Sub-task',
-              class: 'checklist-category-badge',
-              style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
+              class: 'checklist-category-badge'
             });
             textWrap.appendChild(categoryBadge);
 
-            const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+            const topRow = el('div', { class: 'checklist-item-top-row' });
             topRow.appendChild(cb);
             topRow.appendChild(textWrap);
 
-            const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+            const topActions = el('div', { class: 'checklist-item-edit-actions' });
 
             const editBtn = el('button', {
               type: 'button',
@@ -6609,13 +6608,13 @@ const Workflow = {
             topRow.appendChild(topActions);
             row.appendChild(topRow);
 
-            const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding-left:28px;' });
-            const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
-            const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
+            const bottomRow = el('div', { class: 'checklist-item-bottom-row' });
+            const bottomLeft = el('div', { class: 'checklist-item-bottom-left' });
+            const bottomRight = el('div', { class: 'checklist-item-bottom-right' });
 
             const periodSel = this.createPeriodSelect(
               item.periodYear,
-              'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+              null,
               (val) => {
                 item.periodYear = val;
                 WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
@@ -6700,14 +6699,10 @@ const Workflow = {
       cont.appendChild(listContainer);
 
       if (allowAddRequirements) {
-        const addChecklistRow = el('div', { class: 'add-checklist', style: 'margin-top: 12px; display: flex; gap: 8px; align-items: center;' });
+        const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row'), style: 'margin-top: 12px;' });
         const newItemInput = el('input', { type: 'text', placeholder: 'Add sub-task...', class: 'form-control', style: 'flex: 1;' });
 
-        const periodSel = el('select', { class: 'form-select', style: 'width: 100px; flex-shrink: 0;' });
-        ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-          periodSel.appendChild(el('option', { value: y, text: y }));
-        });
-        periodSel.value = `FY ${new Date().getFullYear()}`;
+        const periodSel = this.createPeriodSelect(null, 'width: 100px; flex-shrink: 0;');
 
         // Category selector for new checklist items
         const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -9980,12 +9975,7 @@ const Workflow = {
             for (const [idx, item] of normalizedChecklist.entries()) {
               const blocked = isChecklistBlocked(item, normalizedChecklist);
               const prereq = item.dependsOn === '*' ? null : normalizedChecklist.find(c => c.id === item.dependsOn);
-              const row = el('div', { class: 'checklist-item' + (blocked ? ' locked' : '') + (item.completed ? ' completed' : '') });
-              
-              row.style.display = 'flex';
-              row.style.flexDirection = 'column';
-              row.style.gap = '8px';
-              row.style.alignItems = 'stretch';
+              const row = el('div', { class: classNames('checklist-item', blocked && 'locked', this.getCompletedClass(item), 'checklist-item-flex') });
 
               const cb = el('input', { type: 'checkbox' });
               cb.checked = !!item.completed;
@@ -10003,16 +9993,15 @@ const Workflow = {
               textWrap.appendChild(el('span', { text: textValue, class: classNames(this.getCompletedClass(item)), title: textValue }));
               const categoryBadge = el('span', {
                 text: item.category === 'document' ? 'Doc' : 'Sub-task',
-                class: 'checklist-category-badge',
-                style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
+                class: 'checklist-category-badge'
               });
               textWrap.appendChild(categoryBadge);
 
-              const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+              const topRow = el('div', { class: 'checklist-item-top-row' });
               topRow.appendChild(cb);
               topRow.appendChild(textWrap);
 
-              const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+              const topActions = el('div', { class: 'checklist-item-edit-actions' });
 
               const editBtn = el('button', {
                 type: 'button',
@@ -10055,13 +10044,13 @@ const Workflow = {
               topRow.appendChild(topActions);
               row.appendChild(topRow);
 
-              const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding-left:28px;' });
-              const bottomLeft = el('div', { class: 'checklist-item-bottom-left', style: 'display:flex; align-items:center; gap:8px; flex:1; min-width:0;' });
-              const bottomRight = el('div', { class: 'checklist-item-bottom-right', style: 'display:flex; align-items:center; gap:8px; flex-shrink:0;' });
+              const bottomRow = el('div', { class: 'checklist-item-bottom-row' });
+              const bottomLeft = el('div', { class: 'checklist-item-bottom-left' });
+              const bottomRight = el('div', { class: 'checklist-item-bottom-right' });
 
               const periodSel = this.createPeriodSelect(
                 item.periodYear,
-                'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+                null,
                 async (val) => {
                   item.periodYear = val;
                   WorkflowData.updateTask(t.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
@@ -10143,14 +10132,10 @@ const Workflow = {
         checklistSection.appendChild(checklistCard);
 
         if (allowAddRequirements) {
-          const addChecklistRow = el('div', { class: 'add-checklist', style: 'display: flex; gap: 8px; align-items: center;' });
+          const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row') });
           const newItemInput = el('input', { type: 'text', placeholder: 'Add checklist item...', id: 'newCheckInput', style: 'flex: 1;' });
 
-          const periodSel = el('select', { class: 'form-select', style: 'width: 100px; flex-shrink: 0;' });
-          ['FY 2024', 'FY 2025', 'FY 2026', 'FY 2027', 'FY 2028'].forEach(y => {
-            periodSel.appendChild(el('option', { value: y, text: y }));
-          });
-          periodSel.value = `FY ${new Date().getFullYear()}`;
+          const periodSel = this.createPeriodSelect(null, 'width: 100px; flex-shrink: 0;');
 
           // Category selector for new checklist items
           const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -12600,7 +12585,7 @@ const Workflow = {
     checklistGroup.appendChild(el('label', { text: 'Checklist Items' }));
     const checklistContainer = el('div', { class: 'checklist-items-container' });
 
-    const checklistBuilder = el('div', { style: 'display:flex; gap:8px; align-items:center;' });
+    const checklistBuilder = el('div', { class: 'checklist-builder-row' });
     const checklistInput = el('input', { type: 'text', placeholder: 'Add a checklist item...', style: 'flex:1;' });
 
     const checklistPeriodSel = this.createPeriodSelect(null, 'width:100px; flex-shrink:0;');
@@ -12624,7 +12609,7 @@ const Workflow = {
 
       const list = el('div', { class: 'checklist-items-list', style: 'display:flex; flex-direction:column; gap:8px; margin-top:8px;' });
       for (const [idx, item] of checklistItems.entries()) {
-        const row = el('div', { style: 'display:flex; flex-direction:column; gap:8px; align-items:stretch; padding:8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius: 12px;' });
+        const row = el('div', { class: classNames('checklist-item-builder-row', 'checklist-item-flex') });
         
         const cb = el('input', { type: 'checkbox' });
         cb.disabled = true;
@@ -12634,16 +12619,15 @@ const Workflow = {
         textWrap.appendChild(el('span', { text: textValue, style: 'font-size:0.9rem; font-weight:500;' }));
         const categoryBadge = el('span', {
           text: item.category === 'document' ? 'Doc' : 'Sub-task',
-          class: 'checklist-category-badge',
-          style: 'font-size:0.65rem; padding:1px 5px; border-radius: 12px; background:' + (item.category === 'document' ? '#dbeafe' : '#f3f4f6') + '; color:' + (item.category === 'document' ? '#1e40af' : '#4b5563') + '; font-weight:600; margin-left:6px;'
+          class: 'checklist-category-badge'
         });
         textWrap.appendChild(categoryBadge);
 
-        const topRow = el('div', { class: 'checklist-item-top-row', style: 'display:flex; align-items:center; gap:8px; width:100%;' });
+        const topRow = el('div', { class: 'checklist-item-top-row' });
         topRow.appendChild(cb);
         topRow.appendChild(textWrap);
 
-        const topActions = el('div', { class: 'checklist-item-edit-actions', style: 'display:flex; align-items:center; gap:8px; margin-left:auto;' });
+        const topActions = el('div', { class: 'checklist-item-edit-actions' });
 
         const editBtn = el('button', {
           type: 'button',
@@ -12676,11 +12660,11 @@ const Workflow = {
         topRow.appendChild(topActions);
         row.appendChild(topRow);
 
-        const bottomRow = el('div', { class: 'checklist-item-bottom-row', style: 'display:flex; align-items:center; gap:8px; width:100%; padding-left:24px;' });
+        const bottomRow = el('div', { class: 'checklist-item-bottom-row-compact' });
         
         const periodSel = this.createPeriodSelect(
           item.periodYear,
-          'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+          null,
           (val) => {
             item.periodYear = val;
           }
@@ -12744,7 +12728,17 @@ const Workflow = {
         titleInput.value = tmpl.title;
         checklistItems = tmpl.defaultChecklist.map(item => {
           const isObj = typeof item === 'object' && item && item.text;
-          return { id: generateUUID(), text: isObj ? item.text : item, category: isObj ? (item.category || 'subtask') : 'subtask', assigneeId: null, assigneeName: null, dependsOn: null, periodYear: `FY ${new Date().getFullYear()}`, timeLogs: [] };
+          const templatePeriod = isObj ? item.periodYear : null;
+          return {
+            id: generateUUID(),
+            text: isObj ? item.text : item,
+            category: isObj ? (item.category || 'subtask') : 'subtask',
+            assigneeId: null,
+            assigneeName: null,
+            dependsOn: null,
+            periodYear: this.getDefaultPeriodValue(templatePeriod),
+            timeLogs: []
+          };
         });
         coAssignees = (tmpl.coAssignees || []).slice();
         checklistFromTemplate = true;

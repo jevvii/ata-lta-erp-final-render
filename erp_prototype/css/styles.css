@@ -17106,5 +17106,79 @@ table.data-table th.dt-cell--right {
   letter-spacing: -0.01em;
 }
 
+/* ─── Redesign: Checklist and inline editing classes ───────────────── */
+.checklist-item-flex {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 8px !important;
+  align-items: stretch !important;
+}
+
+.checklist-item-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.checklist-item-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.checklist-item-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding-left: 28px;
+}
+
+.checklist-item-bottom-row-compact {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding-left: 24px;
+}
+
+.checklist-item-bottom-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.checklist-item-bottom-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.inline-edit-input {
+  font-size: 0.9rem !important;
+  padding: 2px 6px !important;
+  height: 26px !important;
+  width: 100% !important;
+}
+
+.checklist-item-builder-row {
+  padding: 8px !important;
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+}
+
+.checklist-builder-row {
+  display: flex !important;
+  gap: 8px !important;
+  align-items: center !important;
+}
+
 
 
