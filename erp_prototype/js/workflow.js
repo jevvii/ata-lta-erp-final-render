@@ -1753,16 +1753,15 @@ const Workflow = {
       class: 'form-control checklist-period-input',
       style: styleStr || 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
       placeholder: 'Period/Year',
-      value: this.getDefaultPeriodValue(itemVal)
+      value: this.getDefaultPeriodValue(itemVal),
+      maxlength: '100'
     });
-    inputEl.addEventListener('input', () => {
-      inputEl.value = inputEl.value.replace(/[^a-zA-Z0-9\s]/g, '');
-    });
-    if (onChange) {
-      inputEl.addEventListener('change', () => {
+    inputEl.addEventListener('change', () => {
+      inputEl.value = inputEl.value.replace(/[^a-zA-Z0-9\s]/g, '').slice(0, 100);
+      if (onChange) {
         onChange(inputEl.value);
-      });
-    }
+      }
+    });
     return inputEl;
   },
 
