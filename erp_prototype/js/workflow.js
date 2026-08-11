@@ -2825,7 +2825,8 @@ const Workflow = {
       !('completed' in item) ||
       !('dependsOn' in item) ||
       !('timeLogs' in item) ||
-      !('category' in item)
+      !('category' in item) ||
+      !('periodYear' in item)
     );
     if (hasUnnormalized) {
       const normalized = checklist.map(item => {
@@ -2840,6 +2841,7 @@ const Workflow = {
           assigneeId: typeof item === 'object' && item ? item.assigneeId || null : null,
           assigneeName: typeof item === 'object' && item ? item.assigneeName || null : null,
           dependsOn: typeof item === 'object' && item ? item.dependsOn || null : null,
+          periodYear: typeof item === 'object' && item ? this.getDefaultPeriodValue(item.periodYear) : this.getDefaultPeriodValue(null),
           timeLogs: typeof item === 'object' && item ? item.timeLogs || [] : []
         };
       });

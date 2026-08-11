@@ -17160,24 +17160,24 @@ table.data-table th.dt-cell--right {
   flex-shrink: 0;
 }
 
-.inline-edit-input {
-  font-size: 0.9rem !important;
-  padding: 2px 6px !important;
-  height: 26px !important;
-  width: 100% !important;
+.checklist-items-container .inline-edit-input {
+  font-size: 0.9rem;
+  padding: 2px 6px;
+  height: 26px;
+  width: 100%;
 }
 
-.checklist-item-builder-row {
-  padding: 8px !important;
-  background: #f8fafc !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important;
+.checklist-items-container .checklist-item-builder-row {
+  padding: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
 }
 
-.checklist-builder-row {
-  display: flex !important;
-  gap: 8px !important;
-  align-items: center !important;
+.checklist-items-container .checklist-builder-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 
