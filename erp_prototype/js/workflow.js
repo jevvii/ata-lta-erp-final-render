@@ -7476,25 +7476,7 @@ const Workflow = {
       html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add task'
     });
     addTaskBtn.addEventListener('click', async () => {
-      let checklist = [];
-      if (confirm("Would you like to add checklist items to this task?")) {
-        let itemText = prompt("Enter checklist item text (or leave blank to finish):");
-        while (itemText && itemText.trim()) {
-          checklist.push({
-            id: generateUUID(),
-            text: itemText.trim(),
-            category: 'subtask',
-            completed: false,
-            assigneeId: null,
-            assigneeName: null,
-            dependsOn: null,
-            periodYear: `FY ${new Date().getFullYear()}`,
-            timeLogs: []
-          });
-          itemText = prompt("Enter next checklist item text (or leave blank to finish):");
-        }
-      }
-      await this.addTaskRow(tasksList, null, true, checklist);
+      await this.addTaskRow(tasksList, null, true);
       this.updatePredecessorOptions(tasksList);
     });
     tasksSection.appendChild(addTaskBtn);
@@ -13060,10 +13042,9 @@ const Workflow = {
   },
 
   async showAddTaskPanel(wrId, mode = null) {
-    const addChecklist = confirm("Would you like to add checklist items to this task?");
     const form = await this.renderAddTaskForm(wrId, { 
       hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null,
-      showChecklist: addChecklist
+      showChecklist: true
     });
     if (!form) return;
     const fullPageRoute = '#operations/addTask/' + wrId;
