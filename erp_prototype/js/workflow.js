@@ -1740,39 +1740,30 @@ const Workflow = {
     return this.isCompleted(itemOrTask) ? 'is-completed' : '';
   },
 
-  getPeriodOptions() {
-    const currentYear = new Date().getFullYear();
-    const options = [];
-    for (let i = -2; i <= 2; i += 1) {
-      options.push(`FY ${currentYear + i}`);
-    }
-    return options;
-  },
-
   getDefaultPeriodValue(itemVal) {
-    const options = this.getPeriodOptions();
-    if (itemVal && options.includes(itemVal)) {
+    if (itemVal !== undefined && itemVal !== null) {
       return itemVal;
     }
-    const currentFY = `FY ${new Date().getFullYear()}`;
-    if (options.includes(currentFY)) {
-      return currentFY;
-    }
-    return options[0] || '';
+    return `FY ${new Date().getFullYear()}`;
   },
 
-  createPeriodSelect(itemVal, styleStr, onChange) {
-    const selectEl = el('select', { class: 'form-select checklist-period-select', style: styleStr });
-    this.getPeriodOptions().forEach(y => {
-      selectEl.appendChild(el('option', { value: y, text: y }));
+  createPeriodInput(itemVal, styleStr, onChange) {
+    const inputEl = el('input', {
+      type: 'text',
+      class: 'form-control checklist-period-input',
+      style: styleStr || 'width: 100px; height: 28px; padding: 2px 6px; font-size: 0.8125rem;',
+      placeholder: 'Period/Year',
+      value: this.getDefaultPeriodValue(itemVal)
     });
-    selectEl.value = this.getDefaultPeriodValue(itemVal);
+    inputEl.addEventListener('input', () => {
+      inputEl.value = inputEl.value.replace(/[^a-zA-Z0-9\s]/g, '');
+    });
     if (onChange) {
-      selectEl.addEventListener('change', () => {
-        onChange(selectEl.value);
+      inputEl.addEventListener('change', () => {
+        onChange(inputEl.value);
       });
     }
-    return selectEl;
+    return inputEl;
   },
 
   initInlineEdit(textWrap, currentText, onSave, onCancel) {
@@ -6612,7 +6603,7 @@ const Workflow = {
             const bottomLeft = el('div', { class: 'checklist-item-bottom-left' });
             const bottomRight = el('div', { class: 'checklist-item-bottom-right' });
 
-            const periodSel = this.createPeriodSelect(
+            const periodSel = this.createPeriodInput(
               item.periodYear,
               null,
               (val) => {
@@ -6702,7 +6693,7 @@ const Workflow = {
         const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row'), style: 'margin-top: 12px;' });
         const newItemInput = el('input', { type: 'text', placeholder: 'Add sub-task...', class: 'form-control', style: 'flex: 1;' });
 
-        const periodSel = this.createPeriodSelect(null, 'width: 100px; flex-shrink: 0;');
+        const periodSel = this.createPeriodInput(null, 'width: 100px; flex-shrink: 0;');
 
         // Category selector for new checklist items
         const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -10048,7 +10039,7 @@ const Workflow = {
               const bottomLeft = el('div', { class: 'checklist-item-bottom-left' });
               const bottomRight = el('div', { class: 'checklist-item-bottom-right' });
 
-              const periodSel = this.createPeriodSelect(
+              const periodSel = this.createPeriodInput(
                 item.periodYear,
                 null,
                 async (val) => {
@@ -10135,7 +10126,7 @@ const Workflow = {
           const addChecklistRow = el('div', { class: classNames('add-checklist', 'checklist-builder-row') });
           const newItemInput = el('input', { type: 'text', placeholder: 'Add checklist item...', id: 'newCheckInput', style: 'flex: 1;' });
 
-          const periodSel = this.createPeriodSelect(null, 'width: 100px; flex-shrink: 0;');
+          const periodSel = this.createPeriodInput(null, 'width: 100px; flex-shrink: 0;');
 
           // Category selector for new checklist items
           const categorySel = el('select', { class: 'form-select', style: 'width: 110px; flex-shrink: 0;' });
@@ -12588,7 +12579,7 @@ const Workflow = {
     const checklistBuilder = el('div', { class: 'checklist-builder-row' });
     const checklistInput = el('input', { type: 'text', placeholder: 'Add a checklist item...', style: 'flex:1;' });
 
-    const checklistPeriodSel = this.createPeriodSelect(null, 'width:100px; flex-shrink:0;');
+    const checklistPeriodSel = this.createPeriodInput(null, 'width:100px; flex-shrink:0;');
 
     const checklistCategorySel = el('select', { style: 'width:110px; flex-shrink:0;' });
     checklistCategorySel.appendChild(el('option', { value: 'subtask', text: 'Sub-task' }));
@@ -12662,7 +12653,7 @@ const Workflow = {
 
         const bottomRow = el('div', { class: 'checklist-item-bottom-row-compact' });
         
-        const periodSel = this.createPeriodSelect(
+        const periodSel = this.createPeriodInput(
           item.periodYear,
           null,
           (val) => {
