@@ -17107,11 +17107,11 @@ table.data-table th.dt-cell--right {
 }
 
 /* ─── Redesign: Checklist and inline editing classes ───────────────── */
-.checklist-item-flex {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 8px !important;
-  align-items: stretch !important;
+.checklist-items-container .checklist-item-flex {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
 }
 
 .checklist-item-top-row {

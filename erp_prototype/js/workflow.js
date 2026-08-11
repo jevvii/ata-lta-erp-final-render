@@ -1806,8 +1806,9 @@ const Workflow = {
 
   async confirmDeleteChecklistItem(task, normalizedChecklist, idx, item, onConfirmChange) {
     if (!item.timeLogs || item.timeLogs.length === 0) {
-      normalizedChecklist.splice(idx, 1);
-      WorkflowData.updateTask(task.id, { checklist: normalizedChecklist, updatedAt: new Date().toISOString() });
+      const tObj = WorkflowData.getTaskById(task.id) || task;
+      tObj.checklist = (tObj.checklist || []).filter(c => c.id !== item.id);
+      WorkflowData.updateTask(tObj.id, { checklist: tObj.checklist, updatedAt: new Date().toISOString() });
       await onConfirmChange();
     } else {
       const content = el('div');
@@ -2846,7 +2847,7 @@ const Workflow = {
           assigneeId: typeof item === 'object' && item ? item.assigneeId || null : null,
           assigneeName: typeof item === 'object' && item ? item.assigneeName || null : null,
           dependsOn: typeof item === 'object' && item ? item.dependsOn || null : null,
-          periodYear: typeof item === 'object' && item ? this.getDefaultPeriodValue(item.periodYear) : this.getDefaultPeriodValue(null),
+          periodYear: (typeof item === 'object' && item && 'periodYear' in item) ? (item.periodYear || null) : null,
           timeLogs: typeof item === 'object' && item ? item.timeLogs || [] : []
         };
       });
