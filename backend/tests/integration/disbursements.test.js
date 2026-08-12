@@ -12,6 +12,7 @@ const { app } = require('../helpers/testServer');
 const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtures/supabaseMock');
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
+const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -23,6 +24,13 @@ const seedClient = () => {
     created_by: 'user-1',
     updated_by: 'user-1',
   });
+  mockTables.work_requests.set(WORK_REQUEST_ID, {
+    id: WORK_REQUEST_ID,
+    entity_id: 'ent-ata',
+    client_id: CLIENT_ID,
+    title: 'Acme Audit',
+    status: 'In Progress',
+  });
 };
 
 const validDisbursement = {
@@ -31,6 +39,7 @@ const validDisbursement = {
   amount: 1500,
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
+  linkedWorkRequestId: WORK_REQUEST_ID,
   dueDate: '2026-07-31',
   notes: 'Test disbursement',
 };
@@ -313,11 +322,20 @@ describe('/v1/disbursements', () => {
       entities: ['ATA'],
     });
 
+    const OPS_USER_ID = '55555555-5555-5555-5555-555555555555';
     const ops = registerUser({
+      id: OPS_USER_ID,
       email: 'ops@ata-lta.ph',
       name: 'Ops',
       role: 'Operations',
       entities: ['ATA'],
+    });
+
+    mockTables.tasks.set('task-ops-list', {
+      id: 'task-ops-list',
+      work_request_id: WORK_REQUEST_ID,
+      assignee_id: OPS_USER_ID,
+      deleted_at: null,
     });
 
     // Create a draft disbursement
@@ -345,8 +363,8 @@ describe('/v1/disbursements', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(adminList.body.data.some(d => d.category === 'DraftCategory')).toBe(true);
-    expect(adminList.body.data.some(d => d.category === 'ReleasedCategory')).toBe(true);
+    expect(adminList.body.data.some((d) => d.category === 'DraftCategory')).toBe(true);
+    expect(adminList.body.data.some((d) => d.category === 'ReleasedCategory')).toBe(true);
 
     // 2. Ops lists disbursements -> sees only Released
     const opsList = await request(app)
@@ -354,8 +372,8 @@ describe('/v1/disbursements', () => {
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsList.body.data.some(d => d.category === 'DraftCategory')).toBe(false);
-    expect(opsList.body.data.some(d => d.category === 'ReleasedCategory')).toBe(true);
+    expect(opsList.body.data.some((d) => d.category === 'DraftCategory')).toBe(false);
+    expect(opsList.body.data.some((d) => d.category === 'ReleasedCategory')).toBe(true);
 
     // 3. Ops tries to fetch draft disbursement directly -> 403 Forbidden
     await request(app)

@@ -178,7 +178,12 @@ describe('/v1/work-requests', () => {
       .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Task with time log', checklist: [{ id: '9a217645-7399-4893-99d0-9a2451b11c74', text: 'Subtask 1', completed: false }] })
+      .send({
+        title: 'Task with time log',
+        checklist: [
+          { id: '9a217645-7399-4893-99d0-9a2451b11c74', text: 'Subtask 1', completed: false },
+        ],
+      })
       .expect(201);
 
     const checklistItemId = task.body.data.checklist[0].id;
@@ -198,8 +203,8 @@ describe('/v1/work-requests', () => {
             note: 'Worked on integration test',
             workerName: 'Integration Tester',
             checklistItemId,
-          }
-        ]
+          },
+        ],
       })
       .expect(201);
 

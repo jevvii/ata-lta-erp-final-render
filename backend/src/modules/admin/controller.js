@@ -135,8 +135,10 @@ const getNormalTableName = (tableName) => {
 
 const hasApprovePermission = (permissions, tableName) => {
   const norm = getNormalTableName(tableName);
-  return hasPermission(permissions, `approve_change:${norm}`) ||
-         hasPermission(permissions, `approve_change:${tableName}`);
+  return (
+    hasPermission(permissions, `approve_change:${norm}`) ||
+    hasPermission(permissions, `approve_change:${tableName}`)
+  );
 };
 
 const listPendingApprovals = async (req, res, next) => {
@@ -144,7 +146,7 @@ const listPendingApprovals = async (req, res, next) => {
     const entityId = await resolveEntityId(req);
     const permissions = computePermissions(req.user);
     const canApproveAll = hasPermission(permissions, 'approve_change:*');
-    const hasAnyApprove = Array.from(permissions).some(p => p.startsWith('approve_change:'));
+    const hasAnyApprove = Array.from(permissions).some((p) => p.startsWith('approve_change:'));
 
     let submittedBy = req.query.submittedBy;
     if (!canApproveAll && !hasAnyApprove) {
@@ -162,7 +164,7 @@ const listPendingApprovals = async (req, res, next) => {
 
     let filteredItems = items;
     if (!canApproveAll) {
-      filteredItems = items.filter(item => {
+      filteredItems = items.filter((item) => {
         if (item.submittedBy === req.user.id) return true;
         return hasApprovePermission(permissions, item.tableName);
       });
@@ -205,8 +207,9 @@ const getPendingById = async (req, res, next) => {
     const item = await adminService.getPendingChangeById({ entityId, id: req.params.id });
 
     const permissions = computePermissions(req.user);
-    const canApprove = hasPermission(permissions, 'approve_change:*') ||
-                       hasApprovePermission(permissions, item.tableName);
+    const canApprove =
+      hasPermission(permissions, 'approve_change:*') ||
+      hasApprovePermission(permissions, item.tableName);
     if (!canApprove && item.submittedBy !== req.user.id) {
       throw new AppError({
         statusCode: 403,

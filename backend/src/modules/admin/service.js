@@ -14,7 +14,7 @@ const transmittalsService = require('../transmittals/service');
 const { computePermissions } = require('../../middleware/rbac');
 const { hasPermission } = require('../../lib/permissions');
 
-const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
+const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
 const toApiUser = (row, departments = []) => ({
   id: row.id,
@@ -617,9 +617,10 @@ const approvePending = async ({ id, user }) => {
     transmittals: 'transmittals',
   };
   const norm = TABLE_NAME_MAP[change.table_name] || change.table_name;
-  const canApprove = hasPermission(permissions, 'approve_change:*') ||
-                     hasPermission(permissions, `approve_change:${norm}`) ||
-                     hasPermission(permissions, `approve_change:${change.table_name}`);
+  const canApprove =
+    hasPermission(permissions, 'approve_change:*') ||
+    hasPermission(permissions, `approve_change:${norm}`) ||
+    hasPermission(permissions, `approve_change:${change.table_name}`);
   if (!canApprove) {
     throw new AppError({
       statusCode: 403,
@@ -778,9 +779,10 @@ const rejectPending = async ({ id, user, reason }) => {
     transmittals: 'transmittals',
   };
   const norm = TABLE_NAME_MAP[change.table_name] || change.table_name;
-  const canApprove = hasPermission(permissions, 'approve_change:*') ||
-                     hasPermission(permissions, `approve_change:${norm}`) ||
-                     hasPermission(permissions, `approve_change:${change.table_name}`);
+  const canApprove =
+    hasPermission(permissions, 'approve_change:*') ||
+    hasPermission(permissions, `approve_change:${norm}`) ||
+    hasPermission(permissions, `approve_change:${change.table_name}`);
   if (change.submitted_by !== user.id && !canApprove) {
     throw new AppError({
       statusCode: 403,

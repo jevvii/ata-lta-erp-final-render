@@ -49,7 +49,11 @@ const listInvoices = async (req, res, next) => {
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
-    const result = await service.listInvoices({ entityId: req.activeEntity, filters, user: req.user });
+    const result = await service.listInvoices({
+      entityId: req.activeEntity,
+      filters,
+      user: req.user,
+    });
     res.json({
       data: result.data,
       meta: { total: result.count, page: filters.page, limit: filters.limit },

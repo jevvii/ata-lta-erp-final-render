@@ -8,10 +8,7 @@
 
 const { randomUUID } = require('crypto');
 const { supabaseAdmin } = require('../../services/supabaseClient');
-const {
-  getSignedUploadUrl,
-  getSignedDownloadUrl,
-} = require('../../services/storageService');
+const { getSignedUploadUrl, getSignedDownloadUrl } = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 
@@ -351,7 +348,11 @@ const archiveDocument = async ({ entityId, id, userId }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to archive document' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to archive document',
+    });
   }
 
   await auditService.log({
@@ -377,7 +378,11 @@ const unarchiveDocument = async ({ entityId, id, userId }) => {
     .single();
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Failed to unarchive document' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to unarchive document',
+    });
   }
 
   await auditService.log({

@@ -699,10 +699,17 @@ const Disbursement = {
     if (record && record.linkedWorkRequestId) {
       // Patch the linked work request in the operations cache so the board/list
       // and any open dropdowns stay usable.
-      const wr = typeof WorkflowData !== 'undefined' ? WorkflowData.getWorkRequestById(record.linkedWorkRequestId) : null;
-      if (wr) {
-        if (!Array.isArray(wr.linkedDisbursementIds)) wr.linkedDisbursementIds = [];
-        if (!wr.linkedDisbursementIds.includes(record.id)) wr.linkedDisbursementIds.push(record.id);
+      if (typeof WorkflowData !== 'undefined') {
+        if (typeof WorkflowData.getWorkRequestById === 'function') {
+          const wr = WorkflowData.getWorkRequestById(record.linkedWorkRequestId);
+          if (wr) {
+            if (!Array.isArray(wr.linkedDisbursementIds)) wr.linkedDisbursementIds = [];
+            if (!wr.linkedDisbursementIds.includes(record.id)) wr.linkedDisbursementIds.push(record.id);
+          }
+        }
+        if (typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+          WorkflowData.invalidateRelatedForWorkRequest(record.linkedWorkRequestId);
+        }
       }
       // Also patch the shared work-request cache used by billing/disbursement forms.
       if (window.apiClient?.workRequestCache?.getById) {

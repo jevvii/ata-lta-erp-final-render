@@ -6,11 +6,11 @@
  * plus the legacy role permission.
  */
 
-const ALL_ROLES = ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation'];
+const ALL_ROLES = ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
-const STAFF_ROLES = ['Accounting', 'Operations', 'Documentation'];
+const STAFF_ROLES = ['Accounting', 'Operations', 'Documentation', 'HR'];
 
-const DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
+const DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
 const DEPARTMENT_PERMISSIONS = {
   Management: [
@@ -94,6 +94,20 @@ const DEPARTMENT_PERMISSIONS = {
     'transmittal:create',
     'transmittal:edit',
     'transmittal:mark',
+    'reports:view',
+  ],
+  HR: [
+    'clients:view',
+    'workflow:view',
+    'workflow:task_add',
+    'workflow:task_upload',
+    'billing:view',
+    'billing:request',
+    'disbursement:view',
+    'disbursement:request',
+    'dms:view',
+    'transmittal:view',
+    'transmittal:request',
     'reports:view',
   ],
 };

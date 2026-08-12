@@ -31,10 +31,15 @@ const listTransmittals = async (req, res, next) => {
       clientId: req.query.clientId,
       search: req.query.search,
       archived: req.query.archived,
+      includeDeleted: req.query.includeDeleted,
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
-    const result = await service.listTransmittals({ entityId: req.activeEntity, filters });
+    const result = await service.listTransmittals({
+      entityId: req.activeEntity,
+      filters,
+      user: req.user,
+    });
     res.json({
       data: result.data,
       meta: { total: result.count, page: filters.page, limit: filters.limit },
@@ -47,7 +52,7 @@ const listTransmittals = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const getTransmittalCounts = async (req, res, next) => {
   try {
-    const result = await service.countTransmittals({ entityId: req.activeEntity });
+    const result = await service.countTransmittals({ entityId: req.activeEntity, user: req.user });
     res.json({ data: result });
   } catch (err) {
     next(err);
@@ -75,6 +80,7 @@ const getTransmittal = async (req, res, next) => {
     const data = await service.getTransmittalById({
       entityId: req.activeEntity,
       id: req.params.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {

@@ -37,12 +37,15 @@ const createDocumentSchema = z.object({
     .nonnegative()
     .optional()
     .nullable()
-    .refine((val) => {
-      if (val === null || val === undefined) return true;
-      return val <= MAX_FILE_SIZE_BYTES;
-    }, {
-      message: `File size exceeds maximum allowed limit of ${MAX_FILE_SIZE_BYTES} bytes`,
-    }),
+    .refine(
+      (val) => {
+        if (val === null || val === undefined) return true;
+        return val <= MAX_FILE_SIZE_BYTES;
+      },
+      {
+        message: `File size exceeds maximum allowed limit of ${MAX_FILE_SIZE_BYTES} bytes`,
+      }
+    ),
   originalName: z.string().max(255).optional(),
   workRequestId: z.string().uuid().optional().nullable(),
   linkedTaskId: z.string().uuid().optional().nullable(),

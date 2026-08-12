@@ -18,6 +18,7 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
+const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -38,6 +39,13 @@ const seedClient = () => {
     created_by: 'user-1',
     updated_by: 'user-1',
   });
+  mockTables.work_requests.set(WORK_REQUEST_ID, {
+    id: WORK_REQUEST_ID,
+    entity_id: 'ent-ata',
+    client_id: CLIENT_ID,
+    title: 'Acme Audit',
+    status: 'In Progress',
+  });
 };
 
 const validDisbursement = {
@@ -46,6 +54,7 @@ const validDisbursement = {
   amount: 1500,
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
+  linkedWorkRequestId: WORK_REQUEST_ID,
   dueDate: '2026-07-31',
   notes: 'Test disbursement',
 };
@@ -53,7 +62,7 @@ const validDisbursement = {
 const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
-  workRequestId: null,
+  workRequestId: WORK_REQUEST_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -206,7 +215,13 @@ describe('Concurrency race conditions', () => {
 
   test('4. Two concurrent operations-request fulfillments: only one succeeds', async () => {
     const admin = adminFor(['ATA']);
-    const ops = registerUser({ id: 'ops-user', email: 'ops@ata-lta.ph', name: 'Ops', role: 'Operations', entities: ['ATA'] });
+    const ops = registerUser({
+      id: 'ops-user',
+      email: 'ops@ata-lta.ph',
+      name: 'Ops',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
 
     const created = await request(app)
       .post('/v1/operations-requests')

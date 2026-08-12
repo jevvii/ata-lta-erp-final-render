@@ -209,4 +209,6 @@ const remove = async (req, res, next) => {
   }
 };
 
-module.exports = { clientsController: { list, counts, create, getById, update, archive, unarchive, remove } };
+module.exports = {
+  clientsController: { list, counts, create, getById, update, archive, unarchive, remove },
+};

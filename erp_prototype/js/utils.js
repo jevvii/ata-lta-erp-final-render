@@ -124,7 +124,10 @@ function formatPHP(n) {
 }
 
 function formatDate(d) {
-  return new Date(d).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
+  if (!d) return '—';
+  const parsed = new Date(d);
+  if (isNaN(parsed.getTime())) return '—';
+  return parsed.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 /**
@@ -247,6 +250,27 @@ async function nextInvoiceNumber(entity) {
     return prefix + String(maxNum + 1).padStart(3, '0');
   } catch (e) {
     console.error('[nextInvoiceNumber] failed to load invoices', e);
+    return prefix + '001';
+  }
+}
+
+async function nextTrackingNumber(entity) {
+  const year = new Date().getFullYear();
+  const prefix = entity + '-TX-' + year + '-';
+  try {
+    const api = (typeof window !== 'undefined' && window.apiClient) || null;
+    const res = api ? await api.transmittals.list({ limit: 100, includeDeleted: true }, { headers: { 'X-Active-Entity': entity } }) : null;
+    const list = res?.data || [];
+    const maxNum = list.reduce((max, t) => {
+      const numStr = t.tracking_number || t.trackingNumber || '';
+      if (!numStr.startsWith(prefix)) return max;
+      const parts = numStr.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      return !isNaN(num) && num > max ? num : max;
+    }, 0);
+    return prefix + String(maxNum + 1).padStart(3, '0');
+  } catch (e) {
+    console.error('[nextTrackingNumber] failed to load transmittals', e);
     return prefix + '001';
   }
 }
@@ -2272,6 +2296,7 @@ window.Utils = {
   getSkeletonForView,
   clearSkeleton,
   nextInvoiceNumber,
+  nextTrackingNumber,
   generateTrackingNumber
 };
 

@@ -80,11 +80,11 @@ const formatTimeManila = (dateTime) => {
     timeZone: 'Asia/Manila',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false
+    hour12: false,
   };
   const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
-  const hour = parts.find(p => p.type === 'hour')?.value || '00';
-  const minute = parts.find(p => p.type === 'minute')?.value || '00';
+  const hour = parts.find((p) => p.type === 'hour')?.value || '00';
+  const minute = parts.find((p) => p.type === 'minute')?.value || '00';
   return `${hour}:${minute}`;
 };
 
@@ -102,17 +102,17 @@ const formatDateManila = (dateVal) => {
     timeZone: 'Asia/Manila',
     year: 'numeric',
     month: '2-digit',
-    day: '2-digit'
+    day: '2-digit',
   };
   const parts = new Intl.DateTimeFormat('en-US', options).formatToParts(d);
-  const year = parts.find(p => p.type === 'year')?.value;
-  const month = parts.find(p => p.type === 'month')?.value;
-  const day = parts.find(p => p.type === 'day')?.value;
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
   return `${year}-${month}-${day}`;
 };
 
 const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = {}) => {
-  const taskLevelLogs = timeLogs.filter(t => !t.checklist_item_id);
+  const taskLevelLogs = timeLogs.filter((t) => !t.checklist_item_id);
 
   return {
     id: row.id,
@@ -126,7 +126,7 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
     dueDate: row.due_date || null,
     displayOrder: row.display_order,
     checklist: checklist.map((c) => {
-      const itemLogs = timeLogs.filter(t => t.checklist_item_id === c.id);
+      const itemLogs = timeLogs.filter((t) => t.checklist_item_id === c.id);
       return {
         id: c.id,
         text: c.text,
@@ -134,9 +134,8 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
         completed: c.completed,
         assigneeId: c.assignee_id || null,
         assigneeName: c.assignee_name || null,
-        dependsOn: Array.isArray(c.depends_on)
-          ? (c.depends_on[0] || null)
-          : (c.depends_on || null),
+        dependsOn: Array.isArray(c.depends_on) ? c.depends_on[0] || null : c.depends_on || null,
+        periodYear: c.period_year || null,
         timeLogs: itemLogs.map((t) => ({
           id: t.id,
           startTime: formatTimeManila(t.start_time),
@@ -209,7 +208,11 @@ const loadTaskExtras = async (taskIds) => {
   const [{ data: clRows }, { data: tlRows }, { data: docRows }] = await Promise.all([
     supabaseAdmin.from('task_checklists').select('*').in('task_id', taskIds),
     supabaseAdmin.from('task_time_logs').select('*').in('task_id', taskIds),
-    supabaseAdmin.from('documents').select('*').in('linked_task_id', taskIds).is('deleted_at', null),
+    supabaseAdmin
+      .from('documents')
+      .select('*')
+      .in('linked_task_id', taskIds)
+      .is('deleted_at', null),
   ]);
   (clRows || []).forEach((r) => {
     if (!checklist.has(r.task_id)) checklist.set(r.task_id, []);
@@ -299,11 +302,11 @@ const listWorkRequests = async ({
   if (isBackOffice(user)) {
     visibleRows = data || [];
   } else {
-    const allWrIds = (data || []).map(r => r.id);
+    const allWrIds = (data || []).map((r) => r.id);
     allTaskMap = await loadTasksForWorkRequests(allWrIds);
     visibleRows = (data || []).filter((row) => {
       const tasks = allTaskMap.get(row.id) || [];
-      return tasks.some(t => t.assignee_id === user.id || t.assignee_name === user.name);
+      return tasks.some((t) => t.assignee_id === user.id || t.assignee_name === user.name);
     });
   }
 
@@ -335,7 +338,7 @@ const listWorkRequests = async ({
 
   // Only load tasks for the paginated subset (not ALL work requests)
   const taskMap = withTasks
-    ? (allTaskMap || await loadTasksForWorkRequests(resultRows.map((r) => r.id)))
+    ? allTaskMap || (await loadTasksForWorkRequests(resultRows.map((r) => r.id)))
     : new Map();
 
   // Load checklist/time-log extras when embedding tasks so the client does not
@@ -491,7 +494,11 @@ const archiveWorkRequest = async ({ id, entityId, user }) => {
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to archive work request',
+    });
   }
 
   // Return the post-update row so the frontend sees the current archived flag.
@@ -511,7 +518,11 @@ const unarchiveWorkRequest = async ({ id, entityId, user }) => {
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore work request' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to restore work request',
+    });
   }
 
   // Return the post-update row so the frontend sees the current archived flag.
@@ -643,12 +654,12 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
   if (data.checklist?.length) {
     await upsertChecklist(id, data.checklist);
     const checklistTimeLogs = [];
-    data.checklist.forEach(item => {
+    data.checklist.forEach((item) => {
       if (Array.isArray(item.timeLogs)) {
-        item.timeLogs.forEach(log => {
+        item.timeLogs.forEach((log) => {
           checklistTimeLogs.push({
             ...log,
-            checklistItemId: item.id
+            checklistItemId: item.id,
           });
         });
       }
@@ -679,12 +690,14 @@ const upsertChecklist = async (taskId, checklist) => {
   const rows = checklist.map((item) => {
     let dependsOn = Array.isArray(item.dependsOn)
       ? item.dependsOn
-      : (item.dependsOn ? [item.dependsOn] : []);
+      : item.dependsOn
+        ? [item.dependsOn]
+        : [];
 
     // Resolve dependencies using the map and ensure only valid UUIDs are persisted
     dependsOn = dependsOn.map((id) => chkIdMap.get(id) || id).filter(isValidUUID);
 
-    const itemId = item.id ? (chkIdMap.get(item.id) || item.id) : randomUUID();
+    const itemId = item.id ? chkIdMap.get(item.id) || item.id : randomUUID();
 
     return {
       id: isValidUUID(itemId) ? itemId : randomUUID(),
@@ -695,6 +708,7 @@ const upsertChecklist = async (taskId, checklist) => {
       assignee_id: item.assigneeId || null,
       assignee_name: item.assigneeName || null,
       depends_on: dependsOn,
+      period_year: item.periodYear || null,
     };
   });
   if (rows.length) await supabaseAdmin.from('task_checklists').insert(rows);
@@ -702,7 +716,11 @@ const upsertChecklist = async (taskId, checklist) => {
 
 const upsertTimeLogs = async (taskId, timeLogs, deleteExisting = true) => {
   if (deleteExisting) {
-    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).is('checklist_item_id', null);
+    await supabaseAdmin
+      .from('task_time_logs')
+      .delete()
+      .eq('task_id', taskId)
+      .is('checklist_item_id', null);
   }
   const rows = timeLogs.map((log) => {
     let startTimeStr = null;
@@ -796,9 +814,12 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     status: data.status ?? existing.status,
     assignee_id: data.assigneeId ?? existing.assigneeId,
     assignee_name: data.assigneeName ?? existing.assigneeName,
-    predecessors: data.predecessors !== undefined
-      ? (Array.isArray(data.predecessors) ? data.predecessors.filter(isValidUUID) : [])
-      : existing.predecessors,
+    predecessors:
+      data.predecessors !== undefined
+        ? Array.isArray(data.predecessors)
+          ? data.predecessors.filter(isValidUUID)
+          : []
+        : existing.predecessors,
     due_date: data.dueDate ?? existing.dueDate,
     display_order: data.displayOrder ?? existing.displayOrder,
     updated_at: new Date().toISOString(),
@@ -819,20 +840,33 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
 
   if (data.checklist !== undefined) {
     await upsertChecklist(taskId, data.checklist);
-    const checklistTimeLogs = [];
-    data.checklist.forEach(item => {
-      if (Array.isArray(item.timeLogs)) {
-        item.timeLogs.forEach(log => {
-          checklistTimeLogs.push({
-            ...log,
-            checklistItemId: item.id
+    // Only delete and re-insert checklist time logs when at least one
+    // checklist item explicitly provides a timeLogs array.  This prevents
+    // accidental data loss when the frontend sends a checklist update that
+    // is purely metadata (assignee, text, periodYear, etc.).
+    const hasExplicitTimeLogs = data.checklist.some(
+      (item) => Array.isArray(item.timeLogs) && item.timeLogs.length > 0
+    );
+    if (hasExplicitTimeLogs) {
+      const checklistTimeLogs = [];
+      data.checklist.forEach((item) => {
+        if (Array.isArray(item.timeLogs)) {
+          item.timeLogs.forEach((log) => {
+            checklistTimeLogs.push({
+              ...log,
+              checklistItemId: item.id,
+            });
           });
-        });
+        }
+      });
+      await supabaseAdmin
+        .from('task_time_logs')
+        .delete()
+        .eq('task_id', taskId)
+        .not('checklist_item_id', 'is', null);
+      if (checklistTimeLogs.length) {
+        await upsertTimeLogs(taskId, checklistTimeLogs, false);
       }
-    });
-    await supabaseAdmin.from('task_time_logs').delete().eq('task_id', taskId).not('checklist_item_id', 'is', null);
-    if (checklistTimeLogs.length) {
-      await upsertTimeLogs(taskId, checklistTimeLogs, false);
     }
   }
   if (data.timeLogs !== undefined) {
@@ -882,7 +916,7 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
     return { invoices: [], disbursements: [], transmittals: [], documents: [] };
   }
 
-  const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
+  const relatedEntityId = wr.entity_id;
 
   const [{ data: invoices }, { data: disbursements }, { data: transmittals }, { data: documents }] =
     await Promise.all([
@@ -902,7 +936,7 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
         .order('created_at', { ascending: false }),
       supabaseAdmin
         .from('transmittals')
-        .select('*, clients(name)')
+        .select('*, clients(name), transmittal_items(*)')
         .eq('entity_id', relatedEntityId)
         .eq('work_request_id', id)
         .is('deleted_at', null)
@@ -916,10 +950,18 @@ const getWorkRequestRelated = async ({ id, entityId }) => {
         .order('created_at', { ascending: false }),
     ]);
 
+  const mappedTransmittals = (transmittals || []).map((t) => {
+    const { transmittal_items, ...rest } = t;
+    return {
+      ...rest,
+      items: transmittal_items || [],
+    };
+  });
+
   return {
     invoices: invoices || [],
     disbursements: disbursements || [],
-    transmittals: transmittals || [],
+    transmittals: mappedTransmittals,
     documents: documents || [],
   };
 };

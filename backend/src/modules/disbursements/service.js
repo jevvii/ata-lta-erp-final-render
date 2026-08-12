@@ -81,6 +81,16 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return { active: 0, archived: 0, rejected: 0, awaitingRelease: 0 };
   }
 
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = [];
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { active: 0, archived: 0, rejected: 0, awaitingRelease: 0 };
+    }
+  }
+
   const runCount = async (query) => {
     const { count, error } = await query;
     if (error) {
@@ -93,12 +103,17 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return count || 0;
   };
 
-  const baseQuery = () =>
-    supabaseAdmin
+  const baseQuery = () => {
+    let q = supabaseAdmin
       .from('disbursements')
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
+    if (!isAdmin) {
+      q = q.in('linked_work_request_id', concernedWrIds);
+    }
+    return q;
+  };
 
   const canRelease = (() => {
     if (!user) return false;
@@ -109,8 +124,8 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
 
-  const isAdmin = user?.role === 'Admin';
-  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
 
   let activeQuery = baseQuery().neq('archived', true).neq('status', 'Cancelled');
   if (!isAdmin && !isAccounting) {
@@ -131,14 +146,22 @@ const getDisbursementCounts = async ({ entityId, user }) => {
           .eq('status', 'rejected')
       ),
       runCount(
-        supabaseAdmin
-          .from('operations_requests')
-          .select('*', { count: 'exact', head: true })
-          .in('entity_id', entityIds)
-          .eq('type', 'disbursement')
-          .eq('status', 'rejected')
+        (() => {
+          let q = supabaseAdmin
+            .from('operations_requests')
+            .select('*', { count: 'exact', head: true })
+            .in('entity_id', entityIds)
+            .eq('type', 'disbursement')
+            .eq('status', 'rejected');
+          if (!isAdmin) {
+            q = q.in('work_request_id', concernedWrIds);
+          }
+          return q;
+        })()
       ),
-      canRelease ? runCount(baseQuery().eq('status', 'Approved').eq('archived', false)) : Promise.resolve(0),
+      canRelease
+        ? runCount(baseQuery().eq('status', 'Approved').eq('archived', false))
+        : Promise.resolve(0),
     ]);
 
   const archived = archivedCount + cancelledCount;
@@ -189,7 +212,8 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
 
   // Role restriction: non-admin and non-accounting cannot see Draft or Pending phases/statuses.
   const isAdmin = user?.role === 'Admin';
-  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
   if (!isAdmin && !isAccounting) {
     if (status) {
       if (['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(status)) {
@@ -209,6 +233,15 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
     query = query.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
+  }
+
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
+    query = query.in('linked_work_request_id', concernedWrIds);
   }
 
   const offset = (page - 1) * limit;
@@ -305,8 +338,6 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
         detail: 'Failed to create disbursement',
       });
     }
-
-
   }
 
   throw new AppError({
@@ -316,7 +347,6 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
     code: 'DUPLICATE_DISBURSEMENT_NUMBER',
   });
 };
-
 
 /**
  * Get a single disbursement by ID.
@@ -345,13 +375,30 @@ const getDisbursementById = async ({ entityId, id, user }) => {
   // Role restriction
   if (user) {
     const isAdmin = user.role === 'Admin';
-    const isAccounting = (user.departments || []).includes('Accounting') || user.role === 'Accounting';
-    if (!isAdmin && !isAccounting && ['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(data.status)) {
+    const isAccounting =
+      (user.departments || []).includes('Accounting') || user.role === 'Accounting';
+    if (
+      !isAdmin &&
+      !isAccounting &&
+      ['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(data.status)
+    ) {
       throw new AppError({
         statusCode: 403,
         title: 'Forbidden',
         detail: 'You do not have permission to view this disbursement in its current status.',
       });
+    }
+
+    if (!isAdmin) {
+      const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+      const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+      if (!data.linked_work_request_id || !concernedWrIds.includes(data.linked_work_request_id)) {
+        throw new AppError({
+          statusCode: 403,
+          title: 'Forbidden',
+          detail: 'You do not have permission to view this disbursement.',
+        });
+      }
     }
   }
 
@@ -516,12 +563,15 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
   const transition = VALID_TRANSITIONS[action];
   const validFrom = Array.isArray(transition.from) ? transition.from : [transition.from];
 
-  const paymentDetails = action === 'release' ? {
-    method: extraUpdates.payment_method,
-    reference: extraUpdates.payment_reference,
-    bank: extraUpdates.payment_bank,
-    date: extraUpdates.payment_date,
-  } : undefined;
+  const paymentDetails =
+    action === 'release'
+      ? {
+          method: extraUpdates.payment_method,
+          reference: extraUpdates.payment_reference,
+          bank: extraUpdates.payment_bank,
+          date: extraUpdates.payment_date,
+        }
+      : undefined;
 
   const reason = action === 'reject' ? extraUpdates.rejection_reason : undefined;
 

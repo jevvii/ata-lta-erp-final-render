@@ -13,11 +13,12 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
+const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
 
 const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
-  workRequestId: null,
+  workRequestId: WORK_REQUEST_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -44,6 +45,13 @@ const seedClient = () => {
     status: 'Active',
     created_by: 'user-1',
     updated_by: 'user-1',
+  });
+  mockTables.work_requests.set(WORK_REQUEST_ID, {
+    id: WORK_REQUEST_ID,
+    entity_id: 'ent-ata',
+    client_id: CLIENT_ID,
+    title: 'Acme Audit',
+    status: 'In Progress',
   });
 };
 
@@ -460,11 +468,20 @@ describe('/v1/invoices', () => {
       entities: ['ATA'],
     });
 
+    const OPS_USER_ID = '55555555-5555-5555-5555-555555555555';
     const ops = registerUser({
+      id: OPS_USER_ID,
       email: 'ops@ata-lta.ph',
       name: 'Ops',
       role: 'Operations',
       entities: ['ATA'],
+    });
+
+    mockTables.tasks.set('task-ops-list', {
+      id: 'task-ops-list',
+      work_request_id: WORK_REQUEST_ID,
+      assignee_id: OPS_USER_ID,
+      deleted_at: null,
     });
 
     // Create a draft invoice
@@ -484,7 +501,9 @@ describe('/v1/invoices', () => {
       .expect(201);
 
     // Hardcode status Sent for the second invoice to simulate a released state
-    const sentInvoiceId = Array.from(mockTables.invoices.values()).find(i => i.invoice_number === 'ATA-SI-2026-SENT').id;
+    const sentInvoiceId = Array.from(mockTables.invoices.values()).find(
+      (i) => i.invoice_number === 'ATA-SI-2026-SENT'
+    ).id;
     mockTables.invoices.get(sentInvoiceId).status = 'Sent';
 
     // 1. Admin lists invoices -> sees both
@@ -493,8 +512,8 @@ describe('/v1/invoices', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(adminList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
-    expect(adminList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
+    expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
+    expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
     // 2. Ops lists invoices -> sees only Sent
     const opsList = await request(app)
@@ -502,8 +521,8 @@ describe('/v1/invoices', () => {
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
-    expect(opsList.body.data.some(i => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
+    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
     // 3. Ops tries to fetch draft invoice directly -> 403 Forbidden
     await request(app)
@@ -527,5 +546,110 @@ describe('/v1/invoices', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
     expect(adminCounts.body.data.active).toBe(2);
+  });
+
+  it('restricts invoice viewing access to concerned work request items only', async () => {
+    const _admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const staff1 = registerUser({
+      id: 'staff-1-id',
+      email: 'staff1@ata-lta.ph',
+      name: 'Staff One',
+      role: 'Accounting',
+      entities: ['ATA'],
+    });
+
+    const staff2 = registerUser({
+      id: 'staff-2-id',
+      email: 'staff2@ata-lta.ph',
+      name: 'Staff Two',
+      role: 'Accounting',
+      entities: ['ATA'],
+    });
+
+    // Seed two work requests
+    const WR_1 = '11111111-2222-3333-4444-555555555551';
+    const WR_2 = '11111111-2222-3333-4444-555555555552';
+
+    mockTables.work_requests.set(WR_1, {
+      id: WR_1,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      title: 'WR 1',
+    });
+    mockTables.work_requests.set(WR_2, {
+      id: WR_2,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      title: 'WR 2',
+    });
+
+    // Seed tasks assigning Staff One to WR_1, but no one to WR_2
+    mockTables.tasks.set('task-staff1', {
+      id: 'task-staff1',
+      work_request_id: WR_1,
+      assignee_id: 'staff-1-id',
+      deleted_at: null,
+    });
+
+    // Seed invoices linked to WR_1 and WR_2
+    const invoiceWr1 = 'inv-wr1';
+    const invoiceWr2 = 'inv-wr2';
+
+    mockTables.invoices.set(invoiceWr1, {
+      id: invoiceWr1,
+      invoice_number: 'ATA-SI-WR1',
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      work_request_id: WR_1,
+      status: 'Sent',
+      archived: false,
+    });
+
+    mockTables.invoices.set(invoiceWr2, {
+      id: invoiceWr2,
+      invoice_number: 'ATA-SI-WR2',
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      work_request_id: WR_2,
+      status: 'Sent',
+      archived: false,
+    });
+
+    // 1. Staff One lists invoices -> sees only ATA-SI-WR1
+    const res1 = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${staff1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(res1.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
+    expect(res1.body.data.some((i) => i.id === invoiceWr2)).toBe(false);
+
+    // 2. Staff Two lists invoices -> sees none (not concerned with either WR)
+    const res2 = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${staff2}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(res2.body.data.length).toBe(0);
+
+    // 3. Staff One tries to fetch invoiceWr2 directly -> 403 Forbidden
+    await request(app)
+      .get(`/v1/invoices/${invoiceWr2}`)
+      .set('Authorization', `Bearer ${staff1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(403);
+
+    // 4. Staff One fetches invoiceWr1 directly -> 200 OK
+    await request(app)
+      .get(`/v1/invoices/${invoiceWr1}`)
+      .set('Authorization', `Bearer ${staff1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
   });
 });

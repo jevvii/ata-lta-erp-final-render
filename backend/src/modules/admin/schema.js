@@ -5,12 +5,12 @@
 
 const { z } = require('zod');
 
-const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation'];
+const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
 const createUserSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1).max(255),
-  role: z.enum(['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation']),
+  role: z.enum(['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation', 'HR']),
   departments: z.array(z.enum(ALLOWED_DEPARTMENTS)).optional(),
   entities: z.array(z.enum(['ATA', 'LTA'])).min(1),
   isActive: z.boolean().default(true),

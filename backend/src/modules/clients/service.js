@@ -26,6 +26,10 @@ const toApiClient = (row, extras = {}) => {
     contactUserId: row.contact_user_id || null,
     contactPerson: row.contact_person || null,
     retainer: row.retainer,
+    retainerFee:
+      row.retainer_fee !== null && row.retainer_fee !== undefined
+        ? parseFloat(row.retainer_fee)
+        : null,
     status: row.status,
     createdBy: row.created_by || null,
     updatedBy: row.updated_by || null,
@@ -125,7 +129,16 @@ const loadRelated = async (clientIds) => {
  * @param {string} [params.sortOrder]
  * @returns {Promise<{ data: Array, meta: object }>}
  */
-const listClients = async ({ entityId, search, status, archived, page, limit, sortBy, sortOrder }) => {
+const listClients = async ({
+  entityId,
+  search,
+  status,
+  archived,
+  page,
+  limit,
+  sortBy,
+  sortOrder,
+}) => {
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
@@ -231,6 +244,7 @@ const createClient = async ({ entityId, data, createdBy }) => {
     contact_user_id: data.contactUserId || null,
     contact_person: data.contactPerson || null,
     retainer: data.retainer ?? false,
+    retainer_fee: data.retainer ? (data.retainerFee ?? null) : null,
     status: data.status || 'Active',
     created_by: createdBy,
     updated_by: createdBy,
@@ -267,8 +281,6 @@ const createClient = async ({ entityId, data, createdBy }) => {
 
   return getClientById({ id: clientId, entityId });
 };
-
-
 
 /**
  * Upsert contact details for a client.
@@ -319,7 +331,12 @@ const upsertRelatedCompanies = async (clientId, relatedCompanies) => {
  * @param {boolean} [params.allowCrossEntity=false] - When true, skip entity filtering (for consolidated ALL view).
  * @returns {Promise<object|null>}
  */
-const getClientById = async ({ id, entityId, allowCrossEntity = false, includeArchived = false }) => {
+const getClientById = async ({
+  id,
+  entityId,
+  allowCrossEntity = false,
+  includeArchived = false,
+}) => {
   let query = supabaseAdmin.from('clients').select('*').eq('id', id);
 
   if (!includeArchived) {
@@ -348,7 +365,10 @@ const getClientById = async ({ id, entityId, allowCrossEntity = false, includeAr
 
   if (!data) return null;
 
-  const [related, entityCode] = await Promise.all([loadRelated([id]), resolveEntityCode(data.entity_id || entityId)]);
+  const [related, entityCode] = await Promise.all([
+    loadRelated([id]),
+    resolveEntityCode(data.entity_id || entityId),
+  ]);
 
   return toApiClient(data, {
     entityCode,
@@ -377,9 +397,15 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
     rdo_code: data.rdoCode ?? existing.rdoCode,
     address: data.address ?? existing.address,
     trade_name: data.tradeName ?? existing.tradeName,
-    contact_user_id: data.contactUserId ?? existing.contactUserId,
+    contact_user_id: data.contactUserId !== undefined ? data.contactUserId : existing.contactUserId,
     contact_person: data.contactPerson !== undefined ? data.contactPerson : existing.contactPerson,
     retainer: data.retainer ?? existing.retainer,
+    retainer_fee:
+      (data.retainer ?? existing.retainer)
+        ? data.retainerFee !== undefined
+          ? data.retainerFee
+          : existing.retainerFee
+        : null,
     status: newStatus,
     updated_by: updatedBy,
     updated_at: new Date().toISOString(),
@@ -430,7 +456,11 @@ const archiveClient = async ({ id, entityId, userId }) => {
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to archive client' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to archive client',
+    });
   }
 
   return getClientById({ id, entityId, includeArchived: true });
@@ -453,7 +483,11 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
     .eq('entity_id', entityId);
 
   if (error) {
-    throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to restore client' });
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to restore client',
+    });
   }
 
   return getClientById({ id, entityId, includeArchived: true });

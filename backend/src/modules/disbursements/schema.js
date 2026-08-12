@@ -35,7 +35,7 @@ const createDisbursementSchema = z.object({
   clientId: z.string().uuid().optional().nullable(),
   employeeId: z.string().uuid().optional().nullable(),
   linkedInvoiceId: z.string().uuid().optional().nullable(),
-  linkedWorkRequestId: z.string().uuid().optional().nullable(),
+  linkedWorkRequestId: z.string().uuid(),
   linkedTaskId: z.string().uuid().optional().nullable(),
   dueDate: z.string().optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),

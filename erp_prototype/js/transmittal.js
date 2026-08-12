@@ -314,7 +314,7 @@ const Transmittal = {
       errorTitle: 'Send Failed'
     });
     if (runResult.success) {
-      this._invalidateCountsAndSidebar();
+      this._refreshAfterMutation(t);
     } else if (snapshot) {
       this._updateCachedItem(id, snapshot);
     }
@@ -339,7 +339,7 @@ const Transmittal = {
       errorTitle: 'Approval Failed'
     });
     if (runResult.success) {
-      this._invalidateCountsAndSidebar();
+      this._refreshAfterMutation(t);
     } else if (snapshot) {
       this._updateCachedItem(id, snapshot);
     }
@@ -368,11 +368,39 @@ const Transmittal = {
       errorTitle: 'Acknowledge Failed'
     });
     if (runResult.success) {
-      this._invalidateCountsAndSidebar();
+      this._refreshAfterMutation(t);
     } else if (snapshot) {
       this._updateCachedItem(id, snapshot);
     }
     App.handleRoute();
+  },
+
+  _invalidateWorkRequestRelated(workRequestId) {
+    if (workRequestId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
+      WorkflowData.invalidateRelatedForWorkRequest(workRequestId);
+    }
+  },
+
+  /**
+   * Central post-mutation cache refresh. Marks the module cache as needing a
+   * fresh server fetch, invalidates backend-derived counts/sidebar badges, and
+   * clears the parent work-request related cache so concurrent users always see
+   * the latest linked records.
+   */
+  _refreshAfterMutation(record) {
+    this._needsFreshFetch = true;
+    this._invalidateCountsAndSidebar();
+    if (record?.workRequestId) {
+      this._invalidateWorkRequestRelated(record.workRequestId);
+      // If the user is currently viewing the linked work request, refresh it
+      // in place so the related section shows the new/updated transmittal
+      // without requiring another navigation.
+      if (typeof window !== 'undefined' && window.location?.hash?.includes(record.workRequestId)) {
+        if (typeof App !== 'undefined' && typeof App.handleRoute === 'function') {
+          App.handleRoute();
+        }
+      }
+    }
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
@@ -415,13 +443,8 @@ const Transmittal = {
         }
         this._updateCachedItem(id, norm);
       }
+      this._refreshAfterMutation((this._items || []).find(t => t.id === id));
       this._clearActiveSkipGeneration(gen);
-      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-        window.apiClient.transmittals.invalidateCounts();
-      }
-      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-        App.updateSidebarNotifications().catch(() => {});
-      }
       App.handleRoute();
       return res;
     } catch (e) {
@@ -465,17 +488,8 @@ const Transmittal = {
 
     try {
       const res = await apiCall();
+      this._refreshAfterMutation(originalItem);
       this._clearActiveSkipGeneration(gen);
-      if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-        window.apiClient.transmittals.invalidateCounts();
-      }
-      if (typeof Dashboard !== 'undefined') {
-        if (typeof Dashboard._dataCache !== 'undefined') Dashboard._dataCache = null;
-        if (typeof Dashboard.invalidateCache === 'function') Dashboard.invalidateCache();
-      }
-      if (typeof App !== 'undefined' && typeof App.updateSidebarNotifications === 'function') {
-        App.updateSidebarNotifications().catch(() => {});
-      }
       App.handleRoute();
       return res;
     } catch (e) {
@@ -535,7 +549,7 @@ const Transmittal = {
       receivedByName: t.received_by_name || t.receivedByName || '',
       boardOrder: t.board_order || t.boardOrder,
       pendingChangeId: t.pending_change_id || t.pendingChangeId,
-      items: (t.items || []).map(i => this.normalizeTransmittalItem(i))
+      items: (t.items || t.transmittal_items || t.transmittalItems || []).map(i => this.normalizeTransmittalItem(i))
     };
   },
 
@@ -593,12 +607,14 @@ const Transmittal = {
     if (!id) return null;
     if (this._items) {
       const cached = this._items.find(t => t.id === id);
-      if (cached) return cached;
+      if (cached && Array.isArray(cached.items) && cached.items.length > 0) return cached;
     }
     if (Auth.activeEntity !== 'ALL') {
       try {
         const res = await window.apiClient.transmittals.get(id);
-        return res.data ? this.normalizeTransmittal(res.data) : null;
+        const trans = res.data ? this.normalizeTransmittal(res.data) : null;
+        if (trans) this._replaceInCache(id, trans);
+        return trans;
       } catch (e) {
         return null;
       }
@@ -607,7 +623,11 @@ const Transmittal = {
     for (const code of codes) {
       try {
         const res = await this._callWithEntity(code, () => window.apiClient.transmittals.get(id));
-        if (res.data) return this.normalizeTransmittal(res.data, code);
+        if (res.data) {
+          const trans = this.normalizeTransmittal(res.data, code);
+          if (trans) this._replaceInCache(id, trans);
+          return trans;
+        }
       } catch (e) {
         // not found in this entity; continue
       }
@@ -653,22 +673,22 @@ const Transmittal = {
           if (t) {
             titleTextNode.textContent = t.trackingNumber || this.detailId;
 
-            if (Auth.can('transmittal:mark')) {
-              if (t.status === 'Draft') {
-                if (Auth.can('transmittal:edit')) {
-                  const editBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Edit', style: 'margin-right:8px;' });
-                  editBtn.addEventListener('click', () => { this.showForm(t.id); });
-                  actions.insertBefore(editBtn, backBtn);
-                }
-                if (Auth.user?.role === 'Admin' && !t.approved) {
-                  const approveBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Approve Draft', style: 'margin-right:8px;' });
-                  approveBtn.addEventListener('click', () => {
-                    Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this transmittal draft?', () => {
-                      this.approveTransmittal(t.id);
-                    }, 'success');
-                  });
-                  actions.insertBefore(approveBtn, backBtn);
-                }
+            if (t.status === 'Draft') {
+              if (this.canEditTransmittal(t)) {
+                const editBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Edit', style: 'margin-right:8px;' });
+                editBtn.addEventListener('click', () => { this.showForm(t.id); });
+                actions.insertBefore(editBtn, backBtn);
+              }
+              if (Auth.can('transmittal:approve') && !t.approved) {
+                const approveBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Approve Draft', style: 'margin-right:8px;' });
+                approveBtn.addEventListener('click', () => {
+                  Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this transmittal draft?', () => {
+                    this.approveTransmittal(t.id);
+                  }, 'success');
+                });
+                actions.insertBefore(approveBtn, backBtn);
+              }
+              if (this.showMarkAsSent(t)) {
                 const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
                 sendBtn.addEventListener('click', () => {
                   if (Auth.user?.role !== 'Admin' && !t.approved) {
@@ -680,17 +700,17 @@ const Transmittal = {
                   }, 'success');
                 });
                 actions.insertBefore(sendBtn, backBtn);
-              } else if (t.status === 'Sent') {
-                const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge Receipt', style: 'margin-right:8px;' });
-                ackBtn.addEventListener('click', () => {
-                  this.showAcknowledgeDialog(t.id);
-                });
-                actions.insertBefore(ackBtn, backBtn);
               }
+            } else if (t.status === 'Sent' && Auth.can('transmittal:mark')) {
+              const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge Receipt', style: 'margin-right:8px;' });
+              ackBtn.addEventListener('click', () => {
+                this.showAcknowledgeDialog(t.id);
+              });
+              actions.insertBefore(ackBtn, backBtn);
             }
 
             if (Auth.user?.role === 'Admin') {
-              if (!t.archived) {
+              if (!t.archived && (t.status !== 'Draft' || !Auth.can('transmittal:approve'))) {
                 const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-right:8px;' });
                 archiveBtn.addEventListener('click', () => { this.archiveTransmittal(t.id); });
                 actions.insertBefore(archiveBtn, backBtn);
@@ -1317,8 +1337,7 @@ const Transmittal = {
         });
         wrapper.appendChild(approveBtn);
       }
-      const canMark = Auth.can('transmittal:mark');
-      if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+      if (this.showMarkAsSent(t)) {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent', style: 'margin-left:4px;' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1332,15 +1351,17 @@ const Transmittal = {
         });
         wrapper.appendChild(sendBtn);
       }
-      if (canMark && t.status === 'Sent') {
+      if (Auth.can('transmittal:mark') && t.status === 'Sent') {
         const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge', style: 'margin-left:4px;' });
         ackBtn.addEventListener('click', (e) => { e.stopPropagation(); self.showAcknowledgeDialog(t.id); });
         wrapper.appendChild(ackBtn);
       }
       if (!t.archived && Auth.user?.role === 'Admin') {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
-        wrapper.appendChild(archiveBtn);
+        if (t.status !== 'Draft' || !Auth.can('transmittal:approve')) {
+          const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive', style: 'margin-left:4px;' });
+          archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
+          wrapper.appendChild(archiveBtn);
+        }
       }
       return wrapper;
     };
@@ -1521,7 +1542,7 @@ const Transmittal = {
           )
         });
       }
-      if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+      if (self.showMarkAsSent(t)) {
         menu.push({
           label: 'Mark as Sent',
           className: 'primary',
@@ -1549,11 +1570,13 @@ const Transmittal = {
         });
       }
       if (!t.archived && Auth.user?.role === 'Admin') {
-        menu.push({
-          label: 'Archive',
-          icon: ArchivePage.icons.archive || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>',
-          onClick: () => self.archiveTransmittal(t.id)
-        });
+        if (t.status !== 'Draft' || !Auth.can('transmittal:approve')) {
+          menu.push({
+            label: 'Archive',
+            icon: ArchivePage.icons.archive || '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>',
+            onClick: () => self.archiveTransmittal(t.id)
+          });
+        }
       }
       return menu;
     };
@@ -1603,7 +1626,7 @@ const Transmittal = {
             errorTitle: 'Update Failed'
           }).then(runResult => {
             if (runResult.success) {
-              self._invalidateCountsAndSidebar();
+              self._refreshAfterMutation(item);
             } else if (snapshot) {
               self._updateCachedItem(item.id, snapshot);
             }
@@ -1654,7 +1677,7 @@ const Transmittal = {
             errorTitle: isSend ? 'Send Failed' : 'Acknowledge Failed'
           });
           if (runResult.success) {
-            self._invalidateCountsAndSidebar();
+            self._refreshAfterMutation(item);
           } else if (snapshot) {
             self._updateCachedItem(item.id, snapshot);
           }
@@ -1727,7 +1750,7 @@ const Transmittal = {
         });
         actionWrap.appendChild(approveBtn);
       }
-      if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+      if (this.showMarkAsSent(t)) {
         const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark Sent' });
         sendBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -1747,9 +1770,11 @@ const Transmittal = {
         actionWrap.appendChild(ackBtn);
       }
       if (!t.archived && Auth.user?.role === 'Admin') {
-        const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive' });
-        archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
-        actionWrap.appendChild(archiveBtn);
+        if (t.status !== 'Draft' || !Auth.can('transmittal:approve')) {
+          const archiveBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Archive' });
+          archiveBtn.addEventListener('click', (e) => { e.stopPropagation(); self.archiveTransmittal(t.id); });
+          actionWrap.appendChild(archiveBtn);
+        }
       }
       item.appendChild(actionWrap);
       list.appendChild(item);
@@ -1758,7 +1783,21 @@ const Transmittal = {
   },
 
   canEditTransmittal(t) {
+    if (Auth.can('transmittal:approve')) return false;
     return Auth.can('transmittal:edit') && t.status === 'Draft';
+  },
+
+  showMarkAsSent(t) {
+    if (t.status !== 'Draft') return false;
+    if (t.pendingChangeId) return false;
+    if (Auth.can('transmittal:approve')) return true;
+    return Auth.can('transmittal:mark') && t.createdBy === Auth.user?.id;
+  },
+
+  nextTrackingNumber(entity) {
+    return (typeof Utils !== 'undefined' && typeof Utils.nextTrackingNumber === 'function')
+      ? Utils.nextTrackingNumber(entity)
+      : Promise.resolve(entity + '-TX-' + new Date().getFullYear() + '-001');
   },
 
   async showForm(txId = null, mode = null) {
@@ -1861,14 +1900,18 @@ const Transmittal = {
     // Tracking Number
     const tnGroup = el('div', { class: 'notion-prop' });
     tnGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3M4 17v3h3M20 7V4h-3M20 17v3h-3M9 9h6v6H9z"/></svg> Tracking Number' }));
-    const tnWrap = el('div', { class: 'notion-input-with-btn' });
-    const tnInput = el('input', { type: 'text', name: 'trackingNumber', class: 'notion-prop-input', readonly: true, value: existing ? existing.trackingNumber : '' });
-    tnInput.style.flex = '1';
-    tnWrap.appendChild(tnInput);
-    const genBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Generate' });
-    genBtn.addEventListener('click', () => { tnInput.value = this.generateTrackingNumber(entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity); });
-    tnWrap.appendChild(genBtn);
-    tnGroup.appendChild(tnWrap);
+    const tnInput = el('input', {
+      type: 'text',
+      name: 'trackingNumber',
+      class: 'notion-prop-input',
+      readonly: true,
+      value: existing ? existing.trackingNumber : '',
+      style: 'background: #f1f5f9; cursor: not-allowed; color: #64748b;'
+    });
+    if (!existing) {
+      this.nextTrackingNumber(entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity).then(n => { tnInput.value = n; }).catch(() => {});
+    }
+    tnGroup.appendChild(tnInput);
     propsGrid.appendChild(tnGroup);
 
     form.appendChild(propsGrid);
@@ -1962,7 +2005,7 @@ const Transmittal = {
 
     const typeSel = el('select', { class: 'item-doc-type notion-line-item-type', required: true });
     typeSel.appendChild(el('option', { value: '', text: '— Type —' }));
-    ['Original Scan', 'Generated Copy', 'Government Receipt', 'Final Deliverable', 'Other'].forEach(t => {
+    ['Original Copy', 'Photocopy', 'Generated Copy', 'Others'].forEach(t => {
       const opt = el('option', { value: t, text: t });
       if (documentType === t) opt.selected = true;
       typeSel.appendChild(opt);
@@ -2015,7 +2058,7 @@ const Transmittal = {
     const payload = {
       workRequestId: data.workRequestId,
       clientId: data.clientId,
-      trackingNumber: data.trackingNumber || this.generateTrackingNumber(recordEntity),
+      trackingNumber: data.trackingNumber || await this.nextTrackingNumber(recordEntity),
       items,
       notes: data.notes || null
     };
@@ -2070,12 +2113,7 @@ const Transmittal = {
             savedTransmittal = this.normalizeTransmittal(res?.data);
             if (savedTransmittal) {
               this._replaceInCache(localId, savedTransmittal);
-            }
-            if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
-              Dashboard.invalidateCache();
-            }
-            if (savedTransmittal?.workRequestId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidateRelatedForWorkRequest === 'function') {
-              WorkflowData.invalidateRelatedForWorkRequest(savedTransmittal.workRequestId);
+              this._refreshAfterMutation(savedTransmittal);
             }
 
             // Fulfill pending operations request if any.
@@ -2129,9 +2167,7 @@ const Transmittal = {
             this._items = [savedTransmittal];
             this._entity = this._getActiveEntity();
           }
-        }
-        if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
-          Dashboard.invalidateCache();
+          this._refreshAfterMutation(savedTransmittal);
         }
       } catch (e) {
         Workflow.showMessage('Update Transmittal', e.message || 'Unable to update transmittal.', 'error');
@@ -2365,17 +2401,21 @@ const Transmittal = {
 
     (t.items || []).forEach(item => {
       if (usedRows < totalRows) {
-        rows.push({ text: (item.documentType || '').toUpperCase(), isEmpty: false });
-        usedRows++;
-      }
-      if (usedRows < totalRows) {
-        rows.push({ text: (item.description || '').toUpperCase(), isEmpty: false });
+        rows.push({
+          category: (item.documentType || '').toUpperCase(),
+          document: (item.description || '').toUpperCase(),
+          isEmpty: false
+        });
         usedRows++;
       }
     });
 
     while (usedRows < totalRows) {
-      rows.push({ text: '', isEmpty: true });
+      rows.push({
+        category: '',
+        document: '',
+        isEmpty: true
+      });
       usedRows++;
     }
 
@@ -2447,15 +2487,36 @@ const Transmittal = {
         width: 100%;
         border-collapse: collapse;
       }
+      .preview-table-header-cell {
+        border-bottom: 2px solid #000;
+        padding: 6px 10px;
+        font-weight: bold;
+        text-align: left;
+        font-size: 10pt;
+      }
+      .preview-category-header-cell {
+        width: 35%;
+        border-right: 2px solid #000;
+      }
+      .preview-document-header-cell {
+        width: 65%;
+      }
       .preview-doc-row {
         height: 22px;
       }
       .preview-doc-cell {
         border-bottom: 1px solid #000;
-        text-align: center;
-        font-weight: bold;
-        padding: 2px 4px;
+        padding: 4px 10px;
         font-size: 10pt;
+        text-align: left;
+      }
+      .preview-category-cell {
+        font-weight: bold;
+        border-right: 1px solid #000;
+        width: 35%;
+      }
+      .preview-document-cell {
+        width: 65%;
       }
       .preview-document-table tr:last-child .preview-doc-cell {
         border-bottom: none;
@@ -2547,20 +2608,9 @@ const Transmittal = {
     r2.appendChild(tdDate);
     headerTable.appendChild(r2);
 
-    // Row 3: FROM & TO
+    // Row 3: TO only
     const r3 = el('tr');
-    const tdFrom = el('td', { style: 'width: 55%; line-height: 1.4;' }, [
-      el('strong', { text: 'FROM:' }),
-      document.createTextNode(' '),
-      el('strong', { text: fromEntity }),
-      el('br'),
-      document.createTextNode('RM 307 Republic Supermarket Bldg,'),
-      el('br'),
-      document.createTextNode('Soler St., cor. F.Torres St.,'),
-      el('br'),
-      document.createTextNode('Sta. Cruz, Manila')
-    ]);
-    const tdTo = el('td', { style: 'width: 45%;' }, [
+    const tdTo = el('td', { colspan: '2', style: 'width: 100%;' }, [
       el('div', { style: 'display: flex; gap: 8px; align-items: flex-start;' }, [
         el('strong', { text: 'TO:', style: 'margin-top: 3px;' }),
         el('div', { style: 'flex: 1; display: flex; flex-direction: column;' }, [
@@ -2571,7 +2621,6 @@ const Transmittal = {
         ])
       ])
     ]);
-    r3.appendChild(tdFrom);
     r3.appendChild(tdTo);
     headerTable.appendChild(r3);
 
@@ -2582,11 +2631,21 @@ const Transmittal = {
     docBox.appendChild(el('div', { class: 'preview-document-title', text: 'Received the following documents and/or records:' }));
 
     const docTable = el('table', { class: 'preview-document-table' });
+    const thead = el('thead');
+    const thr = el('tr', { class: 'preview-header-row' });
+    thr.appendChild(el('th', { class: 'preview-table-header-cell preview-category-header-cell', text: 'CATEGORY' }));
+    thr.appendChild(el('th', { class: 'preview-table-header-cell preview-document-header-cell', text: 'DOCUMENT' }));
+    thead.appendChild(thr);
+    docTable.appendChild(thead);
+
+    const tbody = el('tbody');
     rows.forEach(r => {
       const tr = el('tr', { class: 'preview-doc-row' });
-      tr.appendChild(el('td', { class: 'preview-doc-cell', html: r.isEmpty ? '&nbsp;' : r.text }));
-      docTable.appendChild(tr);
+      tr.appendChild(el('td', { class: 'preview-doc-cell preview-category-cell', html: r.isEmpty ? '&nbsp;' : r.category }));
+      tr.appendChild(el('td', { class: 'preview-doc-cell preview-document-cell', html: r.isEmpty ? '&nbsp;' : r.document }));
+      tbody.appendChild(tr);
     });
+    docTable.appendChild(tbody);
     docBox.appendChild(docTable);
 
     // RECEIVED STAMP (if acknowledged)
@@ -2676,17 +2735,23 @@ const Transmittal = {
 
     (t.items || []).forEach(item => {
       if (usedRows < totalRows) {
-        rowsHtml += `<tr class="doc-row"><td class="doc-cell">${(item.documentType || '').toUpperCase()}</td></tr>`;
-        usedRows++;
-      }
-      if (usedRows < totalRows) {
-        rowsHtml += `<tr class="doc-row"><td class="doc-cell">${(item.description || '').toUpperCase()}</td></tr>`;
+        rowsHtml += `
+          <tr class="doc-row">
+            <td class="doc-cell category-cell">${(item.documentType || '').toUpperCase()}</td>
+            <td class="doc-cell document-cell">${(item.description || '').toUpperCase()}</td>
+          </tr>
+        `;
         usedRows++;
       }
     });
 
     while (usedRows < totalRows) {
-      rowsHtml += `<tr class="doc-row"><td class="doc-cell">&nbsp;</td></tr>`;
+      rowsHtml += `
+        <tr class="doc-row">
+          <td class="doc-cell category-cell">&nbsp;</td>
+          <td class="doc-cell document-cell">&nbsp;</td>
+        </tr>
+      `;
       usedRows++;
     }
 
@@ -2810,15 +2875,36 @@ const Transmittal = {
         width: 100%;
         border-collapse: collapse;
       }
+      .table-header-cell {
+        border-bottom: 2px solid #000;
+        padding: 6px 10px;
+        font-weight: bold;
+        text-align: left;
+        font-size: 10pt;
+      }
+      .category-header-cell {
+        width: 35%;
+        border-right: 2px solid #000;
+      }
+      .document-header-cell {
+        width: 65%;
+      }
       .doc-row {
         height: 22px;
       }
       .doc-cell {
         border-bottom: 1px solid #000;
-        text-align: center;
-        font-weight: bold;
-        padding: 2px 4px;
+        padding: 4px 10px;
         font-size: 10pt;
+        text-align: left;
+      }
+      .category-cell {
+        font-weight: bold;
+        border-right: 2px solid #000;
+        width: 35%;
+      }
+      .document-cell {
+        width: 65%;
       }
       .document-table tr:last-child .doc-cell {
         border-bottom: none;
@@ -2904,13 +2990,7 @@ const Transmittal = {
             </td>
           </tr>
           <tr>
-            <td class="from-cell">
-              <strong>FROM:</strong> <strong>${fromEntity}</strong><br>
-              RM 307 Republic Supermarket Bldg,<br>
-              Soler St., cor. F.Torres St.,<br>
-              Sta. Cruz, Manila
-            </td>
-            <td class="to-cell">
+            <td colspan="2" class="to-cell" style="width: 100%;">
               <div style="display: flex; gap: 8px; align-items: flex-start;">
                 <strong style="margin-top: 3px;">TO:</strong>
                 <div style="flex: 1; display: flex; flex-direction: column;">
@@ -2927,7 +3007,15 @@ const Transmittal = {
         <div class="document-box">
           <div class="document-title">Received the following documents and/or records:</div>
           <table class="document-table">
-            ${rowsHtml}
+            <thead>
+              <tr class="header-row">
+                <th class="table-header-cell category-header-cell">CATEGORY</th>
+                <th class="table-header-cell document-header-cell">DOCUMENT</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
           </table>
           ${stampHtml}
         </div>
@@ -2978,10 +3066,7 @@ const Transmittal = {
               }
             },
             onAfterConfirm: async () => {
-              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                window.apiClient.transmittals.invalidateCounts();
-              }
-              App.updateSidebarNotifications().catch(() => {});
+              this._refreshAfterMutation(item);
               if ((this.view === 'detail' && this.detailId === id) || (this.view === 'form' && this.detailId === id)) {
                 location.hash = '#transmittal';
                 return;
@@ -3045,10 +3130,9 @@ const Transmittal = {
               : `${eligible.length} transmittal(s) archived.`,
             errorTitle: 'Archive Failed',
             onAfterConfirm: async () => {
-              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                window.apiClient.transmittals.invalidateCounts();
+              for (const t of eligible) {
+                this._refreshAfterMutation(t);
               }
-              App.updateSidebarNotifications().catch(() => {});
               if (ids.includes(this.detailId) && (this.view === 'detail' || this.view === 'form')) {
                 location.hash = '#transmittal';
                 return;
@@ -3091,10 +3175,7 @@ const Transmittal = {
               }
             },
             onAfterConfirm: async () => {
-              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                window.apiClient.transmittals.invalidateCounts();
-              }
-              App.updateSidebarNotifications().catch(() => {});
+              this._refreshAfterMutation(item);
               if ((this.view === 'detail' && this.detailId === id) || (this.view === 'form' && this.detailId === id)) {
                 location.hash = '#transmittal';
                 return;
@@ -3163,10 +3244,9 @@ const Transmittal = {
               : `${eligible.length} transmittal(s) restored.`,
             errorTitle: 'Restore Failed',
             onAfterConfirm: async () => {
-              if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                window.apiClient.transmittals.invalidateCounts();
+              for (const t of eligible) {
+                this._refreshAfterMutation(t);
               }
-              App.updateSidebarNotifications().catch(() => {});
               if (ids.includes(this.detailId) && (this.view === 'detail' || this.view === 'form')) {
                 location.hash = '#transmittal';
                 return;
@@ -3309,10 +3389,7 @@ const Transmittal = {
                         }
                       },
                       onAfterConfirm: async () => {
-                        if (typeof window.apiClient?.transmittals?.invalidateCounts === 'function') {
-                          window.apiClient.transmittals.invalidateCounts();
-                        }
-                        App.updateSidebarNotifications().catch(() => {});
+                        self._refreshAfterMutation(t);
                         if ((self.view === 'detail' && self.detailId === t.id) || (self.view === 'form' && self.detailId === t.id)) {
                           location.hash = '#transmittal';
                           return;

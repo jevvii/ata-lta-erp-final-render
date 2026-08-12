@@ -3864,6 +3864,9 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Phone', Icons.document, el('span', { text: proposed.phone || 'None' })));
       propertyGrid.appendChild(createPropertyRow('Email', Icons.document, el('span', { text: proposed.email || 'None' })));
       propertyGrid.appendChild(createPropertyRow('Retainer status', Icons.status, el('span', { text: proposed.retainer ? 'Yes' : 'No' })));
+      if (proposed.retainer) {
+        propertyGrid.appendChild(createPropertyRow('Retainer fee', Icons.amount, el('span', { text: proposed.retainerFee != null ? formatPHP(proposed.retainerFee) : 'None' })));
+      }
 
     } else if (pc.table === 'disbursements') {
       const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;

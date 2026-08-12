@@ -1,184 +1,493 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ATA &amp; LTA Accounting Firm ERP</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preconnect" href="http://localhost:3000">
-  <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
-  <!-- Preload critical JS to start download early while HTML parses -->
-  <link rel="preload" href="js/utils.js" as="script">
-  <link rel="preload" href="js/apiClient.js" as="script">
-  <link rel="preload" href="js/auth.js" as="script">
-  <!-- Critical CSS for instant first paint (loading screen + login + app shell) -->
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --color-bg: #f4f6fb; --color-surface: #ffffff; --color-text: #2d2d3f; --color-text-muted: #9494a0; --color-border: #f0f0f5; --color-primary: #2563eb; --color-primary-dark: #1d4ed8; --font-sans: "Poppins", "Inter", system-ui, -apple-system, sans-serif; --radius-sm: 12px; --sidebar-width: 200px; --shadow-soft: 0 10px 40px rgba(0,0,0,0.03); }
-    [data-theme="dark"] { --color-bg: #0c0f1a; --color-surface: #13172a; --color-text: #e2e8f0; --color-text-muted: #94a3b8; --color-border: #1e2540; --color-primary: #4f8afa; }
-    html, body { height: 100%; font-family: var(--font-sans); background: var(--color-bg); color: var(--color-text); }
-    .hidden { display: none !important; }
-    .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
-    .loading-spinner { width: 40px; height: 40px; border: 3px solid var(--color-border); border-top-color: var(--color-primary); border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .login-card { max-width: 400px; margin: 15vh auto; padding: 2rem; background: var(--color-surface); border-radius: var(--radius-sm); box-shadow: var(--shadow-soft); }
-    .app-header { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; padding: .5rem 1rem; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
-    .app-layout { display: flex; min-height: calc(100vh - 49px); }
-    .sidebar { width: var(--sidebar-width); background: var(--color-surface); border-right: 1px solid var(--color-border); padding: .5rem 0; flex-shrink: 0; overflow-y: auto; }
-    .content { flex: 1; padding: 1.5rem; min-width: 0; overflow-x: hidden; }
-  </style>
-  <!-- Full stylesheet loaded non-blocking after first paint -->
-  <link rel="stylesheet" href="css/styles.css" media="print" onload="this.media='all'">
-  <noscript><link rel="stylesheet" href="css/styles.css"></noscript>
-</head>
-<body>
-
-  <!-- Loading Screen -->
-  <div id="loading-screen" class="hidden">
-    <div class="loading-container">
-      <div class="loading-spinner"></div>
-      <div class="loading-text">Syncing data...</div>
-    </div>
-  </div>
-
-  <!-- Login Screen -->
-  <div id="login-screen" class="hidden">
-    <div class="login-card">
-      <h1>ATA &amp; LTA ERP</h1>
-      <p class="login-subtitle">Accounting Firm Management System</p>
-      <form id="login-form" class="form-stacked">
-        <div class="form-group">
-          <label for="email">Email</label>
-          <input type="email" id="email" name="email" required placeholder="user@ata-lta.com">
-        </div>
-        <div class="form-group">
-          <label for="password">Password</label>
-          <input type="password" id="password" name="password" required placeholder="Enter password">
-        </div>
-        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
-      </form>
-      <div id="login-error" class="login-error hidden"></div>
-    </div>
-  </div>
-
-  <!-- App Shell (hidden by default) -->
-  <div id="app-shell" class="hidden">
-    <header class="app-header">
-      <div class="header-brand">
-        <button id="sidebar-collapse-btn" class="sidebar-collapse-btn" aria-label="Toggle sidebar" title="Collapse sidebar">
-          <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
-        </button>
-        <span class="logo">ATA &amp; LTA ERP</span>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ATA &amp; LTA Accounting Firm ERP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="http://localhost:3000" />
+    <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
+    <!-- Preload critical JS to start download early while HTML parses -->
+    <link rel="preload" href="js/utils.js" as="script" />
+    <link rel="preload" href="js/apiClient.js" as="script" />
+    <link rel="preload" href="js/auth.js" as="script" />
+    <!-- Critical CSS for instant first paint (loading screen + login + app shell) -->
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --color-bg: #f4f6fb;
+        --color-surface: #ffffff;
+        --color-text: #2d2d3f;
+        --color-text-muted: #9494a0;
+        --color-border: #f0f0f5;
+        --color-primary: #2563eb;
+        --color-primary-dark: #1d4ed8;
+        --font-sans: "Poppins", "Inter", system-ui, -apple-system, sans-serif;
+        --radius-sm: 12px;
+        --sidebar-width: 200px;
+        --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.03);
+      }
+      [data-theme="dark"] {
+        --color-bg: #0c0f1a;
+        --color-surface: #13172a;
+        --color-text: #e2e8f0;
+        --color-text-muted: #94a3b8;
+        --color-border: #1e2540;
+        --color-primary: #4f8afa;
+      }
+      html,
+      body {
+        height: 100%;
+        font-family: var(--font-sans);
+        background: var(--color-bg);
+        color: var(--color-text);
+      }
+      .hidden {
+        display: none !important;
+      }
+      .loading-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+      }
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid var(--color-border);
+        border-top-color: var(--color-primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .login-card {
+        max-width: 400px;
+        margin: 15vh auto;
+        padding: 2rem;
+        background: var(--color-surface);
+        border-radius: var(--radius-sm);
+        box-shadow: var(--shadow-soft);
+      }
+      .app-header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.5rem 1rem;
+        background: var(--color-surface);
+        border-bottom: 1px solid var(--color-border);
+      }
+      .app-layout {
+        display: flex;
+        min-height: calc(100vh - 49px);
+      }
+      .sidebar {
+        width: var(--sidebar-width);
+        background: var(--color-surface);
+        border-right: 1px solid var(--color-border);
+        padding: 0.5rem 0;
+        flex-shrink: 0;
+        overflow-y: auto;
+      }
+      .content {
+        flex: 1;
+        padding: 1.5rem;
+        min-width: 0;
+        overflow-x: hidden;
+      }
+    </style>
+    <!-- Full stylesheet loaded non-blocking after first paint -->
+    <link
+      rel="stylesheet"
+      href="css/styles.css"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript><link rel="stylesheet" href="css/styles.css" /></noscript>
+  </head>
+  <body>
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="hidden">
+      <div class="loading-container">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Syncing data...</div>
       </div>
-      <div class="header-actions">
-        <div class="entity-pill">
-          <select id="entity-switcher" class="form-select pill-select">
-            <option value="ATA">ATA Accounting</option>
-            <option value="LTA">LTA Accounting</option>
-          </select>
-          <span id="entity-badge" class="badge"></span>
-        </div>
-        <button id="theme-toggle-btn" class="theme-toggle-btn" aria-label="Toggle dark mode" title="Toggle dark mode">
-          <svg id="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          <svg id="theme-icon-sun" class="hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-        </button>
-        <div class="user-chip" id="user-chip">
-          <span id="user-avatar" class="avatar"></span>
-          <span id="user-name" class="user-name">User</span>
-          <button id="user-menu-toggle" class="user-menu-toggle" aria-label="Open user menu" title="User menu">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+
+    <!-- Login Screen -->
+    <div id="login-screen" class="hidden">
+      <div class="login-card">
+        <h1>ATA &amp; LTA ERP</h1>
+        <p class="login-subtitle">Accounting Firm Management System</p>
+        <form id="login-form" class="form-stacked">
+          <div class="form-group">
+            <label for="email">Email</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              required
+              placeholder="user@ata-lta.com"
+            />
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              required
+              placeholder="Enter password"
+            />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">
+            Sign In
           </button>
-          <div id="user-menu-dropdown" class="user-menu-dropdown hidden">
-            <a href="#profile" id="profile-link" class="user-menu-item">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              <span>Profile</span>
-            </a>
-            <button id="logout-btn" class="user-menu-item user-menu-logout">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              <span>Logout</span>
+        </form>
+        <div id="login-error" class="login-error hidden"></div>
+      </div>
+    </div>
+
+    <!-- App Shell (hidden by default) -->
+    <div id="app-shell" class="hidden">
+      <header class="app-header">
+        <div class="header-brand">
+          <button
+            id="sidebar-collapse-btn"
+            class="sidebar-collapse-btn"
+            aria-label="Toggle sidebar"
+            title="Collapse sidebar"
+          >
+            <svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6" /></svg>
+          </button>
+          <span class="logo">ATA &amp; LTA ERP</span>
+        </div>
+        <div class="header-actions">
+          <div class="entity-pill">
+            <select id="entity-switcher" class="form-select pill-select">
+              <option value="ATA">ATA Accounting</option>
+              <option value="LTA">LTA Accounting</option>
+            </select>
+            <span id="entity-badge" class="badge"></span>
+          </div>
+          <button
+            id="theme-toggle-btn"
+            class="theme-toggle-btn"
+            aria-label="Toggle dark mode"
+            title="Toggle dark mode"
+          >
+            <svg
+              id="theme-icon-moon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+            <svg
+              id="theme-icon-sun"
+              class="hidden"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="5" />
+              <path
+                d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+              />
+            </svg>
+          </button>
+          <div class="user-chip" id="user-chip">
+            <span id="user-avatar" class="avatar"></span>
+            <span id="user-name" class="user-name">User</span>
+            <button
+              id="user-menu-toggle"
+              class="user-menu-toggle"
+              aria-label="Open user menu"
+              title="User menu"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="14"
+                height="14"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
             </button>
+            <div id="user-menu-dropdown" class="user-menu-dropdown hidden">
+              <a href="#profile" id="profile-link" class="user-menu-item">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+                <span>Profile</span>
+              </a>
+              <button id="logout-btn" class="user-menu-item user-menu-logout">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                <span>Logout</span>
+              </button>
+            </div>
           </div>
         </div>
+        <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
+          <span></span><span></span><span></span>
+        </button>
+      </header>
+
+      <div class="app-layout">
+        <nav id="sidebar" class="sidebar">
+          <ul class="nav-list">
+            <li>
+              <a href="#dashboard" data-module="dashboard"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <rect x="3" y="3" width="7" height="7" rx="1" />
+                      <rect x="14" y="3" width="7" height="7" rx="1" />
+                      <rect x="3" y="14" width="7" height="7" rx="1" />
+                      <rect
+                        x="14"
+                        y="14"
+                        width="7"
+                        height="7"
+                        rx="1"
+                      /></svg></span
+                  ><span class="nav-link-text">Dashboard</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#clients" data-module="clients"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                      <circle cx="9" cy="7" r="4" />
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg></span
+                  ><span class="nav-link-text">Client List</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#operations" data-module="operations"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="3" />
+                      <path
+                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+                      /></svg></span
+                  ><span class="nav-link-text">Operations</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#billing" data-module="billing"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <path d="M20 11H4" />
+                      <path d="M20 7H4" />
+                      <path
+                        d="M7 21V4a1 1 0 0 1 1-1h4a1 1 0 0 1 0 12H7"
+                      /></svg></span
+                  ><span class="nav-link-text">Billing</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#disbursement" data-module="disbursement"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <rect x="1" y="4" width="22" height="16" rx="2" ry="2" />
+                      <line x1="1" y1="10" x2="23" y2="10" /></svg></span
+                  ><span class="nav-link-text">Disbursement</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#transmittal" data-module="transmittal"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" /></svg></span
+                  ><span class="nav-link-text">Transmittal</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#reports" data-module="reports"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <line x1="18" y1="20" x2="18" y2="10" />
+                      <line x1="12" y1="20" x2="12" y2="4" />
+                      <line x1="6" y1="20" x2="6" y2="14" /></svg></span
+                  ><span class="nav-link-text">Reports</span></span
+                ></a
+              >
+            </li>
+            <li>
+              <a href="#admin" data-module="admin"
+                ><span class="nav-link-label"
+                  ><span class="nav-link-icon"
+                    ><svg viewBox="0 0 24 24">
+                      <path
+                        d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+                      /></svg></span
+                  ><span class="nav-link-text">Admin</span></span
+                ></a
+              >
+            </li>
+          </ul>
+        </nav>
+
+        <main id="content" class="content"></main>
       </div>
-      <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
-        <span></span><span></span><span></span>
-      </button>
-    </header>
-
-    <div class="app-layout">
-      <nav id="sidebar" class="sidebar">
-        <ul class="nav-list">
-          <li><a href="#dashboard" data-module="dashboard"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-link-text">Dashboard</span></span></a></li>
-          <li><a href="#clients" data-module="clients"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span><span class="nav-link-text">Client List</span></span></a></li>
-          <li><a href="#operations" data-module="operations"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span><span class="nav-link-text">Operations</span></span></a></li>
-          <li><a href="#billing" data-module="billing"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="nav-link-text">Billing</span></span></a></li>
-          <li><a href="#disbursement" data-module="disbursement"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></span><span class="nav-link-text">Disbursement</span></span></a></li>
-          <li><a href="#transmittal" data-module="transmittal"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span><span class="nav-link-text">Transmittal</span></span></a></li>
-          <li><a href="#reports" data-module="reports"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="nav-link-text">Reports</span></span></a></li>
-          <li><a href="#admin" data-module="admin"><span class="nav-link-label"><span class="nav-link-icon"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="nav-link-text">Admin</span></span></a></li>
-        </ul>
-      </nav>
-
-      <main id="content" class="content"></main>
     </div>
-  </div>
 
-  <!-- Core scripts: always needed for app shell, auth, and default routes -->
-  <script src="js/utils.js"></script>
-  <script src="env.js"></script>
-  <script src="js/apiClient.js"></script>
-  <script src="js/auth.js"></script>
-  <script src="js/dataTable.js" defer></script>
-  <script src="js/kanban.js" defer></script>
-  <script src="js/datepicker.js" defer></script>
-  <script src="js/timepicker.js" defer></script>
-  <script src="js/dashboard.js" defer></script>
-  <script src="js/clients.js" defer></script>
-  <script src="js/workflow.js" defer></script>
-  <script src="js/pendingChanges.js" defer></script>
-  <script>
-    // Dev-mode lazy bundle definitions.
-    // In production, build.js sets window.__ERP_BUNDLES__ to hashed single-file bundles.
-    // In dev, we map bundle names to arrays of individual source files that are
-    // loaded on demand when the user navigates to the relevant route.
-    if (!window.__ERP_BUNDLES__) {
-      window.__ERP_DEV_BUNDLES__ = {
-        billing: ['js/billing.js', 'js/disbursement.js', 'js/transmittal.js'],
-        admin: ['js/users.js', 'js/reports.js', 'js/profile.js', 'js/dms.js']
-      };
-    }
-  </script>
-  <script src="js/app.js" defer></script>
-  <script>
-    (function () {
-      if (!('serviceWorker' in navigator)) return;
+    <!-- Core scripts: always needed for app shell, auth, and default routes -->
+    <script src="js/utils.js"></script>
+    <script src="env.js"></script>
+    <script src="js/apiClient.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/dataTable.js" defer></script>
+    <script src="js/kanban.js" defer></script>
+    <script src="js/datepicker.js" defer></script>
+    <script src="js/timepicker.js" defer></script>
+    <script src="js/dashboard.js" defer></script>
+    <script src="js/clients.js" defer></script>
+    <script src="js/workflow.js" defer></script>
+    <script src="js/pendingChanges.js" defer></script>
+    <script>
+      // Dev-mode lazy bundle definitions.
+      // In production, build.js sets window.__ERP_BUNDLES__ to hashed single-file bundles.
+      // In dev, we map bundle names to arrays of individual source files that are
+      // loaded on demand when the user navigates to the relevant route.
+      if (!window.__ERP_BUNDLES__) {
+        window.__ERP_DEV_BUNDLES__ = {
+          billing: ["js/billing.js", "js/disbursement.js", "js/transmittal.js"],
+          admin: ["js/users.js", "js/reports.js", "js/profile.js", "js/dms.js"],
+        };
+      }
+    </script>
+    <script src="js/app.js" defer></script>
+    <script>
+      (function () {
+        if (!("serviceWorker" in navigator)) return;
 
-      // Log the custom update event in development for visibility.
-      window.addEventListener('sw-update-available', function (e) {
-        console.log('[SW] sw-update-available event dispatched:', e.detail);
-      });
+        var isDevHost =
+          location.hostname === "localhost" ||
+          location.hostname === "127.0.0.1" ||
+          location.hostname.endsWith(".local");
+        var pendingReload = false;
 
-      // In development, check for updates periodically but never auto-reload.
-      // The user can hard-refresh when they want fresh code. Auto-reload on every
-      // service worker activation breaks login/forms during active development.
-      navigator.serviceWorker.register('sw.js')
-        .then(function (registration) {
-          registration.addEventListener('updatefound', function () {
-            var installing = registration.installing;
-            if (!installing) return;
-            installing.addEventListener('statechange', function () {
-              if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-                window.dispatchEvent(new CustomEvent('sw-update-available', { detail: { registration: registration } }));
-                console.log('[SW] New version available — hard refresh to update.');
-              }
-            });
-          });
-        })
-        .catch(function (err) {
-          console.warn('[SW] Registration failed:', err);
+        // Log the custom update event in development for visibility.
+        window.addEventListener("sw-update-available", function (e) {
+          console.log("[SW] sw-update-available event dispatched:", e.detail);
         });
-    })();
-  </script>
-</body>
+
+        // In production/staging, activate a waiting service worker immediately
+        // and reload once so the new shell assets and cache strategy take effect.
+        // In development, check for updates but never auto-reload so open forms
+        // are not interrupted.
+        navigator.serviceWorker
+          .register("sw.js")
+          .then(function (registration) {
+            registration.addEventListener("updatefound", function () {
+              var installing = registration.installing;
+              if (!installing) return;
+              installing.addEventListener("statechange", function () {
+                if (
+                  installing.state === "installed" &&
+                  navigator.serviceWorker.controller
+                ) {
+                  window.dispatchEvent(
+                    new CustomEvent("sw-update-available", {
+                      detail: { registration: registration },
+                    }),
+                  );
+                  if (isDevHost) {
+                    console.log(
+                      "[SW] New version available — hard refresh to update.",
+                    );
+                    return;
+                  }
+                  // Avoid multiple reloads if several workers update in quick succession.
+                  if (pendingReload) return;
+                  pendingReload = true;
+                  console.log(
+                    "[SW] New version activated; reloading to apply cache fixes.",
+                  );
+                  installing.postMessage("SKIP_WAITING");
+                  navigator.serviceWorker.addEventListener(
+                    "controllerchange",
+                    function onCtrlChange() {
+                      navigator.serviceWorker.removeEventListener(
+                        "controllerchange",
+                        onCtrlChange,
+                      );
+                      window.location.reload();
+                    },
+                  );
+                }
+              });
+            });
+          })
+          .catch(function (err) {
+            console.warn("[SW] Registration failed:", err);
+          });
+      })();
+    </script>
+  </body>
 </html>

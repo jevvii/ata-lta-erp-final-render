@@ -23,7 +23,7 @@ const lineItemSchema = z.object({
  */
 const createInvoiceSchema = z.object({
   clientId: z.string().uuid(),
-  workRequestId: z.string().uuid().optional().nullable(),
+  workRequestId: z.string().uuid(),
   linkedTaskId: z.string().uuid().optional().nullable(),
   invoiceNumber: z.string().min(1).max(50),
   issueDate: z.string().min(1),

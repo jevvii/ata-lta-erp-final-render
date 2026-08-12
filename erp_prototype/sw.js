@@ -10,7 +10,7 @@
  * a bundler), those URLs are added to the app-shell cache. Otherwise a static
  * fallback list is used.
  */
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const SHELL_CACHE = `erp-shell-${CACHE_VERSION}`;
 const API_CACHE = `erp-api-${CACHE_VERSION}`;
 
@@ -56,11 +56,16 @@ const MANIFEST_URLS = (self.__WB_MANIFEST || []).map(entry =>
 const APP_SHELL_URLS = new Set([...SHELL_URLS, ...MANIFEST_URLS]);
 
 const SAFE_API_PATHS = [
-  /^\/v1\/me(\/|$)/,
-  /^\/v1\/clients(\/|$)/,
-  /^\/v1\/work-requests(\/|$)/,
-  /^\/v1\/reports\/analytics(\/|$)/,
-  /^\/v1\/reports\/dashboard(\/|$)/,
+  // Only exact list/count endpoints are safe for stale-while-revalidate.
+  // Detail / related subresources must always hit the network so mutations
+  // are visible immediately after a hard refresh.
+  /^\/v1\/me$/,
+  /^\/v1\/clients$/,
+  /^\/v1\/clients\/counts$/,
+  /^\/v1\/work-requests$/,
+  /^\/v1\/work-requests\/counts$/,
+  /^\/v1\/reports\/analytics$/,
+  /^\/v1\/reports\/dashboard$/,
 ];
 
 function isSameOrigin(url) {
@@ -152,6 +157,12 @@ async function cacheFirst(request) {
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(API_CACHE);
   const cached = await cache.match(request);
+
+  // A request that already carries a cache-buster should bypass the cache
+  // entirely so callers can force a fresh response.
+  if (request.url.includes('_t=')) {
+    return fetch(request);
+  }
 
   const fetchAndCache = async () => {
     try {

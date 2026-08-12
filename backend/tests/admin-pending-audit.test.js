@@ -223,7 +223,7 @@ describe('/v1/admin pending approvals and audit', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 
-    const visibleIds = listRes.body.data.map(item => item.id);
+    const visibleIds = listRes.body.data.map((item) => item.id);
     expect(visibleIds).toContain('pc-4');
     expect(visibleIds).not.toContain('pc-3');
     expect(visibleIds).not.toContain('pc-1');

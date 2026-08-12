@@ -18,14 +18,15 @@ const AppError = require('../../lib/AppError');
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listTransmittals = async ({ entityId, filters = {} }) => {
-  const { status, clientId, search, archived, page = 1, limit = 50 } = filters;
+const listTransmittals = async ({ entityId, filters = {}, user }) => {
+  const { status, clientId, search, archived, includeDeleted, page = 1, limit = 50 } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin
-    .from('transmittals')
-    .select('*, clients(name)', { count: 'exact' })
-    .is('deleted_at', null);
+  let query = supabaseAdmin.from('transmittals').select('*, clients(name)', { count: 'exact' });
+
+  if (includeDeleted !== true && includeDeleted !== 'true') {
+    query = query.is('deleted_at', null);
+  }
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
@@ -43,6 +44,16 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
     query = query.or(
       `tracking_number.ilike.%${search}%,notes.ilike.%${search}%,recipient_name.ilike.%${search}%`
     );
+  }
+
+  const isAdmin = user?.role === 'Admin';
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
+    query = query.in('work_request_id', concernedWrIds);
   }
 
   const offset = (page - 1) * limit;
@@ -67,9 +78,26 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
     : { data: [] };
   const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
 
+  const ids = rows.map((row) => row.id);
+  const { data: allItems } = ids.length
+    ? await supabaseAdmin
+        .from('transmittal_items')
+        .select('*')
+        .in('transmittal_id', ids)
+        .order('sort_order', { ascending: true })
+    : { data: [] };
+
+  const itemsByTransmittal = new Map();
+  for (const item of allItems || []) {
+    const list = itemsByTransmittal.get(item.transmittal_id) || [];
+    list.push(item);
+    itemsByTransmittal.set(item.transmittal_id, list);
+  }
+
   const mapped = rows.map((row) => ({
     ...row,
     entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+    items: itemsByTransmittal.get(row.id) || [],
   }));
 
   return { data: mapped, count: count || 0 };
@@ -81,7 +109,7 @@ const listTransmittals = async ({ entityId, filters = {} }) => {
  * @param {string} params.entityId
  * @returns {Promise<{ active: number, archived: number, total: number }>}
  */
-const countTransmittals = async ({ entityId }) => {
+const countTransmittals = async ({ entityId, user }) => {
   let query = supabaseAdmin
     .from('transmittals')
     .select('*', { count: 'exact' })
@@ -89,6 +117,16 @@ const countTransmittals = async ({ entityId }) => {
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
+  }
+
+  const isAdmin = user?.role === 'Admin';
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { active: 0, archived: 0, total: 0 };
+    }
+    query = query.in('work_request_id', concernedWrIds);
   }
 
   const { data, error, count } = await query;
@@ -102,9 +140,7 @@ const countTransmittals = async ({ entityId }) => {
   }
 
   const rows = data || [];
-  const active = rows.filter(
-    (t) => t.status !== 'Cancelled' && !t.archived
-  ).length;
+  const active = rows.filter((t) => t.status !== 'Cancelled' && !t.archived).length;
   const archived = rows.filter((t) => t.archived === true || t.status === 'Cancelled').length;
 
   return { active, archived, total: count || rows.length };
@@ -194,7 +230,7 @@ const createTransmittal = async ({ entityId, userId, data }) => {
  * @param {string} params.id
  * @returns {Promise<object>}
  */
-const getTransmittalById = async ({ entityId, id }) => {
+const getTransmittalById = async ({ entityId, id, user }) => {
   const { data: transmittal, error } = await supabaseAdmin
     .from('transmittals')
     .select('*, clients(name, address, tin)')
@@ -209,6 +245,21 @@ const getTransmittalById = async ({ entityId, id }) => {
       title: 'Not Found',
       detail: `Transmittal ${id} not found`,
     });
+  }
+
+  if (user) {
+    const isAdmin = user.role === 'Admin';
+    if (!isAdmin) {
+      const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+      const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+      if (!transmittal.work_request_id || !concernedWrIds.includes(transmittal.work_request_id)) {
+        throw new AppError({
+          statusCode: 403,
+          title: 'Forbidden',
+          detail: 'You do not have permission to view this transmittal.',
+        });
+      }
+    }
   }
 
   const { data: items } = await supabaseAdmin
@@ -296,7 +347,7 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
     });
   }
 
-  return updated;
+  return attachItems(updated);
 };
 
 /**
@@ -328,6 +379,9 @@ const approveTransmittal = async ({ entityId, id, userId }) => {
 
   const updates = {
     approved: true,
+    status: 'Sent',
+    sent_at: new Date().toISOString(),
+    sent_by: userId,
     updated_by: userId,
     updated_at: new Date().toISOString(),
   };
@@ -352,12 +406,21 @@ const approveTransmittal = async ({ entityId, id, userId }) => {
     action: 'transmittal.approve',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
 
-  return updated;
+  await auditService.log({
+    action: 'transmittal.send',
+    table: 'transmittals',
+    recordId: id,
+    entity: existing.entity_code || 'ATA',
+    userId,
+    details: { trackingNumber: existing.tracking_number },
+  });
+
+  return attachItems(updated);
 };
 
 const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
@@ -402,6 +465,9 @@ const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
     updated_by: userId,
     updated_at: new Date().toISOString(),
   };
+  if (isUserAdmin) {
+    updates.approved = true;
+  }
   if (boardOrder !== undefined) updates.board_order = boardOrder;
 
   const { data: updated, error } = await supabaseAdmin
@@ -424,12 +490,12 @@ const sendTransmittal = async ({ entityId, id, userId, boardOrder }) => {
     action: 'transmittal.send',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
 
-  return updated;
+  return attachItems(updated);
 };
 
 /**
@@ -480,12 +546,12 @@ const acknowledgeTransmittal = async ({ entityId, id, userId, boardOrder }) => {
     action: 'transmittal.acknowledge',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
 
-  return updated;
+  return attachItems(updated);
 };
 
 /**
@@ -521,7 +587,7 @@ const deleteTransmittal = async ({ entityId, id, userId }) => {
     action: 'transmittal.delete',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
@@ -550,12 +616,12 @@ const archiveTransmittal = async ({ entityId, id, userId }) => {
     action: 'transmittal.archive',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
 
-  return updated;
+  return attachItems(updated);
 };
 
 const unarchiveTransmittal = async ({ entityId, id, userId }) => {
@@ -580,12 +646,22 @@ const unarchiveTransmittal = async ({ entityId, id, userId }) => {
     action: 'transmittal.unarchive',
     table: 'transmittals',
     recordId: id,
-    entity: entityId,
+    entity: existing.entity_code || 'ATA',
     userId,
     details: { trackingNumber: existing.tracking_number },
   });
 
-  return updated;
+  return attachItems(updated);
+};
+
+const attachItems = async (transmittal) => {
+  if (!transmittal) return transmittal;
+  const { data: items } = await supabaseAdmin
+    .from('transmittal_items')
+    .select('*')
+    .eq('transmittal_id', transmittal.id)
+    .order('sort_order', { ascending: true });
+  return { ...transmittal, items: items || [] };
 };
 
 module.exports = {

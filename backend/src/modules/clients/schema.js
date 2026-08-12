@@ -23,8 +23,15 @@ const createClientSchema = z.object({
   address: z.string().max(500).optional(),
   entity: z.enum(['ATA', 'LTA']),
   retainer: z.boolean().default(false),
+  retainerFee: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? null : Number(val)),
+    z.number().nonnegative().nullable().optional()
+  ),
   tradeName: z.string().max(255).optional(),
-  contactUserId: z.preprocess(val => (val === '' || val === undefined || val === null) ? null : val, z.string().uuid().nullable().optional()),
+  contactUserId: z.preprocess(
+    (val) => (val === '' || val === undefined || val === null ? null : val),
+    z.string().uuid().nullable().optional()
+  ),
   contactPerson: z.string().max(255).optional().nullable(),
   contactDetails: z.array(contactDetailSchema).optional(),
   relatedCompanies: z.array(relatedCompanySchema).optional(),

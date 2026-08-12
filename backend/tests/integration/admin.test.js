@@ -104,7 +104,7 @@ describe('/v1/admin', () => {
         name: 'Bad Dept',
         role: 'Accounting',
         entities: ['ATA'],
-        departments: ['HR'],
+        departments: ['Marketing'],
         password: 'password123',
       })
       .expect(400);

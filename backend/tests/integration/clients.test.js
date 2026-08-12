@@ -18,6 +18,7 @@ const validClient = {
   address: 'Makati City',
   entity: 'ATA',
   retainer: true,
+  retainerFee: 5000.5,
   tradeName: 'Acme',
   contactDetails: [{ type: 'email', value: 'info@acme.test', label: 'Main' }],
   relatedCompanies: [],
@@ -46,6 +47,8 @@ describe('/v1/clients', () => {
 
     expect(res.body.data.name).toBe('Acme Corp');
     expect(res.body.data.entity).toBe('ATA');
+    expect(res.body.data.retainer).toBe(true);
+    expect(res.body.data.retainerFee).toBe(5000.5);
     expect(res.body.data.contactDetails).toHaveLength(1);
 
     const audit = Array.from(mockTables.audit_logs.values());

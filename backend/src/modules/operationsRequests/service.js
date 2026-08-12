@@ -16,7 +16,16 @@ const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listRequests = async ({ entityId, filters = {} }) => {
-  const { status, type, workRequestId, clientId, linkedTaskId, requestedBy, page = 1, limit = 50 } = filters;
+  const {
+    status,
+    type,
+    workRequestId,
+    clientId,
+    linkedTaskId,
+    requestedBy,
+    page = 1,
+    limit = 50,
+  } = filters;
 
   let query = supabaseAdmin
     .from('operations_requests')

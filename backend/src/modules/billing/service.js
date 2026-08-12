@@ -56,7 +56,8 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
 
   // Role restriction: non-admin and non-accounting cannot see Draft or Pending invoices.
   const isAdmin = user?.role === 'Admin';
-  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
   if (!isAdmin && !isAccounting) {
     if (status) {
       if (['Draft', 'Pending'].includes(status)) {
@@ -75,6 +76,15 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
   if (search) {
     query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
+  }
+
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
+    query = query.in('work_request_id', concernedWrIds);
   }
 
   const offset = (page - 1) * limit;
@@ -229,13 +239,26 @@ const getInvoiceById = async ({ entityId, id, user }) => {
   // Role restriction
   if (user) {
     const isAdmin = user.role === 'Admin';
-    const isAccounting = (user.departments || []).includes('Accounting') || user.role === 'Accounting';
+    const isAccounting =
+      (user.departments || []).includes('Accounting') || user.role === 'Accounting';
     if (!isAdmin && !isAccounting && ['Draft', 'Pending'].includes(invoice.status)) {
       throw new AppError({
         statusCode: 403,
         title: 'Forbidden',
         detail: 'You do not have permission to view this invoice in its current status.',
       });
+    }
+
+    if (!isAdmin) {
+      const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+      const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+      if (!invoice.work_request_id || !concernedWrIds.includes(invoice.work_request_id)) {
+        throw new AppError({
+          statusCode: 403,
+          title: 'Forbidden',
+          detail: 'You do not have permission to view this invoice.',
+        });
+      }
     }
   }
 
@@ -837,6 +860,16 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return { active: 0, archived: 0, rejected: 0, templates: 0 };
   }
 
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = [];
+  if (!isAdmin) {
+    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+    concernedWrIds = await getUserConcernedWorkRequestIds(user);
+    if (concernedWrIds.length === 0) {
+      return { active: 0, archived: 0, rejected: 0, templates: 0 };
+    }
+  }
+
   const runCount = async (query) => {
     const { count, error } = await query;
     if (error) {
@@ -849,19 +882,30 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return count || 0;
   };
 
-  const baseQuery = () =>
-    supabaseAdmin
+  const baseQuery = () => {
+    let q = supabaseAdmin
       .from('invoices')
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
+    if (!isAdmin) {
+      q = q.in('work_request_id', concernedWrIds);
+    }
+    return q;
+  };
 
-  const isAdmin = user?.role === 'Admin';
-  const isAccounting = (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
 
   let activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
   if (!isAdmin && !isAccounting) {
-    activeQuery = activeQuery.in('status', ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue']);
+    activeQuery = activeQuery.in('status', [
+      'Sent',
+      'Approved',
+      'Partially Paid',
+      'Paid',
+      'Overdue',
+    ]);
   }
 
   const [active, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
@@ -878,12 +922,18 @@ const getInvoiceCounts = async ({ entityId, user }) => {
           .eq('status', 'rejected')
       ),
       runCount(
-        supabaseAdmin
-          .from('operations_requests')
-          .select('*', { count: 'exact', head: true })
-          .in('entity_id', entityIds)
-          .eq('type', 'billing')
-          .eq('status', 'rejected')
+        (() => {
+          let q = supabaseAdmin
+            .from('operations_requests')
+            .select('*', { count: 'exact', head: true })
+            .in('entity_id', entityIds)
+            .eq('type', 'billing')
+            .eq('status', 'rejected');
+          if (!isAdmin) {
+            q = q.in('work_request_id', concernedWrIds);
+          }
+          return q;
+        })()
       ),
       runCount(
         supabaseAdmin

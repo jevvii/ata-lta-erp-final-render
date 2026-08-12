@@ -21,7 +21,7 @@ const transmittalItemSchema = z.object({
  */
 const createTransmittalSchema = z.object({
   clientId: z.string().uuid(),
-  workRequestId: z.string().uuid().optional().nullable(),
+  workRequestId: z.string().uuid(),
   trackingNumber: z.string().min(1).max(50),
   items: z.array(transmittalItemSchema).min(1),
   notes: z.string().max(2000).optional().nullable(),

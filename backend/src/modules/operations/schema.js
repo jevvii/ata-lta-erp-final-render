@@ -23,7 +23,16 @@ const checklistItemSchema = z.object({
   completed: z.boolean().default(false),
   assigneeId: z.string().uuid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
-  dependsOn: z.union([z.string().uuid(), z.array(z.string().uuid())]).optional().nullable(),
+  dependsOn: z
+    .union([z.string().uuid(), z.array(z.string().uuid())])
+    .optional()
+    .nullable(),
+  periodYear: z
+    .string()
+    .regex(/^[a-zA-Z0-9\s/\-]*$/)
+    .max(100)
+    .optional()
+    .nullable(),
   timeLogs: z.array(timeLogSchema).optional(),
 });
 
@@ -72,7 +81,10 @@ const createTaskSchema = z.object({
 
 const updateTaskSchema = createTaskSchema.partial();
 
-const nullableUuid = z.preprocess(val => (val === '' || val === undefined) ? null : val, z.string().uuid().nullable().optional());
+const nullableUuid = z.preprocess(
+  (val) => (val === '' || val === undefined ? null : val),
+  z.string().uuid().nullable().optional()
+);
 
 const taskTemplateSchema = z.object({
   id: z.string().optional().nullable(),

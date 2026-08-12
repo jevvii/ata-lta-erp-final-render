@@ -40,10 +40,10 @@ const Auth = {
   activeEntity: null,
 
   /** All non-Admin, non-Manager roles (i.e. staff-level roles). */
-  STAFF_ROLES: ['Accounting', 'Operations', 'Documentation'],
+  STAFF_ROLES: ['Accounting', 'Operations', 'Documentation', 'HR'],
 
   /** Convenience: every valid role in the system. */
-  ALL_ROLES: ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation'],
+  ALL_ROLES: ['Admin', 'Manager', 'Accounting', 'Operations', 'Documentation', 'HR'],
 
   /**
    * Departments a user may be assigned to. Department assignment is the source
@@ -52,7 +52,7 @@ const Auth = {
    *
    * Restricted to the four operational departments that receive permissions.
    */
-  DEPARTMENTS: ['Management', 'Accounting', 'Operations', 'Documentation'],
+  DEPARTMENTS: ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'],
 
   /**
    * Permission set granted by each department. A user assigned to multiple
@@ -62,7 +62,8 @@ const Auth = {
     'Management': ['clients:view','workflow:view','workflow:edit','workflow:task_add','workflow:task_approve','billing:view','billing:request','billing:mark_paid','disbursement:view','disbursement:request','disbursement:mark_released','dms:view','dms:edit','dms:delete','dms:handover','transmittal:view','transmittal:mark','transmittal:delete','bypass_review:tasks','approve_change:tasks'],
     'Accounting': ['clients:view','workflow:view','workflow:task_add','billing:view','billing:edit','disbursement:view','disbursement:create','disbursement:edit','dms:view','transmittal:view','approve_change:invoices','approve_change:disbursements'],
     'Operations': ['clients:view','workflow:view','workflow:task_add','workflow:task_upload','billing:view','billing:request','disbursement:view','disbursement:request','dms:view','transmittal:view','transmittal:request'],
-    'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:delete','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark']
+    'Documentation': ['clients:view','workflow:view','workflow:task_add','billing:view','disbursement:view','dms:view','dms:edit','dms:delete','dms:handover','transmittal:view','transmittal:create','transmittal:edit','transmittal:mark'],
+    'HR': ['clients:view','workflow:view','workflow:task_add','workflow:task_upload','billing:view','billing:request','disbursement:view','disbursement:request','dms:view','transmittal:view','transmittal:request','reports:view']
   },
 
   updateSessionClasses(hasSession) {

@@ -62,7 +62,9 @@ const refresh = async (req, res, next) => {
       });
     }
 
-    const { data, error } = await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken });
+    const { data, error } = await supabaseAdmin.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
 
     if (error || !data?.session) {
       logger.warn('refresh failed', { error: error?.message, statusCode: error?.status });
