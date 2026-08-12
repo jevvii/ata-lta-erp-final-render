@@ -806,11 +806,20 @@ const WorkflowData = {
           // not delete existing time logs.  Time logs are managed separately
           // through the dedicated addTimeLogs endpoint.
           delete clean.timeLogs;
+          // The frontend uses '*' as a special dependsOn value meaning
+          // "depends on all other items".  The backend schema requires a
+          // valid UUID, so convert '*' to null to avoid Zod validation
+          // failure which would silently abort the entire update.
+          if (clean.dependsOn === '*') clean.dependsOn = null;
           return clean;
         });
       }
       // Don't send coAssignees (frontend-only) to backend
       delete payload.coAssignees;
+      // Don't send timeLogs — they are managed by the dedicated addTimeLogs
+      // endpoint.  Sending them here would cause the backend to delete all
+      // existing task-level time logs and re-insert stale cached copies.
+      delete payload.timeLogs;
       const res = await window.apiClient.workRequests.updateTask(wrId, id, payload);
       const normalized = this.normalizeTask(res.data);
       if (existing) {
@@ -12622,13 +12631,25 @@ const Workflow = {
           const updatedIds = getLogIds(serverTask);
           const newLogIds = updatedIds.filter(id => !existingIds.includes(id));
 
+          // Wait for logs to be listable, but don't block UI update on timeout
+          let finalServerTask = serverTask;
           if (newLogIds.length > 0) {
             submitBtn.textContent = 'Syncing...';
-            await this._waitUntilTimeLogsListable(wrId, taskId, newLogIds);
+            try {
+              await this._waitUntilTimeLogsListable(wrId, taskId, newLogIds);
+              const finalRes = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+              finalServerTask = finalRes?.data || serverTask;
+            } catch (waitErr) {
+              console.warn('Time log sync wait timed out, using initial response', waitErr);
+              // Fall through — use serverTask as finalServerTask
+            }
+          } else {
+            // No new IDs detected, fetch fresh anyway
+            try {
+              const finalRes = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
+              finalServerTask = finalRes?.data || serverTask;
+            } catch (_e) { /* use serverTask */ }
           }
-
-          const finalRes = await window.apiClient.workRequests.getTask(wrId, taskId, { _t: Date.now() });
-          const finalServerTask = finalRes?.data || serverTask;
 
           const normalized = WorkflowData.normalizeTask(finalServerTask);
           if (existing) {
