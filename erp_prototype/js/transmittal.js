@@ -2688,23 +2688,31 @@ const Transmittal = {
       }
     }
 
-    const letter = el('div', { class: 'transmittal-letter', style: 'background:var(--color-surface); color:var(--color-text); font-family:Arial, sans-serif; padding:20px; border:1px solid var(--color-border); max-width:700px; margin:0 auto; box-sizing:border-box;' });
+    const letter = el('div', { class: 'transmittal-letter', style: 'background:var(--color-surface); color:var(--color-text); font-family:Arial, sans-serif; padding:20px; border:1px solid var(--color-border); width:700px; max-width:100%; margin:0 auto; box-sizing:border-box;' });
 
     // Styles local to the preview to ensure styling matches
-    const styleEl = el('style', { textContent: `
+    const styleEl = document.createElement('style');
+    styleEl.textContent = `
       .preview-container {
         font-family: Arial, Helvetica, sans-serif;
+        width: 100%;
+        box-sizing: border-box;
       }
       .preview-header-table {
         width: 100%;
         border: 2px solid #000;
         border-collapse: collapse;
         margin-bottom: 15px;
+        table-layout: fixed;
       }
       .preview-header-table td {
         border: 2px solid #000;
         padding: 6px 10px;
         vertical-align: top;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .preview-title-cell {
         text-align: center;
@@ -2712,6 +2720,20 @@ const Transmittal = {
         font-size: 12pt;
         letter-spacing: 0.5px;
         padding: 8px !important;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+      }
+      .preview-doc-no-cell {
+        width: 55%;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+      }
+      .preview-date-cell {
+        width: 45%;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
       }
       .preview-label-red {
         color: #c2272d;
@@ -2725,10 +2747,18 @@ const Transmittal = {
       .preview-from-cell {
         width: 55%;
         line-height: 1.4;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .preview-to-cell {
         width: 45%;
         line-height: 1.4;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .preview-underline-line {
         border-bottom: 1.5px solid #000;
@@ -2736,11 +2766,16 @@ const Transmittal = {
         margin-top: 3px;
         padding-bottom: 1px;
         font-weight: bold;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
       }
       .preview-document-box {
         border: 2px solid #000;
         position: relative;
         margin-bottom: 15px;
+        width: 100%;
+        box-sizing: border-box;
       }
       .preview-document-title {
         font-weight: bold;
@@ -2752,6 +2787,7 @@ const Transmittal = {
       .preview-document-table {
         width: 100%;
         border-collapse: collapse;
+        table-layout: fixed;
       }
       .preview-table-header-cell {
         border-bottom: 2px solid #000;
@@ -2775,6 +2811,8 @@ const Transmittal = {
         padding: 4px 10px;
         font-size: 10pt;
         text-align: left;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
       .preview-category-cell {
         font-weight: bold;
@@ -2846,7 +2884,7 @@ const Transmittal = {
         color: #333;
         margin-top: 6px;
       }
-    ` });
+    `;
     letter.appendChild(styleEl);
 
     // Main layout container
@@ -2854,6 +2892,11 @@ const Transmittal = {
 
     // Table Header Box
     const headerTable = el('table', { class: 'preview-header-table' });
+    const headerColgroup = el('colgroup', {}, [
+      el('col', { style: 'width: 55%;' }),
+      el('col', { style: 'width: 45%;' })
+    ]);
+    headerTable.appendChild(headerColgroup);
 
     // Row 1: Title
     const r1 = el('tr');
@@ -2862,11 +2905,11 @@ const Transmittal = {
 
     // Row 2: Doc No & Date
     const r2 = el('tr');
-    const tdDocNo = el('td', { style: 'width: 55%;' }, [
+    const tdDocNo = el('td', { class: 'preview-doc-no-cell', style: 'width: 55%;' }, [
       el('span', { class: 'preview-label-red', text: 'TRANSMITTAL DOC NO.:' }),
       el('span', { class: 'value-bold', text: t.trackingNumber || '' })
     ]);
-    const tdDate = el('td', { style: 'width: 45%;' }, [
+    const tdDate = el('td', { class: 'preview-date-cell', style: 'width: 45%;' }, [
       el('span', { class: 'preview-label-bold', text: 'DATE:' }),
       el('span', { class: 'value-bold', text: formattedDate })
     ]);
@@ -2920,14 +2963,18 @@ const Transmittal = {
       r3.appendChild(tdTo);
     }
     headerTable.appendChild(r3);
-
     previewContainer.appendChild(headerTable);
 
-    // Document Box
+    // Document Box Container
     const docBox = el('div', { class: 'preview-document-box' });
     docBox.appendChild(el('div', { class: 'preview-document-title', text: 'Received the following documents and/or records:' }));
 
     const docTable = el('table', { class: 'preview-document-table' });
+    const docColgroup = el('colgroup', {}, [
+      el('col', { style: 'width: 35%;' }),
+      el('col', { style: 'width: 65%;' })
+    ]);
+    docTable.appendChild(docColgroup);
     const thead = el('thead');
     const thr = el('tr', { class: 'preview-header-row' });
     thr.appendChild(el('th', { class: 'preview-table-header-cell preview-category-header-cell', text: 'CATEGORY' }));
@@ -3101,11 +3148,16 @@ const Transmittal = {
         border: 2px solid #000;
         border-collapse: collapse;
         margin-bottom: 15px;
+        table-layout: fixed;
       }
       .header-table td {
         border: 2px solid #000;
         padding: 6px 10px;
         vertical-align: top;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .title-cell {
         text-align: center;
@@ -3113,12 +3165,20 @@ const Transmittal = {
         font-size: 12pt;
         letter-spacing: 0.5px;
         padding: 8px !important;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
       .doc-no-cell {
         width: 55%;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
       }
       .date-cell {
         width: 45%;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
       }
       .label-red {
         color: #c2272d;
@@ -3135,10 +3195,18 @@ const Transmittal = {
       .from-cell {
         width: 55%;
         line-height: 1.4;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .to-cell {
         width: 45%;
         line-height: 1.4;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        box-sizing: border-box;
       }
       .underline-line {
         border-bottom: 1.5px solid #000;
@@ -3146,11 +3214,16 @@ const Transmittal = {
         margin-top: 3px;
         padding-bottom: 1px;
         font-weight: bold;
+        word-break: break-word;
+        word-break: break-all;
+        overflow-wrap: anywhere;
       }
       .document-box {
         border: 2px solid #000;
         position: relative;
         margin-bottom: 15px;
+        width: 100%;
+        box-sizing: border-box;
       }
       .document-title {
         font-weight: bold;
@@ -3162,6 +3235,7 @@ const Transmittal = {
       .document-table {
         width: 100%;
         border-collapse: collapse;
+        table-layout: fixed;
       }
       .table-header-cell {
         border-bottom: 2px solid #000;
@@ -3185,6 +3259,8 @@ const Transmittal = {
         padding: 4px 10px;
         font-size: 10pt;
         text-align: left;
+        word-break: break-word;
+        overflow-wrap: anywhere;
       }
       .category-cell {
         font-weight: bold;
@@ -3296,6 +3372,11 @@ const Transmittal = {
 
     // Header table
     const headerTable = createDocEl('table', { class: 'header-table' });
+    const headerColgroup = createDocEl('colgroup', {}, [
+      createDocEl('col', { style: 'width: 55%;' }),
+      createDocEl('col', { style: 'width: 45%;' })
+    ]);
+    headerTable.appendChild(headerColgroup);
     
     // Row 1: Title
     const tr1 = createDocEl('tr', {}, [
@@ -3358,6 +3439,11 @@ const Transmittal = {
     docBox.appendChild(createDocEl('div', { class: 'document-title', text: 'Received the following documents and/or records:' }));
 
     const docTable = createDocEl('table', { class: 'document-table' });
+    const docColgroup = createDocEl('colgroup', {}, [
+      createDocEl('col', { style: 'width: 35%;' }),
+      createDocEl('col', { style: 'width: 65%;' })
+    ]);
+    docTable.appendChild(docColgroup);
     const thead = createDocEl('thead', {}, [
       createDocEl('tr', { class: 'header-row' }, [
         createDocEl('th', { class: 'table-header-cell category-header-cell', text: 'CATEGORY' }),

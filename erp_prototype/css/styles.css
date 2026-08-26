@@ -3342,6 +3342,10 @@ tbody tr:hover {
   padding: var(--spacing-xl);
   font-family: Georgia, serif;
   line-height: 1.8;
+  width: 700px;
+  max-width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .tracking-number {
@@ -3462,6 +3466,233 @@ tbody tr:hover {
   background: var(--color-surface);
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-alpha);
+}
+
+/* Transmittal Letter Preview Styles */
+.preview-container {
+  font-family: Arial, Helvetica, sans-serif;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.preview-header-table {
+  width: 100% !important;
+  border: 2px solid #000 !important;
+  border-collapse: collapse !important;
+  margin-bottom: 15px !important;
+  table-layout: fixed !important;
+}
+
+.preview-header-table td {
+  border: 2px solid #000 !important;
+  padding: 6px 10px !important;
+  vertical-align: top !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+  box-sizing: border-box !important;
+}
+
+.preview-title-cell {
+  text-align: center !important;
+  font-weight: bold !important;
+  font-size: 12pt !important;
+  letter-spacing: 0.5px !important;
+  padding: 8px !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.preview-doc-no-cell {
+  width: 55% !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+.preview-date-cell {
+  width: 45% !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+.preview-label-red {
+  color: #c2272d !important;
+  font-weight: bold !important;
+  margin-right: 5px !important;
+}
+
+.preview-label-bold {
+  font-weight: bold !important;
+  margin-right: 5px !important;
+}
+
+.preview-from-cell {
+  width: 55% !important;
+  line-height: 1.4 !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+  box-sizing: border-box !important;
+}
+
+.preview-to-cell {
+  width: 45% !important;
+  line-height: 1.4 !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+  box-sizing: border-box !important;
+}
+
+.preview-underline-line {
+  border-bottom: 1.5px solid #000 !important;
+  min-height: 16px !important;
+  margin-top: 3px !important;
+  padding-bottom: 1px !important;
+  font-weight: bold !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+.preview-document-box {
+  border: 2px solid #000 !important;
+  position: relative !important;
+  margin-bottom: 15px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.preview-document-title {
+  font-weight: bold !important;
+  padding: 6px 10px !important;
+  border-bottom: 2px solid #000 !important;
+  background-color: #fff !important;
+  font-size: 10pt !important;
+  color: #000 !important;
+}
+
+.preview-document-table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  table-layout: fixed !important;
+}
+
+.preview-table-header-cell {
+  border-bottom: 2px solid #000 !important;
+  padding: 6px 10px !important;
+  font-weight: bold !important;
+  text-align: left !important;
+  font-size: 10pt !important;
+  color: #000 !important;
+  background-color: #fff !important;
+}
+
+.preview-category-header-cell {
+  width: 35% !important;
+  border-right: 2px solid #000 !important;
+}
+
+.preview-document-header-cell {
+  width: 65% !important;
+}
+
+.preview-doc-row {
+  height: 22px !important;
+}
+
+.preview-doc-cell {
+  border-bottom: 1px solid #000 !important;
+  padding: 4px 10px !important;
+  font-size: 10pt !important;
+  text-align: left !important;
+  word-break: break-word !important;
+  word-break: break-all !important;
+  overflow-wrap: anywhere !important;
+}
+
+.preview-category-cell {
+  font-weight: bold !important;
+  border-right: 1px solid #000 !important;
+  width: 35% !important;
+}
+
+.preview-document-cell {
+  width: 65% !important;
+}
+
+.preview-document-table tr:last-child .preview-doc-cell {
+  border-bottom: none !important;
+}
+
+.preview-received-stamp {
+  position: absolute !important;
+  right: 12% !important;
+  top: 50% !important;
+  transform: translateY(-50%) rotate(-7deg) !important;
+  border: 4px double #1e40af !important;
+  color: #1e40af !important;
+  padding: 6px 12px !important;
+  text-align: center !important;
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-radius: 12px !important;
+  font-family: 'Courier New', Courier, monospace !important;
+  font-weight: bold !important;
+  pointer-events: none !important;
+  z-index: 100 !important;
+}
+
+.preview-stamp-title {
+  font-size: 14pt !important;
+  letter-spacing: 2px !important;
+  border-bottom: 2px solid #1e40af !important;
+  margin-bottom: 4px !important;
+  padding-bottom: 1px !important;
+}
+
+.preview-stamp-date {
+  font-size: 11pt !important;
+}
+
+.preview-signature-container {
+  margin-top: 30px !important;
+  width: 100% !important;
+  max-width: 400px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+  text-align: center !important;
+}
+
+.preview-sig-info {
+  display: flex !important;
+  justify-content: space-between !important;
+  padding: 0 20px !important;
+  font-weight: bold !important;
+  font-size: 11pt !important;
+  min-height: 20px !important;
+}
+
+.preview-sig-name {
+  flex: 2 !important;
+  text-align: center !important;
+}
+
+.preview-sig-date {
+  flex: 1 !important;
+  text-align: right !important;
+}
+
+.preview-sig-line {
+  border-top: 1.5px solid #000 !important;
+  margin-top: 2px !important;
+}
+
+.preview-sig-label {
+  font-size: 9pt !important;
+  color: #333 !important;
+  margin-top: 6px !important;
 }
 
 /* Document Lifecycle */
