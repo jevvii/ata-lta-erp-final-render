@@ -2781,8 +2781,9 @@ const Transmittal = {
         font-weight: bold;
         padding: 6px 10px;
         border-bottom: 2px solid #000;
-        background-color: #fff;
+        background-color: var(--color-surface);
         font-size: 10pt;
+        color: var(--color-text);
       }
       .preview-document-table {
         width: 100%;
@@ -2795,6 +2796,8 @@ const Transmittal = {
         font-weight: bold;
         text-align: left;
         font-size: 10pt;
+        color: var(--color-text);
+        background-color: var(--color-surface);
       }
       .preview-category-header-cell {
         width: 35%;
@@ -2812,6 +2815,7 @@ const Transmittal = {
         font-size: 10pt;
         text-align: left;
         word-break: break-word;
+        word-break: break-all;
         overflow-wrap: anywhere;
       }
       .preview-category-cell {
@@ -2834,7 +2838,7 @@ const Transmittal = {
         color: #1e40af;
         padding: 6px 12px;
         text-align: center;
-        background: rgba(255, 255, 255, 0.95);
+        background: var(--color-surface);
         border-radius: 12px;
         font-family: 'Courier New', Courier, monospace;
         font-weight: bold;
@@ -2881,7 +2885,7 @@ const Transmittal = {
       }
       .preview-sig-label {
         font-size: 9pt;
-        color: #333;
+        color: var(--color-text-muted);
         margin-top: 6px;
       }
     `;
