@@ -2370,10 +2370,10 @@ const Transmittal = {
       this._printCompanyAddress = defaultCompAddr;
     }
 
-    const optionsCard = el('div', { class: 'transmittal-print-options', style: 'margin-bottom: 12px; padding: 12px 14px; background: var(--color-bg-secondary, #f8fafc); border: 1px solid var(--color-border, #e2e8f0); border-radius: 6px;' });
+    const optionsCard = el('div', { class: 'transmittal-print-options' });
     
-    const toggleRow = el('div', { style: 'display: flex; align-items: center; justify-content: space-between; gap: 12px;' });
-    const checkboxLabel = el('label', { style: 'display: inline-flex; align-items: center; gap: 8px; font-weight: 500; cursor: pointer; font-size: 0.875rem; color: var(--color-text); margin: 0;' });
+    const toggleRow = el('div', { class: 'transmittal-options-toggle' });
+    const checkboxLabel = el('label', { class: 'transmittal-options-label' });
     const companyCheckbox = el('input', { type: 'checkbox', id: 'tx-opt-company-details' });
     companyCheckbox.checked = this._printCompanyDetails !== false;
     checkboxLabel.appendChild(companyCheckbox);
@@ -2381,29 +2381,30 @@ const Transmittal = {
     toggleRow.appendChild(checkboxLabel);
     optionsCard.appendChild(toggleRow);
 
-    const dynamicFieldsContainer = el('div', { id: 'tx-dynamic-company-fields', style: 'margin-top: 10px; display: ' + (companyCheckbox.checked ? 'grid' : 'none') + '; grid-template-columns: 1fr 1fr; gap: 12px;' });
+    const dynamicFieldsContainer = el('div', {
+      id: 'tx-dynamic-company-fields',
+      class: 'transmittal-dynamic-fields',
+      style: 'display: ' + (companyCheckbox.checked ? 'grid' : 'none') + ';'
+    });
     
-    const nameGroup = el('div', { style: 'display: flex; flex-direction: column; gap: 4px;' });
-    nameGroup.appendChild(el('label', { style: 'font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted, #64748b); text-transform: uppercase;', text: 'Company Name' }));
+    const nameGroup = el('div', { class: 'transmittal-field-group' });
+    nameGroup.appendChild(el('label', { text: 'Company Name' }));
     const nameInput = el('input', {
       type: 'text',
-      class: 'form-control form-control-sm',
-      style: 'padding: 6px 10px; font-size: 0.875rem; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #fff); color: var(--color-text, #000);',
+      class: 'transmittal-dynamic-input',
       placeholder: 'e.g. ' + defaultCompName,
-      value: this._printCompanyName || defaultCompName
+      value: this._printCompanyName !== undefined ? this._printCompanyName : defaultCompName
     });
     nameGroup.appendChild(nameInput);
     dynamicFieldsContainer.appendChild(nameGroup);
 
-    const addrGroup = el('div', { style: 'display: flex; flex-direction: column; gap: 4px;' });
-    addrGroup.appendChild(el('label', { style: 'font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted, #64748b); text-transform: uppercase;', text: 'Company Address' }));
+    const addrGroup = el('div', { class: 'transmittal-field-group' });
+    addrGroup.appendChild(el('label', { text: 'Company Address' }));
     const addrTextarea = el('textarea', {
-      class: 'form-control form-control-sm',
-      rows: 2,
-      style: 'padding: 6px 10px; font-size: 0.875rem; border: 1px solid var(--color-border, #cbd5e1); border-radius: 4px; background: var(--color-surface, #fff); color: var(--color-text, #000); resize: vertical;',
+      class: 'transmittal-dynamic-textarea',
       placeholder: 'e.g. ' + defaultCompAddr
     });
-    addrTextarea.value = this._printCompanyAddress || defaultCompAddr;
+    addrTextarea.value = this._printCompanyAddress !== undefined ? this._printCompanyAddress : defaultCompAddr;
     addrGroup.appendChild(addrTextarea);
     dynamicFieldsContainer.appendChild(addrGroup);
 
