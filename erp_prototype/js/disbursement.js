@@ -228,6 +228,7 @@ const Disbursement = {
       linkedInvoiceId: d.linked_invoice_id || d.linkedInvoiceId || null,
       linkedWorkRequestId: d.linked_work_request_id || d.linkedWorkRequestId || null,
       linkedTaskId: d.linked_task_id || d.linkedTaskId || null,
+      linkedTransmittalId: d.linked_transmittal_id || d.linkedTransmittalId || null,
       requestedBy: d.requested_by || d.requestedBy || null,
       dueDate: d.due_date || d.dueDate || null,
       notes: d.notes || null,
@@ -269,6 +270,8 @@ const Disbursement = {
       employeeId: data.employeeId || null,
       linkedInvoiceId: data.linkedInvoiceId || null,
       linkedWorkRequestId: data.linkedWorkRequestId || null,
+      linkedTaskId: data.linkedTaskId || null,
+      linkedTransmittalId: data.linkedTransmittalId || null,
       dueDate: data.dueDate || null,
       notes: data.notes || null
     };
@@ -602,6 +605,7 @@ const Disbursement = {
       linkedInvoiceId: null,
       linkedWorkRequestId: null,
       linkedTaskId: null,
+      linkedTransmittalId: null,
       requestedBy: Auth.user?.id || null,
       dueDate: null,
       notes: null,
@@ -2140,7 +2144,8 @@ const Disbursement = {
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),
-      window.apiClient.workRequestCache.ensure()
+      window.apiClient.workRequestCache.ensure(),
+      window.apiClient.transmittalCache.ensure(),
     ]);
     // Allow access if user can create new disbursements OR can edit existing ones
     const isNew = !this.detailId;
@@ -2157,8 +2162,9 @@ const Disbursement = {
 
     const entity = Auth.activeEntity;
     const opReq = this._prefilledOpReq || null;
-    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : 
+    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId, linkedTransmittalId: this.prefilledTransmittalId || null } : 
                     (opReq ? { workRequestId: opReq.workRequestId || opReq.work_request_id, clientId: opReq.clientId || opReq.client_id, linkedTaskId: opReq.linkedTaskId || opReq.linked_task_id } : null);
+    this.prefilledTransmittalId = null;
 
     const container = el('div');
 
@@ -2280,7 +2286,7 @@ const Disbursement = {
     const wrGroup = el('div', { class: 'notion-prop' });
     wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request' }));
     const wrSelAttrs = { name: 'linkedWorkRequestId', class: 'notion-prop-select' };
-    if (prefill) wrSelAttrs.disabled = true;
+    if (prefill && prefill.workRequestId) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
     const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
@@ -2314,6 +2320,19 @@ const Disbursement = {
       taskGroup.appendChild(el('input', { type: 'hidden', name: 'linkedTaskId', value: prefill.linkedTaskId }));
     }
     propsGrid.appendChild(taskGroup);
+
+    // Transmittal link (Dynamic based on WR / Entity)
+    const transGroup = el('div', { class: 'notion-prop' });
+    transGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg> Transmittal' }));
+    const transSelAttrs = { name: 'linkedTransmittalId', class: 'notion-prop-select' };
+    if (prefill && prefill.linkedTransmittalId) transSelAttrs.disabled = true;
+    const transSel = el('select', transSelAttrs);
+    transSel.appendChild(el('option', { value: '', text: '— None —' }));
+    transGroup.appendChild(transSel);
+    if (prefill && prefill.linkedTransmittalId) {
+      transGroup.appendChild(el('input', { type: 'hidden', name: 'linkedTransmittalId', value: prefill.linkedTransmittalId }));
+    }
+    propsGrid.appendChild(transGroup);
 
     // Amount
     const amtGroup = el('div', { class: 'notion-prop' });
@@ -2447,8 +2466,46 @@ const Disbursement = {
         });
       }
     };
-    wrSel.addEventListener('change', updateTasks);
+
+    const updateTransmittals = () => {
+      const currentSelected = transSel.value || (existing?.linkedTransmittalId || (prefill?.linkedTransmittalId || ''));
+      while (transSel.firstChild) transSel.removeChild(transSel.firstChild);
+      transSel.appendChild(el('option', { value: '', text: '— None —' }));
+      const allTransmittals = window.apiClient.transmittalCache.getActiveByEntity(entity);
+      const wrId = wrSel.value;
+      
+      const filtered = allTransmittals.filter(t => {
+        if (wrId) return (t.work_request_id || t.workRequestId) === wrId;
+        return true;
+      });
+
+      filtered.forEach(t => {
+        const tracking = t.tracking_number || t.trackingNumber;
+        const opt = el('option', { value: t.id, text: tracking + (t.status ? ` (${t.status})` : '') });
+        if (currentSelected === t.id) opt.selected = true;
+        transSel.appendChild(opt);
+      });
+    };
+
+    transSel.addEventListener('change', () => {
+      const transId = transSel.value;
+      if (transId) {
+        const trans = window.apiClient.transmittalCache.getById(transId);
+        const transWrId = trans?.work_request_id || trans?.workRequestId;
+        if (transWrId && wrSel.value !== transWrId) {
+          wrSel.value = transWrId;
+          updateTasks();
+        }
+      }
+    });
+
+    wrSel.addEventListener('change', () => {
+      updateTasks();
+      updateTransmittals();
+    });
+
     updateTasks(); // Initial load
+    updateTransmittals();
 
     // Linked invoice (only for Client Fund) — collapsible notion section
     const invGroup = el('div', { class: 'notion-collapsible hidden', id: 'linked-invoice-group' });
@@ -2820,6 +2877,34 @@ const Disbursement = {
         }));
         container.appendChild(linkCard);
       }
+    }
+
+    // Linked Transmittal info card
+    if (d.linkedTransmittalId) {
+      const linkedTrans = window.apiClient.transmittalCache?.getById(d.linkedTransmittalId);
+      const trackingNo = linkedTrans?.tracking_number || linkedTrans?.trackingNumber || d.linkedTransmittalId;
+      const linkCard = el('div', {
+        style: 'background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.2);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
+      });
+      const linkHeader = el('div', {
+        style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px;color:#065f46;font-weight:600;'
+      });
+      linkHeader.appendChild(el('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>' }));
+      linkHeader.appendChild(el('span', { text: 'Linked Transmittal' }));
+      linkCard.appendChild(linkHeader);
+
+      const transLink = el('a', {
+        href: 'javascript:void(0)',
+        text: `Transmittal ${trackingNo}` + (linkedTrans?.status ? ` (${linkedTrans.status})` : ''),
+        style: 'color:#059669;font-weight:500;text-decoration:none;'
+      });
+      transLink.addEventListener('click', () => {
+        location.hash = '#transmittal/detail/' + (linkedTrans?.id || d.linkedTransmittalId);
+      });
+      transLink.addEventListener('mouseenter', () => { transLink.style.textDecoration = 'underline'; });
+      transLink.addEventListener('mouseleave', () => { transLink.style.textDecoration = 'none'; });
+      linkCard.appendChild(transLink);
+      container.appendChild(linkCard);
     }
 
     // Items table (Single row for disbursement)

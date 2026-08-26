@@ -188,6 +188,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     category,
     fundSource,
     linkedTaskId,
+    linkedTransmittalId,
     search,
     archived,
     page = 1,
@@ -231,6 +232,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   if (category) query = query.eq('category', category);
   if (fundSource) query = query.eq('fund_source', fundSource);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
+  if (linkedTransmittalId) query = query.eq('linked_transmittal_id', linkedTransmittalId);
   if (search) {
     query = query.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
   }
@@ -302,6 +304,7 @@ const createDisbursement = async ({ entityId, entityCode, userId, data }) => {
       linked_invoice_id: data.linkedInvoiceId || null,
       linked_work_request_id: data.linkedWorkRequestId || null,
       linked_task_id: data.linkedTaskId || null,
+      linked_transmittal_id: data.linkedTransmittalId || null,
       requested_by: userId,
       due_date: data.dueDate || null,
       notes: data.notes || null,
@@ -428,6 +431,7 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
     'linkedInvoiceId',
     'linkedWorkRequestId',
     'linkedTaskId',
+    'linkedTransmittalId',
     'dueDate',
     'notes',
   ];
@@ -456,6 +460,8 @@ const updateDisbursement = async ({ entityId, id, userId, data }) => {
   if (data.linkedWorkRequestId !== undefined)
     updates.linked_work_request_id = data.linkedWorkRequestId;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
+  if (data.linkedTransmittalId !== undefined)
+    updates.linked_transmittal_id = data.linkedTransmittalId;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.archived !== undefined) updates.archived = data.archived;
@@ -749,6 +755,7 @@ const createDisbursementTemplate = async ({ entityId, userId, data }) => {
     description: data.description || null,
     linked_work_request_id: data.linkedWorkRequestId || null,
     linked_invoice_id: data.linkedInvoiceId || null,
+    linked_transmittal_id: data.linkedTransmittalId || null,
     created_by: userId,
   };
 
@@ -789,6 +796,8 @@ const updateDisbursementTemplate = async ({ entityId, id, data }) => {
   if (data.linkedWorkRequestId !== undefined)
     updates.linked_work_request_id = data.linkedWorkRequestId;
   if (data.linkedInvoiceId !== undefined) updates.linked_invoice_id = data.linkedInvoiceId;
+  if (data.linkedTransmittalId !== undefined)
+    updates.linked_transmittal_id = data.linkedTransmittalId;
 
   const { data: updated, error } = await supabaseAdmin
     .from('disbursement_templates')

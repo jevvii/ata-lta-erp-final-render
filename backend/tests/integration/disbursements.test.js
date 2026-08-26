@@ -398,4 +398,72 @@ describe('/v1/disbursements', () => {
       .expect(200);
     expect(adminCounts.body.data.active).toBe(2);
   });
+
+  it('supports linking a transmittal to a disbursement on create, update, and filtering by linkedTransmittalId', async () => {
+    const admin = registerUser({
+      email: 'admin-disb-transmittal@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const TRANSMITTAL_ID = '66666666-6666-6666-6666-666666666666';
+    const TRANSMITTAL_ID_2 = '77777777-7777-7777-7777-777777777777';
+
+    mockTables.transmittals.set(TRANSMITTAL_ID, {
+      id: TRANSMITTAL_ID,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      work_request_id: WORK_REQUEST_ID,
+      tracking_number: 'ATA-TR-2026-0002',
+      status: 'Sent',
+    });
+
+    // 1. Create disbursement with linkedTransmittalId
+    const createRes = await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        ...validDisbursement,
+        category: 'TransmittalExpense',
+        linkedTransmittalId: TRANSMITTAL_ID,
+      })
+      .expect(201);
+
+    expect(createRes.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID);
+
+    // 2. Create another disbursement without transmittal link
+    await request(app)
+      .post('/v1/disbursements')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        ...validDisbursement,
+        category: 'NoTransmittalExpense',
+      })
+      .expect(201);
+
+    // 3. Filter disbursements by linkedTransmittalId
+    const filterRes = await request(app)
+      .get(`/v1/disbursements?linkedTransmittalId=${TRANSMITTAL_ID}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(filterRes.body.data.length).toBe(1);
+    expect(filterRes.body.data[0].category).toBe('TransmittalExpense');
+
+    // 4. Update disbursement to change linkedTransmittalId
+    const updateRes = await request(app)
+      .put(`/v1/disbursements/${createRes.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        linkedTransmittalId: TRANSMITTAL_ID_2,
+      })
+      .expect(200);
+
+    expect(updateRes.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID_2);
+  });
 });

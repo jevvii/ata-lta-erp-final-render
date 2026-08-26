@@ -29,6 +29,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     status,
     clientId,
     linkedTaskId,
+    linkedTransmittalId,
     search,
     archived,
     includeDeleted,
@@ -74,6 +75,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
 
   if (clientId) query = query.eq('client_id', clientId);
   if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
+  if (linkedTransmittalId) query = query.eq('linked_transmittal_id', linkedTransmittalId);
   if (search) {
     query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
   }
@@ -142,6 +144,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
     client_id: data.clientId,
     work_request_id: data.workRequestId || null,
     linked_task_id: data.linkedTaskId || null,
+    linked_transmittal_id: data.linkedTransmittalId || null,
     entity_id: entityId,
     issue_date: data.issueDate,
     due_date: data.dueDate,
@@ -373,6 +376,7 @@ const updateInvoice = async ({ entityId, id, userId, data }) => {
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.workRequestId !== undefined) updates.work_request_id = data.workRequestId;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
+  if (data.linkedTransmittalId !== undefined) updates.linked_transmittal_id = data.linkedTransmittalId;
   if (data.invoiceNumber !== undefined) updates.invoice_number = data.invoiceNumber;
   if (data.issueDate !== undefined) updates.issue_date = data.issueDate;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;

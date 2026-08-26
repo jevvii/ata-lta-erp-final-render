@@ -652,4 +652,72 @@ describe('/v1/invoices', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
   });
+
+  it('supports linking a transmittal to an invoice on create, update, and filtering by linkedTransmittalId', async () => {
+    const admin = registerUser({
+      email: 'admin-transmittal@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const TRANSMITTAL_ID = '44444444-4444-4444-4444-444444444444';
+    const TRANSMITTAL_ID_2 = '55555555-5555-5555-5555-555555555555';
+
+    mockTables.transmittals.set(TRANSMITTAL_ID, {
+      id: TRANSMITTAL_ID,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      work_request_id: WORK_REQUEST_ID,
+      tracking_number: 'ATA-TR-2026-0001',
+      status: 'Sent',
+    });
+
+    // 1. Create invoice with linkedTransmittalId
+    const createRes = await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        ...validInvoice,
+        invoiceNumber: 'ATA-SI-2026-TRANS-1',
+        linkedTransmittalId: TRANSMITTAL_ID,
+      })
+      .expect(201);
+
+    expect(createRes.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID);
+
+    // 2. Create another invoice without transmittal link
+    await request(app)
+      .post('/v1/invoices')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        ...validInvoice,
+        invoiceNumber: 'ATA-SI-2026-NO-TRANS',
+      })
+      .expect(201);
+
+    // 3. Filter invoices by linkedTransmittalId
+    const filterRes = await request(app)
+      .get(`/v1/invoices?linkedTransmittalId=${TRANSMITTAL_ID}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(filterRes.body.data.length).toBe(1);
+    expect(filterRes.body.data[0].invoice_number).toBe('ATA-SI-2026-TRANS-1');
+
+    // 4. Update invoice to change linkedTransmittalId
+    const updateRes = await request(app)
+      .put(`/v1/invoices/${createRes.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        linkedTransmittalId: TRANSMITTAL_ID_2,
+      })
+      .expect(200);
+
+    expect(updateRes.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID_2);
+  });
 });

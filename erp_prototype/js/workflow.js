@@ -947,6 +947,7 @@ const WorkflowData = {
       balance: typeof inv.balance === 'number' ? inv.balance : (parseFloat(inv.balance) || 0),
       subtotal: typeof inv.subtotal === 'number' ? inv.subtotal : (parseFloat(inv.subtotal) || 0),
       linkedTaskId: inv.linked_task_id || inv.linkedTaskId || null,
+      linkedTransmittalId: inv.linked_transmittal_id || inv.linkedTransmittalId || null,
     };
   },
 
@@ -966,6 +967,7 @@ const WorkflowData = {
       employeeId: d.employee_id || d.employeeId || null,
       submittedAt: d.submitted_at || d.submittedAt || d.created_at || d.createdAt || null,
       linkedTaskId: d.linked_task_id || d.linkedTaskId || null,
+      linkedTransmittalId: d.linked_transmittal_id || d.linkedTransmittalId || null,
     };
   },
 

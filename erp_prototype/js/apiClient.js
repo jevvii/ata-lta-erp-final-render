@@ -320,6 +320,9 @@
           wrId = extractWrId(trans);
         }
       }
+      if (type === 'transmittal' && window.apiClient?.transmittalCache?.invalidate) {
+        window.apiClient.transmittalCache.invalidate();
+      }
       if (wrId) {
         invalidateWrRelated(wrId);
       }
@@ -506,6 +509,54 @@
       },
       invalidate() {
         this._wrs = null;
+        this._loadedAt = null;
+      }
+    },
+
+    transmittalCache: {
+      _transmittals: null,
+      _promise: null,
+      _loadedAt: null,
+      TTL_MS: 5 * 60 * 1000,
+      _stale() {
+        return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
+      },
+      async ensure() {
+        if (this._transmittals && !this._stale()) return this._transmittals;
+        if (this._promise) return this._promise;
+        this._promise = window.apiClient.transmittals.list().then(res => {
+          this._transmittals = res.data || [];
+          this._loadedAt = Date.now();
+          return this._transmittals;
+        }).catch(err => {
+          this._transmittals = [];
+          this._loadedAt = Date.now();
+          return this._transmittals;
+        }).finally(() => {
+          this._promise = null;
+        });
+        return this._promise;
+      },
+      isActive(t) {
+        return !!t && !t.archived && t.status !== 'Cancelled';
+      },
+      getActiveByEntity(entity) {
+        return (this._transmittals || []).filter(t => this.isActive(t) && entityMatches(t.entity_code || t.entityCode || t.entity, entity));
+      },
+      getById(id) {
+        if (!id || !this._transmittals) return null;
+        return this._transmittals.find(t => t.id === id) || null;
+      },
+      getByTrackingNumber(num) {
+        if (!num || !this._transmittals) return null;
+        return this._transmittals.find(t => (t.tracking_number || t.trackingNumber) === num) || null;
+      },
+      getByWorkRequestId(wrId) {
+        if (!wrId || !this._transmittals) return [];
+        return (this._transmittals || []).filter(t => (t.work_request_id || t.workRequestId) === wrId);
+      },
+      invalidate() {
+        this._transmittals = null;
         this._loadedAt = null;
       }
     },

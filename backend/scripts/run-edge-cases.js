@@ -137,7 +137,8 @@ async function testEdgeCases() {
     // Call listTransmittals with includeDeleted to simulate sequential generation check
     const { data: list } = await transmittalsService.listTransmittals({
       entityId: testEntityId,
-      filters: { includeDeleted: true }
+      filters: { includeDeleted: true },
+      user: { id: testUserId, role: 'Admin' }
     });
 
     const foundDeleted = list.find(t => t.id === created2.id);

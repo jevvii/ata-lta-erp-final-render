@@ -285,6 +285,7 @@ const Auth = {
       localStorage.setItem(this._sessionKey, JSON.stringify({ userId: this.user.id, activeEntity: upper }));
       if (window.apiClient) {
         if (window.apiClient.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+        if (window.apiClient.transmittalCache?.invalidate) window.apiClient.transmittalCache.invalidate();
         if (window.apiClient.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
         if (window.apiClient.userCache?.invalidate) window.apiClient.userCache.invalidate();
       }

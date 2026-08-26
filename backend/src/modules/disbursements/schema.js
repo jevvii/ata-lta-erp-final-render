@@ -37,6 +37,7 @@ const createDisbursementSchema = z.object({
   linkedInvoiceId: z.string().uuid().optional().nullable(),
   linkedWorkRequestId: z.string().uuid(),
   linkedTaskId: z.string().uuid().optional().nullable(),
+  linkedTransmittalId: z.string().uuid().optional().nullable(),
   dueDate: z.string().optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),
   receiptS3Key: z.string().max(500).optional().nullable(),
@@ -79,6 +80,7 @@ const disbursementTemplateSchema = z.object({
   description: z.string().max(2000).optional().nullable(),
   linkedWorkRequestId: z.string().uuid().optional().nullable(),
   linkedInvoiceId: z.string().uuid().optional().nullable(),
+  linkedTransmittalId: z.string().uuid().optional().nullable(),
 });
 
 module.exports = {

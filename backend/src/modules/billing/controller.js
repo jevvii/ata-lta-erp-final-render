@@ -43,6 +43,7 @@ const listInvoices = async (req, res, next) => {
       status: req.query.status,
       clientId: req.query.clientId,
       linkedTaskId: req.query.linkedTaskId,
+      linkedTransmittalId: req.query.linkedTransmittalId,
       search: req.query.search,
       archived: req.query.archived,
       includeDeleted: req.query.includeDeleted,
