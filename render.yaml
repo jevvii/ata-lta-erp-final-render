@@ -1,33 +1,32 @@
-# ATA & LTA ERP — Render Blueprint (Free Tier UAT Only)
-# Deploys the UAT backend and SPA into the existing "My project".
+# ATA & LTA ERP — Render Blueprint (Main / Production Deployment)
+# Deploys the main backend and SPA into "My project".
 #
-# PREREQUISITE: Create the "erp-uat-secrets" environment group manually in the
-# Render dashboard under My project -> uat -> Environment Groups, using these
+# PREREQUISITE: Create the "erp-main-secrets" environment group manually in the
+# Render dashboard under My project -> main -> Environment Groups, using these
 # exact key names:
 #   SUPABASE_URL
 #   SUPABASE_SERVICE_KEY
 #   SUPABASE_STORAGE_BUCKET
 #   DATABASE_URL
 #
-# If an "erp-uat-secrets" group already exists anywhere else (including the
-# default Production environment), delete it first to avoid the
-# "same environment" linking error.
+# If an "erp-main-secrets" group already exists anywhere else, delete it first to
+# avoid the "same environment" linking error.
 #
 # Do NOT store secret values in this file.
 
 projects:
   - name: My project
     environments:
-      - name: uat
+      - name: main
         services:
           # ─── Backend ────────────────────────────────────────────────
           - type: web
-            name: ata-lta-erp-api-staging # Replace "staging" with "uat" for uat
+            name: ata-lta-erp-api-main
             runtime: docker
             region: singapore
             plan: free
             repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-            branch: staging # Change to uat for uat
+            branch: main
             rootDir: backend
             dockerfilePath: Dockerfile
             healthCheckPath: /health
@@ -37,19 +36,19 @@ projects:
               - key: LOG_LEVEL
                 value: info
               - key: FRONTEND_URL
-                value: https://ata-lta-erp-spa-staging.onrender.com # Replace "staging" with "uat" for uat
-              - fromGroup: erp-staging-secrets
+                value: https://ata-lta-erp-spa-main.onrender.com
+              - fromGroup: erp-main-secrets
 
           # ─── Frontend Static Site ──────────────────────────────────
           # Static sites on Render are free by default; do not set `plan`.
           - type: web
-            name: ata-lta-erp-spa-staging # Replace "staging" with "uat" for uat
+            name: ata-lta-erp-spa-main
             runtime: static
             repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-            branch: staging # Change to uat for uat
+            branch: main
             rootDir: erp_prototype
             buildCommand: npm run build
             staticPublishPath: .
             envVars:
               - key: ERP_API_BASE_URL
-                value: https://ata-lta-erp-api-staging.onrender.com/v1 # Replace "staging" with "uat" for uat
+                value: https://ata-lta-erp-api-main.onrender.com/v1
