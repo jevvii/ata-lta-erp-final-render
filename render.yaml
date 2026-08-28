@@ -17,7 +17,7 @@
 projects:
   - name: My project
     environments:
-      - name: main
+      - name: uat
         services:
           # ─── Backend ────────────────────────────────────────────────
           - type: web
