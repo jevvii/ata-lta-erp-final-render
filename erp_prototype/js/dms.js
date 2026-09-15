@@ -743,7 +743,7 @@ const DMS = {
 
     // File
     const fileGroup = el('div', { class: 'form-group' });
-    fileGroup.appendChild(el('label', { text: 'File *' }));
+    fileGroup.appendChild(el('label', { text: 'File' }));
     const fileInput = el('input', { type: 'file', name: 'file', required: true });
     fileGroup.appendChild(fileInput);
     const sizeWarning = el('span', { class: 'field-error hidden', text: '' });
@@ -764,7 +764,7 @@ const DMS = {
 
     // Work Request
     const wrGroup = el('div', { class: 'form-group' });
-    wrGroup.appendChild(el('label', { text: 'Work Request *' }));
+    wrGroup.appendChild(el('label', { text: 'Work Request' }));
     const wrSel = el('select', { name: 'workRequestId', required: true });
     wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     wrGroup.appendChild(wrSel);
@@ -781,8 +781,8 @@ const DMS = {
     });
 
     // Document Type
-    const typeGroup = el('div', { class: 'form-group' });
-    typeGroup.appendChild(el('label', { text: 'Document Type *' }));
+    const typeGroup = el('div', { class: 'form-group is-required' });
+    typeGroup.appendChild(el('label', { text: 'Document Type' }));
     const typeWrap = el('div', { class: 'radio-group' });
     [
       { value: 'original_scan', label: 'Original Scan' },
@@ -799,7 +799,7 @@ const DMS = {
 
     // Category — aligned with backend DOCUMENT_CATEGORIES values.
     const catGroup = el('div', { class: 'form-group' });
-    catGroup.appendChild(el('label', { text: 'Category *' }));
+    catGroup.appendChild(el('label', { text: 'Category' }));
     const catSel = el('select', { name: 'category', required: true });
     catSel.appendChild(el('option', { value: '', text: '— Select Category —' }));
     ['SEC', 'BIR', 'CONTRACT', 'PERMIT', 'FINANCIAL', 'CORRESPONDENCE', 'LEGAL', 'HR', 'OTHER'].forEach(c => {
@@ -1078,17 +1078,17 @@ const DMS = {
         const handoverForm = el('form', { class: 'form-stacked hidden' });
 
         const recGroup = el('div', { class: 'form-group' });
-        recGroup.appendChild(el('label', { text: 'Recipient Name *' }));
+        recGroup.appendChild(el('label', { text: 'Recipient Name' }));
         recGroup.appendChild(el('input', { type: 'text', name: 'recipient', required: true }));
         handoverForm.appendChild(recGroup);
 
         const dateGroup = el('div', { class: 'form-group' });
-        dateGroup.appendChild(el('label', { text: 'Handover Date *' }));
+        dateGroup.appendChild(el('label', { text: 'Handover Date' }));
         dateGroup.appendChild(el('input', { type: 'date', name: 'handoverDate', value: new Date().toISOString().slice(0, 10), required: true }));
         handoverForm.appendChild(dateGroup);
 
         const methodGroup = el('div', { class: 'form-group' });
-        methodGroup.appendChild(el('label', { text: 'Method *' }));
+        methodGroup.appendChild(el('label', { text: 'Method' }));
         const methodSel = el('select', { name: 'method', required: true });
         methodSel.appendChild(el('option', { value: '', text: '— Select Method —' }));
         ['Pickup', 'Courier', 'Email', 'In-Person'].forEach(m => {

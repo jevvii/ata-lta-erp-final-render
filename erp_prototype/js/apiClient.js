@@ -86,27 +86,54 @@
     let activeEntityHeader = getActiveEntity();
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(options.method || 'GET')) {
       let payloadEntity = null;
-      if (options.headers && options.headers['X-Active-Entity']) {
+      if (options.headers && options.headers['X-Active-Entity'] && options.headers['X-Active-Entity'] !== 'ALL') {
         payloadEntity = options.headers['X-Active-Entity'];
       }
-      if (!payloadEntity && options.body) {
+      if (options.body) {
         try {
           const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
-          if (parsed) {
-            payloadEntity = parsed.entity || parsed.entity_code || parsed.entityId;
-            if (!payloadEntity) {
-              const wrId = parsed.workRequestId || parsed.work_request_id || parsed.linkedWorkRequestId || parsed.linked_work_request_id;
-              if (wrId && window.apiClient && window.apiClient.workRequestCache && typeof window.apiClient.workRequestCache.getById === 'function') {
-                const wr = window.apiClient.workRequestCache.getById(wrId);
-                if (wr && wr.entity) {
-                  payloadEntity = wr.entity;
+          if (parsed && typeof parsed === 'object') {
+            const explicit = parsed.entity || parsed.entity_code || parsed.entityId;
+            if (explicit && explicit !== 'ALL') {
+              payloadEntity = explicit;
+            } else {
+              // 1. Auto-detect from clientId if available
+              const cId = parsed.clientId || parsed.client_id;
+              if (cId && window.apiClient?.clientCache && typeof window.apiClient.clientCache.getById === 'function') {
+                const c = window.apiClient.clientCache.getById(cId);
+                if (c && c.entity && c.entity !== 'ALL') {
+                  payloadEntity = c.entity;
                 }
               }
-              if (!payloadEntity && wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.getWorkRequestById === 'function') {
-                const wr = WorkflowData.getWorkRequestById(wrId);
-                if (wr && wr.entity) {
-                  payloadEntity = wr.entity;
+              // 2. Auto-detect from workRequestId if available
+              if (!payloadEntity) {
+                const wrId = parsed.workRequestId || parsed.work_request_id || parsed.linkedWorkRequestId || parsed.linked_work_request_id;
+                if (wrId && window.apiClient?.workRequestCache && typeof window.apiClient.workRequestCache.getById === 'function') {
+                  const wr = window.apiClient.workRequestCache.getById(wrId);
+                  if (wr && wr.entity && wr.entity !== 'ALL') {
+                    payloadEntity = wr.entity;
+                  } else if (wr?.clientId && window.apiClient?.clientCache) {
+                    const c = window.apiClient.clientCache.getById(wr.clientId);
+                    if (c && c.entity && c.entity !== 'ALL') payloadEntity = c.entity;
+                  }
                 }
+                if (!payloadEntity && wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.getWorkRequestById === 'function') {
+                  const wr = WorkflowData.getWorkRequestById(wrId);
+                  if (wr && wr.entity && wr.entity !== 'ALL') {
+                    payloadEntity = wr.entity;
+                  } else if (wr?.clientId && window.apiClient?.clientCache) {
+                    const c = window.apiClient.clientCache.getById(wr.clientId);
+                    if (c && c.entity && c.entity !== 'ALL') payloadEntity = c.entity;
+                  }
+                }
+              }
+            }
+
+            // If payloadEntity is detected and parsed.entity was 'ALL' (or missing for operations), normalize body
+            if (payloadEntity && payloadEntity !== 'ALL') {
+              if (parsed.entity === 'ALL' || (!parsed.entity && typeof path === 'string' && (path.startsWith('/operations') || path.startsWith('/work-requests')))) {
+                parsed.entity = payloadEntity;
+                options.body = JSON.stringify(parsed);
               }
             }
           }
@@ -114,6 +141,12 @@
       }
       if (payloadEntity && payloadEntity !== 'ALL') {
         activeEntityHeader = payloadEntity;
+      } else if (activeEntityHeader === 'ALL') {
+        const fallback = (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+        activeEntityHeader = fallback;
+      }
+      if (options.headers && options.headers['X-Active-Entity'] === 'ALL') {
+        options.headers['X-Active-Entity'] = activeEntityHeader;
       }
     }
 

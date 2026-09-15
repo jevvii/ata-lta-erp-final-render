@@ -731,12 +731,18 @@ const Dashboard = {
 
     if (type === 'wr') {
       await window.apiClient.clientCache.ensure();
-      const firstClient = (window.apiClient.clientCache._clients || []).find(c => (c.entity || '').toUpperCase() === entity);
+      const clients = window.apiClient.clientCache._clients || [];
+      const firstClient = entity === 'ALL'
+        ? clients[0]
+        : clients.find(c => (c.entity || '').toUpperCase() === entity);
+      const resolvedEntity = entity === 'ALL'
+        ? (firstClient?.entity || Auth.user?.entities?.find(e => e !== 'ALL') || 'ATA')
+        : entity;
       const newWr = {
         title: cleanText,
         description: 'Scheduled via AI Command: "' + input + '"',
         clientId: firstClient?.id,
-        entity: entity,
+        entity: resolvedEntity,
         status: 'In Progress', // Legacy prototype used 'Processing'; backend operations status is 'In Progress'.
         requestedBy: Auth.user?.id,
         dueDate: dateStr
@@ -744,7 +750,7 @@ const Dashboard = {
       try {
         await window.apiClient.workRequests.create(newWr);
         this._dataCache = null; // invalidate so the new item appears on next render
-        return { success: true, message: `Scheduled Work Request: "${cleanText}" for ${entity} on ${dateStr}` };
+        return { success: true, message: `Scheduled Work Request: "${cleanText}" for ${resolvedEntity} on ${dateStr}` };
       } catch (e) {
         return { success: false, message: e.message || 'Failed to create work request.' };
       }

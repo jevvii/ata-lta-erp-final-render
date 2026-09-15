@@ -697,6 +697,106 @@ h3 {
   color: var(--color-text-muted);
 }
 
+/* Required Field Visual Indicator — Modern Minimal Design Token */
+.required-indicator {
+  content: "*";
+  display: inline-block;
+  color: var(--color-danger, #ef4444);
+  font-size: 0.75em;
+  font-weight: 600;
+  line-height: 1;
+  margin-left: 3px;
+  vertical-align: super;
+  transform: translateY(-1px);
+  opacity: 0.85;
+  user-select: none;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .required-indicator {
+  color: #f87171;
+  opacity: 0.9;
+}
+
+/* Automatic pseudo-element indicator on form labels containing required controls */
+.form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+.form-group.is-required > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+.notion-prop:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+.notion-prop:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) .pw-header-row > label:not(:has(.required-indicator))::after,
+.notion-prop.is-required > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+.notion-prop.is-required .pw-header-row > label:not(:has(.required-indicator))::after,
+.notion-freeform:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > :is(label, .notion-section-label):not(:has(.required-indicator))::after,
+.notion-freeform.is-required > :is(label, .notion-section-label):not(:has(.required-indicator))::after,
+.profile-form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(:has(.required-indicator))::after,
+.profile-form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) .pw-header-row > label:not(:has(.required-indicator))::after,
+.profile-form-group.is-required > label:not(:has(.required-indicator))::after,
+.profile-form-group.is-required .pw-header-row > label:not(:has(.required-indicator))::after,
+label.is-required:not(:has(.required-indicator))::after,
+label.required:not(:has(.required-indicator))::after,
+.notion-section-label.is-required:not(:has(.required-indicator))::after,
+.notion-section-heading.is-required:not(:has(.required-indicator))::after,
+.form-section.is-required > :is(h3, h4, label):not(:has(.required-indicator))::after,
+h3.is-required:not(:has(.required-indicator))::after,
+h4.is-required:not(:has(.required-indicator))::after {
+  content: "*";
+  display: inline-block;
+  color: var(--color-danger, #ef4444);
+  font-size: 0.75em;
+  font-weight: 600;
+  line-height: 1;
+  margin-left: 3px;
+  vertical-align: super;
+  transform: translateY(-1px);
+  opacity: 0.85;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Subtle gap compensation for flex label containers */
+.notion-prop > label::after,
+.pw-header-row > label::after {
+  margin-left: -2px;
+}
+
+/* Dark mode overrides for required field indicator */
+[data-theme="dark"] .form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .form-group.is-required > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-prop:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-prop:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) .pw-header-row > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-prop.is-required > label:not(.radio-label):not(.checkbox-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-prop.is-required .pw-header-row > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-freeform:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > :is(label, .notion-section-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-freeform.is-required > :is(label, .notion-section-label):not(:has(.required-indicator))::after,
+[data-theme="dark"] .profile-form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] .profile-form-group:has(:is(input, select, textarea):is([required], [aria-required="true"], .is-required)) .pw-header-row > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] .profile-form-group.is-required > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] .profile-form-group.is-required .pw-header-row > label:not(:has(.required-indicator))::after,
+[data-theme="dark"] label.is-required:not(:has(.required-indicator))::after,
+[data-theme="dark"] label.required:not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-section-label.is-required:not(:has(.required-indicator))::after,
+[data-theme="dark"] .notion-section-heading.is-required:not(:has(.required-indicator))::after,
+[data-theme="dark"] .form-section.is-required > :is(h3, h4, label):not(:has(.required-indicator))::after,
+[data-theme="dark"] h3.is-required:not(:has(.required-indicator))::after,
+[data-theme="dark"] h4.is-required:not(:has(.required-indicator))::after {
+  color: #f87171;
+  opacity: 0.9;
+}
+
+/* Suppress visual requirement indicators on the sign-in / login form */
+#login-screen label::after,
+#login-form label::after,
+.login-card label::after,
+#login-screen .required-indicator,
+#login-form .required-indicator,
+[data-theme="dark"] #login-screen label::after,
+[data-theme="dark"] #login-form label::after,
+[data-theme="dark"] .login-card label::after,
+[data-theme="dark"] #login-screen .required-indicator,
+[data-theme="dark"] #login-form .required-indicator {
+  content: none !important;
+  display: none !important;
+}
+
 input[type="text"],
 input[type="email"],
 input[type="password"],
@@ -935,6 +1035,69 @@ tbody tr:hover {
 .badge-lta { background: #fff7ed; color: var(--color-lta); }
 .badge-all { background: #e0f2fe; color: #075985; }
 .badge-recurring { background: #f3e8ff; color: #6b21a8; }
+
+/* Client entity indication in consolidated view */
+.client-entity-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-xs, 4px);
+  text-transform: uppercase;
+  user-select: none;
+  vertical-align: middle;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+
+.client-entity-tag.tag-ata {
+  background: rgba(37, 99, 235, 0.09);
+  color: #1d4ed8;
+  border: 1px solid rgba(37, 99, 235, 0.22);
+}
+
+.client-entity-tag.tag-lta {
+  background: rgba(71, 85, 105, 0.09);
+  color: #334155;
+  border: 1px solid rgba(71, 85, 105, 0.22);
+}
+
+.client-with-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.client-with-entity .client-name-text {
+  display: inline;
+}
+
+.card-v2-desc .client-with-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.list-item-meta .client-with-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  vertical-align: middle;
+}
+
+.list-item-title .client-with-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
 
 /* WR phase badges — distinct color per phase, aligned with the board/progress palette */
 .badge-draft { background: #f1f5f9; color: #475569; }
@@ -13702,6 +13865,19 @@ html.loading-active #loading-screen:not(.hidden) {
 [data-theme="dark"] .badge-billing { background: rgba(168, 85, 247, 0.18); color: #d8b4fe; }
 [data-theme="dark"] .badge-disbursement { background: rgba(99, 102, 241, 0.18); color: #a5b4fc; }
 [data-theme="dark"] .badge-neutral { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+
+/* Dark mode client entity tag overrides */
+[data-theme="dark"] .client-entity-tag.tag-ata {
+  background: rgba(37, 99, 235, 0.2);
+  color: #93c5fd;
+  border: 1px solid rgba(147, 197, 253, 0.3);
+}
+
+[data-theme="dark"] .client-entity-tag.tag-lta {
+  background: rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+  border: 1px solid rgba(203, 213, 225, 0.3);
+}
 
 /* Document lifecycle badges */
 [data-theme="dark"] .lifecycle-collected { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }

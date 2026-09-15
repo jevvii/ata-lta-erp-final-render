@@ -129,7 +129,7 @@ const Profile = {
 
     // Form
     const form = el('form', { id: 'profile-details-form', class: 'profile-form' });
-    form.appendChild(this.formGroup('FULL NAME', 'text', 'profile-name', userName, !isLoading));
+    form.appendChild(this.formGroup('FULL NAME', 'text', 'profile-name', userName, !isLoading, '', true));
     form.appendChild(this.formGroup('EMAIL ADDRESS', 'email', 'profile-email', Auth.user?.email || 'test-account@ata-lta.ph', false));
 
     const actions = el('div', { class: 'profile-form-actions' });
@@ -662,8 +662,8 @@ const Profile = {
   /**
    * Helper to create a password field with show/hide toggle and header action.
    */
-  createPasswordField({ label, id, placeholder = '', editable = true, headerAction = null }) {
-    const group = el('div', { class: 'profile-form-group' });
+  createPasswordField({ label, id, placeholder = '', editable = true, headerAction = null, required = true }) {
+    const group = el('div', { class: 'profile-form-group' + (required ? ' is-required' : '') });
 
     const header = el('div', { class: 'pw-header-row' });
     header.appendChild(el('label', { htmlFor: id, text: label }));
@@ -682,6 +682,7 @@ const Profile = {
       name: id,
       disabled: !editable,
       placeholder: placeholder,
+      required: required,
       class: 'profile-input pw-input',
       autocomplete: id.includes('current') ? 'current-password' : 'new-password',
       style: 'width: 100%; padding-right: 44px !important; box-sizing: border-box;'
@@ -1229,8 +1230,8 @@ const Profile = {
     return card;
   },
 
-  formGroup(label, type, id, value, editable, placeholder = '') {
-    const group = el('div', { class: 'profile-form-group' });
+  formGroup(label, type, id, value, editable, placeholder = '', required = false) {
+    const group = el('div', { class: 'profile-form-group' + (required ? ' is-required' : '') });
     group.appendChild(el('label', { htmlFor: id, text: label }));
     const input = el('input', {
       type: type,
@@ -1239,6 +1240,7 @@ const Profile = {
       value: value,
       disabled: !editable,
       placeholder: placeholder,
+      required: required,
       class: 'form-input'
     });
     group.appendChild(input);

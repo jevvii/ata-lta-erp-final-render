@@ -40,7 +40,7 @@ const createWorkRequestSchema = z.object({
   title: z.string().min(1).max(255),
   description: z.string().optional().nullable(),
   clientId: z.string().uuid(),
-  entity: z.enum(['ATA', 'LTA']),
+  entity: z.enum(['ATA', 'LTA', 'ALL']).optional(),
   status: z.string().max(50).optional(),
   requestedBy: z.string().uuid().optional(),
   dueDate: z.string().optional(),

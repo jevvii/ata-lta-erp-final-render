@@ -1686,7 +1686,8 @@ const Users = {
    * segmented strength meter, and generate-password action.
    */
   _renderModernPasswordField(user) {
-    const container = el('div', { class: 'notion-prop pw-prop-container' });
+    const isNew = !user;
+    const container = el('div', { class: 'notion-prop pw-prop-container' + (isNew ? ' is-required' : '') });
 
     // Header with label and generate button
     const header = el('div', { class: 'pw-header-row' });
@@ -1715,6 +1716,7 @@ const Users = {
       class: 'notion-prop-input pw-input',
       placeholder: user ? 'Leave blank to keep current password' : 'Set secure password',
       autocomplete: 'new-password',
+      required: isNew,
       style: 'width: 100%; padding-right: 44px !important; box-sizing: border-box;'
     });
     inputWrapper.appendChild(pwInput);
@@ -1937,7 +1939,7 @@ const Users = {
 
     // Department (multi-select); skip for Admin because Admin is all-powerful.
     if (!user || user.role !== 'Admin') {
-      const deptProp = el('div', { class: 'notion-prop' });
+      const deptProp = el('div', { class: 'notion-prop is-required' });
       deptProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg> Department' }));
       const deptWrap = el('div', { class: 'notion-checkbox-group' });
       const departmentList = Auth.DEPARTMENTS;
@@ -1955,7 +1957,7 @@ const Users = {
     }
 
     // Entity access
-    const entityProp = el('div', { class: 'notion-prop' });
+    const entityProp = el('div', { class: 'notion-prop is-required' });
     entityProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Entity Access' }));
     const entityWrap = el('div', { class: 'notion-checkbox-group' });
     ['ATA', 'LTA'].forEach(e => {

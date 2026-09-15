@@ -1765,7 +1765,9 @@ const Billing = {
         label: "Client",
         getName: (inv) => {
           const client = window.apiClient.clientCache.getById(inv.clientId);
-          return client?.name || "No Client";
+          const entity = client?.entity || inv.entity;
+          const entitySuffix = (typeof Auth !== 'undefined' && Auth.activeEntity === 'ALL' && entity) ? ` (${entity})` : '';
+          return (client?.name || "No Client") + entitySuffix;
         },
       },
       {
@@ -2192,8 +2194,10 @@ const Billing = {
       {
         key: "clientId",
         label: "Client",
-        render: (inv) =>
-          window.apiClient.clientCache.getById(inv.clientId)?.name || "—",
+        render: (inv) => {
+          const client = window.apiClient.clientCache.getById(inv.clientId);
+          return renderClientWithEntity(client?.name || "—", client?.entity || inv.entity);
+        },
       },
       {
         key: "issueDate",
@@ -2592,7 +2596,7 @@ const Billing = {
         progress,
         statusColor: statusColors[inv.status] || "#cbd5e1",
         title: inv.invoiceNumber,
-        description: client?.name || "—",
+        description: renderClientWithEntity(client?.name || "—", client?.entity || inv.entity),
         detail: descParts.slice(1).join(" • "),
         date: inv.issueDate ? formatDate(inv.issueDate) : "",
         priority: self.getInvoiceDisplayStatus(inv.status),
@@ -3063,10 +3067,12 @@ const Billing = {
       }
       row.appendChild(
         el("div", {}, [
-          el("div", {
-            class: "list-item-title",
-            text: inv.invoiceNumber + " — " + (client?.name || "—"),
-          }),
+          (() => {
+            const titleEl = el("div", { class: "list-item-title" });
+            titleEl.appendChild(document.createTextNode(inv.invoiceNumber + " — "));
+            titleEl.appendChild(renderClientWithEntity(client?.name || "—", client?.entity || inv.entity));
+            return titleEl;
+          })(),
           el("div", {
             class: "list-item-meta",
             text:
@@ -3230,16 +3236,16 @@ const Billing = {
     propsGrid.appendChild(clientGroup);
 
     // Work Request link
-    const wrGroup = el("div", { class: "notion-prop" });
+    const wrGroup = el("div", { class: "notion-prop is-required" });
     wrGroup.appendChild(
       el("label", {
         html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request',
       }),
     );
-    const wrSelAttrs = { name: "workRequestId", class: "notion-prop-select" };
+    const wrSelAttrs = { name: "workRequestId", class: "notion-prop-select", required: true };
     if (prefill && prefill.workRequestId) wrSelAttrs.disabled = true;
     const wrSel = el("select", wrSelAttrs);
-    wrSel.appendChild(el("option", { value: "", text: "— None —" }));
+    wrSel.appendChild(el("option", { value: "", text: "— Select Work Request —" }));
     const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
     const activeWrIds = new Set(wrs.map((wr) => wr.id));
     const existingWr = inv?.workRequestId
@@ -3460,7 +3466,7 @@ const Billing = {
 
     // Line Items — Notion-style editable list
     form.appendChild(
-      el("h3", { class: "notion-section-heading", text: "Line Items" }),
+      el("h3", { class: "notion-section-heading is-required", text: "Line Items" }),
     );
     const itemsSection = el("div", { class: "notion-line-items" });
     const itemsList = el("div", {
@@ -3668,6 +3674,14 @@ const Billing = {
     }
 
     const data = Object.fromEntries(new FormData(form).entries());
+    if (!data.workRequestId) {
+      Workflow.showMessage(
+        "Validation Error",
+        "Please select a work request.",
+        "warning",
+      );
+      return;
+    }
     const activeEntity = Auth.activeEntity;
     // Resolve a concrete entity for the optimistic record. The backend resolves the
     // actual entity from the request header / client, but the local cache matching
@@ -4022,8 +4036,8 @@ const Billing = {
     const form = el("form", { class: "form-stacked" });
 
     // 1. Select Work Request
-    const wrGroup = el("div", { class: "form-group" });
-    wrGroup.appendChild(el("label", { text: "Select Work Request *" }));
+    const wrGroup = el("div", { class: "form-group is-required" });
+    wrGroup.appendChild(el("label", { text: "Select Work Request" }));
     const wrSelect = el("select", {
       name: "workRequestId",
       class: "form-select",
@@ -4098,7 +4112,7 @@ const Billing = {
 
     // 3. Billing Amount
     const amtGroup = el("div", { class: "form-group" });
-    amtGroup.appendChild(el("label", { text: "Billing Amount (₱) *" }));
+    amtGroup.appendChild(el("label", { text: "Billing Amount (₱)" }));
     const amtIn = el("input", {
       type: "text",
       inputmode: "decimal",
@@ -4293,7 +4307,8 @@ const Billing = {
     }
 
     const meta = el("div", { class: "invoice-meta" });
-    meta.appendChild(el("p", { text: "Client: " + (client?.name || "—") }));
+    const clientP = el("p", {}, ["Client: ", renderClientWithEntity(client?.name || "—", client?.entity || inv.entity)]);
+    meta.appendChild(clientP);
     meta.appendChild(
       el("p", { text: "Issue Date: " + formatDate(inv.issueDate) }),
     );
@@ -4578,7 +4593,7 @@ const Billing = {
       // Amount and Date (always shown)
       payForm.appendChild(
         el("div", { class: "form-group" }, [
-          el("label", { text: "Amount Paid *" }),
+          el("label", { text: "Amount Paid" }),
           el("input", {
             type: "number",
             name: "payAmount",
@@ -4591,7 +4606,7 @@ const Billing = {
       );
       payForm.appendChild(
         el("div", { class: "form-group" }, [
-          el("label", { text: "Payment Date *" }),
+          el("label", { text: "Payment Date" }),
           el("input", {
             type: "date",
             name: "payDate",
@@ -4603,7 +4618,7 @@ const Billing = {
 
       // Payment Method
       const methodGroup = el("div", { class: "form-group" });
-      methodGroup.appendChild(el("label", { text: "Payment Method *" }));
+      methodGroup.appendChild(el("label", { text: "Payment Method" }));
       const methodSel = el("select", { name: "payMethod", required: true });
       const methods = [
         { value: "", text: "— Select Method —" },
@@ -4624,19 +4639,22 @@ const Billing = {
       payForm.appendChild(methodGroup);
 
       // Conditional field groups
-      const createFieldGroup = (name, label, type = "text", placeholder = "") =>
-        el(
+      const createFieldGroup = (name, label, type = "text", placeholder = "") => {
+        const isReq = label.includes("*");
+        const cleanLabel = label.replace(/\s*\*$/, "");
+        return el(
           "div",
           {
-            class: "form-group pay-field-group",
+            class: "form-group pay-field-group" + (isReq ? " is-required" : ""),
             "data-method": name,
             style: "display:none;",
           },
           [
-            el("label", { text: label }),
-            el("input", { type, name, placeholder }),
+            el("label", { text: cleanLabel }),
+            el("input", { type, name, placeholder, required: isReq }),
           ],
         );
+      };
 
       const checkFields = el("div", {
         class: "pay-check-fields",
@@ -6315,7 +6333,7 @@ const Billing = {
         iconHtml:
           '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
         tags: [
-          { text: client?.name || "No Client", type: "client" },
+          { text: renderClientWithEntity(client?.name || "No Client", client?.entity || t.entity), type: "client" },
           {
             text: t.schedule || "—",
             type: "schedule",
@@ -6696,7 +6714,7 @@ const Billing = {
     form.appendChild(titleSection);
 
     const clientGroup = el("div", { class: "form-group" });
-    clientGroup.appendChild(el("label", { text: "Client *" }));
+    clientGroup.appendChild(el("label", { text: "Client" }));
     const clientSel = el("select", { name: "clientId", required: true });
     clientSel.appendChild(
       el("option", { value: "", text: "— Select Client —" }),
@@ -6719,7 +6737,7 @@ const Billing = {
     form.appendChild(clientGroup);
 
     const schedGroup = el("div", { class: "form-group" });
-    schedGroup.appendChild(el("label", { text: "Schedule *" }));
+    schedGroup.appendChild(el("label", { text: "Schedule" }));
     const schedSel = el("select", { name: "schedule", required: true });
     ["monthly", "quarterly"].forEach((s) => {
       const opt = el("option", { value: s, text: s });
@@ -6731,7 +6749,7 @@ const Billing = {
 
     form.appendChild(
       el("div", { class: "form-group" }, [
-        el("label", { text: "Professional Fee Amount *" }),
+        el("label", { text: "Professional Fee Amount" }),
         el("input", {
           type: "number",
           name: "pfAmount",
@@ -7455,7 +7473,7 @@ const Billing = {
         category,
         title: inv.invoiceNumber || "(no number)",
         meta: [
-          { icon: ArchivePage.icons.client, text: client?.name || "—" },
+          { icon: ArchivePage.icons.client, text: renderClientWithEntity(client?.name || "—", client?.entity || inv.entity) },
           { icon: ArchivePage.icons.amount, text: formatPHP(inv.total) },
           { icon: ArchivePage.icons.date, text: formatDate(inv.updatedAt) },
         ],
@@ -7510,11 +7528,11 @@ const Billing = {
       const pc = isOpReq ? null : record;
       const r = isOpReq ? record : null;
       const data = pc ? pc.proposedData || {} : r;
-      const clientName =
-        (
-          window.apiClient.clientCache.getById(data.clientId) ||
-          window.apiClient.clientCache.getById(r?.clientId)
-        )?.name || "—";
+      const clientObj =
+        window.apiClient.clientCache.getById(data.clientId) ||
+        window.apiClient.clientCache.getById(r?.clientId);
+      const clientName = clientObj?.name || "—";
+      const clientEntity = clientObj?.entity || data.entity || r?.entity || null;
       const title = isOpReq
         ? `Billing Request ${r.workRequestId ? "for WR" : ""}`
         : `Invoice Change: ${data.invoiceNumber || "(untitled)"}`;
@@ -7524,7 +7542,7 @@ const Billing = {
         category: "rejected",
         title,
         meta: [
-          { icon: ArchivePage.icons.client, text: clientName },
+          { icon: ArchivePage.icons.client, text: renderClientWithEntity(clientName, clientEntity) },
           {
             icon: ArchivePage.icons.date,
             text: formatDate(

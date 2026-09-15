@@ -489,6 +489,10 @@ const WorkflowData = {
     const payload = { ...record };
     delete payload.id;
     delete payload.tasks;
+    if (!payload.entity || payload.entity === 'ALL') {
+      const c = payload.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(payload.clientId) : null;
+      payload.entity = c?.entity || (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+    }
     const res = await window.apiClient.workRequests.create(payload);
     const created = this.normalizeWorkRequest(res.data);
     let existing = localId ? this.getWorkRequestById(localId) : null;
@@ -3150,7 +3154,7 @@ const Workflow = {
     form.appendChild(clientGroup);
 
     // ---------- Work Request (read-only, auto-filled) ----------
-    const wrGroup = el('div', { class: 'form-group' });
+    const wrGroup = el('div', { class: 'form-group is-required' });
     wrGroup.appendChild(el('label', { text: 'Work Request' }));
     const wrDisplay = el('input', {
       type: 'text',
@@ -3181,7 +3185,7 @@ const Workflow = {
     const dateRow = el('div', { style: 'display: grid; grid-template-columns: 1fr 1fr; gap: 12px;' });
 
     const issueDateGroup = el('div', { class: 'form-group' });
-    issueDateGroup.appendChild(el('label', { text: 'Issue Date *' }));
+    issueDateGroup.appendChild(el('label', { text: 'Issue Date' }));
     issueDateGroup.appendChild(el('input', {
       type: 'date', name: 'issueDate',
       value: new Date().toISOString().slice(0, 10),
@@ -3190,7 +3194,7 @@ const Workflow = {
     dateRow.appendChild(issueDateGroup);
 
     const dueDateGroup = el('div', { class: 'form-group' });
-    dueDateGroup.appendChild(el('label', { text: 'Due Date *' }));
+    dueDateGroup.appendChild(el('label', { text: 'Due Date' }));
     dueDateGroup.appendChild(el('input', {
       type: 'date', name: 'dueDate',
       value: '', required: true
@@ -3210,8 +3214,8 @@ const Workflow = {
     form.appendChild(numGroup);
 
     // ---------- Line Items ----------
-    const itemsSection = el('div', { class: 'form-section', style: 'margin-top: 4px;' });
-    itemsSection.appendChild(el('h4', { text: 'Line Items' }));
+    const itemsSection = el('div', { class: 'form-section is-required', style: 'margin-top: 4px;' });
+    itemsSection.appendChild(el('h4', { class: 'is-required', text: 'Line Items' }));
     const itemsList = el('div', { id: 'modal-line-item-rows' });
     itemsSection.appendChild(itemsList);
 
@@ -3297,15 +3301,30 @@ const Workflow = {
       const rows = form.querySelectorAll('.line-item-row');
       const lineItems = [];
       let subtotal = 0;
+      let hasPartialItem = false;
       rows.forEach(row => {
-        const amt = parseFloat(row.querySelector('.item-amt').value) || 0;
-        subtotal += amt;
-        lineItems.push({
-          type: row.querySelector('.item-type').value,
-          description: row.querySelector('.item-desc').value.trim(),
-          amount: amt
-        });
+        const desc = row.querySelector('.item-desc')?.value.trim() || '';
+        const amt = parseFloat(row.querySelector('.item-amt')?.value) || 0;
+        if (desc && amt > 0) {
+          subtotal += amt;
+          lineItems.push({
+            type: row.querySelector('.item-type').value,
+            description: desc,
+            amount: amt
+          });
+        } else if (desc || amt > 0) {
+          hasPartialItem = true;
+        }
       });
+
+      if (hasPartialItem) {
+        this.showMessage('Validation Error', 'Each line item must have both a description and a valid amount greater than zero.', 'warning');
+        return;
+      }
+      if (lineItems.length === 0) {
+        this.showMessage('Validation Error', 'Please add at least one line item with a description and a valid amount.', 'warning');
+        return;
+      }
 
       const record = {
         invoiceNumber: data.invoiceNumber,
@@ -3380,7 +3399,7 @@ const Workflow = {
     form.appendChild(clientGroup);
 
     // ---------- Work Request (read-only, auto-filled) ----------
-    const wrGroup = el('div', { class: 'form-group' });
+    const wrGroup = el('div', { class: 'form-group is-required' });
     wrGroup.appendChild(el('label', { text: 'Work Request' }));
     wrGroup.appendChild(el('input', {
       type: 'text',
@@ -3408,7 +3427,7 @@ const Workflow = {
 
     // ---------- Category ----------
     const catGroup = el('div', { class: 'form-group' });
-    catGroup.appendChild(el('label', { text: 'Category *' }));
+    catGroup.appendChild(el('label', { text: 'Category' }));
     const catSel = el('select', { name: 'category', required: true, class: 'form-select' });
     ['Transportation', 'Notary', 'Meals', 'Government Fee', 'Other'].forEach(c => {
       catSel.appendChild(el('option', { value: c, text: c }));
@@ -3418,13 +3437,13 @@ const Workflow = {
 
     // ---------- Description ----------
     const descGroup = el('div', { class: 'form-group' });
-    descGroup.appendChild(el('label', { text: 'Description *' }));
+    descGroup.appendChild(el('label', { text: 'Description' }));
     descGroup.appendChild(el('input', { type: 'text', name: 'description', required: true, placeholder: 'e.g. BIR filing fee' }));
     form.appendChild(descGroup);
 
     // ---------- Amount ----------
     const amtGroup = el('div', { class: 'form-group' });
-    amtGroup.appendChild(el('label', { text: 'Amount (₱) *' }));
+    amtGroup.appendChild(el('label', { text: 'Amount (₱)' }));
     const amtIn = el('input', { type: 'text', inputmode: 'decimal', name: 'amount', placeholder: '0.00', required: true });
     amtIn.addEventListener('input', () => { amtIn.value = amtIn.value.replace(/[^0-9.,]/g, ''); });
     amtIn.addEventListener('focus', () => { const n = parseFloat(String(amtIn.value).replace(/[₱$,\s]/g, '')) || 0; amtIn.value = n > 0 ? String(n) : ''; });
@@ -3433,8 +3452,8 @@ const Workflow = {
     form.appendChild(amtGroup);
 
     // ---------- Fund Source ----------
-    const fundGroup = el('div', { class: 'form-group' });
-    fundGroup.appendChild(el('label', { text: 'Fund Source *' }));
+    const fundGroup = el('div', { class: 'form-group is-required' });
+    fundGroup.appendChild(el('label', { text: 'Fund Source' }));
     const fundWrap = el('div', { class: 'radio-group' });
     ['Firm Fund', 'Client Fund'].forEach(f => {
       const label = el('label', { class: 'radio-label' });
@@ -3467,9 +3486,9 @@ const Workflow = {
       });
     });
 
-    // ---------- Receipt (optional) ----------
-    const receiptGroup = el('div', { class: 'form-group' });
-    receiptGroup.appendChild(el('label', { text: 'Receipt (optional)' }));
+    // ---------- Receipt ----------
+    const receiptGroup = el('div', { class: 'form-group is-required' });
+    receiptGroup.appendChild(el('label', { text: 'Receipt' }));
 
     const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
     dropzone.innerHTML = `
@@ -3485,6 +3504,7 @@ const Workflow = {
     const handleFile = (file) => {
       errorLabel.textContent = '';
       statusLabel.innerHTML = '';
+      dropzone.style.borderColor = '';
       if (!file) return;
 
       const limit = 50 * 1024 * 1024;
@@ -3559,6 +3579,13 @@ const Workflow = {
       const data = Object.fromEntries(new FormData(form).entries());
       const receiptInput = form.querySelector('input[name="receipt"]');
       const receiptFile = receiptInput?.files?.[0];
+
+      if (!receiptFile) {
+        this.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+        const dropzone = form.querySelector('.notion-popover-dropzone');
+        if (dropzone) dropzone.style.borderColor = 'var(--color-danger)';
+        return;
+      }
 
       let receiptS3Key = null;
       let receiptFilename = null;
@@ -3655,7 +3682,7 @@ const Workflow = {
     form.appendChild(clientGroup);
 
     // ---------- Work Request (read-only, auto-filled) ----------
-    const wrGroup = el('div', { class: 'form-group' });
+    const wrGroup = el('div', { class: 'form-group is-required' });
     wrGroup.appendChild(el('label', { text: 'Work Request' }));
     wrGroup.appendChild(el('input', {
       type: 'text',
@@ -3679,9 +3706,9 @@ const Workflow = {
     tnGroup.appendChild(tnInput);
     form.appendChild(tnGroup);
 
-    // ---------- Itemized Document List ----------
-    const itemsSection = el('div', { class: 'form-section', style: 'margin-top: 4px;' });
-    itemsSection.appendChild(el('h4', { text: 'Document Items' }));
+    // ---------- Transmittal Items ----------
+    const itemsSection = el('div', { class: 'form-section is-required', style: 'margin-top: 4px;' });
+    itemsSection.appendChild(el('h4', { class: 'is-required', text: 'Transmittal Items' }));
 
     // Column headers
     const headerLabelStyle = 'font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.03em; padding-left: 13px;';
@@ -3764,16 +3791,24 @@ const Workflow = {
       // Collect items
       const rows = itemsList.querySelectorAll('.line-item-row');
       const items = [];
+      let hasPartialItem = false;
       rows.forEach(row => {
         const desc = row.querySelector('.item-desc')?.value?.trim();
         const docType = row.querySelector('.item-type')?.value;
         if (desc && docType) {
           items.push({ description: desc, documentType: docType });
+        } else if (desc || docType) {
+          hasPartialItem = true;
         }
       });
 
+      if (hasPartialItem) {
+        this.showMessage('Validation Error', 'Each transmittal item must have both a document type and a description.', 'warning');
+        return;
+      }
+
       if (items.length === 0) {
-        this.showMessage('Validation Error', 'Please add at least one document item with a description.', 'warning');
+        this.showMessage('Validation Error', 'Please add at least one transmittal item with a document type and description.', 'warning');
         return;
       }
 
@@ -3928,7 +3963,7 @@ const Workflow = {
 
       // 2. Billing Amount
       const amtGroup = el('div', { class: 'form-group' });
-      amtGroup.appendChild(el('label', { text: 'Billing Amount (₱) *' }));
+      amtGroup.appendChild(el('label', { text: 'Billing Amount (₱)' }));
       const amtIn = el('input', { type: 'text', inputmode: 'decimal', name: 'amount', placeholder: '0.00', required: true });
       amtIn.addEventListener('input', () => { amtIn.value = amtIn.value.replace(/[^0-9.,]/g, ''); });
       amtIn.addEventListener('focus', () => { const n = parseFloat(String(amtIn.value).replace(/[₱$,\s]/g, '')) || 0; amtIn.value = n > 0 ? String(n) : ''; });
@@ -4005,8 +4040,8 @@ const Workflow = {
     }
     else if (type === 'disbursement') {
       // 1. Request Type Toggle (Reimbursement vs Cash Advance)
-      const typeGroup = el('div', { class: 'form-group' });
-      typeGroup.appendChild(el('label', { text: 'Disbursement Type *' }));
+      const typeGroup = el('div', { class: 'form-group is-required' });
+      typeGroup.appendChild(el('label', { text: 'Disbursement Type' }));
       const typeWrap = el('div', { class: 'radio-group', style: 'display: flex; gap: var(--spacing-md);' });
       
       const rLabel = el('label', { class: 'radio-label', style: 'font-weight: normal; cursor: pointer;' });
@@ -4026,7 +4061,7 @@ const Workflow = {
 
       // 2. Category Select
       const catGroup = el('div', { class: 'form-group' });
-      catGroup.appendChild(el('label', { text: 'Category *' }));
+      catGroup.appendChild(el('label', { text: 'Category' }));
       const catSel = el('select', { name: 'category', required: true, class: 'form-select' });
       ['Government Fee', 'Notarization', 'Transportation / Travel', 'Meals / Client Meeting', 'Other'].forEach(c => {
         catSel.appendChild(el('option', { value: c, text: c }));
@@ -4036,7 +4071,7 @@ const Workflow = {
 
       // 3. Amount
       const amtGroup = el('div', { class: 'form-group' });
-      amtGroup.appendChild(el('label', { text: 'Amount (₱) *' }));
+      amtGroup.appendChild(el('label', { text: 'Amount (₱)' }));
       const amtIn = el('input', { type: 'text', inputmode: 'decimal', name: 'amount', placeholder: '0.00', required: true });
       amtIn.addEventListener('input', () => { amtIn.value = amtIn.value.replace(/[^0-9.,]/g, ''); });
       amtIn.addEventListener('focus', () => { const n = parseFloat(String(amtIn.value).replace(/[₱$,\s]/g, '')) || 0; amtIn.value = n > 0 ? String(n) : ''; });
@@ -4046,7 +4081,7 @@ const Workflow = {
 
       // 4. Payment Method
       const payGroup = el('div', { class: 'form-group' });
-      payGroup.appendChild(el('label', { text: 'Preferred Payment Method *' }));
+      payGroup.appendChild(el('label', { text: 'Preferred Payment Method' }));
       const paySel = el('select', { name: 'paymentMethod', class: 'form-select', required: true });
       ['Cash', 'Bank Transfer', 'GCash / E-Wallet', 'Check'].forEach(m => {
         paySel.appendChild(el('option', { value: m, text: m }));
@@ -4128,8 +4163,8 @@ const Workflow = {
     }
     else if (type === 'transmittal') {
       // 1. Documents listing (Hybrid)
-      const docGroup = el('div', { class: 'form-group' });
-      docGroup.appendChild(el('label', { text: 'Documents to Transmit *', style: 'margin-bottom: var(--spacing-xs);' }));
+      const docGroup = el('div', { class: 'form-group is-required' });
+      docGroup.appendChild(el('label', { text: 'Documents to Transmit', style: 'margin-bottom: var(--spacing-xs);' }));
       
       const docListContainer = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-xs); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--spacing-sm); max-height: 150px; overflow-y: auto; background: var(--color-surface);' });
       
@@ -4157,7 +4192,7 @@ const Workflow = {
 
       // 3. Recipient & Delivery Details
       const recGroup = el('div', { class: 'form-group' });
-      recGroup.appendChild(el('label', { text: 'Recipient & Delivery Details *' }));
+      recGroup.appendChild(el('label', { text: 'Recipient & Delivery Details' }));
       const recArea = el('textarea', { name: 'recipientDetails', class: 'form-control', required: true, style: 'min-height: 80px;', placeholder: 'Recipient Name, Phone, and Delivery Address...' });
       recGroup.appendChild(recArea);
       form.appendChild(recGroup);
@@ -4371,7 +4406,9 @@ const Workflow = {
             ]),
             el('div', { class: 'detail-info-item' }, [
               el('span', { class: 'detail-info-label', text: 'Client' }),
-              el('span', { class: 'detail-info-value', text: client?.name || 'Unknown Client' })
+              el('span', { class: 'detail-info-value' }, [
+                renderClientWithEntity(client?.name || 'Unknown Client', client?.entity || wr.entity)
+              ])
             ])
           );
 
@@ -5630,7 +5667,15 @@ const Workflow = {
           return cell;
         }
       },
-      { key: 'clientId', label: 'Client', width: '20%', render: (wr) => window.apiClient.clientCache.getById(wr.clientId)?.name || '—' },
+      {
+        key: 'clientId',
+        label: 'Client',
+        width: '20%',
+        render: (wr) => {
+          const client = window.apiClient.clientCache.getById(wr.clientId);
+          return renderClientWithEntity(client?.name || '—', client?.entity || wr.entity);
+        }
+      },
       { key: 'priority', label: 'Priority', render: (wr) => DataTable.priorityCell(wr.priority), width: '110px' },
       {
         key: 'status',
@@ -5801,7 +5846,7 @@ const Workflow = {
         progress,
         statusColor: phase.color,
         title: wr.title,
-        description: client?.name || '—',
+        description: renderClientWithEntity(client?.name || '—', client?.entity || wr.entity),
         detail: (wr.description || '').trim(),
         date: wr.dueDate ? formatDate(wr.dueDate) : '',
         priority: priorityConfig.label,
@@ -6000,7 +6045,9 @@ const Workflow = {
         }
         if (groupBy === 'client') {
           const client = window.apiClient.clientCache.getById(wr.clientId);
-          return client?.name || 'No Client';
+          const entity = client?.entity || wr.entity;
+          const entitySuffix = (Auth.activeEntity === 'ALL' && entity) ? ` (${entity})` : '';
+          return (client?.name || 'No Client') + entitySuffix;
         }
         if (groupBy === 'priority') {
           const p = (wr.priority || '').toString().trim().toLowerCase();
@@ -6129,8 +6176,8 @@ const Workflow = {
         } else {
           avatar = el('div', { class: 'board-group-avatar' });
           if (groupBy === 'client') {
-            const client = (window.apiClient.clientCache._clients || []).filter(c => c.name === name)[0];
-            displayName = client?.name || name;
+            const client = (window.apiClient.clientCache._clients || []).find(c => c.name === name || `${c.name} (${c.entity})` === name);
+            displayName = client?.name || name.replace(/\s*\((ATA|LTA)\)$/, '');
           }
           avatar.textContent = getInitials(displayName);
           avatar.style.backgroundColor = groupColor(displayName);
@@ -6139,7 +6186,14 @@ const Workflow = {
 
         const nameWrap = el('div', { class: 'board-group-name-wrap' });
         const nameLine = el('div', { class: 'board-group-name' });
-        nameLine.appendChild(document.createTextNode(displayName + ' '));
+        if (groupBy === 'client') {
+          const client = (window.apiClient.clientCache._clients || []).find(c => c.name === name || `${c.name} (${c.entity})` === name);
+          const groupEntity = client?.entity || (name.match(/\((ATA|LTA)\)$/)?.[1] || null);
+          nameLine.appendChild(renderClientWithEntity(displayName, groupEntity));
+          nameLine.appendChild(document.createTextNode(' '));
+        } else {
+          nameLine.appendChild(document.createTextNode(displayName + ' '));
+        }
         nameLine.appendChild(el('span', {
           class: 'board-group-count',
           text: '(' + groupWrs.length + ' item' + (groupWrs.length === 1 ? '' : 's') + ')'
@@ -6277,7 +6331,10 @@ const Workflow = {
       }
       textCol.appendChild(titleDiv);
       
-      textCol.appendChild(el('div', { class: 'list-item-meta', text: (client?.name || '—') + ' | Due: ' + (wr.dueDate ? formatDate(wr.dueDate) : '—') }));
+      const metaDiv = el('div', { class: 'list-item-meta' });
+      metaDiv.appendChild(renderClientWithEntity(client?.name || '—', client?.entity || wr.entity));
+      metaDiv.appendChild(document.createTextNode(' | Due: ' + (wr.dueDate ? formatDate(wr.dueDate) : '—')));
+      textCol.appendChild(metaDiv);
       
       const badgeRow = el('div', { style: 'display: flex; gap: 6px; margin-top: 4px;' });
       badgeRow.appendChild(this.getPriorityBadgeForWr(wr));
@@ -7451,7 +7508,7 @@ const Workflow = {
     const clientSel = el('select', { name: 'clientId', class: 'notion-prop-select', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
     (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
-      const opt = el('option', { value: c.id, text: c.name });
+      const opt = el('option', { value: c.id, text: c.name + (entity === 'ALL' && c.entity ? ` (${c.entity})` : '') });
       if (wr && wr.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
     });
@@ -7964,7 +8021,11 @@ const Workflow = {
     if (!validateRequiredFields(form)) { disabledFields.forEach(f => f.disabled = true); return; }
     if (!this.validateManualAssignees(form)) { disabledFields.forEach(f => f.disabled = true); return; }
     const data = Object.fromEntries(new FormData(form).entries());
-    const entity = Auth.activeEntity;
+    let entity = Auth.activeEntity;
+    if (entity === 'ALL') {
+      const selectedClient = data.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(data.clientId) : null;
+      entity = selectedClient?.entity || (Auth.user?.entities || []).find(e => e !== 'ALL') || 'ATA';
+    }
 
     const now = new Date().toISOString();
     const record = {
@@ -9077,11 +9138,11 @@ const Workflow = {
         const workerInput = el('input', { type: 'text', name: 'workerName', placeholder: 'Worker name', value: Auth.user?.name || '' });
         form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Worker Name' }), workerInput]));
         const dateInput = el('input', { type: 'date', name: 'date', required: true, value: manilaToday() });
-        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Date *' }), dateInput]));
+        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Date' }), dateInput]));
         const startInput = el('input', { type: 'time', name: 'start', required: true });
-        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Start Time *' }), startInput]));
+        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Start Time' }), startInput]));
         const endInput = el('input', { type: 'time', name: 'end', required: true });
-        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'End Time *' }), endInput]));
+        form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'End Time' }), endInput]));
         const noteInput = el('input', { type: 'text', name: 'note', placeholder: 'What did you work on?' });
         form.appendChild(el('div', { class: 'form-group' }, [el('label', { text: 'Note / Activity' }), noteInput]));
         const hoursInput = el('input', { type: 'text', name: 'hours', readOnly: true, value: '0.00', style: 'background: var(--bg); cursor: not-allowed;' });
@@ -10961,7 +11022,7 @@ const Workflow = {
     
     // Type Select
     const typeGroup = el('div', { class: 'form-group' });
-    typeGroup.appendChild(el('label', { text: 'Record Type *' }));
+    typeGroup.appendChild(el('label', { text: 'Record Type' }));
     const typeSel = el('select', { required: true });
     typeSel.appendChild(el('option', { value: '', text: '— Select Type —' }));
     typeSel.appendChild(el('option', { value: 'invoice', text: 'Service Invoice (Billing)' }));
@@ -10971,7 +11032,7 @@ const Workflow = {
 
     // Record Select
     const recGroup = el('div', { class: 'form-group' });
-    recGroup.appendChild(el('label', { text: 'Select Record *' }));
+    recGroup.appendChild(el('label', { text: 'Select Record' }));
     const recSel = el('select', { required: true, disabled: true });
     recGroup.appendChild(recSel);
     form.appendChild(recGroup);
@@ -12798,21 +12859,21 @@ const Workflow = {
     // Date field
     const dateInput = el('input', { type: 'date', name: 'date', required: true, value: manilaToday() });
     form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Date *' }),
+      el('label', { text: 'Date' }),
       dateInput
     ]));
 
     // Start Time field
     const startInput = el('input', { type: 'time', name: 'start', required: true });
     form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Start Time *' }),
+      el('label', { text: 'Start Time' }),
       startInput
     ]));
 
     // End Time field
     const endInput = el('input', { type: 'time', name: 'end', required: true });
     form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'End Time *' }),
+      el('label', { text: 'End Time' }),
       endInput
     ]));
 
@@ -13628,7 +13689,7 @@ const Workflow = {
     // Task Title
     const titleInput = el('input', { type: 'text', name: 'title', required: true, value: task.title || '' });
     form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Task Title *' }),
+      el('label', { text: 'Task Title' }),
       titleInput
     ]));
 
@@ -14080,7 +14141,7 @@ const Workflow = {
 
     const commentForm = el('form', { class: 'form-stacked' });
     commentForm.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Add Comment *' }),
+      el('label', { text: 'Add Comment' }),
       el('textarea', { name: 'commentText', rows: 3, required: true })
     ]));
     const commentBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Post Comment' });
@@ -14278,7 +14339,7 @@ const Workflow = {
       const client = window.apiClient.clientCache.getById(t.clientId);
       const assigneeUser = t.assignedTo ? window.apiClient.userCache.getById(t.assignedTo) : null;
       const tags = [
-        { text: client?.name || 'No Client', type: 'client' },
+        { text: renderClientWithEntity(client?.name || 'No Client', client?.entity || t.entity), type: 'client' },
         { text: t.schedule || '—', type: 'schedule', value: t.schedule, style: 'text-transform: capitalize;' },
       ];
       if (assigneeUser) {
@@ -14441,7 +14502,7 @@ const Workflow = {
     ]));
 
     const clientGroup = el('div', { class: 'form-group' });
-    clientGroup.appendChild(el('label', { text: 'Client *' }));
+    clientGroup.appendChild(el('label', { text: 'Client' }));
     const clientSel = el('select', { name: 'clientId', required: true });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
     (window.apiClient.clientCache._clients || []).filter(c => matchesEntity(c.entity, entity)).forEach(c => {
@@ -14464,7 +14525,7 @@ const Workflow = {
     form.appendChild(priorityGroup);
 
     const scheduleGroup = el('div', { class: 'form-group' });
-    scheduleGroup.appendChild(el('label', { text: 'Schedule *' }));
+    scheduleGroup.appendChild(el('label', { text: 'Schedule' }));
     const scheduleSel = el('select', { name: 'schedule', required: true });
     ['monthly', 'quarterly'].forEach(s => {
       const opt = el('option', { value: s, text: s });
@@ -14717,7 +14778,7 @@ const Workflow = {
         category,
         title: wr.title || '(untitled)',
         meta: [
-          { icon: ArchivePage.icons.client, text: client?.name || '—' },
+          { icon: ArchivePage.icons.client, text: renderClientWithEntity(client?.name || '—', client?.entity || wr.entity) },
           { icon: ArchivePage.icons.status, text: wr.status || '—' },
           { icon: ArchivePage.icons.date, text: formatDate(wr.updatedAt) }
         ],
@@ -14787,7 +14848,7 @@ const Workflow = {
         category: 'rejected',
         title: title,
         meta: [
-          { icon: ArchivePage.icons.client, text: wr ? (window.apiClient.clientCache.getById(wr.clientId)?.name || '—') : '—' },
+          { icon: ArchivePage.icons.client, text: wr ? renderClientWithEntity(window.apiClient.clientCache.getById(wr.clientId)?.name || '—', wr) : '—' },
           { icon: ArchivePage.icons.date, text: formatDate(pc.reviewedAt || pc.updatedAt || pc.requestedAt) },
           { icon: ArchivePage.icons.status, text: pc.rejectionReason ? `Reason: ${pc.rejectionReason}` : 'Rejected' }
         ],
@@ -14854,6 +14915,12 @@ const Workflow = {
     const titleSuffix = now.toLocaleDateString('en-PH', { month: 'short', year: 'numeric' });
     const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
 
+    let templateEntity = template.entity;
+    if (!templateEntity || templateEntity === 'ALL') {
+      const c = template.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(template.clientId) : null;
+      templateEntity = c?.entity || (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+    }
+
     const workRequest = {
       id: generateId('wr'),
       title: `${template.name} (${titleSuffix})`,
@@ -14861,7 +14928,7 @@ const Workflow = {
       clientId: template.clientId,
       priority: 'Priority',
       dueDate: dueDate.toISOString().slice(0, 10),
-      entity: template.entity,
+      entity: templateEntity,
       status: 'Draft',
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -14968,6 +15035,11 @@ const Workflow = {
             if (!template) continue;
 
             const dueDate = new Date(now.getTime() + (template.schedule === 'quarterly' ? 90 : 30) * 86400000);
+            let templateEntity = template.entity;
+            if (!templateEntity || templateEntity === 'ALL') {
+              const c = template.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(template.clientId) : null;
+              templateEntity = c?.entity || (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+            }
             const workRequest = {
               id: generateId('wr'),
               title: `${template.name} (${titleSuffix})`,
@@ -14975,7 +15047,7 @@ const Workflow = {
               clientId: template.clientId,
               priority: template.priority || 'Normal',
               dueDate: dueDate.toISOString().slice(0, 10),
-              entity: template.entity,
+              entity: templateEntity,
               status: 'Draft',
               createdAt: nowIso,
               updatedAt: nowIso,

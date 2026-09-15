@@ -412,22 +412,12 @@ const App = {
     badge.className = 'badge';
 
     if (Auth.activeEntity === 'ALL') {
-      const rawHash = location.hash || '#dashboard';
-      const baseHash = rawHash.split('?')[0].split('/')[0];
-      // Reports and dashboard are the only modules that return true consolidated
-      // data for ALL. Every other module falls back to the user's first real entity.
-      const isConsolidatedRoute = ['#dashboard', '#reports'].includes(baseHash);
-      if (isConsolidatedRoute) {
-        badge.textContent = 'Consolidated';
-        badge.classList.add('badge-all');
-      } else {
-        const firstRealEntity = (Auth.user?.entities || []).find((e) => e !== 'ALL') || '';
-        badge.textContent = firstRealEntity ? `Viewing ${firstRealEntity}` : '';
-        badge.classList.add('badge-neutral');
-      }
+      badge.textContent = '';
+      badge.style.display = 'none';
       return;
     }
 
+    badge.style.display = '';
     badge.textContent = Auth.activeEntity || '';
     if (Auth.activeEntity === 'ATA') badge.classList.add('badge-ata');
     else if (Auth.activeEntity === 'LTA') badge.classList.add('badge-lta');

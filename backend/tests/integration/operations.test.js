@@ -363,4 +363,44 @@ describe('/v1/work-requests', () => {
     expect(task.body.data.checklist[0].assigneeId).toBeNull();
     expect(task.body.data.checklist[0].assigneeName).toBeNull();
   });
+
+  it('creates work request in consolidated ALL view auto-detecting client entity without throwing enum error', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+    const client = await createClient(admin, 'LTA');
+
+    // 1. With entity: 'ALL' in body
+    const wrRes1 = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ALL')
+      .send({ title: 'Consolidated WR 1', clientId: client.id, entity: 'ALL' })
+      .expect(201);
+
+    expect(wrRes1.body.data.title).toBe('Consolidated WR 1');
+    expect(wrRes1.body.data.entity).toBe('LTA');
+
+    // 2. Without entity in body
+    const wrRes2 = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ALL')
+      .send({ title: 'Consolidated WR 2', clientId: client.id })
+      .expect(201);
+
+    expect(wrRes2.body.data.title).toBe('Consolidated WR 2');
+    expect(wrRes2.body.data.entity).toBe('LTA');
+
+    // 3. With non-string entity in body (should return 400 validation error, not 500 TypeError)
+    await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ALL')
+      .send({ title: 'Malformed Entity WR', clientId: client.id, entity: 123 })
+      .expect(400);
+  });
 });

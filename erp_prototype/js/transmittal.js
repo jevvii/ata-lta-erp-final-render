@@ -1198,7 +1198,16 @@ const Transmittal = {
     let groupBy = App.restoreGroupBy('transmittals') || 'none';
     const groupOptions = [
       { key: 'none', label: 'None' },
-      { key: 'client', label: 'Client', getName: t => self.getClientName(t.clientId) },
+      {
+        key: 'client',
+        label: 'Client',
+        getName: t => {
+          const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+          const entity = client?.entity || t.entity;
+          const entitySuffix = (typeof Auth !== 'undefined' && Auth.activeEntity === 'ALL' && entity) ? ` (${entity})` : '';
+          return (client?.name || self.getClientName(t.clientId)) + entitySuffix;
+        }
+      },
       { key: 'employee', label: 'Employee', getName: t => {
         const creatorName = self.getUserName(t.createdBy);
         const senderName = self.getUserName(t.sentBy);
@@ -1422,7 +1431,14 @@ const Transmittal = {
         }
       },
       { key: 'workRequestId', label: 'Work Request', render: (t) => this.getWorkRequestTitle(t.workRequestId) },
-      { key: 'clientId', label: 'Client', render: (t) => this.getClientName(t.clientId) },
+      {
+        key: 'clientId',
+        label: 'Client',
+        render: (t) => {
+          const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+          return renderClientWithEntity(client?.name || this.getClientName(t.clientId), client?.entity || t.entity);
+        }
+      },
       { key: 'status', label: 'Status', render: (t) => this.statusBadge(t.status), width: '130px' },
       { key: 'items', label: 'Items', render: (t) => String((t.items || []).length), width: '70px', align: 'center' },
       { key: 'actions', label: 'Actions', render: (t) => buildActions(t), class: 'dt-actions-col', width: '180px' }
@@ -1505,7 +1521,9 @@ const Transmittal = {
     const seqMap = new Map(sortedForSeq.map((t, i) => [t.id, i + 1]));
 
     const renderCard = (t) => {
-      const clientName = self.getClientName(t.clientId);
+      const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+      const clientName = client?.name || self.getClientName(t.clientId);
+      const clientDesc = renderClientWithEntity(clientName, client?.entity || t.entity);
       const itemCount = (t.items || []).length;
       const date = t.sentAt || t.createdAt;
 
@@ -1549,7 +1567,7 @@ const Transmittal = {
         progress,
         statusColor: statusColors[t.status] || '#cbd5e1',
         title: t.trackingNumber,
-        description: clientName,
+        description: clientDesc,
         detail: `${itemCount} item${itemCount === 1 ? '' : 's'}` + (detail ? ` • ${detail}` : ''),
         date: date ? formatDate(date) : '',
         priority: displayStatus,
@@ -1776,7 +1794,11 @@ const Transmittal = {
       });
       const left = el('div');
       left.appendChild(el('div', { class: 'list-item-title', text: t.trackingNumber }));
-      left.appendChild(el('div', { class: 'list-item-meta', text: this.getClientName(t.clientId) + ' • ' + this.getWorkRequestTitle(t.workRequestId) + ' • ' + String((t.items || []).length) + ' items' }));
+      const metaEl = el('div', { class: 'list-item-meta' });
+      const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+      metaEl.appendChild(renderClientWithEntity(client?.name || this.getClientName(t.clientId), client?.entity || t.entity));
+      metaEl.appendChild(document.createTextNode(' • ' + this.getWorkRequestTitle(t.workRequestId) + ' • ' + String((t.items || []).length) + ' items'));
+      left.appendChild(metaEl);
       item.appendChild(left);
       const actionWrap = el('div', { style: 'display:flex;gap:4px;align-items:center;flex-shrink:0;' });
       if (this.canEditTransmittal(t)) {
@@ -1917,7 +1939,7 @@ const Transmittal = {
 
     // Client
     const clientGroup = el('div', { class: 'notion-prop' });
-    clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client *' }));
+    clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client' }));
     const clientSel = el('select', { name: 'clientId', required: true, class: 'notion-prop-select' });
     clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
     const allClients = window.apiClient.clientCache._clients || [];
@@ -1935,7 +1957,7 @@ const Transmittal = {
 
     // Work Request (filtered by selected client)
     const wrGroup = el('div', { class: 'notion-prop' });
-    wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request *' }));
+    wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request' }));
     const wrSel = el('select', { name: 'workRequestId', required: true, class: 'notion-prop-select' });
     wrSel.appendChild(el('option', { value: '', text: '— Select —' }));
     wrGroup.appendChild(wrSel);
@@ -2002,7 +2024,7 @@ const Transmittal = {
     if (initialWRId) wrSel.value = initialWRId;
 
     // Itemized document list — Notion-style editable list
-    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Transmittal Items' }));
+    form.appendChild(el('h3', { class: 'notion-section-heading is-required', text: 'Transmittal Items' }));
     const itemsSection = el('div', { class: 'notion-line-items' });
     const itemsList = el('div', { class: 'notion-line-item-list', id: 'transmittal-items-list' });
     itemsSection.appendChild(itemsList);
@@ -2085,23 +2107,45 @@ const Transmittal = {
     const itemsList = document.getElementById('transmittal-items-list');
 
     const items = [];
+    let hasPartialItem = false;
     itemsList.querySelectorAll('.notion-line-item-row').forEach(row => {
       const desc = row.querySelector('.item-description')?.value.trim();
       const type = row.querySelector('.item-doc-type')?.value;
       if (desc && type) {
         items.push({ description: desc, documentType: type });
+      } else if (desc || type) {
+        hasPartialItem = true;
       }
     });
 
-    if (items.length === 0) {
-      Workflow.showMessage('Item Error', 'Please add at least one item.', 'danger');
+    if (hasPartialItem) {
+      Workflow.showMessage('Validation Error', 'Each transmittal item must have both a document type and a description.', 'warning');
       return;
     }
 
-    const recordEntity = entity === 'ALL' ? (Auth.user.entities[0] || 'ATA') : entity;
+    if (items.length === 0) {
+      Workflow.showMessage('Validation Error', 'Please add at least one transmittal item.', 'warning');
+      return;
+    }
+
+    let recordEntity = entity;
+    if (recordEntity === 'ALL') {
+      if (data.clientId && window.apiClient?.clientCache?.getById) {
+        const c = window.apiClient.clientCache.getById(data.clientId);
+        if (c?.entity && c.entity !== 'ALL') recordEntity = c.entity;
+      }
+      if (recordEntity === 'ALL' && data.workRequestId && window.apiClient?.workRequestCache?.getById) {
+        const wr = window.apiClient.workRequestCache.getById(data.workRequestId);
+        if (wr?.entity && wr.entity !== 'ALL') recordEntity = wr.entity;
+      }
+      if (recordEntity === 'ALL') {
+        recordEntity = (Auth.user?.entities?.find(e => e !== 'ALL') || 'ATA');
+      }
+    }
     const payload = {
       workRequestId: data.workRequestId,
       clientId: data.clientId,
+      entity: recordEntity,
       trackingNumber: data.trackingNumber || await this.nextTrackingNumber(recordEntity),
       items,
       notes: data.notes || null
@@ -2259,9 +2303,9 @@ const Transmittal = {
     const wrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
 
     const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
-    const selectGroup = el('div', { class: 'form-group' });
-    selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
-    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
+    const selectGroup = el('div', { class: 'form-group is-required' });
+    selectGroup.appendChild(el('label', { text: 'Select Work Request' }));
+    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;', required: true });
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
     for (const wr of wrs) {
       const clientName = this.getClientName(wr.clientId);
@@ -2343,8 +2387,8 @@ const Transmittal = {
 
     // Meta
     const meta = el('div', { class: 'invoice-meta' });
-    meta.appendChild(el('p', { text: 'Work Request: ' + this.getWorkRequestTitle(t.workRequestId) }));
-    meta.appendChild(el('p', { text: 'Client: ' + await this.getClientName(t.clientId) }));
+    const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+    meta.appendChild(el('p', {}, ['Client: ', renderClientWithEntity(client?.name || this.getClientName(t.clientId), client?.entity || t.entity)]));
     if (t.sentAt) {
       const senderName = await this.getUserName(t.sentBy);
       meta.appendChild(el('p', { text: 'Sent: ' + formatDate(t.sentAt) + ' by ' + senderName }));
@@ -2580,12 +2624,12 @@ const Transmittal = {
     const form = el('form', { class: 'form-stacked' });
 
     const nameGroup = el('div', { class: 'form-group' });
-    nameGroup.appendChild(el('label', { text: 'Received By (Name) *' }));
+    nameGroup.appendChild(el('label', { text: 'Received By (Name)' }));
     nameGroup.appendChild(el('input', { type: 'text', name: 'receivedBy', required: true, class: 'form-control' }));
     form.appendChild(nameGroup);
 
     const dateGroup = el('div', { class: 'form-group' });
-    dateGroup.appendChild(el('label', { text: 'Received Date *' }));
+    dateGroup.appendChild(el('label', { text: 'Received Date' }));
     dateGroup.appendChild(el('input', { type: 'date', name: 'receivedDate', required: true, class: 'form-control', value: new Date().toISOString().slice(0, 10) }));
     form.appendChild(dateGroup);
 
@@ -3809,7 +3853,13 @@ const Transmittal = {
         category,
         title: t.trackingNumber || '(no tracking)',
         meta: [
-          { icon: ArchivePage.icons.client, text: this.getClientName(t.clientId) },
+          {
+            icon: ArchivePage.icons.client,
+            text: (() => {
+              const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(t.clientId) : null;
+              return renderClientWithEntity(client?.name || this.getClientName(t.clientId), client?.entity || t.entity);
+            })()
+          },
           { icon: ArchivePage.icons.status, text: t.status || '—' },
           { icon: ArchivePage.icons.date, text: formatDate(t.updatedAt) }
         ],
@@ -3880,7 +3930,13 @@ const Transmittal = {
         category: 'rejected',
         title: `Transmittal Request ${wrTitle ? '— ' + wrTitle : ''}`,
         meta: [
-          { icon: ArchivePage.icons.client, text: this.getClientName(r.clientId) },
+          {
+            icon: ArchivePage.icons.client,
+            text: (() => {
+              const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(r.clientId) : null;
+              return renderClientWithEntity(client?.name || this.getClientName(r.clientId), client?.entity || r.entity);
+            })()
+          },
           { icon: ArchivePage.icons.date, text: formatDate(r.reviewedAt || r.updatedAt || r.requestedAt) },
           { icon: ArchivePage.icons.status, text: `Reason: ${r.rejectionReason || 'Rejected'}` }
         ],

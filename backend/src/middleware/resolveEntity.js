@@ -11,7 +11,8 @@
  *   router.use(resolveEntity);
  */
 
-const { resolveEntityId } = require('../lib/entityResolver');
+const { resolveEntityId, resolveEntityCode } = require('../lib/entityResolver');
+const { supabaseAdmin } = require('../services/supabaseClient');
 const AppError = require('../lib/AppError');
 
 const VALID_ENTITIES = ['ATA', 'LTA'];
@@ -30,21 +31,82 @@ function resolveEntity(options = {}) {
           return;
         }
 
-        // For non-consolidation endpoints, default to the user's first real entity.
-        const fallback = (req.user?.entities || [])
-          .map((e) => e.toUpperCase())
-          .find((e) => VALID_ENTITIES.includes(e));
-        if (!fallback) {
-          throw new AppError({
-            statusCode: 400,
-            title: 'Bad Request',
-            detail: 'No valid entity available for fallback',
-          });
+        let resolvedCode = null;
+        let resolvedUUID = null;
+
+        // 1. Explicit valid entity in body
+        if (req.body?.entity && typeof req.body.entity === 'string' && VALID_ENTITIES.includes(req.body.entity.toUpperCase())) {
+          resolvedCode = req.body.entity.toUpperCase();
         }
-        const uuid = await resolveEntityId(fallback);
-        req.entityCode = code;
-        req.entityUUID = uuid;
-        req.activeEntity = uuid;
+
+        // 2. Detect from clientId
+        const clientId = req.body?.clientId || req.body?.client_id;
+        if (!resolvedCode && clientId) {
+          const { data: client } = await supabaseAdmin
+            .from('clients')
+            .select('entity_id')
+            .eq('id', clientId)
+            .maybeSingle();
+          if (client?.entity_id) {
+            resolvedUUID = client.entity_id;
+            resolvedCode = await resolveEntityCode(client.entity_id);
+          }
+        }
+
+        // 3. Detect from workRequestId
+        const wrId = req.body?.workRequestId || req.body?.work_request_id || req.body?.linkedWorkRequestId || req.body?.linked_work_request_id || req.params?.wrId;
+        if (!resolvedCode && wrId) {
+          const { data: wr } = await supabaseAdmin
+            .from('work_requests')
+            .select('entity_id')
+            .eq('id', wrId)
+            .maybeSingle();
+          if (wr?.entity_id) {
+            resolvedUUID = wr.entity_id;
+            resolvedCode = await resolveEntityCode(wr.entity_id);
+          }
+        }
+
+        // 4. Detect from route param id (e.g. /operations/:id)
+        if (!resolvedCode && req.params?.id) {
+          const { data: wr } = await supabaseAdmin
+            .from('work_requests')
+            .select('entity_id')
+            .eq('id', req.params.id)
+            .maybeSingle();
+          if (wr?.entity_id) {
+            resolvedUUID = wr.entity_id;
+            resolvedCode = await resolveEntityCode(wr.entity_id);
+          }
+        }
+
+        // 5. Fallback to user's first real entity
+        if (!resolvedCode) {
+          const fallback = (req.user?.entities || [])
+            .map((e) => e.toUpperCase())
+            .find((e) => VALID_ENTITIES.includes(e));
+          if (!fallback) {
+            throw new AppError({
+              statusCode: 400,
+              title: 'Bad Request',
+              detail: 'No valid entity available for fallback',
+            });
+          }
+          resolvedCode = fallback;
+        }
+
+        if (!resolvedUUID && resolvedCode) {
+          resolvedUUID = await resolveEntityId(resolvedCode);
+        }
+
+        req.entityCode = resolvedCode;
+        req.entityUUID = resolvedUUID;
+        req.activeEntity = resolvedUUID;
+
+        if (req.body && req.body.entity === 'ALL') {
+          req.body.entity = resolvedCode;
+        }
+
         next();
         return;
       }

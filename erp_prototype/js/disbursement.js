@@ -578,14 +578,30 @@ const Disbursement = {
     return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
   },
 
-  _getOptimisticEntity() {
+  _getOptimisticEntity(record) {
     const activeEntity = this._getActiveEntity();
-    return (activeEntity && activeEntity !== 'ALL') ? activeEntity : (Auth.user?.entities?.[0] || 'ATA');
+    if (activeEntity && activeEntity !== 'ALL') return activeEntity;
+    if (record) {
+      if (record.clientId && window.apiClient?.clientCache?.getById) {
+        const c = window.apiClient.clientCache.getById(record.clientId);
+        if (c?.entity && c.entity !== 'ALL') return c.entity;
+      }
+      const wrId = record.linkedWorkRequestId || record.workRequestId;
+      if (wrId && window.apiClient?.workRequestCache?.getById) {
+        const wr = window.apiClient.workRequestCache.getById(wrId);
+        if (wr?.entity && wr.entity !== 'ALL') return wr.entity;
+        if (wr?.clientId && window.apiClient?.clientCache?.getById) {
+          const c = window.apiClient.clientCache.getById(wr.clientId);
+          if (c?.entity && c.entity !== 'ALL') return c.entity;
+        }
+      }
+    }
+    return (Auth.user?.entities?.find(e => e !== 'ALL') || 'ATA');
   },
 
   _assignEntity(record) {
-    if (!record.entity) {
-      record.entity = this._getOptimisticEntity();
+    if (!record.entity || record.entity === 'ALL') {
+      record.entity = this._getOptimisticEntity(record);
     }
     record.entityId = record.entityId || record.entity || null;
     return record;
@@ -2262,12 +2278,12 @@ const Disbursement = {
     propsGrid.appendChild(catGroup);
 
     // Linked Work Request
-    const wrGroup = el('div', { class: 'notion-prop' });
+    const wrGroup = el('div', { class: 'notion-prop is-required' });
     wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request' }));
-    const wrSelAttrs = { name: 'linkedWorkRequestId', class: 'notion-prop-select' };
+    const wrSelAttrs = { name: 'linkedWorkRequestId', class: 'notion-prop-select', required: true };
     if (prefill && prefill.workRequestId) wrSelAttrs.disabled = true;
     const wrSel = el('select', wrSelAttrs);
-    wrSel.appendChild(el('option', { value: '', text: '— None —' }));
+    wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
     const activeWrIds = new Set(formWrs.map(wr => wr.id));
     const existingWr = existing?.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId) : null;
@@ -2344,8 +2360,8 @@ const Disbursement = {
     form.appendChild(descSection);
 
     // Receipt upload
-    const receiptGroup = el('div', { class: 'notion-freeform' });
-    receiptGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Receipt' }));
+    const receiptGroup = el('div', { class: 'notion-freeform is-required' });
+    receiptGroup.appendChild(el('label', { class: 'notion-section-label is-required', text: 'Receipt' }));
 
     const dropzone = el('div', { class: 'notion-popover-dropzone', style: 'cursor: pointer; margin-bottom: 8px;' });
     dropzone.innerHTML = `
@@ -2361,6 +2377,7 @@ const Disbursement = {
     const handleFile = (file) => {
       errorLabel.textContent = '';
       statusLabel.innerHTML = '';
+      dropzone.style.borderColor = '';
       if (!file) return;
 
       const limit = 50 * 1024 * 1024;
@@ -2572,6 +2589,10 @@ const Disbursement = {
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
     const data = Object.fromEntries(new FormData(form).entries());
+    if (!data.linkedWorkRequestId) {
+      Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+      return;
+    }
     const entity = Auth.activeEntity;
     const receiptInput = form.querySelector('input[name="receipt"]');
     const receiptFile = receiptInput?.files?.[0];
@@ -2585,11 +2606,15 @@ const Disbursement = {
 
     const existing = isNew ? null : await this.loadDisbursement(this.detailId);
 
-    // On create, a receipt must be attached (or already provided via a fulfilled operations request).
+    // A receipt must be attached (or already provided via a fulfilled operations request / existing record).
     const hasExistingReceipt = !isNew && (existing?.receiptFilename || null);
     const hasPrefilledReceipt = isNew && (this._prefilledOpReq?.receiptFilename || null);
-    if (isNew && !receiptFile && !hasPrefilledReceipt) {
+    if (!receiptFile && !hasExistingReceipt && !hasPrefilledReceipt) {
       Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+      const dropzone = form.querySelector('.notion-popover-dropzone');
+      if (dropzone) {
+        dropzone.style.borderColor = 'var(--color-danger)';
+      }
       return;
     }
 
@@ -2721,9 +2746,9 @@ const Disbursement = {
     const pendingWrIds = new Set(pendingRequests.map(r => r.work_request_id || r.workRequestId).filter(Boolean));
 
     const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
-    const selectGroup = el('div', { class: 'form-group' });
-    selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
-    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
+    const selectGroup = el('div', { class: 'form-group is-required' });
+    selectGroup.appendChild(el('label', { text: 'Select Work Request' }));
+    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;', required: true });
     wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
     wrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
@@ -3144,25 +3169,25 @@ const Disbursement = {
     const form = el('form', { class: 'form-stacked' });
 
     const methodGroup = el('div', { class: 'form-group' });
-    methodGroup.appendChild(el('label', { text: 'Payment Method *' }));
+    methodGroup.appendChild(el('label', { text: 'Payment Method' }));
     const methodSel = el('select', { name: 'method', required: true, class: 'form-select' });
     ['Cash', 'Check', 'Bank Transfer', 'GCash', 'Maya', 'Other Digital'].forEach(m => methodSel.appendChild(el('option', { value: m, text: m })));
     methodGroup.appendChild(methodSel);
     form.appendChild(methodGroup);
 
     const refGroup = el('div', { class: 'form-group' });
-    refGroup.appendChild(el('label', { text: 'Reference / Check Number *' }));
+    refGroup.appendChild(el('label', { text: 'Reference / Check Number' }));
     refGroup.appendChild(el('input', { type: 'text', name: 'reference', required: true }));
     form.appendChild(refGroup);
 
     const dateGroup = el('div', { class: 'form-group' });
-    dateGroup.appendChild(el('label', { text: 'Date of Release *' }));
+    dateGroup.appendChild(el('label', { text: 'Date of Release' }));
     dateGroup.appendChild(el('input', { type: 'date', name: 'date', required: true, value: new Date().toISOString().slice(0, 10) }));
     form.appendChild(dateGroup);
 
     // Document Requirement
     const docGroup = el('div', { class: 'form-group' });
-    docGroup.appendChild(el('label', { text: 'Attached Scanned Document (Required) *' }));
+    docGroup.appendChild(el('label', { text: 'Attached Scanned Document' }));
     docGroup.appendChild(el('input', { type: 'file', name: 'releaseDoc', required: true }));
     form.appendChild(docGroup);
 
@@ -3993,7 +4018,7 @@ const Disbursement = {
     form.appendChild(titleSection);
 
     const catGroup = el('div', { class: 'form-group' });
-    catGroup.appendChild(el('label', { text: 'Category *' }));
+    catGroup.appendChild(el('label', { text: 'Category' }));
     const catSel = el('select', { name: 'category', required: true, class: 'form-select' });
     this.STANDARD_CATEGORIES.forEach(c => {
       catSel.appendChild(el('option', { value: c, text: c }));
@@ -4003,13 +4028,13 @@ const Disbursement = {
     form.appendChild(catGroup);
 
     const amtGroup = el('div', { class: 'form-group' });
-    amtGroup.appendChild(el('label', { text: 'Amount (₱) *' }));
+    amtGroup.appendChild(el('label', { text: 'Amount (₱)' }));
     const amtInput = el('input', { type: 'number', name: 'amount', min: 0, step: 0.01, required: true, value: template?.amount || '' });
     amtGroup.appendChild(amtInput);
     form.appendChild(amtGroup);
 
-    const fundGroup = el('div', { class: 'form-group' });
-    fundGroup.appendChild(el('label', { text: 'Fund Source *' }));
+    const fundGroup = el('div', { class: 'form-group is-required' });
+    fundGroup.appendChild(el('label', { text: 'Fund Source' }));
     const fundWrap = el('div', { class: 'radio-group' });
     ['Firm Fund', 'Client Fund'].forEach(f => {
       const label = el('label', { class: 'radio-label' });

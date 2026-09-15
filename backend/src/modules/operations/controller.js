@@ -14,6 +14,8 @@ const {
   addTimeLogsSchema,
 } = require('./schema');
 const auditService = require('../../services/auditService');
+const { supabaseAdmin } = require('../../services/supabaseClient');
+const { resolveEntityId, resolveEntityCode } = require('../../lib/entityResolver');
 const AppError = require('../../lib/AppError');
 const { injectExpectedVersion } = require('../../lib/concurrency');
 
@@ -95,9 +97,31 @@ const unarchive = async (req, res, next) => {
 const create = async (req, res, next) => {
   try {
     const payload = validate(createWorkRequestSchema, req.body);
-    const entityId = req.entityUUID;
+    let entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.entityCode) {
+    // Auto-detect entity if in ALL or if payload.entity is ALL/missing
+    if (!payload.entity || payload.entity === 'ALL' || req.entityCode === 'ALL') {
+      if (payload.clientId) {
+        const { data: client } = await supabaseAdmin
+          .from('clients')
+          .select('entity_id')
+          .eq('id', payload.clientId)
+          .maybeSingle();
+        if (client?.entity_id) {
+          entityId = client.entity_id;
+          payload.entity = await resolveEntityCode(client.entity_id);
+        }
+      }
+      if (!payload.entity || payload.entity === 'ALL') {
+        const fallback = (req.user?.entities || []).find((e) => e !== 'ALL') || 'ATA';
+        payload.entity = fallback;
+        if (!entityId) {
+          entityId = await resolveEntityId(fallback);
+        }
+      }
+    }
+
+    if (req.entityCode && req.entityCode !== 'ALL' && payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({
         statusCode: 400,
         title: 'Bad Request',
@@ -148,7 +172,7 @@ const update = async (req, res, next) => {
     const payload = injectExpectedVersion(req, validate(updateWorkRequestSchema, req.body));
     const entityId = req.entityUUID;
 
-    if (payload.entity && payload.entity !== req.entityCode) {
+    if (req.entityCode && req.entityCode !== 'ALL' && payload.entity && payload.entity !== req.entityCode) {
       throw new AppError({
         statusCode: 400,
         title: 'Bad Request',
@@ -218,7 +242,17 @@ const listTasks = async (req, res, next) => {
 const createTask = async (req, res, next) => {
   try {
     const payload = validate(createTaskSchema, req.body);
-    const entityId = req.entityUUID;
+    let entityId = req.entityUUID;
+    if (!entityId || req.entityCode === 'ALL') {
+      const { data: wr } = await supabaseAdmin
+        .from('work_requests')
+        .select('entity_id')
+        .eq('id', req.params.wrId)
+        .maybeSingle();
+      if (wr?.entity_id) {
+        entityId = wr.entity_id;
+      }
+    }
     const task = await operationsService.createTask({
       workRequestId: req.params.wrId,
       entityId,

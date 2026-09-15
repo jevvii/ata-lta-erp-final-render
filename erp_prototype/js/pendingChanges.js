@@ -64,6 +64,11 @@ const PendingChanges = {
     const api = this._api();
     if (!api) return { approved: false, pendingId: null };
 
+    if (table === 'workRequests' && (!record.entity || record.entity === 'ALL')) {
+      const c = record.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(record.clientId) : null;
+      record.entity = c?.entity || (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+    }
+
     if (Auth.canBypassReview(table)) {
       const bypassRecord = await this._adminBypass(table, record, isNew);
       return { approved: true, record: bypassRecord || null };
@@ -103,6 +108,10 @@ const PendingChanges = {
     delete cleanRecord.tasks;
 
     if (table === 'workRequests') {
+      if (!cleanRecord.entity || cleanRecord.entity === 'ALL') {
+        const c = cleanRecord.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(cleanRecord.clientId) : null;
+        cleanRecord.entity = c?.entity || (typeof Auth !== 'undefined' && Auth.user?.entities?.find(e => e !== 'ALL')) || 'ATA';
+      }
       const tasks = record.tasks || [];
       let wr = null;
       if (isNew) {
