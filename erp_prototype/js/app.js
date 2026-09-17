@@ -271,19 +271,81 @@ const App = {
         adminCount = pendingChanges.length + myReqsPending + approvalsCount + accountingReqsCount;
       }
 
-      let adminBadge = adminNav.querySelector('.nav-badge');
-      if (adminCount > 0) {
+      let adminBadge = adminNav.querySelector('.nav-badge:not(.badge-info)');
+      let infoBadge = adminNav.querySelector('.nav-badge.badge-info');
+
+      // QoL 5.2: actionable items (approvals the user can decide) render
+      // amber; their own in-flight submissions render grey, so users can tell
+      // "needs my action" apart from "waiting on someone else".
+      let actionableCount = 0;
+      let infoCount = 0;
+      if (canManageUsers) {
+        actionableCount = adminCount;
+      } else {
+        const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getPendingForUser === 'function')
+          ? (await PendingChanges.getPendingForUser(Auth.user.id))
+          : [];
+        // adminCount already includes pendingChanges + myReqsPending + approval
+        // counts; recompute the split from the same inputs used above.
+        infoCount = pendingChanges.length;
+        actionableCount = Math.max(0, adminCount - infoCount);
+      }
+
+      if (actionableCount > 0) {
         if (!adminBadge) {
           adminBadge = document.createElement('span');
           adminBadge.className = 'nav-badge';
           adminNav.appendChild(adminBadge);
         }
-        adminBadge.textContent = adminCount > 99 ? '99+' : adminCount;
+        adminBadge.classList.remove('badge-info');
+        adminBadge.classList.add('badge-actionable');
+        adminBadge.textContent = actionableCount > 99 ? '99+' : actionableCount;
+        adminBadge.title = `${actionableCount} item${actionableCount === 1 ? '' : 's'} awaiting your action`;
       } else if (adminBadge) {
         adminBadge.remove();
       }
+
+      if (infoCount > 0) {
+        if (!infoBadge) {
+          infoBadge = document.createElement('span');
+          infoBadge.className = 'nav-badge badge-info';
+          adminNav.appendChild(infoBadge);
+        }
+        infoBadge.textContent = infoCount > 99 ? '99+' : infoCount;
+        infoBadge.title = `${infoCount} submission${infoCount === 1 ? '' : 's'} of yours awaiting approval`;
+      } else if (infoBadge) {
+        infoBadge.remove();
+      }
     }
 
+  },
+
+  // QoL 6.2: global table/list density ('comfortable' | 'compact').
+  initTableDensity() {
+    let mode = 'comfortable';
+    try { mode = localStorage.getItem('erp_density') || 'comfortable'; } catch (e) { /* ignore */ }
+    document.body.classList.toggle('density-compact', mode === 'compact');
+    this._mountDensityToggle();
+  },
+
+  _mountDensityToggle() {
+    if (document.getElementById('density-toggle-btn')) return;
+    const host = document.querySelector('.header-actions');
+    if (!host) return;
+    const btn = document.createElement('button');
+    btn.id = 'density-toggle-btn';
+    btn.className = 'theme-toggle-btn';
+    btn.setAttribute('aria-label', 'Toggle table density');
+    btn.title = 'Toggle compact table density';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="10" x2="20" y2="10"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="4" y1="18" x2="20" y2="18"/></svg>';
+    btn.addEventListener('click', () => {
+      const compact = !document.body.classList.contains('density-compact');
+      document.body.classList.toggle('density-compact', compact);
+      try { localStorage.setItem('erp_density', compact ? 'compact' : 'comfortable'); } catch (e) { /* ignore */ }
+      btn.classList.toggle('active', compact);
+    });
+    btn.classList.toggle('active', document.body.classList.contains('density-compact'));
+    host.insertBefore(btn, host.firstChild);
   },
 
   renderShell() {
@@ -300,6 +362,7 @@ const App = {
       }
     }
     this.renderEntitySwitcher();
+    this.initTableDensity();
 
     const adminNav = document.querySelector('nav a[href="#admin"]');
     const canManageUsers = Auth.user?.role === 'Admin';
@@ -416,9 +479,15 @@ const App = {
     if (!badge) return;
     badge.className = 'badge';
 
-    if (Auth.activeEntity === 'ALL') {
-      badge.textContent = '';
-      badge.style.display = 'none';
+    const isConsolidated = Auth.activeEntity === 'ALL';
+    document.body.classList.toggle('entity-consolidated', isConsolidated);
+    this.renderConsolidatedBanner(isConsolidated);
+
+    if (isConsolidated) {
+      // QoL 4.1: surface consolidated mode explicitly instead of hiding it.
+      badge.style.display = '';
+      badge.textContent = 'ATA + LTA';
+      badge.classList.add('badge-consolidated');
       return;
     }
 
@@ -426,6 +495,26 @@ const App = {
     badge.textContent = Auth.activeEntity || '';
     if (Auth.activeEntity === 'ATA') badge.classList.add('badge-ata');
     else if (Auth.activeEntity === 'LTA') badge.classList.add('badge-lta');
+  },
+
+  renderConsolidatedBanner(isConsolidated) {
+    let banner = document.getElementById('consolidated-banner');
+    if (!isConsolidated) {
+      if (banner) banner.remove();
+      return;
+    }
+    if (banner) return; // already rendered
+    banner = document.createElement('div');
+    banner.id = 'consolidated-banner';
+    banner.className = 'consolidated-banner';
+    banner.setAttribute('role', 'status');
+    banner.innerHTML = '<span class="consolidated-banner-icon" aria-hidden="true">⇄</span> Viewing both entities — records are merged from ATA and LTA accounting.';
+    const header = document.querySelector('.app-header') || document.querySelector('.topbar');
+    if (header && header.parentElement) {
+      header.parentElement.insertBefore(banner, header.nextSibling);
+    } else {
+      document.body.prepend(banner);
+    }
   },
 
   renderRouteSkeleton(routeName) {
@@ -612,6 +701,20 @@ const App = {
     const parts = rawHash.split('?');
     const pathParts = parts[0].split('/');
     const baseHash = pathParts[0];
+
+    // QoL 4.2: a ?view= hash param deep-links a specific list view mode
+    // (Back/Forward and shared links restore it). Apply it to the stored
+    // preference without re-writing the URL.
+    const viewParam = parts[1] ? new URLSearchParams(parts[1]).get('view') : null;
+    const viewModuleMap = {
+      '#operations': 'operations',
+      '#billing': 'billing',
+      '#disbursement': 'disbursement',
+      '#transmittal': 'transmittals'
+    };
+    if (viewParam && viewModuleMap[baseHash] && ['list', 'table', 'board'].includes(viewParam)) {
+      try { localStorage.setItem(`erp_preferred_view_${viewModuleMap[baseHash]}`, viewParam); } catch (e) { /* ignore */ }
+    }
 
     // Load the route-specific bundle on demand before the module is used.
     await this.ensureRouteBundle(baseHash);
@@ -826,6 +929,54 @@ const App = {
     if (mode === 'list' || mode === 'table' || mode === 'board') {
       localStorage.setItem(key, mode);
     }
+    // QoL 4.2: mirror the mode into the hash query so back/forward and shared
+    // links restore the same view. replace() keeps history clean.
+    this.syncRouteQuery({ view: mode }, { replace: true });
+  },
+
+  /**
+   * QoL 4.2: read the query string portion of the current hash route
+   * (everything after '#path?...') as URLSearchParams.
+   */
+  getRouteQuery() {
+    const rawHash = location.hash || '';
+    const qIndex = rawHash.indexOf('?');
+    return new URLSearchParams(qIndex >= 0 ? rawHash.slice(qIndex + 1) : '');
+  },
+
+  /**
+   * QoL 4.2: merge key/value pairs into the current hash's query string.
+   * Null/empty values remove the key. `history.replaceState` updates silently;
+   * without replace, a new history entry is pushed so Back restores the
+   * previous state.
+   */
+  syncRouteQuery(map = {}, { replace = true } = {}) {
+    try {
+      const rawHash = location.hash || '#dashboard';
+      const qIndex = rawHash.indexOf('?');
+      const path = qIndex >= 0 ? rawHash.slice(0, qIndex) : rawHash;
+      const params = new URLSearchParams(qIndex >= 0 ? rawHash.slice(qIndex + 1) : '');
+      let changed = false;
+      Object.entries(map).forEach(([k, v]) => {
+        if (v === null || v === undefined || v === '') {
+          if (params.has(k)) { params.delete(k); changed = true; }
+        } else if (params.get(k) !== String(v)) {
+          params.set(k, String(v));
+          changed = true;
+        }
+      });
+      if (!changed) return;
+      const qs = params.toString();
+      const newHash = qs ? `${path}?${qs}` : path;
+      if (replace) {
+        // replaceState with the full URL (no hashchange event fires).
+        const url = location.pathname + location.search + newHash;
+        history.replaceState(null, '', url);
+      } else {
+        this._suppressHashChange = true;
+        location.hash = newHash;
+      }
+    } catch (e) { /* ignore URL sync failures */ }
   },
 
   _getFilterStorageKey(module) {

@@ -2101,11 +2101,34 @@ const Transmittal = {
     });
     row.appendChild(remBtn);
 
+    // QoL 6.2: Tab on the last field of the last row appends the next row.
+    descInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Tab' || e.shiftKey) return;
+      const rowsNow = container.querySelectorAll('.notion-line-item-row');
+      if (rowsNow[rowsNow.length - 1] !== row) return;
+      if (!descInput.value.trim()) return;
+      e.preventDefault();
+      this.addItemRow(container);
+      const allRows = container.querySelectorAll('.notion-line-item-row');
+      allRows[allRows.length - 1]?.querySelector('.item-doc-type')?.focus();
+    });
+
     container.appendChild(row);
   },
 
   async submitForm(form) {
-    if (!validateRequiredFields(form)) return;
+    if (this._isSubmittingTransmittal) return;
+    const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('.btn-primary') || document.querySelector('button[form="transmittal-form"]');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : null;
+    this._isSubmittingTransmittal = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+    }
+
+    try {
+      if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
     const entity = Auth.activeEntity;
@@ -2113,25 +2136,39 @@ const Transmittal = {
     const isNew = !this.detailId;
     const itemsList = document.getElementById('transmittal-items-list');
 
+    // Inline validation — flag offending items instead of a blocking modal
+    clearFieldErrors(form);
     const items = [];
     let hasPartialItem = false;
-    itemsList.querySelectorAll('.notion-line-item-row').forEach(row => {
-      const desc = row.querySelector('.item-description')?.value.trim();
-      const type = row.querySelector('.item-doc-type')?.value;
+    const itemRows = itemsList.querySelectorAll('.notion-line-item-row');
+    itemRows.forEach(row => {
+      const descField = row.querySelector('.item-description');
+      const typeField = row.querySelector('.item-doc-type');
+      const desc = descField?.value.trim();
+      const type = typeField?.value;
       if (desc && type) {
         items.push({ description: desc, documentType: type });
       } else if (desc || type) {
         hasPartialItem = true;
+        if (!type) showFieldError(typeField, 'Select a document type.');
+        if (!desc) showFieldError(descField, 'Description is required.');
       }
     });
 
     if (hasPartialItem) {
-      Workflow.showMessage('Validation Error', 'Each transmittal item must have both a document type and a description.', 'warning');
+      focusFirstInvalidField(form);
       return;
     }
 
     if (items.length === 0) {
-      Workflow.showMessage('Validation Error', 'Please add at least one transmittal item.', 'warning');
+      const firstRow = itemRows[0];
+      if (firstRow) {
+        showFieldError(firstRow.querySelector('.item-doc-type'), 'Select a document type.');
+        showFieldError(firstRow.querySelector('.item-description'), 'Add at least one item.');
+        focusFirstInvalidField(form);
+      } else {
+        Workflow.showMessage('Validation Error', 'Please add at least one transmittal item.', 'warning');
+      }
       return;
     }
 
@@ -2246,6 +2283,7 @@ const Transmittal = {
       });
 
       if (runResult.success) {
+        markPaneFormClean();
         await closeFormPanelAndRoute(targetRoute);
       } else {
         App.handleRoute();
@@ -2300,6 +2338,14 @@ const Transmittal = {
       await closeFormPanelAndRoute(targetRoute, msgConfig);
       this._clearActiveSkipGeneration(skipGen);
     }
+    } finally {
+      this._isSubmittingTransmittal = false;
+      if (submitBtn && originalBtnHtml) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        submitBtn.innerHTML = originalBtnHtml;
+      }
+    }
   },
 
   // ============================================================
@@ -2342,11 +2388,15 @@ const Transmittal = {
 
     const overlay = Workflow.showModal('Request Transmittal', wrapper);
 
+    let isSubmittingTransReq = false;
     overlay.querySelector('#btn-cancel-trans-opreq').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', async () => {
+      if (isSubmittingTransReq) return;
+      clearFieldErrors(overlay);
       const wrId = wrSelect.value;
       if (!wrId) {
-        Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+        showFieldError(wrSelect, 'Select a work request.');
+        focusFirstInvalidField(overlay);
         return;
       }
       const wr = window.apiClient.workRequestCache.getById(wrId);
@@ -2361,22 +2411,38 @@ const Transmittal = {
         notes
       };
 
-      Workflow.runBlockingArchiveAction({
-        title: 'Submitting Transmittal Request',
-        message: 'Please wait while your transmittal request is being submitted...',
-        apiCall: async () => {
-          return await window.apiClient.operationsRequests.create(record);
-        },
-        successTitle: 'Request Submitted',
-        successMessage: 'Your transmittal request has been submitted to Documentation for review.',
-        errorTitle: 'Request Failed',
-        onSuccess: async (res) => {
-          overlay.remove();
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
+      const submitBtn = overlay.querySelector('#btn-save-trans-opreq');
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmittingTransReq = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Submitting...';
+      }
+
+      try {
+        await Workflow.runBlockingArchiveAction({
+          title: 'Submitting Transmittal Request',
+          message: 'Please wait while your transmittal request is being submitted...',
+          apiCall: async () => {
+            return await window.apiClient.operationsRequests.create(record);
+          },
+          successTitle: 'Request Submitted',
+          successMessage: 'Your transmittal request has been submitted to Documentation for review.',
+          errorTitle: 'Request Failed',
+          onSuccess: async (res) => {
+            overlay.remove();
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          }
+        });
+      } finally {
+        isSubmittingTransReq = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origHtml;
         }
-      });
+      }
     });
   },
 
@@ -2644,10 +2710,15 @@ const Transmittal = {
     form.appendChild(submitBtn);
 
     const overlay = Workflow.showModal('Acknowledge Transmittal Receipt', form);
+    let isSubmitting = false;
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isSubmitting) return;
       if (!validateRequiredFields(form)) return;
+      isSubmitting = true;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Confirming...';
       const receivedByName = form.querySelector('[name="receivedBy"]')?.value.trim();
       overlay.remove();
       await this._acknowledgeTransmittal(id, receivedByName);

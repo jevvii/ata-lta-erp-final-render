@@ -1,0 +1,344 @@
+{
+  "targetUrl": "http://127.0.0.1:8085",
+  "startedAt": "2026-09-17T18:01:09.748Z",
+  "testCases": {
+    "AUTH-01": {
+      "name": "Show/Hide Password Toggle on Login Form",
+      "passed": true,
+      "details": {
+        "toggleWorks": true
+      },
+      "timestamp": "2026-09-17T18:01:10.105Z"
+    },
+    "AUTH-02": {
+      "name": "Invalid Credentials Error Handling",
+      "passed": true,
+      "details": {
+        "errorText": "Invalid email or password."
+      },
+      "timestamp": "2026-09-17T18:01:10.939Z"
+    },
+    "RBAC-ADMIN": {
+      "name": "Role Auth & Scoping: Admin",
+      "passed": true,
+      "details": {
+        "loggedInUser": "dev-admin@ata-lta.ph",
+        "name": "Dev Administrator",
+        "optionsList": [
+          "Consolidated View",
+          "ATA Accounting",
+          "LTA Accounting"
+        ],
+        "entityScopeCorrect": true
+      },
+      "timestamp": "2026-09-17T18:01:13.175Z"
+    },
+    "RBAC-MANAGER": {
+      "name": "Role Auth & Scoping: Manager",
+      "passed": true,
+      "details": {
+        "loggedInUser": "love@ata-lta.ph",
+        "name": "Lovelyn Rebong",
+        "optionsList": [
+          "Consolidated View",
+          "ATA Accounting",
+          "LTA Accounting"
+        ],
+        "entityScopeCorrect": true
+      },
+      "timestamp": "2026-09-17T18:01:18.474Z"
+    },
+    "RBAC-OPERATIONS": {
+      "name": "Role Auth & Scoping: Operations",
+      "passed": true,
+      "details": {
+        "loggedInUser": "ann@ata-lta.ph",
+        "name": "Mary Ann Baraquiel",
+        "optionsList": [
+          "ATA Accounting",
+          "LTA Accounting"
+        ],
+        "entityScopeCorrect": true
+      },
+      "timestamp": "2026-09-17T18:01:23.078Z"
+    },
+    "RBAC-ACCOUNTING": {
+      "name": "Role Auth & Scoping: Accounting",
+      "passed": true,
+      "details": {
+        "loggedInUser": "rachel@ata-lta.ph",
+        "name": "Rachel Baradas",
+        "optionsList": [
+          "ATA Accounting",
+          "LTA Accounting"
+        ],
+        "entityScopeCorrect": true
+      },
+      "timestamp": "2026-09-17T18:01:26.693Z"
+    },
+    "RBAC-DOCS": {
+      "name": "Role Auth: Documentation",
+      "passed": false,
+      "details": {
+        "error": "Login failed for twinkle@ata-lta.ph: Too many authentication attempts. Please wait 15 minutes before trying again."
+      },
+      "timestamp": "2026-09-17T18:01:28.479Z"
+    },
+    "NAV-01": {
+      "name": "Navigation across all 8 primary modules",
+      "passed": true,
+      "details": {
+        "dashboard": "rendered",
+        "clients": "rendered",
+        "operations": "rendered",
+        "billing": "rendered",
+        "disbursement": "rendered",
+        "transmittal": "rendered",
+        "reports": "rendered",
+        "admin": "rendered"
+      },
+      "timestamp": "2026-09-17T18:01:37.122Z"
+    },
+    "NAV-02": {
+      "name": "Entity Switcher Smooth Transition (ATA, LTA, ALL)",
+      "passed": true,
+      "details": {},
+      "timestamp": "2026-09-17T18:01:40.147Z"
+    },
+    "CHAOS-WR-01": {
+      "name": "Work Request Creation Form Debouncing & Button Disabling Guard",
+      "passed": true,
+      "details": {
+        "hasIsSubmittingGuard": true,
+        "disablesSubmitBtn": true,
+        "showsSavingText": true
+      },
+      "timestamp": "2026-09-17T18:01:41.151Z"
+    },
+    "CHAOS-UI-01": {
+      "name": "Card Click Resilience against HTML5 Drag-and-Drop micro-drag",
+      "passed": true,
+      "details": {
+        "hasDisplacementCheck": true,
+        "hasFunction": true
+      },
+      "timestamp": "2026-09-17T18:01:41.152Z"
+    },
+    "CHAOS-CLIENT-01": {
+      "name": "Client Form POC population & Cross-Entity Relationship Support",
+      "passed": true,
+      "details": {
+        "supportsCrossEntity": true,
+        "hasAtaOption": true,
+        "hasLtaOption": true,
+        "hasValidRelations": true,
+        "populatesPoc": true,
+        "clientOptionsCount": 9
+      },
+      "timestamp": "2026-09-17T18:01:46.022Z"
+    },
+    "CHAOS-BILL-01": {
+      "name": "Invoice Auto-Increment Entity Fallback & Submission Debounce",
+      "passed": true,
+      "details": {
+        "fallbacksFromAll": true,
+        "safeQueryLimit": true,
+        "debouncesSubmit": true,
+        "generatedAta": "ATA-SI-2026-005"
+      },
+      "timestamp": "2026-09-17T18:01:47.244Z"
+    },
+    "CHAOS-AUDIT-01": {
+      "name": "Admin Audit Log Row Click Modal Trigger",
+      "passed": true,
+      "details": {
+        "hasOnRowClick": true,
+        "renderedRows": 20
+      },
+      "timestamp": "2026-09-17T18:01:48.449Z"
+    },
+    "CHAOS-DASH-01": {
+      "name": "Dashboard Calendar Work Request Worker Scoping Isolation",
+      "passed": true,
+      "details": {
+        "scopesByAuthCanViewWr": true,
+        "scopesByAuthCanViewDisbursement": true
+      },
+      "timestamp": "2026-09-17T18:01:53.254Z"
+    },
+    "CACHE-01": {
+      "name": "Service Worker Active Registration and Storage Isolation",
+      "passed": true,
+      "details": {
+        "swActive": true,
+        "swScope": "http://127.0.0.1:8085/"
+      },
+      "timestamp": "2026-09-17T18:01:53.255Z"
+    },
+    "CHAOS-OPREQ-01": {
+      "name": "Operations Request Modals Debouncing & Double-Click Guard (Workflow, Billing, Disbursement, Transmittal)",
+      "passed": true,
+      "details": {
+        "wfHasDebounce": true,
+        "billHasDebounce": true,
+        "disbHasDebounce": true,
+        "transHasDebounce": true
+      },
+      "timestamp": "2026-09-17T18:01:54.460Z"
+    },
+    "CHAOS-TX-01": {
+      "name": "Transmittal Auto-Increment Entity Resolution & Safe Query Limit",
+      "passed": true,
+      "details": {
+        "resolvesAll": true,
+        "safeLimit": true,
+        "genTrackingAll": "ATA-TX-2026-001",
+        "validPrefix": true
+      },
+      "timestamp": "2026-09-17T18:01:54.682Z"
+    },
+    "CHAOS-DISB-01": {
+      "name": "Disbursement Self-Approval Barrier & Enforcement",
+      "passed": true,
+      "details": {
+        "preventsSelfApproval": true
+      },
+      "timestamp": "2026-09-17T18:01:54.683Z"
+    },
+    "CHAOS-WR-02": {
+      "name": "Work Request Detail Header Outline Badge Styling",
+      "passed": true,
+      "details": {
+        "hasWrTitleBadge": true
+      },
+      "timestamp": "2026-09-17T18:01:54.684Z"
+    },
+    "CHAOS-API-01": {
+      "name": "Client Idempotency Key Generation on Mutating Requests",
+      "passed": true,
+      "details": {
+        "hasIdempotencyKey": true,
+        "interceptedHeader": "c363054f-b1e7-4313-be4d-7a1944b12fe5"
+      },
+      "timestamp": "2026-09-17T18:01:54.686Z"
+    }
+  },
+  "consoleErrors": [
+    {
+      "text": "[Auth.login] failed: Error: Invalid login credentials\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:265:23)\n    at async Object.login (http://127.0.0.1:8085/js/auth.js?v=2.3.10:86:19)\n    at async HTMLFormElement.<anonymous> (http://127.0.0.1:8085/js/app.js?v=2.3.10:1066:27)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/auth.js?v=2.3.10",
+        "line": 106,
+        "column": 16,
+        "lineNumber": 106,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[apiClient] count fetch failed for transmittals.counts:ATA TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at cachedCount.data.active (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:880:15)\n    at cachedCount (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:363:12)\n    at Object.counts (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:878:29)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:217:37)\n    at Object.handleRoute (http://127.0.0.1:8085/js/app.js?v=2.3.10:798:12)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/apiClient.js?v=2.3.10",
+        "line": 368,
+        "column": 16,
+        "lineNumber": 368,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[apiClient] count fetch failed for disbursements.counts:ATA TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at cachedCount.data.active (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:849:15)\n    at cachedCount (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:363:12)\n    at Object.counts (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:847:29)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:214:38)\n    at Object.handleRoute (http://127.0.0.1:8085/js/app.js?v=2.3.10:798:12)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/apiClient.js?v=2.3.10",
+        "line": 368,
+        "column": 16,
+        "lineNumber": 368,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[apiClient] count fetch failed for invoices.counts:ATA TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at cachedCount.data.active (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:821:15)\n    at cachedCount (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:363:12)\n    at Object.counts (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:819:29)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:216:33)\n    at Object.handleRoute (http://127.0.0.1:8085/js/app.js?v=2.3.10:798:12)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/apiClient.js?v=2.3.10",
+        "line": 368,
+        "column": 16,
+        "lineNumber": 368,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[apiClient] count fetch failed for operationsRequests.counts:ATA TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at cachedCount.data.total (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:798:15)\n    at cachedCount (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:363:12)\n    at Object.counts (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:796:29)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:215:43)\n    at Object.handleRoute (http://127.0.0.1:8085/js/app.js?v=2.3.10:798:12)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/apiClient.js?v=2.3.10",
+        "line": 368,
+        "column": 16,
+        "lineNumber": 368,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[App.handleRoute] sidebar notifications failed TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at Object.list (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:937:16)\n    at Object.getPendingForUser (http://127.0.0.1:8085/js/pendingChanges.js?v=2.3.10:237:44)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:250:35)\n    at async Object.init (http://127.0.0.1:8085/js/app.js?v=2.3.10:153:5)\n    at async HTMLFormElement.<anonymous> (http://127.0.0.1:8085/js/app.js?v=2.3.10:1083:9)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/app.js?v=2.3.10",
+        "line": 799,
+        "column": 18,
+        "lineNumber": 799,
+        "columnNumber": 18
+      }
+    },
+    {
+      "text": "[App.handleRoute] sidebar notifications failed TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at Object.list (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:937:16)\n    at Object.getPendingForUser (http://127.0.0.1:8085/js/pendingChanges.js?v=2.3.10:237:44)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:250:35)\n    at async Object.init (http://127.0.0.1:8085/js/app.js?v=2.3.10:153:5)\n    at async HTMLFormElement.<anonymous> (http://127.0.0.1:8085/js/app.js?v=2.3.10:1083:9)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/app.js?v=2.3.10",
+        "line": 799,
+        "column": 18,
+        "lineNumber": 799,
+        "columnNumber": 18
+      }
+    },
+    {
+      "text": "[App.handleRoute] sidebar notifications failed TypeError: Failed to fetch\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:191:23)\n    at get (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:309:21)\n    at Object.list (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:937:16)\n    at Object.getPendingForUser (http://127.0.0.1:8085/js/pendingChanges.js?v=2.3.10:237:44)\n    at Object.updateSidebarNotifications (http://127.0.0.1:8085/js/app.js?v=2.3.10:250:35)\n    at async Object.init (http://127.0.0.1:8085/js/app.js?v=2.3.10:153:5)\n    at async HTMLFormElement.<anonymous> (http://127.0.0.1:8085/js/app.js?v=2.3.10:1083:9)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/app.js?v=2.3.10",
+        "line": 799,
+        "column": 18,
+        "lineNumber": 799,
+        "columnNumber": 18
+      }
+    },
+    {
+      "text": "Failed to load resource: the server responded with a status of 429 ()",
+      "location": {
+        "url": "https://ata-lta-erp-api-staging.onrender.com/v1/auth/signin",
+        "line": 0,
+        "column": 0,
+        "lineNumber": 0,
+        "columnNumber": 0
+      }
+    },
+    {
+      "text": "[Auth.login] failed: Error: Too many authentication attempts. Please try again in 15 minutes.\n    at request (http://127.0.0.1:8085/js/apiClient.js?v=2.3.10:265:23)\n    at async Object.login (http://127.0.0.1:8085/js/auth.js?v=2.3.10:86:19)\n    at async HTMLFormElement.<anonymous> (http://127.0.0.1:8085/js/app.js?v=2.3.10:1066:27)",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/auth.js?v=2.3.10",
+        "line": 106,
+        "column": 16,
+        "lineNumber": 106,
+        "columnNumber": 16
+      }
+    },
+    {
+      "text": "[Users.countMyRequests] failed to load operations request count route-change",
+      "location": {
+        "url": "http://127.0.0.1:8085/js/users.js?v=2.3.10?v=1789668095518",
+        "line": 62,
+        "column": 14,
+        "lineNumber": 62,
+        "columnNumber": 14
+      }
+    }
+  ],
+  "summary": {
+    "total": 21,
+    "passed": 20,
+    "failed": 1
+  },
+  "completedAt": "2026-09-17T18:01:54.722Z"
+}

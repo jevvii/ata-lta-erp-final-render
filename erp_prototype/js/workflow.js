@@ -746,7 +746,12 @@ const WorkflowData = {
     const normalized = this.normalizeWorkRequest(record);
     if (!normalized.tasks) normalized.tasks = [];
     if (!Array.isArray(this._workRequests)) this._workRequests = [];
-    this._workRequests.push(normalized);
+    const existingIdx = this._workRequests.findIndex(r => r.id === normalized.id);
+    if (existingIdx >= 0) {
+      this._workRequests[existingIdx] = normalized;
+    } else {
+      this._workRequests.push(normalized);
+    }
     // Mark the cache as fresh for the active entity so WorkflowData.ensure()
     // does not fire a server fetch and overwrite the optimistic record before
     // the list has a chance to render it.
@@ -763,11 +768,21 @@ const WorkflowData = {
   _addOptimisticTask(record) {
     const normalized = this.normalizeTask(record);
     if (!Array.isArray(this._tasks)) this._tasks = [];
-    this._tasks.push(normalized);
+    const existingTaskIdx = this._tasks.findIndex(t => t.id === normalized.id);
+    if (existingTaskIdx >= 0) {
+      this._tasks[existingTaskIdx] = normalized;
+    } else {
+      this._tasks.push(normalized);
+    }
     const wr = this.getWorkRequestById(normalized.workRequestId);
     if (wr) {
       if (!Array.isArray(wr.tasks)) wr.tasks = [];
-      wr.tasks.push(normalized);
+      const existingWrTaskIdx = wr.tasks.findIndex(t => t.id === normalized.id);
+      if (existingWrTaskIdx >= 0) {
+        wr.tasks[existingWrTaskIdx] = normalized;
+      } else {
+        wr.tasks.push(normalized);
+      }
       // Keep the parent WR cache fresh so a subsequent ensure() does not wipe it.
       this._entity = this._getActiveEntity();
     }
@@ -3411,13 +3426,16 @@ const Workflow = {
     cancelBtn.addEventListener('click', () => overlay.remove());
 
     saveBtn.addEventListener('click', async () => {
-      // Basic validation
-      const issueDate = form.querySelector('[name="issueDate"]').value;
-      const dueDate = form.querySelector('[name="dueDate"]').value;
-      if (!issueDate || !dueDate) {
-        this.showMessage('Validation Error', 'Please fill in both Issue Date and Due Date.', 'warning');
-        return;
-      }
+      // Inline validation — flag offending fields instead of a blocking modal
+      clearFieldErrors(form);
+      const issueDateField = form.querySelector('[name="issueDate"]');
+      const dueDateField = form.querySelector('[name="dueDate"]');
+      const issueDate = issueDateField.value;
+      const dueDate = dueDateField.value;
+      let valid = true;
+      if (!issueDate) { showFieldError(issueDateField, 'Issue date is required.'); valid = false; }
+      if (!dueDate) { showFieldError(dueDateField, 'Due date is required.'); valid = false; }
+      if (!valid) { focusFirstInvalidField(form); return; }
 
       const data = Object.fromEntries(new FormData(form).entries());
       const rows = form.querySelectorAll('.line-item-row');
@@ -3436,15 +3454,24 @@ const Workflow = {
           });
         } else if (desc || amt > 0) {
           hasPartialItem = true;
+          if (!desc) showFieldError(row.querySelector('.item-desc'), 'Description is required.');
+          if (!(amt > 0)) showFieldError(row.querySelector('.item-amt'), 'Enter an amount greater than zero.');
         }
       });
 
       if (hasPartialItem) {
-        this.showMessage('Validation Error', 'Each line item must have both a description and a valid amount greater than zero.', 'warning');
+        focusFirstInvalidField(form);
         return;
       }
       if (lineItems.length === 0) {
-        this.showMessage('Validation Error', 'Please add at least one line item with a description and a valid amount.', 'warning');
+        const firstRow = rows[0];
+        if (firstRow) {
+          showFieldError(firstRow.querySelector('.item-desc'), 'Add at least one line item.');
+          showFieldError(firstRow.querySelector('.item-amt'), 'Enter an amount greater than zero.');
+          focusFirstInvalidField(form);
+        } else {
+          this.showMessage('Validation Error', 'Please add at least one line item with a description and a valid amount.', 'warning');
+        }
         return;
       }
 
@@ -3467,25 +3494,30 @@ const Workflow = {
         updatedAt: new Date().toISOString()
       };
 
-      overlay.remove();
+      const restoreSaveBtn = setButtonLoading(saveBtn, 'Saving Invoice…');
+      try {
+        overlay.remove();
 
-      await this.runBlockingArchiveAction({
-        title: 'Creating Invoice',
-        message: 'Please wait while the invoice is being saved...',
-        apiCall: async () => {
-          return await window.apiClient.invoices.create(record);
-        },
-        successTitle: 'Invoice Created',
-        successMessage: 'Invoice ' + record.invoiceNumber + ' has been created successfully and linked to "' + wr.title + '".',
-        errorTitle: 'Failed to Create Invoice',
-        onSuccess: async (res) => {
-          const created = res?.data || record;
-          WorkflowData.invalidateRelatedForWorkRequest(created.workRequestId || data.workRequestId);
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
-        }
-      });
+        await this.runBlockingArchiveAction({
+          title: 'Creating Invoice',
+          message: 'Please wait while the invoice is being saved...',
+          apiCall: async () => {
+            return await window.apiClient.invoices.create(record);
+          },
+          successTitle: 'Invoice Created',
+          successMessage: 'Invoice ' + record.invoiceNumber + ' has been created successfully and linked to "' + wr.title + '".',
+          errorTitle: 'Failed to Create Invoice',
+          onSuccess: async (res) => {
+            const created = res?.data || record;
+            WorkflowData.invalidateRelatedForWorkRequest(created.workRequestId || data.workRequestId);
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          }
+        });
+      } finally {
+        restoreSaveBtn();
+      }
     });
   },
 
@@ -3685,84 +3717,95 @@ const Workflow = {
     cancelBtn.addEventListener('click', () => overlay.remove());
 
     saveBtn.addEventListener('click', async () => {
-      // Validation
-      const desc = form.querySelector('[name="description"]').value.trim();
-      const amtVal = form.querySelector('[name="amount"]').value;
+      // Inline validation — flag offending fields instead of a blocking modal
+      clearFieldErrors(form);
+      const descField = form.querySelector('[name="description"]');
+      const amtField = form.querySelector('[name="amount"]');
+      const desc = descField.value.trim();
+      const amtVal = amtField.value;
+      let valid = true;
       if (!desc) {
-        this.showMessage('Validation Error', 'Please enter a description.', 'warning');
-        return;
+        showFieldError(descField, 'Description is required.');
+        valid = false;
       }
       const amount = parseFloat(String(amtVal).replace(/[₱$,\s]/g, '')) || 0;
       if (amount <= 0) {
-        this.showMessage('Validation Error', 'Please enter a valid amount.', 'warning');
-        return;
+        showFieldError(amtField, 'Enter a valid amount greater than zero.');
+        valid = false;
       }
+      if (!valid) { focusFirstInvalidField(form); return; }
 
       const data = Object.fromEntries(new FormData(form).entries());
       const receiptInput = form.querySelector('input[name="receipt"]');
       const receiptFile = receiptInput?.files?.[0];
 
       if (!receiptFile) {
-        this.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+        showFieldError(receiptInput, 'Attach a receipt for this disbursement.');
         const dropzone = form.querySelector('.notion-popover-dropzone');
         if (dropzone) dropzone.style.borderColor = 'var(--color-danger)';
+        focusFirstInvalidField(form);
         return;
       }
 
       let receiptS3Key = null;
       let receiptFilename = null;
 
-      if (receiptFile) {
-        try {
-          const uploaded = await this.uploadReceipt(receiptFile, {
-            workRequestId: data.linkedWorkRequestId || null,
-            clientId: wr?.clientId || null,
-            linkedTaskId: data.linkedTaskId || null
-          });
-          receiptS3Key = uploaded.id;
-          receiptFilename = uploaded.name;
-        } catch (err) {
-          return;
+      const restoreSaveBtn = setButtonLoading(saveBtn, 'Filing Expense…');
+      try {
+        if (receiptFile) {
+          try {
+            const uploaded = await this.uploadReceipt(receiptFile, {
+              workRequestId: data.linkedWorkRequestId || null,
+              clientId: wr?.clientId || null,
+              linkedTaskId: data.linkedTaskId || null
+            });
+            receiptS3Key = uploaded.id;
+            receiptFilename = uploaded.name;
+          } catch (err) {
+            return;
+          }
         }
+
+        const record = {
+          category: data.category,
+          description: desc,
+          amount: amount,
+          fundSource: data.fundSource,
+          linkedInvoiceId: data.linkedInvoiceId || null,
+          linkedWorkRequestId: data.linkedWorkRequestId || null,
+          linkedTaskId: data.linkedTaskId || null,
+          entity: recordEntity,
+          employeeId: Auth.user.id,
+          requestedBy: Auth.user.id,
+          status: 'Submitted',
+          submittedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          receiptS3Key: receiptS3Key,
+          receiptFilename: receiptFilename
+        };
+
+        overlay.remove();
+
+        await this.runBlockingArchiveAction({
+          title: 'Filing Expense',
+          message: 'Please wait while the disbursement is being saved...',
+          apiCall: async () => {
+            return await window.apiClient.disbursements.create(record);
+          },
+          successTitle: 'Expense Filed',
+          successMessage: 'Disbursement for ' + data.category + ' (₱' + amount.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ') has been submitted and linked to "' + wr.title + '".',
+          errorTitle: 'Failed to File Expense',
+          onSuccess: async (res) => {
+            const created = res?.data || record;
+            WorkflowData.invalidateRelatedForWorkRequest(created.linkedWorkRequestId || data.linkedWorkRequestId);
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          }
+        });
+      } finally {
+        restoreSaveBtn();
       }
-
-      const record = {
-        category: data.category,
-        description: desc,
-        amount: amount,
-        fundSource: data.fundSource,
-        linkedInvoiceId: data.linkedInvoiceId || null,
-        linkedWorkRequestId: data.linkedWorkRequestId || null,
-        linkedTaskId: data.linkedTaskId || null,
-        entity: recordEntity,
-        employeeId: Auth.user.id,
-        requestedBy: Auth.user.id,
-        status: 'Submitted',
-        submittedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        receiptS3Key: receiptS3Key,
-        receiptFilename: receiptFilename
-      };
-
-      overlay.remove();
-
-      await this.runBlockingArchiveAction({
-        title: 'Filing Expense',
-        message: 'Please wait while the disbursement is being saved...',
-        apiCall: async () => {
-          return await window.apiClient.disbursements.create(record);
-        },
-        successTitle: 'Expense Filed',
-        successMessage: 'Disbursement for ' + data.category + ' (₱' + amount.toLocaleString('en-US', { minimumFractionDigits: 2 }) + ') has been submitted and linked to "' + wr.title + '".',
-        errorTitle: 'Failed to File Expense',
-        onSuccess: async (res) => {
-          const created = res?.data || record;
-          WorkflowData.invalidateRelatedForWorkRequest(created.linkedWorkRequestId || data.linkedWorkRequestId);
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
-        }
-      });
     });
   },
 
@@ -3926,83 +3969,100 @@ const Workflow = {
     cancelBtn.addEventListener('click', () => overlay.remove());
 
     saveBtn.addEventListener('click', async () => {
-      // Collect items
+      // Inline validation — flag offending items instead of a blocking modal
+      clearFieldErrors(form);
       const rows = itemsList.querySelectorAll('.line-item-row');
       const items = [];
       let hasPartialItem = false;
       rows.forEach(row => {
-        const desc = row.querySelector('.item-desc')?.value?.trim();
-        const docType = row.querySelector('.item-type')?.value;
+        const descField = row.querySelector('.item-desc');
+        const typeField = row.querySelector('.item-type');
+        const desc = descField?.value?.trim();
+        const docType = typeField?.value;
         if (desc && docType) {
           items.push({ description: desc, documentType: docType });
         } else if (desc || docType) {
           hasPartialItem = true;
+          if (!docType) showFieldError(typeField, 'Select a document type.');
+          if (!desc) showFieldError(descField, 'Description is required.');
         }
       });
 
       if (hasPartialItem) {
-        this.showMessage('Validation Error', 'Each transmittal item must have both a document type and a description.', 'warning');
+        focusFirstInvalidField(form);
         return;
       }
 
       if (items.length === 0) {
-        this.showMessage('Validation Error', 'Please add at least one transmittal item with a document type and description.', 'warning');
+        const firstRow = rows[0];
+        if (firstRow) {
+          showFieldError(firstRow.querySelector('.item-type'), 'Select a document type.');
+          showFieldError(firstRow.querySelector('.item-desc'), 'Add at least one item.');
+          focusFirstInvalidField(form);
+        } else {
+          this.showMessage('Validation Error', 'Please add at least one transmittal item with a document type and description.', 'warning');
+        }
         return;
       }
 
-      const data = Object.fromEntries(new FormData(form).entries());
+      const restoreSaveBtn = setButtonLoading(saveBtn, 'Creating Transmittal…');
+      try {
+        const data = Object.fromEntries(new FormData(form).entries());
 
-      const record = {
-        workRequestId: data.workRequestId,
-        clientId: data.clientId,
-        linkedTaskId: data.linkedTaskId || (preselectedTask ? preselectedTask.id : null) || null,
-        trackingNumber: data.trackingNumber || await Utils.nextTrackingNumber(recordEntity),
-        status: 'Draft',
-        items,
-        notes: data.notes || '',
-        entity: recordEntity,
-        createdAt: new Date().toISOString(),
-        createdBy: Auth.user.id
-      };
+        const record = {
+          workRequestId: data.workRequestId,
+          clientId: data.clientId,
+          linkedTaskId: data.linkedTaskId || (preselectedTask ? preselectedTask.id : null) || null,
+          trackingNumber: data.trackingNumber || await Utils.nextTrackingNumber(recordEntity),
+          status: 'Draft',
+          items,
+          notes: data.notes || '',
+          entity: recordEntity,
+          createdAt: new Date().toISOString(),
+          createdBy: Auth.user.id
+        };
 
-      overlay.remove();
+        overlay.remove();
 
-      await this.runBlockingArchiveAction({
-        title: 'Creating Transmittal',
-        message: 'Please wait while the transmittal is being saved...',
-        apiCall: async () => {
-          const res = await window.apiClient.transmittals.create(record);
-          const createdTransmittal = res?.data || record;
+        await this.runBlockingArchiveAction({
+          title: 'Creating Transmittal',
+          message: 'Please wait while the transmittal is being saved...',
+          apiCall: async () => {
+            const res = await window.apiClient.transmittals.create(record);
+            const createdTransmittal = res?.data || record;
 
-          // Fulfill pending operations request if any
-          const reqId = prefilledRequestId || (opReq ? opReq.id : null);
-          if (reqId) {
-            try {
-              await window.apiClient.operationsRequests.update(reqId, {
-                status: 'fulfilled',
-                fulfilledBy: Auth.user.id,
-                fulfilledAt: new Date().toISOString(),
-                linkedRecordId: createdTransmittal.id
-              });
-            } catch (e) {
-              console.error('Failed to fulfill operations request', e);
+            // Fulfill pending operations request if any
+            const reqId = prefilledRequestId || (opReq ? opReq.id : null);
+            if (reqId) {
+              try {
+                await window.apiClient.operationsRequests.update(reqId, {
+                  status: 'fulfilled',
+                  fulfilledBy: Auth.user.id,
+                  fulfilledAt: new Date().toISOString(),
+                  linkedRecordId: createdTransmittal.id
+                });
+              } catch (e) {
+                console.error('Failed to fulfill operations request', e);
+              }
             }
+            return res;
+          },
+          successTitle: 'Transmittal Created',
+          successMessage: 'Transmittal ' + record.trackingNumber + ' has been created and linked to "' + wr.title + '".',
+          errorTitle: 'Failed to Create Transmittal',
+          onSuccess: async (res) => {
+            WorkflowData.invalidateRelatedForWorkRequest(data.workRequestId);
+            if (record.linkedTaskId) {
+              WorkflowData.invalidateRelatedForTask(record.linkedTaskId);
+            }
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
           }
-          return res;
-        },
-        successTitle: 'Transmittal Created',
-        successMessage: 'Transmittal ' + record.trackingNumber + ' has been created and linked to "' + wr.title + '".',
-        errorTitle: 'Failed to Create Transmittal',
-        onSuccess: async (res) => {
-          WorkflowData.invalidateRelatedForWorkRequest(data.workRequestId);
-          if (record.linkedTaskId) {
-            WorkflowData.invalidateRelatedForTask(record.linkedTaskId);
-          }
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
-        }
-      });
+        });
+      } finally {
+        restoreSaveBtn();
+      }
     });
   },
 
@@ -4374,10 +4434,14 @@ const Workflow = {
     const label = type === 'billing' ? 'Billing' : type === 'disbursement' ? 'Disbursement' : 'Transmittal';
     const overlay = this.showModal(`Submit Request for ${label}`, wrapper);
 
+    let isSubmittingOpreq = false;
     overlay.querySelector('#btn-cancel-opreq').addEventListener('click', () => overlay.remove());
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isSubmittingOpreq) return;
+
+      clearFieldErrors(form);
 
       const record = {
         type,
@@ -4391,10 +4455,11 @@ const Workflow = {
 
       if (type === 'billing') {
         const linkedTaskId = form.querySelector('[name="linkedTaskId"]').value;
-        const amtStr = form.querySelector('[name="amount"]').value;
-        const amount = parseFloat(amtStr.replace(/[₱$,\s]/g, '')) || 0;
+        const amtField = form.querySelector('[name="amount"]');
+        const amount = parseFloat(amtField.value.replace(/[₱$,\s]/g, '')) || 0;
         if (amount <= 0) {
-          this.showMessage('Validation Error', 'Please enter a valid billing amount.', 'warning');
+          showFieldError(amtField, 'Enter a valid billing amount greater than zero.');
+          focusFirstInvalidField(form);
           return;
         }
         const notes = form.querySelector('[name="notes"]').value.trim();
@@ -4409,10 +4474,11 @@ const Workflow = {
       else if (type === 'disbursement') {
         const disType = form.querySelector('input[name="disbursementType"]:checked').value;
         const category = form.querySelector('[name="category"]').value;
-        const amtStr = form.querySelector('[name="amount"]').value;
-        const amount = parseFloat(amtStr.replace(/[₱$,\s]/g, '')) || 0;
+        const amtField = form.querySelector('[name="amount"]');
+        const amount = parseFloat(amtField.value.replace(/[₱$,\s]/g, '')) || 0;
         if (amount <= 0) {
-          this.showMessage('Validation Error', 'Please enter a valid disbursement amount.', 'warning');
+          showFieldError(amtField, 'Enter a valid disbursement amount greater than zero.');
+          focusFirstInvalidField(form);
           return;
         }
         const payMethod = form.querySelector('[name="paymentMethod"]').value;
@@ -4435,13 +4501,17 @@ const Workflow = {
         const documents = [...checkedDocs, ...manualDocs];
 
         if (documents.length === 0) {
-          this.showMessage('Validation Error', 'Please select or enter at least one document to transmit.', 'warning');
+          const manualDocsField = form.querySelector('[name="manualDocs"]');
+          showFieldError(manualDocsField, 'Select or enter at least one document to transmit.');
+          focusFirstInvalidField(form);
           return;
         }
 
-        const recipientDetails = form.querySelector('[name="recipientDetails"]').value.trim();
+        const recipientField = form.querySelector('[name="recipientDetails"]');
+        const recipientDetails = recipientField.value.trim();
         if (!recipientDetails) {
-          this.showMessage('Validation Error', 'Please enter recipient and delivery details.', 'warning');
+          showFieldError(recipientField, 'Recipient and delivery details are required.');
+          focusFirstInvalidField(form);
           return;
         }
         const notes = form.querySelector('[name="notes"]').value.trim();
@@ -4452,22 +4522,38 @@ const Workflow = {
         record.linkedTaskId = form.querySelector('[name="linkedTaskId"]')?.value || (preselectedTask ? preselectedTask.id : null) || null;
       }
 
-      this.runBlockingArchiveAction({
-        title: 'Submitting Request',
-        message: `Please wait while your request for ${label} is being submitted...`,
-        apiCall: async () => {
-          return await window.apiClient.operationsRequests.create(record);
-        },
-        successTitle: 'Request Submitted',
-        successMessage: `Your request for ${label} has been submitted to Accounting/Documentation for review.`,
-        errorTitle: 'Request Failed',
-        onSuccess: async (res) => {
-          overlay.remove();
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
+      const submitBtn = footer.querySelector('button[type="submit"]') || form.querySelector('button[type="submit"]');
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmittingOpreq = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Submitting...';
+      }
+
+      try {
+        await this.runBlockingArchiveAction({
+          title: 'Submitting Request',
+          message: `Please wait while your request for ${label} is being submitted...`,
+          apiCall: async () => {
+            return await window.apiClient.operationsRequests.create(record);
+          },
+          successTitle: 'Request Submitted',
+          successMessage: `Your request for ${label} has been submitted to Accounting/Documentation for review.`,
+          errorTitle: 'Request Failed',
+          onSuccess: async (res) => {
+            overlay.remove();
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          }
+        });
+      } finally {
+        isSubmittingOpreq = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origHtml;
         }
-      });
+      }
     });
   },
 
@@ -4485,7 +4571,7 @@ const Workflow = {
       opLink.addEventListener('click', () => { location.hash = '#operations'; });
       h1.appendChild(opLink);
       h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
-      const titleTextNode = document.createTextNode('Loading...');
+      const titleTextNode = el('span', { class: 'wr-title-badge', text: 'Loading...' });
       h1.appendChild(titleTextNode);
       titleBar.appendChild(h1);
       
@@ -7711,6 +7797,24 @@ const Workflow = {
     }
     form.appendChild(titleSection);
 
+    // QoL 4.1: in consolidated mode, let the creator pin the target entity
+    // explicitly instead of silently inheriting it from the client.
+    if (entity === 'ALL' && !wr) {
+      const entities = (Auth.user?.entities || []).filter(e => e && e !== 'ALL');
+      if (entities.length > 1) {
+        const entityWrap = el('div', { class: 'entity-pill-toggle-wrap' });
+        entityWrap.appendChild(el('label', { class: 'notion-section-label', text: 'Record Entity' }));
+        const pillToggle = buildEntityPillToggle({
+          value: entities[0],
+          entities,
+          onChange: (val) => { form.dataset.recordEntity = val; }
+        });
+        form.dataset.recordEntity = entities[0];
+        entityWrap.appendChild(pillToggle.el);
+        form.appendChild(entityWrap);
+      }
+    }
+
     // ── Top property grid ──
     const propsGrid = el('div', { class: 'notion-property-grid' });
 
@@ -8228,17 +8332,30 @@ const Workflow = {
   },
 
   async submitForm(form) {
-    const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
-    // Temporarily enable disabled fields so FormData picks them up
-    const disabledFields = form.querySelectorAll('[disabled]');
-    disabledFields.forEach(f => f.disabled = false);
-    if (!validateRequiredFields(form)) { disabledFields.forEach(f => f.disabled = true); return; }
-    if (!this.validateManualAssignees(form)) { disabledFields.forEach(f => f.disabled = true); return; }
+    if (this._isSubmittingWr) return;
+    const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('.btn-primary') || document.querySelector('button[form="wr-form"]');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : null;
+    this._isSubmittingWr = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+    }
+
+    try {
+      const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
+      // Temporarily enable disabled fields so FormData picks them up
+      const disabledFields = form.querySelectorAll('[disabled]');
+      disabledFields.forEach(f => f.disabled = false);
+      if (!validateRequiredFields(form)) { disabledFields.forEach(f => f.disabled = true); return; }
+      if (!this.validateManualAssignees(form)) { disabledFields.forEach(f => f.disabled = true); return; }
     const data = Object.fromEntries(new FormData(form).entries());
     let entity = Auth.activeEntity;
     if (entity === 'ALL') {
+      // Precedence: explicit entity pill (QoL 4.1) → client autodetect → first entity.
+      const pillChoice = form.dataset.recordEntity;
       const selectedClient = data.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(data.clientId) : null;
-      entity = selectedClient?.entity || (Auth.user?.entities || []).find(e => e !== 'ALL') || 'ATA';
+      entity = pillChoice || selectedClient?.entity || (Auth.user?.entities || []).find(e => e !== 'ALL') || 'ATA';
     }
 
     const now = new Date().toISOString();
@@ -8491,6 +8608,7 @@ const Workflow = {
         }
         this._invalidateCountsAndSidebar();
         if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        markPaneFormClean();
         closeFormPanelAndRoute(targetRoute);
       } else {
         App.handleRoute();
@@ -8556,6 +8674,7 @@ const Workflow = {
         if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
         this._invalidateCountsAndSidebar();
         if (typeof App !== 'undefined' && App.updateSidebarNotifications) App.updateSidebarNotifications().catch(() => {});
+        markPaneFormClean();
         await closeFormPanelAndRoute(targetRoute);
       },
       onAfterConfirm: async (res) => {
@@ -8573,6 +8692,14 @@ const Workflow = {
 
     if (!runResult.success) {
       App.handleRoute();
+    }
+    } finally {
+      this._isSubmittingWr = false;
+      if (submitBtn && originalBtnHtml) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        submitBtn.innerHTML = originalBtnHtml;
+      }
     }
   },
 
@@ -9447,14 +9574,20 @@ const Workflow = {
         const submitBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Save Logs' });
         form.appendChild(submitBtn);
         const overlay = this.showModal('Bulk Log Time', form, null);
+        let isSubmitting = false;
         form.addEventListener('submit', (e) => {
           e.preventDefault();
+          if (isSubmitting) return;
           const dateVal = dateInput.value;
           const start = startInput.value;
           const end = endInput.value;
           const noteVal = noteInput.value;
 
           if (!dateVal || !start || !end) return;
+
+          isSubmitting = true;
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
 
           const [sh, sm] = start.split(':').map(Number);
           const [eh, em] = end.split(':').map(Number);
@@ -13264,14 +13397,20 @@ const Workflow = {
     form.appendChild(submitBtn);
 
     const overlay = this.showModal('Add Time Log', form, null);
+    let isSubmitting = false;
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (isSubmitting) return;
       const dateVal = dateInput.value;
       const start = startInput.value;
       const end = endInput.value;
       const noteVal = noteInput.value;
 
       if (!dateVal || !start || !end) return;
+
+      isSubmitting = true;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
 
       const [sh, sm] = start.split(':').map(Number);
       const [eh, em] = end.split(':').map(Number);
@@ -13895,86 +14034,106 @@ const Workflow = {
       predMenu.appendChild(optionEl);
     });
 
+    let isSubmitting = false;
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isSubmitting) return;
       if (!validateRequiredFields(form)) return;
-      const groundWorkerName = gwDropdown.searchText.trim();
-      const groundWorkerId = gwDropdown.value || null;
-      const data = Object.fromEntries(new FormData(form).entries());
-      const allExistingIds = existingTasks.map(t => t.id);
-      const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
-
-      const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
-      let resolvedName = res.name;
-      if (!resolvedName && res.id) {
-        const u = window.apiClient?.userCache?.getById?.(res.id);
-        const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
-        resolvedName = u?.name || gw?.name || null;
+      const submitBtn = form.querySelector('button[type="submit"]') || document.querySelector('button[form="add-task-form"]');
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmitting = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.classList.add('loading');
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Adding...';
       }
+      try {
+        const groundWorkerName = gwDropdown.searchText.trim();
+        const groundWorkerId = gwDropdown.value || null;
+        const data = Object.fromEntries(new FormData(form).entries());
+        const allExistingIds = existingTasks.map(t => t.id);
+        const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const newTask = {
-        id: generateId('t'),
-        workRequestId: wrId,
-        title: data.title.trim(),
-        requiredLinkType: reqLinkSel.value || '',
-        assigneeId: res.id,
-        assigneeName: resolvedName,
-        coAssignees: isDraft ? coAssignees.filter(Boolean) : [],
-        status: (resolvedName || coAssignees.length > 0) ? 'Assigned' : 'Draft',
-        priority: data.priority || 'Priority',
-        dueDate: data.dueDate || '',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        predecessors,
-        checklist: checklistItems.map(item => this.createChecklistItemData(item)),
-        timeLogs: [],
-        taskDocuments: [],
-        comments: []
-      };
+        const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
+        let resolvedName = res.name;
+        if (!resolvedName && res.id) {
+          const u = window.apiClient?.userCache?.getById?.(res.id);
+          const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
+          resolvedName = u?.name || gw?.name || null;
+        }
 
-      let submitResult = null;
+        const newTask = {
+          id: generateId('t'),
+          workRequestId: wrId,
+          title: data.title.trim(),
+          requiredLinkType: reqLinkSel.value || '',
+          assigneeId: res.id,
+          assigneeName: resolvedName,
+          coAssignees: isDraft ? coAssignees.filter(Boolean) : [],
+          status: (resolvedName || coAssignees.length > 0) ? 'Assigned' : 'Draft',
+          priority: data.priority || 'Priority',
+          dueDate: data.dueDate || '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          predecessors,
+          checklist: checklistItems.map(item => this.createChecklistItemData(item)),
+          timeLogs: [],
+          taskDocuments: [],
+          comments: []
+        };
 
-      const runResult = await this.runBlockingArchiveAction({
-        title: 'Adding Task',
-        message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
-        apiCall: async () => {
-          submitResult = await PendingChanges.submit('tasks', newTask, true);
-          if (submitResult.approved) {
-            // Optimistic insert so counts update immediately under the overlay.
-            WorkflowData._addOptimisticTask(newTask);
-            try {
-              if (submitResult.record) {
-                const serverTask = WorkflowData.normalizeTask(submitResult.record);
-                serverTask.workRequestId = newTask.workRequestId;
+        let submitResult = null;
+
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Adding Task',
+          message: `Please wait while "${newTask.title || 'the task'}" is being added...`,
+          apiCall: async () => {
+            submitResult = await PendingChanges.submit('tasks', newTask, true);
+            if (submitResult.approved) {
+              // Optimistic insert so counts update immediately under the overlay.
+              WorkflowData._addOptimisticTask(newTask);
+              try {
+                if (submitResult.record) {
+                  const serverTask = WorkflowData.normalizeTask(submitResult.record);
+                  serverTask.workRequestId = newTask.workRequestId;
+                  WorkflowData._removeTask(newTask.id);
+                  this._syncTaskToCaches(serverTask);
+                  return { data: serverTask };
+                }
+                const created = await WorkflowData.createTask(newTask);
+                this._syncTaskToCaches(created);
+                return { data: created };
+              } catch (e) {
+                console.error('Failed to add task', e);
                 WorkflowData._removeTask(newTask.id);
-                this._syncTaskToCaches(serverTask);
-                return { data: serverTask };
+                throw e;
               }
-              const created = await WorkflowData.createTask(newTask);
-              this._syncTaskToCaches(created);
-              return { data: created };
-            } catch (e) {
-              console.error('Failed to add task', e);
-              WorkflowData._removeTask(newTask.id);
-              throw e;
+            } else {
+              return { data: submitResult };
             }
-          } else {
-            return { data: submitResult };
-          }
-        },
-        successTitle: 'Task Added',
-        successMessage: () => submitResult && submitResult.approved
-          ? 'Task has been added to the work request.'
-          : 'Task addition has been submitted for Manager approval.',
-        errorTitle: 'Failed to Add Task'
-      });
+          },
+          successTitle: 'Task Added',
+          successMessage: () => submitResult && submitResult.approved
+            ? 'Task has been added to the work request.'
+            : 'Task addition has been submitted for Manager approval.',
+          errorTitle: 'Failed to Add Task'
+        });
 
-      if (runResult.success) {
-        if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
-        this._invalidateCountsAndSidebar();
-        closeFormPanelAndRoute('#operations/detail/' + wrId);
-      } else {
-        App.handleRoute();
+        if (runResult.success) {
+          if (typeof Dashboard !== 'undefined' && Dashboard.invalidateCache) Dashboard.invalidateCache();
+          this._invalidateCountsAndSidebar();
+          markPaneFormClean();
+          closeFormPanelAndRoute('#operations/detail/' + wrId);
+        } else {
+          App.handleRoute();
+        }
+      } finally {
+        isSubmitting = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.classList.remove('loading');
+          submitBtn.innerHTML = origHtml;
+        }
       }
     });
 
@@ -14022,6 +14181,10 @@ const Workflow = {
       viewContext: 'work-request-form',
       fullPageRoute,
       newTabRoute: fullPageRoute,
+      // Draft caching scoped per record so an abandoned draft restores only
+      // into the same work request it was typed for.
+      draftKey: 'work-request-' + (this.editingId || 'new'),
+      restoreDraft: true,
       actions: [
         { text: isNew ? 'Submit Request' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'wr-form' },
         { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations') }
@@ -14360,52 +14523,70 @@ const Workflow = {
         PendingChanges.editingPendingId = null;
       }
     });
+    let isSubmitting = false;
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isSubmitting) return;
       if (!validateRequiredFields(form)) return;
-      const groundWorkerName = gwDropdown.searchText.trim();
-      const groundWorkerId = gwDropdown.value || null;
-      const data = Object.fromEntries(new FormData(form).entries());
-      const allExistingIds = existingTasks.map(t => t.id);
-      const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
-      let resolvedName = res.name;
-      if (!resolvedName && res.id) {
-        const u = window.apiClient?.userCache?.getById?.(res.id);
-        const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
-        resolvedName = u?.name || gw?.name || null;
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmitting = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
       }
 
-      const runResult = await this.runBlockingArchiveAction({
-        title: 'Saving Task',
-        message: `Please wait while "${task.title || 'the task'}" is being updated...`,
-        apiCall: async () => {
-          await WorkflowData.updateTask(task.id, {
-            title: data.title.trim(),
-            assigneeId: res.id,
-            assigneeName: resolvedName,
-            coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
-            priority: data.priority || 'Priority',
-            dueDate: data.dueDate || '',
-            predecessors: predecessors,
-            checklist: checklistItems,
-            updatedAt: new Date().toISOString()
-          });
-          const updated = WorkflowData.getTaskById(task.id);
-          this._syncTaskToCaches(updated);
-          return { data: updated };
-        },
-        successTitle: 'Task Saved',
-        successMessage: 'Task has been successfully updated.',
-        errorTitle: 'Failed to Save Task'
-      });
+      try {
+        const groundWorkerName = gwDropdown.searchText.trim();
+        const groundWorkerId = gwDropdown.value || null;
+        const data = Object.fromEntries(new FormData(form).entries());
+        const allExistingIds = existingTasks.map(t => t.id);
+        const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      if (runResult.success) {
-        this._invalidateCountsAndSidebar();
+        const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
+        let resolvedName = res.name;
+        if (!resolvedName && res.id) {
+          const u = window.apiClient?.userCache?.getById?.(res.id);
+          const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
+          resolvedName = u?.name || gw?.name || null;
+        }
+
+        const runResult = await this.runBlockingArchiveAction({
+          title: 'Saving Task',
+          message: `Please wait while "${task.title || 'the task'}" is being updated...`,
+          apiCall: async () => {
+            await WorkflowData.updateTask(task.id, {
+              title: data.title.trim(),
+              assigneeId: res.id,
+              assigneeName: resolvedName,
+              coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
+              priority: data.priority || 'Priority',
+              dueDate: data.dueDate || '',
+              predecessors: predecessors,
+              checklist: checklistItems,
+              updatedAt: new Date().toISOString()
+            });
+            const updated = WorkflowData.getTaskById(task.id);
+            this._syncTaskToCaches(updated);
+            return { data: updated };
+          },
+          successTitle: 'Task Saved',
+          successMessage: 'Task has been successfully updated.',
+          errorTitle: 'Failed to Save Task'
+        });
+
+        if (runResult.success) {
+          this._invalidateCountsAndSidebar();
+        }
+        overlay.remove();
+        if (onSaved) onSaved();
+      } finally {
+        isSubmitting = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origHtml;
+        }
       }
-      overlay.remove();
-      if (onSaved) onSaved();
     });
   },
 

@@ -1416,6 +1416,16 @@ const Dashboard = {
       disbursements = disbursements.filter(d => (d.entity || '').toUpperCase() === active);
     }
 
+    // Role and assignment scoping (prevent data leaks of other workers' items)
+    if (typeof Auth !== 'undefined') {
+      if (typeof Auth.canViewWr === 'function') {
+        wrs = wrs.filter(wr => Auth.canViewWr(wr));
+      }
+      if (typeof Auth.canViewDisbursement === 'function') {
+        disbursements = disbursements.filter(d => Auth.canViewDisbursement(d));
+      }
+    }
+
     const eventsByDate = {};
     const addToEvents = (dateStr, type, item) => {
       if (!dateStr) return;
@@ -1965,7 +1975,7 @@ const Dashboard = {
               tasks: (raw.tasks || []).map(t => ({ ...t, workRequestId: raw.id })),
             };
           })
-          .filter(wr => wr.id && !existingIds.has(wr.id));
+          .filter(wr => wr.id && !existingIds.has(wr.id) && Auth.canViewWr(wr));
         workRequests.push(...calendarWrs);
       }
     } else {
@@ -1994,7 +2004,7 @@ const Dashboard = {
               tasks: (raw.tasks || []).map(t => ({ ...t, workRequestId: raw.id })),
             };
           })
-          .filter(wr => wr.id && !existingIds.has(wr.id));
+          .filter(wr => wr.id && !existingIds.has(wr.id) && Auth.canViewWr(wr));
         workRequests.push(...calendarWrs);
       }
     }

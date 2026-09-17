@@ -295,8 +295,9 @@ const Auth = {
     // back-office: the backend serves them every work request (isBackOffice),
     // so the frontend must not bounce their detail views to the list.
     if (this.isManagerial()) return !!wr;
-    // Staff-level users can see work requests they are assigned to via tasks.
+    // Staff-level users can see work requests they are assigned to, requested, or via tasks.
     if (!wr) return false;
+    if (wr.assignedTo === this.user.id || wr.requestedBy === this.user.id || wr.submittedBy === this.user.id) return true;
     
     // Check tasks from the cached work request (workRequestCache always includes tasks).
     const tasks = wr.tasks || [];
@@ -318,6 +319,7 @@ const Auth = {
     if (this.user.role === 'Admin') return true;
     if (this.isManagerial()) return !!wr;
     if (!wr) return false;
+    if (wr.assignedTo === this.user.id || wr.requestedBy === this.user.id || wr.submittedBy === this.user.id) return true;
     const tasks = wr.isPendingApproval ? (wr.tasks || []) : (taskMap[wr.id] || []);
     return tasks.some(t => {
       if (t.assigneeId === this.user.id || t.assignedTo === this.user.id) return true;
@@ -343,14 +345,14 @@ const Auth = {
       if (d.linkedWorkRequestId) {
         return wr && this.canViewWr(wr);
       }
-      return d.requestedBy === this.user.id;
+      return d.requestedBy === this.user.id || d.createdBy === this.user.id;
     }
     // Staff users can see WR-linked disbursements if they can view the WR,
     // or non-linked disbursements they personally requested.
     if (d.linkedWorkRequestId) {
       return wr && this.canViewWr(wr);
     }
-    return d.requestedBy === this.user.id;
+    return d.requestedBy === this.user.id || d.createdBy === this.user.id;
   },
 
   switchEntity(entity) {

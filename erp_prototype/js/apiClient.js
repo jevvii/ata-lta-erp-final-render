@@ -262,7 +262,11 @@
         throw conflictErr;
       }
 
-      throw new Error(body.detail || `HTTP ${res.status}`);
+      const httpErr = new Error(body.detail || `HTTP ${res.status}`);
+      httpErr.status = res.status;
+      httpErr.code = body.code;
+      httpErr.data = body;
+      throw httpErr;
     }
 
     // Invalidate service worker API caches on successful mutations

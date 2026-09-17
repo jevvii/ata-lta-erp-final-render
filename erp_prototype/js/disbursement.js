@@ -2636,12 +2636,25 @@ const Disbursement = {
   },
 
   async submitForm(form) {
-    if (!validateRequiredFields(form)) return;
+    if (this._isSubmittingDisbursement) return;
+    const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('.btn-primary') || document.querySelector('button[form="disbursement-form"]');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : null;
+    this._isSubmittingDisbursement = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+    }
+
+    try {
+      if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
     const data = Object.fromEntries(new FormData(form).entries());
+    clearFieldErrors(form);
     if (!data.linkedWorkRequestId) {
-      Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+      showFieldError(form.querySelector('[name="linkedWorkRequestId"]'), 'Select a work request.');
+      focusFirstInvalidField(form);
       return;
     }
     const entity = Auth.activeEntity;
@@ -2651,7 +2664,8 @@ const Disbursement = {
 
     const amount = parseFloat(data.amount) || 0;
     if (amount <= 0) {
-      Workflow.showMessage('Validation Error', 'Please enter a disbursement amount greater than zero.', 'warning');
+      showFieldError(form.querySelector('[name="amount"]'), 'Enter an amount greater than zero.');
+      focusFirstInvalidField(form);
       return;
     }
 
@@ -2661,11 +2675,12 @@ const Disbursement = {
     const hasExistingReceipt = !isNew && (existing?.receiptFilename || null);
     const hasPrefilledReceipt = isNew && (this._prefilledOpReq?.receiptFilename || null);
     if (!receiptFile && !hasExistingReceipt && !hasPrefilledReceipt) {
-      Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+      showFieldError(receiptInput, 'Attach a receipt for this disbursement.');
       const dropzone = form.querySelector('.notion-popover-dropzone');
       if (dropzone) {
         dropzone.style.borderColor = 'var(--color-danger)';
       }
+      focusFirstInvalidField(form);
       return;
     }
 
@@ -2746,6 +2761,7 @@ const Disbursement = {
       });
 
       if (runResult.success) {
+        markPaneFormClean();
         await closeFormPanelAndRoute(targetRoute);
       } else {
         App.handleRoute();
@@ -2772,6 +2788,14 @@ const Disbursement = {
       };
       closeFormPanelAndRoute(targetRoute, msgConfig);
       return;
+    }
+    } finally {
+      this._isSubmittingDisbursement = false;
+      if (submitBtn && originalBtnHtml) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        submitBtn.innerHTML = originalBtnHtml;
+      }
     }
   },
 
@@ -2822,11 +2846,15 @@ const Disbursement = {
 
     const overlay = Workflow.showModal('Request Disbursement', wrapper);
 
+    let isSubmittingDisbReq = false;
     overlay.querySelector('#btn-cancel-disb-opreq').addEventListener('click', () => overlay.remove());
     overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', async () => {
+      if (isSubmittingDisbReq) return;
+      clearFieldErrors(overlay);
       const wrId = wrSelect.value;
       if (!wrId) {
-        Workflow.showMessage('Validation Error', 'Please select a work request.', 'warning');
+        showFieldError(wrSelect, 'Select a work request.');
+        focusFirstInvalidField(overlay);
         return;
       }
       const wr = window.apiClient.workRequestCache.getById(wrId);
@@ -2840,22 +2868,38 @@ const Disbursement = {
         notes
       };
 
-      Workflow.runBlockingArchiveAction({
-        title: 'Submitting Disbursement Request',
-        message: 'Please wait while your disbursement request is being submitted...',
-        apiCall: async () => {
-          return await window.apiClient.operationsRequests.create(record);
-        },
-        successTitle: 'Request Submitted',
-        successMessage: 'Your disbursement request has been submitted to Accounting for review.',
-        errorTitle: 'Request Failed',
-        onSuccess: async (res) => {
-          overlay.remove();
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
+      const submitBtn = overlay.querySelector('#btn-save-disb-opreq');
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmittingDisbReq = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Submitting...';
+      }
+
+      try {
+        await Workflow.runBlockingArchiveAction({
+          title: 'Submitting Disbursement Request',
+          message: 'Please wait while your disbursement request is being submitted...',
+          apiCall: async () => {
+            return await window.apiClient.operationsRequests.create(record);
+          },
+          successTitle: 'Request Submitted',
+          successMessage: 'Your disbursement request has been submitted to Accounting for review.',
+          errorTitle: 'Request Failed',
+          onSuccess: async (res) => {
+            overlay.remove();
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          }
+        });
+      } finally {
+        isSubmittingDisbReq = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origHtml;
         }
-      });
+      }
     });
   },
 
@@ -4061,6 +4105,7 @@ const Disbursement = {
               onAfterConfirm: async () => {
                 this.view = 'templates';
                 this.templateEditingId = null;
+                markPaneFormClean();
                 closeFormPanelAndRoute('#disbursement');
               }
             });
@@ -4191,6 +4236,7 @@ const Disbursement = {
       onAfterConfirm: async () => {
         this.view = 'templates';
         this.templateEditingId = null;
+        markPaneFormClean();
         closeFormPanelAndRoute('#disbursement');
         App.handleRoute();
       }

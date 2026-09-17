@@ -3400,10 +3400,27 @@ const Billing = {
       }
       updateTasks();
       updateTransmittals();
+      if (!inv) {
+        const derivedEntity = wr?.entity || (entity !== 'ALL' ? entity : 'ATA');
+        this.nextInvoiceNumber(derivedEntity, this.currentListPage || 1)
+          .then((n) => {
+            if (numInput) numInput.value = n;
+          })
+          .catch(() => {});
+      }
     });
 
     clientSel.addEventListener("change", () => {
       updateTransmittals();
+      if (!inv) {
+        const selClient = allClients.find((c) => c.id === clientSel.value);
+        const derivedEntity = selClient?.entity || (entity !== 'ALL' ? entity : 'ATA');
+        this.nextInvoiceNumber(derivedEntity, this.currentListPage || 1)
+          .then((n) => {
+            if (numInput) numInput.value = n;
+          })
+          .catch(() => {});
+      }
     });
 
     updateTasks();
@@ -3593,6 +3610,18 @@ const Billing = {
     });
     row.appendChild(removeBtn);
 
+    // QoL 6.2: Tab on the last field of the last row appends the next row.
+    amtIn.addEventListener("keydown", (e) => {
+      if (e.key !== "Tab" || e.shiftKey) return;
+      const rowsNow = container.querySelectorAll(".notion-line-item-row");
+      if (rowsNow[rowsNow.length - 1] !== row) return;
+      if (!descIn.value.trim() && !amtIn.value.trim()) return;
+      e.preventDefault();
+      this.addLineItemRow(container);
+      const allRows = container.querySelectorAll(".notion-line-item-row");
+      allRows[allRows.length - 1]?.querySelector(".item-desc")?.focus();
+    });
+
     container.appendChild(row);
   },
 
@@ -3618,18 +3647,21 @@ const Billing = {
   },
 
   async _legacyNextInvoiceNumber(entity, page = 1) {
+    let resolvedEntity = entity;
+    if (!resolvedEntity || resolvedEntity === "ALL") {
+      resolvedEntity = (typeof Auth !== "undefined" && (Auth.user?.entities || []).find(e => e !== "ALL")) || "ATA";
+    }
     const year = new Date().getFullYear();
-    const prefix = entity + "-SI-" + year + "-";
+    const prefix = resolvedEntity + "-SI-" + year + "-";
     try {
-      // Scan only the current/most-recent page for the latest sequential number.
       const list = await this.fetchInvoices({
         page,
-        limit: 1,
+        limit: 500,
         sortBy: "createdAt",
         sortOrder: "desc",
         includeDeleted: true,
       });
-      const maxNum = list
+      const maxNum = (list || [])
         .filter(
           (inv) => inv.invoiceNumber && inv.invoiceNumber.startsWith(prefix),
         )
@@ -3646,47 +3678,63 @@ const Billing = {
   },
 
   async submitForm(form) {
-    if (!validateRequiredFields(form)) return;
+    if (this._isSubmittingBilling) return;
+    const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('.btn-primary') || document.querySelector('button[form="invoice-form"]');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : null;
+    this._isSubmittingBilling = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
+    }
+
+    try {
+      if (!validateRequiredFields(form)) return;
     const isResubmitting =
       typeof PendingChanges !== "undefined" && PendingChanges.editingPendingId;
 
-    // Validate line items: at least one complete row, no partially-filled rows.
+    // Validate line items inline: at least one complete row, no partially-filled rows.
+    clearFieldErrors(form);
     const itemRows = form.querySelectorAll(".notion-line-item-row");
     let validItemCount = 0;
     let hasPartialItem = false;
     itemRows.forEach((row) => {
-      const desc = row.querySelector(".item-desc")?.value.trim() || "";
-      const amt = parseFloat(row.querySelector(".item-amt")?.value) || 0;
+      const descField = row.querySelector(".item-desc");
+      const amtField = row.querySelector(".item-amt");
+      const desc = descField?.value.trim() || "";
+      const amt = parseFloat(amtField?.value) || 0;
       if (desc && amt > 0) {
         validItemCount++;
       } else if (desc || amt > 0) {
         hasPartialItem = true;
+        if (!desc) showFieldError(descField, "Description is required.");
+        if (!(amt > 0)) showFieldError(amtField, "Enter an amount greater than zero.");
       }
     });
     if (hasPartialItem) {
-      Workflow.showMessage(
-        "Validation Error",
-        "Each line item must have both a description and a valid amount greater than zero.",
-        "warning",
-      );
+      focusFirstInvalidField(form);
       return;
     }
     if (validItemCount === 0) {
-      Workflow.showMessage(
-        "Validation Error",
-        "Please add at least one line item with a description and a valid amount.",
-        "warning",
-      );
+      const firstRow = itemRows[0];
+      if (firstRow) {
+        showFieldError(firstRow.querySelector(".item-desc"), "Add at least one line item.");
+        showFieldError(firstRow.querySelector(".item-amt"), "Enter an amount greater than zero.");
+        focusFirstInvalidField(form);
+      } else {
+        Workflow.showMessage(
+          "Validation Error",
+          "Please add at least one line item with a description and a valid amount.",
+          "warning",
+        );
+      }
       return;
     }
 
     const data = Object.fromEntries(new FormData(form).entries());
     if (!data.workRequestId) {
-      Workflow.showMessage(
-        "Validation Error",
-        "Please select a work request.",
-        "warning",
-      );
+      showFieldError(form.querySelector('[name="workRequestId"]'), "Select a work request.");
+      focusFirstInvalidField(form);
       return;
     }
     const activeEntity = Auth.activeEntity;
@@ -3860,6 +3908,7 @@ const Billing = {
             Dashboard.invalidateCache();
           }
           this._endSkipGeneration(skipGeneration);
+          markPaneFormClean();
           await closeFormPanelAndRoute(targetRoute);
         },
       });
@@ -3951,6 +4000,7 @@ const Billing = {
           this.prefilledRequestId = null;
           this.prefilledWrId = null;
           this.prefilledClientId = null;
+          markPaneFormClean();
           await closeFormPanelAndRoute(targetRoute);
         },
         onAfterConfirm: async () => {
@@ -3970,6 +4020,14 @@ const Billing = {
           await triggerSyncReload(targetRoute, msgConfig);
         },
       });
+    }
+    } finally {
+      this._isSubmittingBilling = false;
+      if (submitBtn && originalBtnHtml) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        submitBtn.innerHTML = originalBtnHtml;
+      }
     }
   },
 
@@ -4202,16 +4260,16 @@ const Billing = {
       .querySelector("#btn-cancel-opreq")
       .addEventListener("click", () => overlay.remove());
 
+    let isSubmittingReq = false;
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (isSubmittingReq) return;
 
       const wrId = wrSelect.value;
+      clearFieldErrors(form);
       if (!wrId) {
-        Workflow.showMessage(
-          "Validation Error",
-          "Please select a work request.",
-          "warning",
-        );
+        showFieldError(wrSelect, "Select a work request.");
+        focusFirstInvalidField(form);
         return;
       }
       const wr = window.apiClient.workRequestCache.getById(wrId);
@@ -4219,11 +4277,8 @@ const Billing = {
       const amtStr = amtIn.value;
       const amount = parseFloat(amtStr.replace(/[₱$,\s]/g, "")) || 0;
       if (amount <= 0) {
-        Workflow.showMessage(
-          "Validation Error",
-          "Please enter a valid billing amount.",
-          "warning",
-        );
+        showFieldError(amtIn, "Enter a valid billing amount greater than zero.");
+        focusFirstInvalidField(form);
         return;
       }
 
@@ -4241,23 +4296,39 @@ const Billing = {
         receiptFilename: receiptFile ? receiptFile.name : null,
       };
 
-      Workflow.runBlockingArchiveAction({
-        title: "Submitting Billing Request",
-        message: "Please wait while your billing request is being submitted...",
-        apiCall: async () => {
-          return await window.apiClient.operationsRequests.create(record);
-        },
-        successTitle: "Request Submitted",
-        successMessage:
-          "Your invoice request has been submitted to Accounting for review.",
-        errorTitle: "Request Failed",
-        onSuccess: async (res) => {
-          overlay.remove();
-        },
-        onAfterConfirm: async () => {
-          App.handleRoute();
-        },
-      });
+      const submitBtn = footer.querySelector('button[type="submit"]') || form.querySelector('button[type="submit"]');
+      const origHtml = submitBtn ? submitBtn.innerHTML : null;
+      isSubmittingReq = true;
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Submitting...';
+      }
+
+      try {
+        await Workflow.runBlockingArchiveAction({
+          title: "Submitting Billing Request",
+          message: "Please wait while your billing request is being submitted...",
+          apiCall: async () => {
+            return await window.apiClient.operationsRequests.create(record);
+          },
+          successTitle: "Request Submitted",
+          successMessage:
+            "Your invoice request has been submitted to Accounting for review.",
+          errorTitle: "Request Failed",
+          onSuccess: async (res) => {
+            overlay.remove();
+          },
+          onAfterConfirm: async () => {
+            App.handleRoute();
+          },
+        });
+      } finally {
+        isSubmittingReq = false;
+        if (submitBtn && origHtml) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = origHtml;
+        }
+      }
     });
   },
 

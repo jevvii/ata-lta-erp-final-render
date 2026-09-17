@@ -302,7 +302,7 @@ const canViewWorkRequest = (wr, user, taskMap) => {
   if (!user) return false;
   if (user.role === 'Admin') return true;
   if (isBackOffice(user)) return true;
-  if (wr.submitted_by === user.id || wr.requested_by === user.id) return true;
+  if (wr.submitted_by === user.id || wr.requested_by === user.id || wr.assigned_to === user.id) return true;
   const tasks = taskMap.get(wr.id) || [];
   return tasks.some((t) => {
     if (t.assignee_id === user.id || t.assignee_name === user.name) return true;
@@ -375,7 +375,7 @@ const listWorkRequests = async ({
     const allWrIds = (data || []).map((r) => r.id);
     allTaskMap = await loadTasksForWorkRequests(allWrIds);
     visibleRows = (data || []).filter((row) => {
-      if (row.submitted_by === user.id || row.requested_by === user.id) return true;
+      if (row.submitted_by === user.id || row.requested_by === user.id || row.assigned_to === user.id) return true;
       const tasks = allTaskMap.get(row.id) || [];
       return tasks.some((t) => t.assignee_id === user.id || t.assignee_name === user.name);
     });
@@ -453,33 +453,73 @@ const listWorkRequests = async ({
   };
 };
 
-const createWorkRequest = async ({ entityId, data, user }) => {
-  const id = data.id && isValidUUID(data.id) ? data.id : randomUUID();
-  const now = new Date().toISOString();
-  const record = {
-    id,
-    entity_id: entityId,
-    client_id: data.clientId,
-    title: data.title,
-    description: data.description || null,
-    status: data.status || 'Draft',
-    priority: data.priority || 'Normal',
-    requested_by: data.requestedBy || user.id,
-    due_date: data.dueDate || null,
-    created_at: now,
-    updated_at: now,
-  };
+// In-flight mutex map to guarantee idempotency against concurrent double-submits
+const inFlightWorkRequests = new Map();
 
-  const { error } = await supabaseAdmin.from('work_requests').insert(record);
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Unable to create work request',
-    });
+const createWorkRequest = async ({ entityId, data, user }) => {
+  const reqBy = data.requestedBy || user?.id;
+  const titleClean = (data.title || '').trim();
+  const dedupeKey = `${entityId}:${reqBy || ''}:${data.clientId || ''}:${titleClean}`;
+
+  if (inFlightWorkRequests.has(dedupeKey)) {
+    return inFlightWorkRequests.get(dedupeKey);
   }
 
-  return getWorkRequestById({ id, entityId, user });
+  const creationPromise = (async () => {
+    try {
+      // Deduplication guard against rapid double-clicks (within 5 seconds)
+      const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
+      let dupQuery = supabaseAdmin
+        .from('work_requests')
+        .select('id')
+        .eq('entity_id', entityId)
+        .eq('client_id', data.clientId)
+        .eq('title', data.title)
+        .is('deleted_at', null)
+        .gte('created_at', fiveSecondsAgo);
+
+      if (reqBy) {
+        dupQuery = dupQuery.eq('requested_by', reqBy);
+      }
+
+      const { data: existingDups } = await dupQuery.limit(1);
+      if (existingDups && existingDups.length > 0) {
+        return getWorkRequestById({ id: existingDups[0].id, entityId, user });
+      }
+
+      const id = data.id && isValidUUID(data.id) ? data.id : randomUUID();
+      const now = new Date().toISOString();
+      const record = {
+        id,
+        entity_id: entityId,
+        client_id: data.clientId,
+        title: data.title,
+        description: data.description || null,
+        status: data.status || 'Draft',
+        priority: data.priority || 'Normal',
+        requested_by: data.requestedBy || user.id,
+        due_date: data.dueDate || null,
+        created_at: now,
+        updated_at: now,
+      };
+
+      const { error } = await supabaseAdmin.from('work_requests').insert(record);
+      if (error) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Unable to create work request',
+        });
+      }
+
+      return getWorkRequestById({ id, entityId, user });
+    } finally {
+      inFlightWorkRequests.delete(dedupeKey);
+    }
+  })();
+
+  inFlightWorkRequests.set(dedupeKey, creationPromise);
+  return creationPromise;
 };
 
 const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) => {

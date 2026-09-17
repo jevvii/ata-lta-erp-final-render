@@ -1,0 +1,1545 @@
+ATA & LTA ENTERPRISE RESOURCE PLANNING (ERP) SYSTEM
+
+USER ROLES, ACCESS CONTROL & VIEW PERMISSIONS MATRIX
+
+Standard Technical Specification: Security Architecture, Role-Based Access Control (RBAC), Universal Dual-Entity Scoping, Row-Level View Rules, and Two-Phase Mutation Review Gates
+
+Document Control Property
+
+Specification Details
+
+Document Identifier
+
+DOC-SEC-RBAC-2026-V1
+
+System & Version
+
+ATA & LTA Accounting Firm ERP Platform — Monorepo v0.1.0
+
+Target Codebase Directories
+
+/backend (Express API), /erp_prototype (Vanilla JS SPA), /docs
+
+Database Architecture
+
+PostgreSQL 15.8 (AWS ap-southeast-1 / Supabase) with 28 relational tables
+
+Authorization Model
+
+Hybrid Dual-Tier RBAC: Primary Roles + Department Allowlist + Universal Dual Scoping
+
+Entity Scoping Architecture
+
+All User Roles Support Dual Entity Scope ['ATA', 'LTA'] or Single Entity Scope
+
+Authentication Engine
+
+Supabase Auth (GoTrue JWT) + 5-Minute In-Memory Profile Caching
+
+Security Classification
+
+Confidential — Internal Technical Architecture & System Governance
+
+Publication / Baseline Date
+
+September 2026
+
+Monorepo Governance
+
+Technical Specification (Strictly Uncommitted Document Directive)
+
+1. Executive Summary & Authorization Architecture
+
+This document establishes the definitive, system-wide Role-Based Access Control (RBAC), Multi-Tenant Scoping, and Record-Level View Permissions Matrix for the ATA & LTA Enterprise Resource Planning (ERP) platform. The platform is designed specifically for dual accounting entities—Alliance Tax & Accounting (ATA) and Ledger Tax & Accounting (LTA)—to deliver end-to-end management of client onboarding, work request workflows, task tracking, accounts receivable (billing), accounts payable (disbursements), document custody (DMS), transmittals, operational requests, and regulatory compliance reporting.
+
+1.1 The Dual-Tier Operational Architecture & Universal Dual Scoping
+
+The platform strictly bifurcates system actors into two operational tiers, ensuring high-level executive governance while maintaining data encapsulation across field personnel. A core architectural principle of the ATA & LTA ERP is that all user roles can be assigned dual-entity scope (['ATA', 'LTA']):
+
+1. Managerial & Oversight Tier:  Comprises the System Administrator (Admin) and General Managers (Manager / Management department). Designed for strategic firm-wide oversight, cross-entity performance monitoring, executive analytics, financial release approvals, phase routing authorization, and exception dispute resolution. Managerial users with dual-entity access possess the privilege to view aggregated multi-tenant data via the Consolidated Firm View ('ALL').
+
+2. Execution & Staff Tier:  Comprises Accounting, Operations, Documentation, and Human Resources (HR) specialists. Designed for daily operational task execution under strict data encapsulation. All staff roles can be configured with dual-entity access (['ATA', 'LTA']) or single-entity access (['ATA'] or ['LTA']). When granted dual-entity access, staff members can switch active workspace between ATA and LTA at will to execute duties across both entities, while maintaining complete data separation between the two tenant databases.
+
+1.2 The Hybrid RBAC Engine
+
+The authorization engine operates as a hybrid intersection of two primary database-driven concepts defined in backend/src/lib/permissions.js and mirrored on the client in erp_prototype/js/auth.js:
+
+• Primary System Role:  Stored in the 'users.role' column (Admin, Manager, Accounting, Operations, Documentation, HR). Identifies user persona, default navigation layout, and fallback department association.
+
+• Department Membership Allowlist:  Stored in the normalized 'user_departments' junction table referencing the 'departments' table (Management, Accounting, Operations, Documentation, HR). Department assignments dictate granular functional capabilities.
+
+• Effective Permissions Union:  A user's effective permission set is computed as the mathematical union of all permissions granted across all assigned departments, plus the primary role mapped to its department equivalent (e.g., role 'Manager' maps to 'Management').
+
+• Administrator Superuser Override:  A user possessing the 'Admin' role automatically bypasses individual department assignment checks and receives the superset of all department permissions, in addition to exclusive system administrative capabilities (users:manage, clients:edit, transmittal:approve, bypass_review:*, approve_change:*).
+
+1.3 Five-Layer Defense-in-Depth Authorization Stack
+
+Security enforcement is implemented across five discrete layers to ensure zero-trust verification on every request:
+
+1. Authentication Gateway (middleware/auth.js):  Verifies Supabase Bearer JWT tokens. Loads internal ERP profiles and active status. Caches user profiles in Node.js memory for 5 minutes (PROFILE_CACHE_TTL_MS = 300,000) with a 500-entry capacity cap.
+
+2. Multi-Tenant Scoping Gateway (middleware/entityScope.js):  Inspects the 'X-Active-Entity' HTTP header. Validates tenant access against user's permitted entities ('ATA', 'LTA'). Validates that consolidated view ('ALL') is restricted solely to managerial users with dual-entity grants.
+
+3. Route-Level RBAC Guards (middleware/rbac.js):  Middleware factory evaluating required permissions (e.g., 'clients:view', 'disbursement:create') against the user's computed effective permission set. Supports wildcard matches (e.g., 'approve_change:*').
+
+4. Database Stored Procedure Gates (PostgreSQL RPCs):  State-machine transitions (e.g., invoice_record_payment, disbursement_transition, pending_change_approve) are enforced via PostgreSQL PL/pgSQL functions executing under ACID row-level locks.
+
+5. Reactive Frontend UI Engine (erp_prototype/js):  Client-side authorization service (Auth.can, Auth.isManagerial) dynamically renders UI navigation, enables/disables action buttons, filters sensitive table columns, and prevents unauthorized DOM interactions.
+
+2. Master Roles & Department Topology Matrix
+
+The table below provides a comprehensive summary of all valid system roles, their operational tier, entity scoping capabilities, department mappings, primary responsibilities, review gate authority, and core constraints. Crucially, all roles support dual-entity assignment (['ATA', 'LTA']).
+
+Role Name
+
+Functional Tier
+
+Primary Dept
+
+Entity Scoping Options
+
+Primary Purpose & Operational Focus
+
+Approval Authority
+
+Key Constraints
+
+Admin
+
+Managerial
+
+Superuser (All)
+
+Dual (ATA & LTA)
+
+Firm-wide oversight, user account provisioning, audit log inspection, system configuration.
+
+Approves all WRs, routing, disbursements, transmittals, and user modifications.
+
+None. Superuser bypass on all review gates and tenant filters.
+
+Manager
+
+Managerial
+
+Management
+
+Dual (ATA & LTA) or Single
+
+Operational oversight, work request management, team workflow monitoring, client coordination.
+
+Approves staff tasks. Reviews operations requests. Cannot approve WR phase routing.
+
+Cannot file disbursements or edit invoices directly. Client records are view-only.
+
+Accounting
+
+Execution / Staff
+
+Accounting
+
+Dual (ATA & LTA) or Single
+
+Accounts receivable (invoicing, payments), accounts payable (filing disbursements, expense vouchers).
+
+Approves pending changes for invoices and disbursements (Four-Eyes Principle).
+
+Cannot route phases, manage users, edit clients, or access the Consolidated View ('ALL').
+
+Operations
+
+Execution / Staff
+
+Operations
+
+Dual (ATA & LTA) or Single
+
+Field processing, agency permits (BIR, SEC, LGU), task checklist completion, time logging.
+
+None. Submits operations requests and task modification proposals.
+
+Cannot create invoices or file disbursements directly. View-only for client profiles.
+
+Documentation
+
+Execution / Staff
+
+Documentation
+
+Dual (ATA & LTA) or Single
+
+Document custody, transmittal generation, delivery dispatching, DMS lifecycle transitions.
+
+None. Transmittals and status markings require Admin/Manager approval.
+
+Cannot file disbursements, edit billing invoices, modify clients, or manage users.
+
+HR
+
+Execution / Staff
+
+HR
+
+Dual (ATA & LTA) or Single
+
+Workforce allocation, staff time tracking verification, internal administrative request processing.
+
+None. Submits operations requests for billing or disbursement allocation.
+
+Cannot file expenses, edit clients, manage users, or approve structural modifications.
+
+2.1 Granular Role Profiles & Segregation of Duties
+
+The ATA & LTA ERP enforces strict segregation of duties to satisfy statutory auditability, professional standards, and operational risk mitigation:
+
+1. Administrator (Admin):  Holds full administrative authority across all twelve modules. Responsible for provisioning accounts, assigning departments, configuring entity access (dual or single), and reviewing audit trails. Bypasses all review gates directly.
+
+2. General Manager (Manager):  Manages end-to-end client engagements. Can be assigned dual entity scope to monitor both ATA and LTA, or single entity. Creates work requests (which stage for Admin approval). Approves tasks submitted by staff. Monitors team time logs. Can request invoices from Accounting and request disbursements. Can mark invoices as paid and disbursements as released (subject to Admin approval). Cannot edit or create financial records directly.
+
+3. Senior Accountant (Accounting):  Dedicated financial controller. Can be assigned dual entity scope to manage finances for both ATA and LTA, or single entity. Possesses exclusive authority to generate invoices, apply line items, record client payments, manage retainer billing templates, and file disbursement expense requests. Acts as an independent review authority for invoice and disbursement modifications submitted by other staff.
+
+4. Operations Specialist (Operations):  Direct operational executor. Can be assigned dual entity scope to handle operational permits and compliance for both ATA and LTA clients, or single entity. Completes task checklists, uploads verification documents, logs worker hours, and flags task dependencies. Submits official operations requests when billing or disbursement funds are required for field execution.
+
+5. Documentation Officer (Documentation):  Manages official client and agency documentation. Frequently assigned dual entity scope to maintain document custody across both firms. Generates transmittal records for document release and tracks courier delivery acknowledgments. Manages document lifecycle states (collected -> active -> transmitted -> inactive).
+
+6. Human Resources Specialist (HR):  Human resource administrative officer. Can be assigned dual entity scope to oversee workforce management for both firms, or single entity. Monitors staff allocation, reviews task time logs for workforce productivity, initiates inter-departmental operations requests, and reviews monthly pending workflow analytics.
+
+3. Multi-Tenant Entity Access Scoping Matrix
+
+The ATA & LTA platform implements a multi-tenant data isolation model within a unified PostgreSQL database. Tenant separation is enforced via the 'entities' array on user profiles and the 'entity' / 'entity_id' column on database tables.
+
+3.1 Universal Dual-Entity Capability
+
+A foundational architectural capability of the platform is that all user roles—regardless of operational tier—can be provisioned with dual-entity scope (entities = ARRAY['ATA', 'LTA']):
+
+• Flexible Configuration:  The database schema ('users.entities text[]') and administrative user endpoints (/v1/admin/users) enforce no restriction on entity assignments by role. Any employee in Accounting, Operations, Documentation, HR, Management, or Administration can be assigned to 'ATA' only, 'LTA' only, or both 'ATA' and 'LTA'.
+
+• Discrete Context Switching:  Any user assigned both entities is automatically provided the entity switcher dropdown in the navigation shell. Switching active entity dynamically sets the 'X-Active-Entity' header and re-scopes the entire client workspace, API queries, caches, and form selectors.
+
+• Consolidated ('ALL') vs Discrete Switching:  While dual-entity staff can switch between ATA and LTA discretely to execute work in either firm, accessing the aggregated Consolidated Firm View ('ALL') is restricted to managerial users. Staff members manage each entity's records independently to preserve clean accounting and audit ledgers.
+
+3.2 Scoping Gateway & The 'ALL' Consolidated View Rules
+
+Tenant scoping is evaluated by backend/src/middleware/entityScope.js on every authenticated HTTP request via the 'X-Active-Entity' header. Strict enforcement rules apply:
+
+1. Automatic Resolution:  If the client omits 'X-Active-Entity' or sends an invalid entity, the system automatically resolves to the user's first assigned entity. If the user has no valid assigned entity, the request is rejected with 400 Bad Request.
+
+2. Single-Tenant Isolation:  Single-entity users assigned only to 'ATA' or 'LTA' can never access data belonging to the other entity. Requesting an unassigned entity triggers an immediate 403 Forbidden error.
+
+3. Consolidated View ('ALL') Prerequisites:  Requesting 'ALL' requires the user to satisfy TWO mandatory prerequisites: (a) The user must hold a managerial role ('Admin', 'Manager', or 'Management' department), AND (b) The user must have explicit access to both 'ATA' and 'LTA' in their 'entities' array. If either condition is unmet, the gateway returns 403 Forbidden ('Consolidated view requires a managerial role' or 'Consolidated view requires access to both ATA and LTA entities').
+
+Role Name
+
+Permitted Entity Assignments
+
+Access ATA?
+
+Access LTA?
+
+Switch Active Entity?
+
+Access Consolidated View ('ALL')?
+
+Tenant Isolation Enforcement
+
+Admin
+
+Always Dual ['ATA', 'LTA']
+
+Full Access
+
+Full Access
+
+Yes (Dropdown: ATA / LTA / ALL)
+
+Permitted (Full Consolidated Access)
+
+Superuser assigned to all entities.
+
+Manager
+
+Dual ['ATA', 'LTA'] or Single ['ATA'] / ['LTA']
+
+If Assigned
+
+If Assigned
+
+Yes (when assigned Dual)
+
+Permitted ONLY IF assigned Dual ['ATA', 'LTA']
+
+403 Forbidden if single-entity manager requests 'ALL' or unassigned entity.
+
+Accounting
+
+Dual ['ATA', 'LTA'] or Single ['ATA'] / ['LTA']
+
+If Assigned
+
+If Assigned
+
+Yes (when assigned Dual)
+
+Prohibited (Staff tier; 403 Forbidden)
+
+When Dual: Switches between ATA & LTA. Single: Locked to assigned entity.
+
+Operations
+
+Dual ['ATA', 'LTA'] or Single ['ATA'] / ['LTA']
+
+If Assigned
+
+If Assigned
+
+Yes (when assigned Dual)
+
+Prohibited (Staff tier; 403 Forbidden)
+
+When Dual: Switches between ATA & LTA. Single: Locked to assigned entity.
+
+Documentation
+
+Dual ['ATA', 'LTA'] or Single ['ATA'] / ['LTA']
+
+If Assigned
+
+If Assigned
+
+Yes (when assigned Dual)
+
+Prohibited (Staff tier; 403 Forbidden)
+
+When Dual: Switches between ATA & LTA. Single: Locked to assigned entity.
+
+HR
+
+Dual ['ATA', 'LTA'] or Single ['ATA'] / ['LTA']
+
+If Assigned
+
+If Assigned
+
+Yes (when assigned Dual)
+
+Prohibited (Staff tier; 403 Forbidden)
+
+When Dual: Switches between ATA & LTA. Single: Locked to assigned entity.
+
+4. Module-Level Access & Functional Capabilities Matrix
+
+The table below details functional access across all twelve primary application modules. Access levels are classified as: Full Access (unrestricted create, edit, delete), View Only (read-only data access), Action Scoped (permission to execute specific task actions or requests), or Prohibited (navigation hidden, API access blocked with 403 Forbidden).
+
+Functional Module
+
+Admin
+
+Manager
+
+Accounting
+
+Operations
+
+Documentation
+
+HR
+
+Navigation & Route Guard
+
+1. Dashboard (#dashboard)
+
+Full (Firm Overview & Consolidated KPIs)
+
+Scoped / Consolidated (if dual entity)
+
+Scoped (Entity KPIs & Assigned Tasks)
+
+Scoped (Entity KPIs & Assigned Tasks)
+
+Scoped (Entity KPIs & Assigned Tasks)
+
+Scoped (Entity KPIs & Assigned Tasks)
+
+workflow:view (Open to all authenticated active users)
+
+2. Work Requests (#workflow - WR)
+
+Full (Create, Edit, Delete, Phase Route)
+
+Create (Staged), Edit (Owned), View
+
+View (Scoped to assigned tasks), Add Task
+
+View (Scoped to assigned tasks), Add Task
+
+View (Scoped to assigned tasks), Add Task
+
+View (Scoped to assigned tasks), Add Task
+
+workflow:view (Filtered by record-level view rules)
+
+3. Kanban & Tasks (#workflow - Tasks)
+
+Full (Create, Reassign, Force Transition)
+
+Create, Edit, Reassign, Approve Tasks
+
+Add Task (Staged), Update Assigned
+
+Add Task (Staged), Upload, Update Assigned
+
+Add Task (Staged), Update Assigned
+
+Add Task (Staged), Upload, Update Assigned
+
+workflow:view, workflow:task_add, workflow:edit
+
+4. Operations Requests (#admin)
+
+Full (View All, Approve, Reject)
+
+View All, Submit Billing/Disbursement
+
+View & Fulfill Billing/Disbursement Reqs
+
+Submit Billing & Disbursement Requests
+
+View Transmittal Requests
+
+Submit Billing & Disbursement Requests
+
+workflow:view (Submissions tab visible to staff)
+
+5. Clients Directory (#clients)
+
+Full (Create, Edit, Delete, Archive)
+
+View Only (Active & Archived clients)
+
+View Only (Active & Archived clients)
+
+View Only (Active clients only)
+
+View Only (Active & Archived clients)
+
+View Only (Active clients only)
+
+clients:view (Read); clients:edit (Admin only for mutations)
+
+6. Invoicing & Billing (#billing)
+
+Full (Create, Edit, Delete, Templates, Pay)
+
+View (Owned WRs), Request Invoice, Mark Paid
+
+Full (Create, Edit, Delete, Templates, Pay)
+
+View (Assigned WRs), Request Invoice
+
+View (Assigned WRs only)
+
+View (Assigned WRs), Request Invoice
+
+billing:view (Read); billing:edit (Accounting & Admin only)
+
+7. Disbursements (#disbursement)
+
+Full (Create, Edit, Delete, Approve, Fund)
+
+View (Owned WRs), Request Disb, Mark Released
+
+Create, Edit, Delete, Submit (Draft->Pending)
+
+View (Assigned WRs), Request Disbursement
+
+View Only (Assigned WRs)
+
+View (Assigned WRs), Request Disbursement
+
+disbursement:view (Nav visible only if permission granted)
+
+8. Document Custody (#dms)
+
+Full (Upload, Edit, Delete, Handover, Cross)
+
+Full (Upload, Edit, Delete, Handover, Scoped)
+
+Upload Attachments; DMS File Browser Hidden
+
+Upload Task Docs; DMS File Browser Hidden
+
+Full (Upload, Edit, Delete, Handover, Cross)
+
+Upload Attachments; DMS File Browser Hidden
+
+dms:view (Read); dms:edit / dms:handover (DMS UI Guard)
+
+9. Transmittals (#transmittal)
+
+Full (Create, Edit, Delete, Approve, Send)
+
+View (Owned WRs), Mark Sent/Ack (Staged)
+
+View Only (Entity transmittals)
+
+View (Assigned WRs), Request Transmittal
+
+Full (Create, Edit, Mark Sent/Ack, Dispatch)
+
+View (Assigned WRs), Request Transmittal
+
+transmittal:view or transmittal:request (Nav Guard)
+
+10. Reports & Analytics (#reports)
+
+Full (Analytics, Daily, Weekly, Monthly, AR)
+
+Full (Analytics, Daily, Weekly, Monthly, AR)
+
+P&L, AR Aging, Billing Collections
+
+Prohibited (Navigation hidden)
+
+Prohibited (Navigation hidden)
+
+Monthly Pending & Operational Activity
+
+reports:view (Nav link completely hidden if unassigned)
+
+11. User Management (#admin - Users)
+
+Full (Provision, Update, Disable, Assign)
+
+Prohibited (Redirected to My Submissions)
+
+Prohibited (Redirected to My Submissions)
+
+Prohibited (Redirected to My Submissions)
+
+Prohibited (Redirected to My Submissions)
+
+Prohibited (Redirected to My Submissions)
+
+users:manage (Mutations); users:view (Read Admin only)
+
+12. System Audit Logs (#admin - Audit)
+
+Full (Firm-wide filter, Date search, Export)
+
+Prohibited (Hidden from Manager)
+
+Prohibited (Hidden from Staff)
+
+Prohibited (Hidden from Staff)
+
+Prohibited (Hidden from Staff)
+
+Prohibited (Hidden from Staff)
+
+audit:view_all (Admin only; blocked on API for staff)
+
+5. Record-Level View Scoping & Data Encapsulation
+
+In addition to module-level route guards, the platform implements granular row-level data encapsulation. This ensures that staff members only interact with records directly relevant to their assigned duties, mitigating unauthorized visibility into sensitive client billing, overhead expenses, and unrelated legal casework.
+
+5.1 Work Request Visibility Engine (canViewWr & canViewWrWithTasks)
+
+When a user queries work requests via the API (/v1/work-requests) or navigates the Kanban board in the frontend client, record visibility is filtered using the following deterministic logic (erp_prototype/js/auth.js):
+
+1. Administrator:  User can view all work requests within their active entity scope without restriction.
+
+2. Managerial Users (Manager / Management dept):  User can view a work request IF AND ONLY IF they are the submitter (wr.submittedBy === user.id) OR the designated requester (wr.requestedBy === user.id). Unrelated work requests managed by other personnel remain invisible.
+
+3. Staff-Level Users (Accounting, Operations, Documentation, HR):  A work request card is rendered IF AND ONLY IF the user is explicitly assigned to at least one task or checklist item within that work request. The engine checks: (a) task.assigneeId === user.id, (b) task.assignedTo === user.id, (c) task.assigneeName === user.name, (d) task.coAssignees includes user.name, or (e) task.checklist item assigneeName === user.name. If no task matches, the entire work request card and its timeline are concealed.
+
+5.2 Financial Records Visibility Engine (Disbursements & Billing)
+
+• Disbursement Scoping (canViewDisbursement):  Admin and Accounting personnel can view all disbursement records within their assigned active entity. Managerial users can view disbursements linked to work requests they own or disbursements they personally requested. Staff users can only view disbursements linked to work requests they are assigned to, disbursements they personally requested, or records that have completed processing and reached 'Released', 'Funded', or 'Rejected' states.
+
+• Invoicing Scoping (getUserConcernedWorkRequestIds):  Admin and Accounting personnel can view all client invoices and accounts receivable aging reports within their active entity. Managerial and staff users can only view invoices linked to work requests they have permission to view. Standalone retainer invoices or firm overhead invoices without a linked work request are strictly invisible to non-accounting staff.
+
+Resource / Record Type
+
+Administrator
+
+General Manager
+
+Accounting Staff
+
+Operations Staff
+
+Documentation Staff
+
+HR Staff
+
+Client Profiles
+
+All active entity clients (Active & Archived)
+
+All active entity clients (View Only)
+
+All active entity clients (View Only)
+
+Active clients with assigned WRs
+
+All active entity clients (View Only)
+
+Active clients with assigned WRs
+
+Work Requests (WR)
+
+All WRs across active entity
+
+WRs submitted or requested by Manager
+
+Encapsulated: Assigned tasks only
+
+Encapsulated: Assigned tasks only
+
+Encapsulated: Assigned tasks only
+
+Encapsulated: Assigned tasks only
+
+Tasks & Checklists
+
+All tasks across all WRs
+
+All tasks under accessible WRs
+
+Assigned tasks (Editable); Others (View)
+
+Assigned tasks (Editable); Others (View)
+
+Assigned tasks (Editable); Others (View)
+
+Assigned tasks (Editable); Others (View)
+
+Billing Invoices
+
+All active entity invoices & AR Aging
+
+Invoices linked to owned WRs
+
+All active entity invoices & AR Aging
+
+Invoices linked to assigned WRs
+
+Invoices linked to assigned WRs
+
+Invoices linked to assigned WRs
+
+Disbursements (AP)
+
+All active entity disbursements
+
+Disbursements linked to owned WRs / self
+
+All active entity disbursements
+
+Linked WR / Self-requested / Released
+
+Linked WR / Self-requested / Released
+
+Linked WR / Self-requested / Released
+
+DMS Documents
+
+All active entity files + Handover
+
+All active entity files + Handover
+
+Task/voucher attachments only
+
+Task attachments only
+
+All active entity files + Handover
+
+Task attachments only
+
+Transmittals
+
+All active entity transmittals
+
+Transmittals linked to owned WRs
+
+Transmittals linked to entity WRs
+
+Transmittals linked to assigned WRs
+
+All active entity transmittals
+
+Transmittals linked to assigned WRs
+
+Operations Requests
+
+All pending & fulfilled requests
+
+Owned requests & team requests
+
+All billing/disbursement requests
+
+Self-submitted requests only
+
+Self-submitted requests only
+
+Self-submitted requests only
+
+Audit Logs
+
+All firm audit logs (Cross-entity)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+User Directory
+
+All users & credential settings
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+Prohibited (Hidden)
+
+6. Two-Phase Pending Approvals & Four-Eyes Principle Matrix
+
+To prevent unauthorized state corruption, fraudulent disbursements, or uncoordinated client commitments, structural modifications are gated by a two-phase staging mechanism backed by the 'pending_changes' table and enforced via backend/src/modules/admin/pendingApprovalsController.js.
+
+6.1 Staged Mutation Lifecycle
+
+1. Submission & Staging:  When a non-admin user creates or edits a critical record, the payload is serialized into JSON and inserted into 'pending_changes' with status 'pending'. The live production table remains unmodified.
+
+2. Review & Verification:  Authorized reviewers inspect the visual side-by-side diff between the current database state and proposedData in the Admin/Submissions portal.
+
+3. Atomic Execution:  An approver triggers the 'pending_change_approve' PostgreSQL RPC, which atomically transitions the status to 'approved' and executes the underlying table mutation under an ACID database transaction.
+
+4. Mandatory Rejection Reason:  If rejected, the reviewer must provide a mandatory written reason. Status flips to 'rejected', and the submitter is notified via their 'My Submissions' tab.
+
+6.2 Segregation of Duties & Self-Approval Prevention
+
+The system strictly enforces the Four-Eyes Principle: no user (with the sole exception of the Administrator) can approve their own submission. The frontend check 'pc.submittedBy === Auth.user.id' completely disables approval buttons, and the backend returns 403 Forbidden if a submitter attempts to self-approve. Furthermore, approval authority is segregated by domain:
+
+• Workflow Task Gate:  Only Managers and Admins can approve tasks added to work requests by staff.
+
+• Financial Records Gate:  Only Accounting staff and Admins can approve invoice creation, line item edits, or disbursement expense filings.
+
+• Executive Governance Gate:  Only Admins can approve new work requests submitted by Managers, phase routing transitions, client profile edits, and transmittal releases.
+
+Target Table / Resource
+
+Mutation Action
+
+Submitter Role(s)
+
+Review Gate Required?
+
+Direct Bypass Role(s)
+
+Authorized Approver Role(s)
+
+Self-Approval Policy
+
+workRequests
+
+Create new Work Request
+
+Manager
+
+Yes (Staged in pending_changes)
+
+Admin
+
+Admin only
+
+Strictly Prohibited
+
+workRequests
+
+Phase Routing Transition
+
+Manager, Staff
+
+Yes (Admin approval required)
+
+Admin
+
+Admin only
+
+Strictly Prohibited
+
+tasks
+
+Add Task to Work Request
+
+Staff (Accs, Ops, Docs, HR)
+
+Yes (Staged in pending_changes)
+
+Admin, Manager
+
+Manager, Admin
+
+Strictly Prohibited
+
+tasks
+
+Update Task Status
+
+Assigned Staff
+
+No (Direct state update if assigned)
+
+Admin, Manager
+
+Self (Assigned worker only)
+
+Permitted for assigned worker
+
+clients
+
+Create, Edit, Archive Client
+
+Manager, Staff
+
+Prohibited (Blocked on API)
+
+Admin
+
+Admin only
+
+N/A — Admin exclusive mutation
+
+invoices
+
+Create / Edit Invoice Items
+
+Manager, Operations, HR
+
+Yes (Submit Operations Request)
+
+Accounting, Admin
+
+Accounting, Admin
+
+Strictly Prohibited
+
+invoices
+
+Mark Invoice as Paid
+
+Manager
+
+Yes (Staged in pending_changes)
+
+Accounting, Admin
+
+Accounting, Admin
+
+Strictly Prohibited
+
+disbursements
+
+File Expense / Create Disb
+
+Manager, Operations, HR
+
+Yes (Submit Operations Request)
+
+Accounting, Admin
+
+Accounting, Admin
+
+Strictly Prohibited
+
+disbursements
+
+Approve & Release Funds
+
+Accounting
+
+Yes (Requires Admin confirmation)
+
+Admin
+
+Admin only
+
+Strictly Prohibited
+
+transmittals
+
+Create / Edit Transmittal
+
+Manager, Operations
+
+Yes (Request from Documentation)
+
+Documentation, Admin
+
+Documentation, Admin
+
+Strictly Prohibited
+
+transmittals
+
+Mark Transmittal as Sent
+
+Documentation, Manager
+
+Yes (Admin approval required)
+
+Admin
+
+Admin only
+
+Strictly Prohibited
+
+7. Exhaustive Technical Permission Codes Reference
+
+The table below catalogs every explicit permission code declared in backend/src/lib/permissions.js, its functional module, description, granted roles/departments, and corresponding enforcement guards.
+
+Permission Code
+
+Module
+
+Functional Capability Description
+
+Granted Roles / Depts
+
+Backend Route Guard
+
+Frontend UI Guard
+
+clients:view
+
+Clients
+
+View client directory, contact details, related entities
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/clients
+
+Nav link rendered; client table accessible
+
+clients:edit
+
+Clients
+
+Create, update, archive, and delete client profiles
+
+Admin only
+
+POST/PUT/DELETE /v1/clients
+
+Add Client button; edit/delete actions
+
+workflow:view
+
+Workflow
+
+View work requests, timeline boards, and task lists
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/work-requests
+
+Workflow nav link; board/table views
+
+workflow:edit
+
+Workflow
+
+Update work request status, title, dates, and cancel
+
+Admin, Management
+
+PUT/DELETE /v1/work-requests
+
+Edit WR modal; cancel WR button
+
+workflow:task_add
+
+Workflow
+
+Add tasks to work requests (staged for approval)
+
+Admin, Management, Accs, Ops, Docs, HR
+
+POST /v1/work-requests/:id/tasks
+
+Add Task button in WR side-pane/detail
+
+workflow:task_upload
+
+Workflow
+
+Upload document attachments directly to task checklist
+
+Admin, Operations, HR
+
+POST /v1/tasks/:id/time-logs
+
+Upload Attachment button in checklist item
+
+workflow:task_approve
+
+Workflow
+
+Approve staff-submitted tasks into active workflow
+
+Admin, Management
+
+POST /v1/admin/pending-approvals
+
+Approve Task button in Admin portal
+
+bypass_review:tasks
+
+Approvals
+
+Directly insert and update tasks without admin review
+
+Admin, Management
+
+POST /v1/work-requests/:id/tasks
+
+Task created directly without pending toast
+
+bypass_review:*
+
+Approvals
+
+Directly commit any mutation without staging gate
+
+Admin only
+
+Applied across all module endpoints
+
+All actions bypass pending_changes queue
+
+approve_change:tasks
+
+Approvals
+
+Approve pending task additions submitted by staff
+
+Admin, Management
+
+POST /v1/admin/pending-approvals
+
+Approve button in Pending Approvals
+
+approve_change:invoices
+
+Approvals
+
+Approve invoice modifications and payment records
+
+Admin, Accounting
+
+POST /v1/admin/pending-approvals
+
+Approve button in Pending Invoices
+
+approve_change:disbursements
+
+Approvals
+
+Approve disbursement expense filings and edits
+
+Admin, Accounting
+
+POST /v1/admin/pending-approvals
+
+Approve button in Pending Disbursements
+
+approve_change:*
+
+Approvals
+
+Approve any pending change in the system
+
+Admin only
+
+POST /v1/admin/pending-approvals
+
+Global approval privileges in portal
+
+billing:view
+
+Billing
+
+View invoices, invoice details, aging reports, PDFs
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/invoices
+
+Billing nav link; invoice data table
+
+billing:edit
+
+Billing
+
+Create and update invoices, line items, and adjust taxes
+
+Admin, Accounting
+
+POST/PUT /v1/invoices
+
+New Invoice button; line item editor
+
+billing:delete
+
+Billing
+
+Delete or archive unapproved invoice drafts
+
+Admin, Management, Accounting
+
+DELETE /v1/invoices/:id
+
+Delete Invoice button in detail toolbar
+
+billing:payments
+
+Billing
+
+Record payments, issue vouchers, calculate balance
+
+Admin, Management, Accounting
+
+POST /v1/invoices/:id/payments
+
+Record Payment modal; voucher PDF download
+
+billing:templates
+
+Billing
+
+Create and manage recurring retainer billing templates
+
+Admin, Management, Accounting
+
+GET/POST/PUT /v1/invoices/templates
+
+Retainer Templates tab in Billing module
+
+billing:request
+
+Billing
+
+Submit official request to Accounting to issue invoice
+
+Management, Operations, HR
+
+POST /v1/operations-requests
+
+Request Invoice button in WR and actions
+
+billing:mark_paid
+
+Billing
+
+Flag invoice as paid (triggers review gate for Manager)
+
+Admin, Management
+
+POST /v1/invoices/:id/payments
+
+Mark as Paid button in invoice details
+
+disbursement:view
+
+Disbursements
+
+View disbursements table, vouchers, expense breakdown
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/disbursements
+
+Disbursement nav link rendered in shell
+
+disbursement:create
+
+Disbursements
+
+File new expense disbursement and upload receipt
+
+Admin, Accounting
+
+POST /v1/disbursements
+
+New Disbursement button; receipt uploader
+
+disbursement:edit
+
+Disbursements
+
+Update disbursement amounts, category, payee, bank
+
+Admin, Accounting
+
+PUT /v1/disbursements/:id
+
+Edit Disbursement modal; category selector
+
+disbursement:delete
+
+Disbursements
+
+Archive or delete unreleased disbursement records
+
+Admin only
+
+DELETE /v1/disbursements/:id
+
+Delete Disbursement button
+
+disbursement:request
+
+Disbursements
+
+Submit official request to Accounting for expense fund
+
+Management, Operations, HR
+
+POST /v1/operations-requests
+
+Request Disbursement button in WR
+
+disbursement:mark_released
+
+Disbursements
+
+Approve release, record bank ref, and fund payout
+
+Admin, Management
+
+POST /v1/disbursements/:id/release
+
+Release Funds & Mark Funded buttons
+
+dms:view
+
+DMS
+
+Browse document metadata, folder counts, download files
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/documents
+
+Document links & download pre-signed URLs
+
+dms:edit
+
+DMS
+
+Update document title, category, tags, notes, archive
+
+Admin, Management, Documentation
+
+PUT /v1/documents/:id
+
+Edit Document metadata; archive button
+
+dms:delete
+
+DMS
+
+Soft-delete document records and remove storage paths
+
+Admin, Management, Documentation
+
+DELETE /v1/documents/:id
+
+Delete Document button in DMS file list
+
+dms:handover
+
+DMS
+
+Execute lifecycle handover (collected->active->trans)
+
+Admin, Management, Documentation
+
+PUT /v1/documents/:id/lifecycle
+
+Handover Document modal & state transition
+
+transmittal:view
+
+Transmittals
+
+View transmittal letters, delivery items, timestamps
+
+Admin, Management, Accs, Ops, Docs, HR
+
+GET /v1/transmittals
+
+Transmittal nav link rendered in shell
+
+transmittal:create
+
+Transmittals
+
+Draft new transmittal letter and select documents
+
+Admin, Documentation
+
+POST /v1/transmittals
+
+Create Transmittal button
+
+transmittal:edit
+
+Transmittals
+
+Update transmittal line items and recipient metadata
+
+Admin, Documentation
+
+PUT /v1/transmittals/:id
+
+Edit Transmittal button in Draft status
+
+transmittal:mark
+
+Transmittals
+
+Mark transmittal as Sent or Acknowledged by client
+
+Admin, Management, Documentation
+
+POST /v1/transmittals/:id/send
+
+Mark Sent / Mark Acknowledged buttons
+
+transmittal:approve
+
+Transmittals
+
+Approve draft transmittal for official client dispatch
+
+Admin only
+
+POST /v1/transmittals/:id/approve
+
+Approve Transmittal button in Draft status
+
+transmittal:delete
+
+Transmittals
+
+Delete un-dispatched transmittal records
+
+Admin, Management
+
+DELETE /v1/transmittals/:id
+
+Delete Transmittal button
+
+transmittal:request
+
+Transmittals
+
+Submit request to Documentation to prepare letter
+
+Operations, HR
+
+POST /v1/operations-requests
+
+Request Transmittal button in WR actions
+
+reports:view
+
+Reports
+
+View Analytics, Daily, Weekly, Monthly pending reports
+
+Admin, Management, Accounting, HR
+
+GET /v1/reports/*
+
+Reports nav link rendered; export enabled
+
+users:view
+
+Administration
+
+View user account list, departments, and audit logs
+
+Admin only
+
+GET /v1/admin/users
+
+Users and Audit tabs in Admin module
+
+users:manage
+
+Administration
+
+Create users, reset passwords, update roles/entities
+
+Admin only
+
+POST/PUT/DELETE /v1/admin/users
+
+Add User button; Edit Role dropdown
+
+audit:view_all
+
+Administration
+
+Inspect full security audit logs and export event CSV
+
+Admin only
+
+GET /v1/admin/audit
+
+Audit Log explorer and filter toolbar
+
+8. Standard Seeded User Credentials & Role Verification Guide
+
+For development, quality assurance, and automated end-to-end smoke testing, the system is seeded with standard user profiles representing each operational tier and entity scope configuration (backend/scripts/seed-staging-auth.js and erp_prototype/ERP_User_Credentials_and_Roles.docx):
+
+Role Persona
+
+Standard Email Address
+
+Default Password
+
+Entity Access Scope
+
+Assigned Department
+
+Verification Focus & Test Case Scope
+
+Dev Administrator
+
+admin@ata-lta.ph / dev-admin@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+Management (Superuser)
+
+Verifies user provisioning, audit logging, un-gated review bypass, and consolidated 'ALL' view.
+
+General Manager (Dual)
+
+manager@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+Management
+
+Verifies cross-entity monitoring, WR creation review gate, task approval, payment marking, and 'ALL' view.
+
+General Manager (Single)
+
+manager-ata@ata-lta.ph
+
+password123
+
+Single ['ATA']
+
+Management
+
+Verifies entity-locked manager behavior, blocking 'ALL' view, and ATA-specific work requests.
+
+Accounting Staff (Dual)
+
+accounting-dual@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+Accounting
+
+Verifies dual-entity switching for accounting staff (toggling between ATA & LTA client AR/AP ledgers).
+
+Accounting Staff (Single)
+
+accounting-ata@ata-lta.ph / dev-accs@ata-lta.ph
+
+password123
+
+Single ['ATA']
+
+Accounting
+
+Verifies single-entity locking for ATA invoicing, payment recording, and disbursement expense filing.
+
+Operations Staff (Dual)
+
+ops-dual@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+Operations
+
+Verifies dual-entity switching for operations field staff handling permits for both ATA and LTA clients.
+
+Operations Staff (Single)
+
+ops-ata@ata-lta.ph
+
+password123
+
+Single ['ATA']
+
+Operations
+
+Verifies task checklist execution, time logging, operations request submission, and WR encapsulation.
+
+Documentation Officer (Dual)
+
+docs@ata-lta.ph / dev-docs@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+Documentation
+
+Verifies cross-entity document custody, transmittal generation, and document handover lifecycle.
+
+HR Specialist (Dual)
+
+hr-dual@ata-lta.ph
+
+password123
+
+Dual ['ATA', 'LTA']
+
+HR
+
+Verifies cross-firm workforce allocation, multi-entity time log verification, and operational requests.
+
+8.1 Production Hardening & Operational Security Notes
+
+1. Credential Security:  Default passwords ('password123') must be changed immediately upon production deployment via PATCH /v1/me/password. The database enforces bcrypt password hashing via Supabase Auth GoTrue service.
+
+2. Cache Invalidation Vulnerability:  In-memory user profiles are cached for 300 seconds (5 minutes) in backend/src/middleware/auth.js. When an administrator deactivates an account (is_active = false) or demotes a role, the profileCache must be explicitly pruned or the Node process restarted to ensure immediate token revocation.
+
+3. Monorepo Documentation Policy:  In accordance with project operational governance, this document is created solely as an internal reference asset within the /docs directory and must remain strictly uncommitted in git revision control.

@@ -224,7 +224,8 @@ const PendingChanges = {
         });
       }
     } catch (e) {
-      console.error('Failed to query invoices in getAllPending', e);
+      const isAbort = typeof isAbortError === 'function' ? isAbortError(e) : (typeof window !== 'undefined' && typeof window.isAbortError === 'function' ? window.isAbortError(e) : false);
+      if (!isAbort) console.error('Failed to query invoices in getAllPending', e);
     }
 
     return pending;
@@ -261,7 +262,8 @@ const PendingChanges = {
         });
       }
     } catch (e) {
-      console.error('Failed to query disbursements in getPendingForUser', e);
+      const isAbort = typeof isAbortError === 'function' ? isAbortError(e) : (typeof window !== 'undefined' && typeof window.isAbortError === 'function' ? window.isAbortError(e) : false);
+      if (!isAbort) console.error('Failed to query disbursements in getPendingForUser', e);
     }
 
     try {
@@ -289,7 +291,8 @@ const PendingChanges = {
         });
       }
     } catch (e) {
-      console.error('Failed to query invoices in getPendingForUser', e);
+      const isAbort = typeof isAbortError === 'function' ? isAbortError(e) : (typeof window !== 'undefined' && typeof window.isAbortError === 'function' ? window.isAbortError(e) : false);
+      if (!isAbort) console.error('Failed to query invoices in getPendingForUser', e);
     }
 
     return pending;
@@ -326,7 +329,8 @@ const PendingChanges = {
         });
       }
     } catch (e) {
-      console.error('Failed to query disbursements in getRejectedForUser', e);
+      const isAbort = typeof isAbortError === 'function' ? isAbortError(e) : (typeof window !== 'undefined' && typeof window.isAbortError === 'function' ? window.isAbortError(e) : false);
+      if (!isAbort) console.error('Failed to query disbursements in getRejectedForUser', e);
     }
 
     try {
@@ -354,7 +358,8 @@ const PendingChanges = {
         });
       }
     } catch (e) {
-      console.error('Failed to query invoices in getRejectedForUser', e);
+      const isAbort = typeof isAbortError === 'function' ? isAbortError(e) : (typeof window !== 'undefined' && typeof window.isAbortError === 'function' ? window.isAbortError(e) : false);
+      if (!isAbort) console.error('Failed to query invoices in getRejectedForUser', e);
     }
 
     return rejected;

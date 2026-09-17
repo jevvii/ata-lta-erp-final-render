@@ -63,6 +63,45 @@ function toggleMenu(menu, button) {
 
 /* ── Column status icons ── */
 
+const KANBAN_GRIP_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="5" r="1.6"/><circle cx="16" cy="5" r="1.6"/><circle cx="8" cy="12" r="1.6"/><circle cx="16" cy="12" r="1.6"/><circle cx="8" cy="19" r="1.6"/><circle cx="16" cy="19" r="1.6"/></svg>';
+
+/**
+ * Ensure a card has a dedicated drag handle (grip icon). The card itself stays
+ * non-draggable so clicks always open the record; the handle is pressed to
+ * arm HTML5 drag-and-drop for that gesture only.
+ */
+function ensureCardDragHandle(card) {
+  if (!card || card.querySelector('.card-drag-handle')) return null;
+  const handle = el('button', {
+    type: 'button',
+    class: 'card-drag-handle',
+    'aria-label': 'Drag to move this card',
+    title: 'Drag to move',
+    html: KANBAN_GRIP_ICON
+  });
+  // Arm dragging for the gesture that starts on the handle only. The browser
+  // needs draggable=true set during mousedown, before the drag gesture begins.
+  handle.addEventListener('mousedown', () => { card.draggable = true; });
+  handle.addEventListener('touchstart', () => { card.draggable = true; }, { passive: true });
+  handle.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+  card.addEventListener('mouseup', () => { card.draggable = false; });
+  card.addEventListener('dragend', () => { card.draggable = false; });
+  const header = card.querySelector('.card-v2-header');
+  if (header) header.insertBefore(handle, header.firstChild);
+  else card.insertBefore(handle, card.firstChild);
+  return handle;
+}
+
+/** Mark a card as syncing with the server (optimistic move feedback). */
+function markCardSyncing(root, itemId) {
+  if (!root || !itemId) return;
+  const card = root.querySelector(`.board-card-v2[data-item-id="${CSS.escape(itemId)}"]`);
+  if (!card) return;
+  card.classList.add('card-syncing');
+  // Safety net: a failed sync re-renders the board; never leave the shimmer on.
+  setTimeout(() => card.classList.remove('card-syncing'), 12000);
+}
+
 const KanbanBoardIcons = {
   phase: {
     draft(color) {
@@ -99,6 +138,10 @@ function buildColumnStatusIcon(column) {
 /* ── KanbanBoard component ── */
 
 const KanbanBoard = {
+  // Collapse preference memory, keyed per board+column, survives re-renders
+  // within the session (columns are rebuilt from scratch on every render).
+  _collapsed: new Set(),
+
   render(config = {}) {
     const {
       items = [],
@@ -313,6 +356,10 @@ const KanbanBoard = {
     }
 
     function handleDragStart(e) {
+      if (e.target && e.target.closest && e.target.closest('button, .action-menu, .card-v2-menu, a, input, select, textarea')) {
+        e.preventDefault();
+        return;
+      }
       dragSrcId = this.dataset.itemId;
       this.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -393,6 +440,7 @@ const KanbanBoard = {
       }
 
       clearDragIndicators();
+      markCardSyncing(col, itemId);
       dragConfig.onDrop({
         item,
         targetColumn: col,
@@ -432,10 +480,42 @@ const KanbanBoard = {
       const columnTotal = Array.isArray(column.sections)
         ? column.sections.reduce((sum, s) => sum + (s.items?.length || 0), 0)
         : colItems.length;
-      titleWrap.appendChild(el('span', { class: 'board-column-count', text: String(columnTotal) }));
+      const countEl = el('span', { class: 'board-column-count', text: String(columnTotal) });
+      // WIP indicator: tint the count badge when the column exceeds its healthy
+      // threshold so bottlenecks are visible at a glance.
+      const wipLimit = typeof column.wipLimit === 'number' ? column.wipLimit : 10;
+      if (columnTotal > wipLimit * 2) {
+        countEl.classList.add('wip-over');
+        countEl.title = `Over capacity: ${columnTotal} items (limit ${wipLimit})`;
+      } else if (columnTotal > wipLimit) {
+        countEl.classList.add('wip-warn');
+        countEl.title = `Approaching capacity: ${columnTotal} items (limit ${wipLimit})`;
+      }
+      titleWrap.appendChild(countEl);
       header.appendChild(titleWrap);
 
       const actionsWrap = el('div', { class: 'board-column-actions' });
+      // Collapse toggle for empty or terminal columns (e.g. Cancelled) so they
+      // stop consuming board width. Collapse state is remembered per board.
+      const isTerminal = column.terminal === true || /cancel/i.test(String(column.key || ''));
+      if (columnTotal === 0 || isTerminal) {
+        const collapseKey = `${config.boardId || className}:${column.key}`;
+        if (this._collapsed.has(collapseKey)) col.classList.add('collapsed');
+        const collapseBtn = el('button', {
+          type: 'button',
+          class: 'board-column-collapse',
+          'aria-label': 'Collapse column',
+          title: 'Collapse / expand column',
+          html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>'
+        });
+        collapseBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const nowCollapsed = col.classList.toggle('collapsed');
+          if (nowCollapsed) this._collapsed.add(collapseKey);
+          else this._collapsed.delete(collapseKey);
+        });
+        actionsWrap.appendChild(collapseBtn);
+      }
       if (column.addButton) {
         const addBtn = el('button', {
           class: 'board-column-add',
@@ -493,8 +573,9 @@ const KanbanBoard = {
         if (dragConfig.enabled) {
           const canDragItem = typeof dragConfig.canDrag === 'function' ? dragConfig.canDrag(item, sectionColumn || column) : true;
           if (canDragItem) {
-            card.draggable = true;
-            card.style.cursor = 'grab';
+            // Drag handle separation: the card body stays a click target; the
+            // grip handle arms draggable for the gesture that starts on it.
+            ensureCardDragHandle(card);
             card.addEventListener('dragstart', handleDragStart);
             card.addEventListener('dragend', handleDragEnd);
           }
@@ -830,6 +911,10 @@ const KanbanBoard = {
     };
 
     const handleDragStart = function(e) {
+      if (e.target && e.target.closest && e.target.closest('button, .action-menu, .card-v2-menu, a, input, select, textarea')) {
+        e.preventDefault();
+        return;
+      }
       dragSrcId = this.dataset.itemId;
       this.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -906,6 +991,7 @@ const KanbanBoard = {
       }
 
       clearDragIndicators();
+      markCardSyncing(column, itemId);
       dragConfig.onDrop({
         item,
         targetColumn: column,
@@ -930,8 +1016,7 @@ const KanbanBoard = {
         ? dragConfig.canDrag(itemLookup.get(itemId), card.closest(columnSelector))
         : true;
       if (canDragItem) {
-        card.draggable = true;
-        card.style.cursor = 'grab';
+        ensureCardDragHandle(card);
         card.addEventListener('dragstart', handleDragStart);
         card.addEventListener('dragend', handleDragEnd);
       }

@@ -80,7 +80,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
   }
 
-  if (!isAdmin) {
+  if (!isAdmin && !isAccounting) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     const concernedWrIds = await getUserConcernedWorkRequestIds(user);
     if (concernedWrIds.length === 0) {
@@ -244,7 +244,7 @@ const getInvoiceById = async ({ entityId, id, user }) => {
       });
     }
 
-    if (!isAdmin) {
+    if (!isAdmin && !isAccounting) {
       const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
       const concernedWrIds = await getUserConcernedWorkRequestIds(user);
       if (!invoice.work_request_id || !concernedWrIds.includes(invoice.work_request_id)) {
@@ -864,8 +864,10 @@ const getInvoiceCounts = async ({ entityId, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
   let concernedWrIds = [];
-  if (!isAdmin) {
+  if (!isAdmin && !isAccounting) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     concernedWrIds = await getUserConcernedWorkRequestIds(user);
     if (concernedWrIds.length === 0) {
@@ -891,14 +893,11 @@ const getInvoiceCounts = async ({ entityId, user }) => {
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
-    if (!isAdmin) {
+    if (!isAdmin && !isAccounting) {
       q = q.in('work_request_id', concernedWrIds);
     }
     return q;
   };
-
-  const isAccounting =
-    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
 
   let activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
   if (!isAdmin && !isAccounting) {
@@ -932,7 +931,7 @@ const getInvoiceCounts = async ({ entityId, user }) => {
             .in('entity_id', entityIds)
             .eq('type', 'billing')
             .eq('status', 'rejected');
-          if (!isAdmin) {
+          if (!isAdmin && !isAccounting) {
             q = q.in('work_request_id', concernedWrIds);
           }
           return q;

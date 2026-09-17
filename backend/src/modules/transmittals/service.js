@@ -48,13 +48,16 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
-  if (!isAdmin) {
+  const isDocumentation =
+    (user?.departments || []).includes('Documentation') || user?.role === 'Documentation';
+  if (!isAdmin && !isDocumentation) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     const concernedWrIds = await getUserConcernedWorkRequestIds(user);
-    if (concernedWrIds.length === 0) {
-      return { data: [], count: 0 };
+    const scopeClauses = [`created_by.eq.${user.id}`];
+    if (concernedWrIds.length > 0) {
+      scopeClauses.push(`work_request_id.in.(${concernedWrIds.join(',')})`);
     }
-    query = query.in('work_request_id', concernedWrIds);
+    query = query.or(scopeClauses.join(','));
   }
 
   const offset = (page - 1) * limit;
@@ -121,13 +124,16 @@ const countTransmittals = async ({ entityId, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
-  if (!isAdmin) {
+  const isDocumentation =
+    (user?.departments || []).includes('Documentation') || user?.role === 'Documentation';
+  if (!isAdmin && !isDocumentation) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     const concernedWrIds = await getUserConcernedWorkRequestIds(user);
-    if (concernedWrIds.length === 0) {
-      return { active: 0, archived: 0, total: 0 };
+    const scopeClauses = [`created_by.eq.${user.id}`];
+    if (concernedWrIds.length > 0) {
+      scopeClauses.push(`work_request_id.in.(${concernedWrIds.join(',')})`);
     }
-    query = query.in('work_request_id', concernedWrIds);
+    query = query.or(scopeClauses.join(','));
   }
 
   const { data, error, count } = await query;
@@ -251,7 +257,9 @@ const getTransmittalById = async ({ entityId, id, user }) => {
 
   if (user) {
     const isAdmin = user.role === 'Admin';
-    if (!isAdmin) {
+    const isDocumentation =
+      (user?.departments || []).includes('Documentation') || user?.role === 'Documentation';
+    if (!isAdmin && !isDocumentation && transmittal.created_by !== user.id) {
       const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
       const concernedWrIds = await getUserConcernedWorkRequestIds(user);
       if (!transmittal.work_request_id || !concernedWrIds.includes(transmittal.work_request_id)) {

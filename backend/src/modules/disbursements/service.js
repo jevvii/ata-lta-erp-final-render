@@ -94,8 +94,10 @@ const getDisbursementCounts = async ({ entityId, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
+  const isAccounting =
+    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
   let concernedWrIds = [];
-  if (!isAdmin) {
+  if (!isAdmin && !isAccounting) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     concernedWrIds = await getUserConcernedWorkRequestIds(user);
     if (concernedWrIds.length === 0) {
@@ -121,7 +123,7 @@ const getDisbursementCounts = async ({ entityId, user }) => {
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
-    if (!isAdmin) {
+    if (!isAdmin && !isAccounting) {
       q = q.in('linked_work_request_id', concernedWrIds);
     }
     return q;
@@ -135,9 +137,6 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     });
     return hasPermission(permissions, 'disbursement:mark_released');
   })();
-
-  const isAccounting =
-    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
 
   let activeQuery = baseQuery().neq('archived', true).neq('status', 'Cancelled');
   if (!isAdmin && !isAccounting) {
@@ -165,7 +164,7 @@ const getDisbursementCounts = async ({ entityId, user }) => {
             .in('entity_id', entityIds)
             .eq('type', 'disbursement')
             .eq('status', 'rejected');
-          if (!isAdmin) {
+          if (!isAdmin && !isAccounting) {
             q = q.in('work_request_id', concernedWrIds);
           }
           return q;
@@ -223,7 +222,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     query = query.eq('archived', false);
   }
 
-  // Role restriction: non-admin and non-accounting cannot see Draft or Pending phases/statuses.
+  // Role restriction and scoping
   const isAdmin = user?.role === 'Admin';
   const isAccounting =
     (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
@@ -249,7 +248,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     query = query.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
   }
 
-  if (!isAdmin) {
+  if (!isAdmin && !isAccounting) {
     const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
     const concernedWrIds = await getUserConcernedWorkRequestIds(user);
     if (concernedWrIds.length === 0) {
@@ -257,6 +256,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     }
     query = query.in('linked_work_request_id', concernedWrIds);
   }
+
 
   const offset = (page - 1) * limit;
   query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
@@ -392,27 +392,33 @@ const getDisbursementById = async ({ entityId, id, user }) => {
     const isAdmin = user.role === 'Admin';
     const isAccounting =
       (user.departments || []).includes('Accounting') || user.role === 'Accounting';
-    if (
-      !isAdmin &&
-      !isAccounting &&
-      ['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(data.status)
-    ) {
-      throw new AppError({
-        statusCode: 403,
-        title: 'Forbidden',
-        detail: 'You do not have permission to view this disbursement in its current status.',
-      });
-    }
+    const isManager =
+      user.role === 'Manager' || (user.departments || []).includes('Management');
+    const isSelf = data.requested_by === user.id || data.created_by === user.id;
 
-    if (!isAdmin) {
-      const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
-      const concernedWrIds = await getUserConcernedWorkRequestIds(user);
-      if (!data.linked_work_request_id || !concernedWrIds.includes(data.linked_work_request_id)) {
+    if (!isAdmin && !isAccounting) {
+      if (
+        !isManager &&
+        !isSelf &&
+        ['Draft', 'Pending', 'Submitted', 'Under Review', 'Approved'].includes(data.status)
+      ) {
         throw new AppError({
           statusCode: 403,
           title: 'Forbidden',
-          detail: 'You do not have permission to view this disbursement.',
+          detail: 'You do not have permission to view this disbursement in its current status.',
         });
+      }
+
+      if (!isSelf) {
+        const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+        const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+        if (!data.linked_work_request_id || !concernedWrIds.includes(data.linked_work_request_id)) {
+          throw new AppError({
+            statusCode: 403,
+            title: 'Forbidden',
+            detail: 'You do not have permission to view this disbursement.',
+          });
+        }
       }
     }
   }

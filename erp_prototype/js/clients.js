@@ -466,6 +466,11 @@ const Clients = {
 
   async render(routeId) {
     if (!this.activeTab) this.activeTab = 'active';
+    // QoL 4.2: a ?tab= hash param deep-links the Archive tab.
+    if (typeof App !== 'undefined' && typeof App.getRouteQuery === 'function') {
+      const tabParam = App.getRouteQuery().get('tab');
+      if (tabParam === 'archived' || tabParam === 'active') this.activeTab = tabParam;
+    }
     const container = el('div', { class: 'page clients-tab-page' });
 
     // Full-page form route (#clients/form/new or #clients/form/:id) renders inline
@@ -564,6 +569,13 @@ const Clients = {
       style: 'width: 100%; padding-left: 36px; max-width: 320px;'
     });
 
+    // QoL 4.2: restore a search carried in the hash (?q=...) so refresh and
+    // shared links keep the filtered view.
+    if (typeof App !== 'undefined' && typeof App.getRouteQuery === 'function') {
+      const initialQ = App.getRouteQuery().get('q');
+      if (initialQ) search.value = initialQ;
+    }
+
     searchWrapper.appendChild(searchIcon);
     searchWrapper.appendChild(search);
     filters.appendChild(searchWrapper);
@@ -621,6 +633,11 @@ const Clients = {
 
     search.addEventListener('input', debounce(async () => {
       const q = search.value.trim();
+      // QoL 4.2: keep the hash query in sync (silent replace — typing must not
+      // spam history entries).
+      if (typeof App !== 'undefined' && typeof App.syncRouteQuery === 'function') {
+        App.syncRouteQuery({ q: q || null }, { replace: true });
+      }
       if (this.activeTab === 'active') {
         listContainer.innerHTML = Utils.getSkeletonForView('clients');
         this.renderList(listContainer, q);
@@ -728,6 +745,11 @@ const Clients = {
         this._archivePage = 1;
       }
       this.activeTab = key;
+      // QoL 4.2: discrete tab switches get their own history entry so Back
+      // returns to the previous tab.
+      if (typeof App !== 'undefined' && typeof App.syncRouteQuery === 'function') {
+        App.syncRouteQuery({ tab: key === 'active' ? null : key }, { replace: false });
+      }
       App.handleRoute();
     });
 
@@ -1608,11 +1630,10 @@ const Clients = {
     if (allClients.length === 0 && window.apiClient?.clientCache) {
       allClients = window.apiClient.clientCache.getAll?.() || window.apiClient.clientCache._clients || [];
     }
-    allClients.filter(c => {
-      return matchesEntity(c.entity, entity);
-    }).forEach(c => {
+    allClients.forEach(c => {
       if (this.editingId && c.id === this.editingId) return;
-      clientSel.appendChild(el('option', { value: c.id, text: c.name }));
+      const entityTag = c.entity ? ` (${c.entity})` : '';
+      clientSel.appendChild(el('option', { value: c.id, text: `${c.name}${entityTag}` }));
     });
     if (data && data.clientId) clientSel.value = data.clientId;
     const relSel = el('select', { class: 'notion-line-item-type', name: 'rc-relation-' + idx, style: 'flex: 0 0 150px;' });
@@ -1639,11 +1660,22 @@ const Clients = {
   },
 
   async submitForm(form) {
-    if (Auth.user?.role !== 'Admin') {
-      Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
-      return;
+    if (this._isSubmittingClient) return;
+    const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('.btn-primary') || document.querySelector('button[form="client-form"]');
+    const originalBtnHtml = submitBtn ? submitBtn.innerHTML : null;
+    this._isSubmittingClient = true;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('loading');
+      submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Saving...';
     }
-    if (!validateRequiredFields(form)) return;
+
+    try {
+      if (Auth.user?.role !== 'Admin') {
+        Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
+        return;
+      }
+      if (!validateRequiredFields(form)) return;
     const isResubmitting = typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId;
 
     const data = Object.fromEntries(new FormData(form).entries());
@@ -1805,6 +1837,7 @@ const Clients = {
           }
           this.editingId = null;
           const targetRoute = isResubmitting ? '#admin' : '#clients';
+          markPaneFormClean();
           await closeFormPanelAndRoute(targetRoute);
         },
         onAfterConfirm: async () => {
@@ -1865,6 +1898,7 @@ const Clients = {
         }
         this.editingId = null;
         const targetRoute = isResubmitting ? '#admin' : '#clients';
+        markPaneFormClean();
         await closeFormPanelAndRoute(targetRoute);
       },
       onAfterConfirm: async () => {
@@ -1883,6 +1917,14 @@ const Clients = {
         }
       }
     });
+    } finally {
+      this._isSubmittingClient = false;
+      if (submitBtn && originalBtnHtml) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('loading');
+        submitBtn.innerHTML = originalBtnHtml;
+      }
+    }
   },
 
   async archiveClientDirectly(clientId) {

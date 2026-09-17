@@ -373,4 +373,29 @@ describe('/v1/operations-requests', () => {
     expect(counts.body.data.pending).toBe(1);
     expect(counts.body.data.awaitingFulfillment).toBe(0);
   });
+
+  it('deduplicates rapid consecutive submissions of the same operations request', async () => {
+    const admin = registerUser({
+      email: 'admin-dup@ata-lta.ph',
+      name: 'Admin Dup',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const res1 = await request(app)
+      .post('/v1/operations-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validRequest)
+      .expect(201);
+
+    const res2 = await request(app)
+      .post('/v1/operations-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send(validRequest)
+      .expect(201);
+
+    expect(res2.body.data.id).toBe(res1.body.data.id);
+  });
 });

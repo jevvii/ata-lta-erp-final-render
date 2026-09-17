@@ -59,6 +59,32 @@ describe('/v1/work-requests', () => {
     expect(getRes.body.data.clientId).toBe(client.id);
   });
 
+  it('deduplicates rapid consecutive submissions of the same work request', async () => {
+    const admin = registerUser({
+      email: 'admin-wr-dup@ata-lta.ph',
+      name: 'Admin WR Dup',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+    const client = await createClient(admin, 'ATA');
+
+    const wrRes1 = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    const wrRes2 = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    expect(wrRes2.body.data.id).toBe(wrRes1.body.data.id);
+  });
+
   it('rejects invalid status transitions', async () => {
     const admin = registerUser({
       email: 'admin@ata-lta.ph',

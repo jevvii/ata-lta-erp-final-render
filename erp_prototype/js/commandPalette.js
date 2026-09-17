@@ -197,6 +197,96 @@ const CommandPalette = {
       });
     }
 
+    // ── QoL 6.1: Quick Actions ──────────────────────────────────────
+    // Log Time: open the time-log modal for the first incomplete task on the
+    // WR currently in view; otherwise jump to Operations.
+    if (window.Auth?.can?.('workflow:view')) {
+      commands.push({
+        category: 'Quick Actions',
+        icon: '⏱️',
+        title: 'Log Time',
+        subtitle: 'Add a time log to an active task',
+        action: async () => {
+          try {
+            await App.ensureRouteBundle('#operations');
+            const wrId = (typeof Workflow !== 'undefined') ? Workflow.detailWrId : null;
+            let task = null;
+            if (wrId && typeof WorkflowData !== 'undefined') {
+              await WorkflowData.ensure();
+              task = (WorkflowData.getTasksWhere(t => t.workRequestId === wrId && t.status !== 'Completed') || [])[0] || null;
+            }
+            if (task) {
+              Workflow.showAddTimeLogModal(task.id);
+            } else {
+              location.hash = '#operations';
+            }
+          } catch (e) { console.error('Log Time quick action failed', e); }
+        }
+      });
+    }
+
+    if (window.Auth?.can?.('billing:request') || window.Auth?.can?.('billing:create')) {
+      commands.push({
+        category: 'Quick Actions',
+        icon: '📄',
+        title: 'Request Invoice',
+        subtitle: 'Ask Accounting to prepare an invoice',
+        action: async () => {
+          try {
+            await App.ensureRouteBundle('#billing');
+            if (typeof Billing !== 'undefined' && typeof Billing.showRequestInvoiceModal === 'function') {
+              Billing.showRequestInvoiceModal();
+            } else {
+              location.hash = '#billing';
+            }
+          } catch (e) { console.error('Request Invoice quick action failed', e); }
+        }
+      });
+    }
+
+    if (window.Auth?.can?.('disbursement:request') || window.Auth?.can?.('disbursement:create')) {
+      commands.push({
+        category: 'Quick Actions',
+        icon: '💸',
+        title: 'Request Disbursement',
+        subtitle: 'Ask Accounting to file an expense',
+        action: async () => {
+          try {
+            await App.ensureRouteBundle('#disbursement');
+            if (typeof Disbursement !== 'undefined' && typeof Disbursement.showRequestDisbursementModal === 'function') {
+              Disbursement.showRequestDisbursementModal();
+            } else {
+              location.hash = '#disbursement';
+            }
+          } catch (e) { console.error('Request Disbursement quick action failed', e); }
+        }
+      });
+    }
+
+    // Switch Entity: one command per available scope, mirroring the header
+    // switcher (including Consolidated View when offered there).
+    const userEntities = (window.Auth?.user?.entities || []).filter(e => e && e !== 'ALL');
+    if (userEntities.length > 1) {
+      const scopes = [...userEntities];
+      if (window.Auth?.isManagerial?.()) scopes.unshift('ALL');
+      scopes.forEach(code => {
+        const label = code === 'ALL' ? 'Consolidated (ATA + LTA)' : (code === 'ATA' ? 'ATA Accounting' : 'LTA Accounting');
+        commands.push({
+          category: 'Quick Actions',
+          icon: '🔁',
+          title: `Switch to ${label}`,
+          subtitle: window.Auth?.activeEntity === code ? 'Currently active' : 'Change active entity',
+          action: () => {
+            const sel = document.getElementById('entity-switcher');
+            if (sel && sel.value !== code) {
+              sel.value = code;
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
+        });
+      });
+    }
+
     return commands;
   },
 

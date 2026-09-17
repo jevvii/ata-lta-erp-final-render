@@ -560,7 +560,7 @@ describe('/v1/invoices', () => {
       id: 'staff-1-id',
       email: 'staff1@ata-lta.ph',
       name: 'Staff One',
-      role: 'Accounting',
+      role: 'Operations',
       entities: ['ATA'],
     });
 
@@ -568,6 +568,14 @@ describe('/v1/invoices', () => {
       id: 'staff-2-id',
       email: 'staff2@ata-lta.ph',
       name: 'Staff Two',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    const accounting = registerUser({
+      id: 'accounting-id',
+      email: 'acct@ata-lta.ph',
+      name: 'Accounting Staff',
       role: 'Accounting',
       entities: ['ATA'],
     });
@@ -651,6 +659,15 @@ describe('/v1/invoices', () => {
       .set('Authorization', `Bearer ${staff1}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
+
+    // 5. Accounting Staff can see both invoices across the entity
+    const resAcct = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${accounting}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(resAcct.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
+    expect(resAcct.body.data.some((i) => i.id === invoiceWr2)).toBe(true);
   });
 
   it('supports linking a transmittal to an invoice on create, update, and filtering by linkedTransmittalId', async () => {
