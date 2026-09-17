@@ -10,9 +10,9 @@
     <link rel="preconnect" href="http://localhost:3000" />
     <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
     <!-- Preload critical JS to start download early while HTML parses -->
-    <link rel="preload" href="js/utils.js?v=2.3.7" as="script" />
-    <link rel="preload" href="js/apiClient.js?v=2.3.7" as="script" />
-    <link rel="preload" href="js/auth.js?v=2.3.7" as="script" />
+    <link rel="preload" href="js/utils.js?v=2.3.10" as="script" />
+    <link rel="preload" href="js/apiClient.js?v=2.3.10" as="script" />
+    <link rel="preload" href="js/auth.js?v=2.3.10" as="script" />
     <!-- Critical CSS for instant first paint (loading screen + login + app shell) -->
     <style>
       *,
@@ -114,11 +114,11 @@
     <!-- Full stylesheet loaded non-blocking after first paint -->
     <link
       rel="stylesheet"
-      href="css/styles.css?v=2.3.0"
+      href="css/styles.css?v=2.3.10"
       media="print"
       onload="this.media='all'"
     />
-    <noscript><link rel="stylesheet" href="css/styles.css?v=2.3.0" /></noscript>
+    <noscript><link rel="stylesheet" href="css/styles.css?v=2.3.10" /></noscript>
   </head>
   <body>
     <!-- Loading Screen -->
@@ -416,18 +416,18 @@
     </div>
 
     <!-- Core scripts: always needed for app shell, auth, and default routes -->
-    <script src="js/utils.js?v=2.3.7"></script>
-    <script src="env.js?v=2.3.7"></script>
-    <script src="js/apiClient.js?v=2.3.7"></script>
-    <script src="js/auth.js?v=2.3.7"></script>
-    <script src="js/dataTable.js?v=2.3.7" defer></script>
-    <script src="js/kanban.js?v=2.3.7" defer></script>
-    <script src="js/datepicker.js?v=2.3.7" defer></script>
-    <script src="js/timepicker.js?v=2.3.7" defer></script>
-    <script src="js/dashboard.js?v=2.3.7" defer></script>
-    <script src="js/clients.js?v=2.3.7" defer></script>
-    <script src="js/workflow.js?v=2.3.7" defer></script>
-    <script src="js/pendingChanges.js?v=2.3.7" defer></script>
+    <script src="js/utils.js?v=2.3.10"></script>
+    <script src="env.js?v=2.3.10"></script>
+    <script src="js/apiClient.js?v=2.3.10"></script>
+    <script src="js/auth.js?v=2.3.10"></script>
+    <script src="js/dataTable.js?v=2.3.10" defer></script>
+    <script src="js/kanban.js?v=2.3.10" defer></script>
+    <script src="js/datepicker.js?v=2.3.10" defer></script>
+    <script src="js/timepicker.js?v=2.3.10" defer></script>
+    <script src="js/dashboard.js?v=2.3.10" defer></script>
+    <script src="js/clients.js?v=2.3.10" defer></script>
+    <script src="js/workflow.js?v=2.3.10" defer></script>
+    <script src="js/pendingChanges.js?v=2.3.10" defer></script>
     <script>
       // Dev-mode lazy bundle definitions.
       // In production, build.js sets window.__ERP_BUNDLES__ to hashed single-file bundles.
@@ -435,13 +435,13 @@
       // loaded on demand when the user navigates to the relevant route.
       if (!window.__ERP_BUNDLES__) {
         window.__ERP_DEV_BUNDLES__ = {
-          billing: ["js/billing.js?v=2.3.7", "js/disbursement.js?v=2.3.7", "js/transmittal.js?v=2.3.7"],
-          admin: ["js/users.js?v=2.3.7", "js/reports.js?v=2.3.7", "js/profile.js?v=2.3.7", "js/dms.js?v=2.3.7"],
+          billing: ["js/billing.js?v=2.3.10", "js/disbursement.js?v=2.3.10", "js/transmittal.js?v=2.3.10"],
+          admin: ["js/users.js?v=2.3.10", "js/reports.js?v=2.3.10", "js/profile.js?v=2.3.10", "js/dms.js?v=2.3.10"],
         };
       }
     </script>
-    <script src="js/commandPalette.js?v=2.3.7" defer></script>
-    <script src="js/app.js?v=2.3.7" defer></script>
+    <script src="js/commandPalette.js?v=2.3.10" defer></script>
+    <script src="js/app.js?v=2.3.10" defer></script>
     <script>
       (function () {
         if (!("serviceWorker" in navigator)) return;
@@ -462,7 +462,7 @@
         // In development, check for updates but never auto-reload so open forms
         // are not interrupted.
         navigator.serviceWorker
-          .register("sw.js?v=2.3.7")
+          .register("sw.js?v=2.3.10")
           .then(function (registration) {
             registration.addEventListener("updatefound", function () {
               var installing = registration.installing;

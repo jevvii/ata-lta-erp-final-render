@@ -10,7 +10,7 @@
  * a bundler), those URLs are added to the app-shell cache. Otherwise a static
  * fallback list is used.
  */
-const CACHE_VERSION = 'v26';
+const CACHE_VERSION = 'v29';
 const SHELL_CACHE = `erp-shell-${CACHE_VERSION}`;
 const API_CACHE = `erp-api-${CACHE_VERSION}`;
 

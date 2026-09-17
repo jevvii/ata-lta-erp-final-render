@@ -1404,6 +1404,12 @@ class SidePane {
     if (this.isOpen() && this.mode !== mode) this.close({ silent: true });
     this.mode = mode;
 
+    if (this.activeElement) {
+      this.activeElement.classList.remove('side-pane-active');
+      this.activeElement = null;
+    }
+    document.querySelectorAll('.side-pane-active').forEach(el => el.classList.remove('side-pane-active'));
+
     if (this.triggerElement) {
       this.activeElement = this.triggerElement;
       this.activeElement.classList.add('side-pane-active');
@@ -1797,6 +1803,7 @@ class SidePane {
       this.activeElement.classList.remove('side-pane-active');
       this.activeElement = null;
     }
+    document.querySelectorAll('.side-pane-active').forEach(el => el.classList.remove('side-pane-active'));
 
     if (this.mode === PaneMode.CENTER_PEEK && this.previouslyFocused && typeof this.previouslyFocused.focus === 'function') {
       try { this.previouslyFocused.focus(); } catch (e) {}

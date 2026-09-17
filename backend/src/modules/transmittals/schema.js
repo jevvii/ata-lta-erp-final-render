@@ -27,6 +27,7 @@ const createTransmittalSchema = z.object({
   notes: z.string().max(2000).optional().nullable(),
   recipientName: z.string().max(255).optional().nullable(),
   recipientDetails: z.string().max(1000).optional().nullable(),
+  linkedTaskId: z.string().uuid().optional().nullable(),
 });
 
 /**
@@ -40,6 +41,7 @@ const updateTransmittalSchema = z.object({
   notes: z.string().max(2000).optional().nullable(),
   recipientName: z.string().max(255).optional().nullable(),
   recipientDetails: z.string().max(1000).optional().nullable(),
+  linkedTaskId: z.string().uuid().optional().nullable(),
   boardOrder: z.number().int().optional(),
   // OCC guard (Spec 2.2 / R-10): update applies only if the stored version matches.
   expectedVersion: z.number().int().positive().optional(),

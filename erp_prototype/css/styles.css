@@ -9380,7 +9380,7 @@ tbody tr:hover {
 
 .task-list .table-header {
   display: grid;
-  grid-template-columns: 36px minmax(180px, 2fr) minmax(160px, 1.5fr) 110px 120px 100px 110px 80px 100px;
+  grid-template-columns: 36px minmax(180px, 1.8fr) minmax(150px, 1.2fr) 110px 120px 100px minmax(160px, 1.4fr) 80px 100px;
   gap: 0;
   padding: var(--space-3) var(--space-5);
   color: var(--muted);
@@ -9413,7 +9413,7 @@ tbody tr:hover {
 
 .task-list .task-row {
   display: grid;
-  grid-template-columns: 36px minmax(180px, 2fr) minmax(160px, 1.5fr) 110px 120px 100px 110px 80px 100px;
+  grid-template-columns: 36px minmax(180px, 1.8fr) minmax(150px, 1.2fr) 110px 120px 100px minmax(160px, 1.4fr) 80px 100px;
   gap: 0;
   align-items: center;
   padding: var(--space-4) var(--space-5);
@@ -9450,6 +9450,21 @@ tbody tr:hover {
 .task-list .cell {
   padding: 0 var(--space-2);
   min-width: 0;
+}
+
+.task-list .cell-linked {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-list .cell-linked .badge,
+.task-list .cell-linked .task-link-required-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
 }
 
 .task-list .cell:first-child {

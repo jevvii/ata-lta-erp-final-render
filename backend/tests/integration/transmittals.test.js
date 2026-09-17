@@ -266,4 +266,23 @@ describe('/v1/transmittals', () => {
     expect(res.body.data.status).toBe('Draft');
     expect(res.body.data.entity_id).toBe('ent-ata'); // Fallback resolves to first entity UUID/ID
   });
+
+  it('creates a transmittal linked to a task', async () => {
+    const token = registerUser({
+      email: 'doc@ata-lta.ph',
+      name: 'Doc Staff',
+      role: 'Documentation',
+      entities: ['ATA'],
+    });
+
+    const taskId = 'd3b07384-d113-460b-80a2-234567890123';
+    const res = await request(app)
+      .post('/v1/transmittals')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validTransmittal, linkedTaskId: taskId })
+      .expect(201);
+
+    expect(res.body.data.linked_task_id).toBe(taskId);
+  });
 });

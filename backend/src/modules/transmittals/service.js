@@ -161,6 +161,7 @@ const createTransmittal = async ({ entityId, userId, data }) => {
     entity_id: entityId,
     client_id: data.clientId,
     work_request_id: data.workRequestId || null,
+    linked_task_id: data.linkedTaskId || null,
     status: 'Draft',
     approved: false,
     board_order: data.boardOrder ?? 0,
@@ -290,6 +291,7 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
   const hasNonOrderEdit =
     data.clientId !== undefined ||
     data.workRequestId !== undefined ||
+    data.linkedTaskId !== undefined ||
     data.trackingNumber !== undefined ||
     data.notes !== undefined ||
     data.recipientName !== undefined ||
@@ -311,6 +313,7 @@ const updateTransmittal = async ({ entityId, id, userId, data }) => {
 
   if (data.clientId !== undefined) updates.client_id = data.clientId;
   if (data.workRequestId !== undefined) updates.work_request_id = data.workRequestId;
+  if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
   if (data.trackingNumber !== undefined) updates.tracking_number = data.trackingNumber;
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.recipientName !== undefined) updates.recipient_name = data.recipientName;

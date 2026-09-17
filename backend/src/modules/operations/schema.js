@@ -79,6 +79,7 @@ const createTaskSchema = z.object({
   timeLogs: z.array(timeLogSchema).optional(),
   coAssignees: z.array(z.string().uuid()).optional().nullable(),
   taskDocuments: z.array(z.any()).optional().nullable(),
+  requiredLinkType: z.string().max(50).optional().nullable(),
 });
 
 const updateTaskSchema = createTaskSchema.partial().extend({
@@ -99,6 +100,7 @@ const taskTemplateSchema = z.object({
   assigneeName: z.string().optional().nullable(),
   coAssignees: z.array(z.string().uuid()).optional().nullable(),
   predecessors: z.array(z.string()).optional().nullable(),
+  requiredLinkType: z.string().max(50).optional().nullable(),
 });
 
 const retainerTemplateSchema = z.object({

@@ -134,6 +134,7 @@ const WorkflowData = {
         documentId: d.documentId || null
       })),
       coAssignees: task.coAssignees || [],
+      requiredLinkType: task.requiredLinkType || task.required_link_type || '',
       priority: task.priority || 'Normal',
       assigneeName: task.assigneeName || (task.assigneeId ? (window.apiClient?.userCache?.getById?.(task.assigneeId)?.name || (typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(task.assigneeId)?.name : null)) : null),
       assignedTo: task.assignedTo || task.assigneeId || null,
@@ -976,7 +977,7 @@ const WorkflowData = {
     return { invoices: [], disbursements: [], transmittals: [], documents: [] };
   },
   _emptyTaskRelated() {
-    return { invoices: [], disbursements: [] };
+    return { invoices: [], disbursements: [], transmittals: [] };
   },
 
   _isAbortError(e) {
@@ -1031,6 +1032,7 @@ const WorkflowData = {
       trackingNumber: t.tracking_number || t.trackingNumber || '',
       status: t.status || 'Draft',
       workRequestId: t.work_request_id || t.workRequestId || null,
+      linkedTaskId: t.linked_task_id || t.linkedTaskId || null,
       sentAt: t.sent_at || t.sentAt || null,
       clientId: t.client_id || t.clientId || null,
       items: t.items || t.transmittal_items || [],
@@ -1123,8 +1125,9 @@ const WorkflowData = {
         // Derive from the WR-related cache when available to avoid an extra round trip.
         const wrRelated = await this.loadRelatedForWorkRequest(wrId);
         const filtered = {
-          invoices: wrRelated.invoices.filter(inv => inv.linkedTaskId === id),
-          disbursements: wrRelated.disbursements.filter(d => d.linkedTaskId === id),
+          invoices: (wrRelated.invoices || []).filter(inv => inv.linkedTaskId === id || inv.linked_task_id === id),
+          disbursements: (wrRelated.disbursements || []).filter(d => d.linkedTaskId === id || d.linked_task_id === id),
+          transmittals: (wrRelated.transmittals || []).filter(t => t.linkedTaskId === id || t.linked_task_id === id),
         };
         this._relatedByTask.set(id, filtered);
         return filtered;
@@ -1135,6 +1138,7 @@ const WorkflowData = {
       const normalized = {
         invoices: (data.invoices || []).map(inv => this._normalizeRelatedInvoice(inv)),
         disbursements: (data.disbursements || []).map(d => this._normalizeRelatedDisbursement(d)),
+        transmittals: (data.transmittals || []).map(t => this._normalizeRelatedTransmittal(t)),
       };
       this._relatedByTask.set(id, normalized);
       return normalized;
@@ -1171,8 +1175,9 @@ const WorkflowData = {
       if (wrId && this._relatedByWr.has(wrId)) {
         const wrRelated = this._relatedByWr.get(wrId);
         const filtered = {
-          invoices: wrRelated.invoices.filter(inv => inv.linkedTaskId === id),
-          disbursements: wrRelated.disbursements.filter(d => d.linkedTaskId === id),
+          invoices: (wrRelated.invoices || []).filter(inv => inv.linkedTaskId === id || inv.linked_task_id === id),
+          disbursements: (wrRelated.disbursements || []).filter(d => d.linkedTaskId === id || d.linked_task_id === id),
+          transmittals: (wrRelated.transmittals || []).filter(t => t.linkedTaskId === id || t.linked_task_id === id),
         };
         this._relatedByTask.set(id, filtered);
         return filtered;
@@ -2017,9 +2022,9 @@ const Workflow = {
     { title: 'Registration of Books of Accounts', defaultChecklist: [] },
     { title: 'Application and Received of Authority to Print', defaultChecklist: [] },
     { title: 'Pickup of Sales/Service Invoice', defaultChecklist: [] },
-    { title: 'Billing', defaultChecklist: [] },
-    { title: 'Disbursement', defaultChecklist: [] },
-    { title: 'Transmittal', defaultChecklist: [] }
+    { title: 'Billing', requiredLinkType: 'billing', defaultChecklist: [] },
+    { title: 'Disbursement', requiredLinkType: 'disbursement', defaultChecklist: [] },
+    { title: 'Transmittal', requiredLinkType: 'transmittal', defaultChecklist: [] }
   ],
 
   /**
@@ -2270,7 +2275,8 @@ const Workflow = {
     // multiple times from within Processing / Testing. WRs already in Billing/Disbursement
     // are treated as ready to complete if all financial requirements are satisfied.
     const stages = ['Draft', 'Pre-processing', 'Processing', 'Completed', 'Cancelled'];
-    const currentIdx = stages.indexOf(wr.status);
+    const effectiveStatus = (wr.status === 'In Progress' || wr.status === 'Pre-processing') ? 'Pre-processing' : wr.status;
+    const currentIdx = stages.indexOf(effectiveStatus);
     let nextPhase = stages[currentIdx + 1];
 
     if (wr.status === 'Cancelled' || wr.status === 'Completed') return { canTransition: false, reason: 'Request is already in a terminal state.' };
@@ -2278,7 +2284,7 @@ const Workflow = {
     let canTransition = true;
     let missing = [];
 
-    switch (wr.status) {
+    switch (effectiveStatus) {
       case 'Draft':
         if (!wr.clientId) { canTransition = false; missing.push('Client assignment'); }
         if (tasks.length === 0) {
@@ -3809,6 +3815,22 @@ const Workflow = {
     wrGroup.appendChild(el('input', { type: 'hidden', name: 'workRequestId', value: wr.id }));
     form.appendChild(wrGroup);
 
+    // ---------- Task link (optional) ----------
+    const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+    if (tasks.length > 0) {
+      const taskGroup = el('div', { class: 'form-group' });
+      taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
+      const taskSel = el('select', { name: 'linkedTaskId' });
+      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      tasks.forEach(t => {
+        const opt = el('option', { value: t.id, text: t.title });
+        if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
+        taskSel.appendChild(opt);
+      });
+      taskGroup.appendChild(taskSel);
+      form.appendChild(taskGroup);
+    }
+
     // ---------- Tracking Number (auto-generated, read-only) ----------
     const tnGroup = el('div', { class: 'form-group' });
     tnGroup.appendChild(el('label', { text: 'Tracking Number' }));
@@ -3933,6 +3955,7 @@ const Workflow = {
       const record = {
         workRequestId: data.workRequestId,
         clientId: data.clientId,
+        linkedTaskId: data.linkedTaskId || (preselectedTask ? preselectedTask.id : null) || null,
         trackingNumber: data.trackingNumber || await Utils.nextTrackingNumber(recordEntity),
         status: 'Draft',
         items,
@@ -3972,6 +3995,9 @@ const Workflow = {
         errorTitle: 'Failed to Create Transmittal',
         onSuccess: async (res) => {
           WorkflowData.invalidateRelatedForWorkRequest(data.workRequestId);
+          if (record.linkedTaskId) {
+            WorkflowData.invalidateRelatedForTask(record.linkedTaskId);
+          }
         },
         onAfterConfirm: async () => {
           App.handleRoute();
@@ -4278,6 +4304,22 @@ const Workflow = {
       form.appendChild(notesGroup);
     }
     else if (type === 'transmittal') {
+      // 0. Link to Specific Task
+      const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id) || [];
+      if (tasks.length > 0) {
+        const taskGroup = el('div', { class: 'form-group' });
+        taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
+        const taskSel = el('select', { name: 'linkedTaskId', class: 'form-select' });
+        taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+        tasks.forEach(t => {
+          const opt = el('option', { value: t.id, text: t.title });
+          if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
+          taskSel.appendChild(opt);
+        });
+        taskGroup.appendChild(taskSel);
+        form.appendChild(taskGroup);
+      }
+
       // 1. Documents listing (Hybrid)
       const docGroup = el('div', { class: 'form-group is-required' });
       docGroup.appendChild(el('label', { text: 'Documents to Transmit', style: 'margin-bottom: var(--spacing-xs);' }));
@@ -4407,6 +4449,7 @@ const Workflow = {
         record.documents = documents;
         record.recipientDetails = recipientDetails;
         record.notes = notes;
+        record.linkedTaskId = form.querySelector('[name="linkedTaskId"]')?.value || (preselectedTask ? preselectedTask.id : null) || null;
       }
 
       this.runBlockingArchiveAction({
@@ -6760,6 +6803,43 @@ const Workflow = {
     }
     propsSec.appendChild(assigneeValEl);
 
+    // Required Linkage Row
+    const linkIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>`;
+    propsSec.appendChild(propLabel('Required Linkage', linkIcon));
+    const reqLinkValEl = el('div', { class: 'side-pane-prop-value' });
+    const reqLinkSel = el('select', { class: 'form-select task-required-link-select', style: 'padding: 2px 6px; font-size: 0.8125rem; font-weight: 500;' });
+    reqLinkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+
+    let curReq = task.requiredLinkType || '';
+    if (!curReq) {
+      const tl = (task.title || '').toLowerCase();
+      if (tl.includes('invoice') || tl.includes('bill')) curReq = 'billing';
+      else if (tl.includes('expense') || tl.includes('disburse') || tl.includes('payment') || tl.includes('reimburse')) curReq = 'disbursement';
+      else if (tl.includes('transmittal')) curReq = 'transmittal';
+    }
+    if (task.requiredLinkType === 'none') curReq = '';
+    reqLinkSel.value = curReq;
+
+    if (isArchived) {
+      reqLinkSel.disabled = true;
+    } else {
+      reqLinkSel.addEventListener('change', async () => {
+        const val = reqLinkSel.value || 'none';
+        task.requiredLinkType = val;
+        await WorkflowData.updateTask(task.id, {
+          requiredLinkType: val,
+          updatedAt: new Date().toISOString()
+        });
+        this.showTaskSidePane(task.id, triggerElement);
+        App.handleRoute();
+      });
+    }
+    reqLinkValEl.appendChild(reqLinkSel);
+    propsSec.appendChild(reqLinkValEl);
+
     paneContent.appendChild(propsSec);
 
     // Accordion helper function
@@ -7572,7 +7652,7 @@ const Workflow = {
   renderProgressBar(status) {
     // Four-stage lifecycle inside work request detail.
     const stages = ['Work Request', 'Pre-processing', 'Processing', 'Documentation'];
-    const map = { 'Draft': 0, 'Pre-processing': 1, 'Processing': 2, 'Billing': 2, 'Disbursement': 2, 'Completed': 3, 'Cancelled': 3 };
+    const map = { 'Draft': 0, 'Pre-processing': 1, 'In Progress': 1, 'Processing': 2, 'Billing': 2, 'Disbursement': 2, 'Completed': 3, 'Cancelled': 3 };
     const current = map[status] ?? 0;
     const wrap = el('div', { class: 'workflow-progress' });
     stages.forEach((s, i) => {
@@ -7903,6 +7983,7 @@ const Workflow = {
     const coAssignees = taskData?.coAssignees ? [...taskData.coAssignees] : [];
     row._coAssignees = coAssignees;
     row._checklist = initialChecklist || taskData?.checklist || [];
+    row._requiredLinkType = taskData?.requiredLinkType || taskData?.required_link_type || '';
 
     const coAssigneeWrap = el('div', { class: 'wr-task-row-coassignees' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
@@ -8207,7 +8288,8 @@ const Workflow = {
         assigneeName: resolvedName,
         coAssignees: row._coAssignees || [],
         predecessorKeys: predecessorKeys,
-        checklist: row._checklist || []
+        checklist: row._checklist || [],
+        requiredLinkType: row._requiredLinkType || ''
       });
     }
 
@@ -8739,6 +8821,7 @@ const Workflow = {
     const phaseColors = {
       'Draft': '#6b6b6b',
       'Pre-processing': '#2f6feb',
+      'In Progress': '#2f6feb',
       'Processing': '#eab308',
       'Billing': '#f59e0b',
       'Disbursement': '#f59e0b',
@@ -10077,11 +10160,11 @@ const Workflow = {
         rowEl.appendChild(cellChecklist);
 
         // 7. Linked Records cell
-        const cellLinked = el('div', { class: 'cell' });
-        const linkedWrap = el('div', { style: 'display:flex; flex-direction:column; gap:4px;' });
+        const cellLinked = el('div', { class: 'cell cell-linked' });
+        const linkedWrap = el('div', { style: 'display:flex; flex-direction:column; gap:4px; min-width:0; max-width:100%;' });
         
         const taskRelated = WorkflowData.getRelatedForTask(t.id);
-        let linkedInv = taskRelated.invoices[0];
+        let linkedInv = taskRelated.invoices ? taskRelated.invoices[0] : null;
         if (!linkedInv) {
           const pc = WorkflowData.getPendingApprovalsWhere(p => p.table === 'invoices' && p.status === 'pending' && p.proposedData && p.proposedData.linkedTaskId === t.id)[0];
           if (pc) {
@@ -10090,46 +10173,99 @@ const Workflow = {
             linkedInv.pendingChangeId = pc.id;
           }
         }
-        const linkedDisb = taskRelated.disbursements;
+        const linkedDisb = taskRelated.disbursements || [];
+        const linkedTrans = taskRelated.transmittals || [];
         
         if (linkedInv) {
-          const badgeText = '📄 ' + linkedInv.invoiceNumber + (linkedInv.status === 'Pending' ? ' (Pending)' : '');
+          const badgeText = '📄 ' + (linkedInv.invoiceNumber || 'Invoice') + (linkedInv.status === 'Pending' ? ' (Pending)' : '');
           const badge = el('span', { class: 'badge badge-info', text: badgeText, style: 'cursor:pointer; font-size:10px;' });
           badge.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#billing/detail/' + linkedInv.id; });
           linkedWrap.appendChild(badge);
         }
         linkedDisb.forEach(d => {
-          const badge = el('span', { class: 'badge badge-warning', text: '💸 ' + d.category, style: 'cursor:pointer; font-size:10px;' });
+          const badge = el('span', { class: 'badge badge-warning', text: '💸 ' + (d.category || 'Disbursement'), style: 'cursor:pointer; font-size:10px;' });
           badge.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#disbursement/detail/' + d.id; });
           linkedWrap.appendChild(badge);
         });
+        linkedTrans.forEach(tr => {
+          const badge = el('span', { class: 'badge badge-success', text: '📦 ' + (tr.trackingNumber || 'Transmittal'), style: 'cursor:pointer; font-size:10px;' });
+          badge.addEventListener('click', (e) => { e.stopPropagation(); location.hash = '#transmittal/detail/' + tr.id; });
+          linkedWrap.appendChild(badge);
+        });
         
-        const needsInvoice = t.title.toLowerCase().includes('invoice') || t.title.toLowerCase().includes('bill');
-        const needsDisbursement = t.title.toLowerCase().includes('expense') || t.title.toLowerCase().includes('disburse') || t.title.toLowerCase().includes('payment') || t.title.toLowerCase().includes('reimburse');
-        if (!isArchived && needsInvoice && !linkedInv) {
+        // Determine requirement: custom task setting or fallback to standard templates/title
+        const titleLower = (t.title || '').toLowerCase();
+        let reqType = t.requiredLinkType;
+        if (!reqType) {
+          if (titleLower.includes('invoice') || titleLower.includes('bill')) {
+            reqType = 'billing';
+          } else if (titleLower.includes('expense') || titleLower.includes('disburse') || titleLower.includes('payment') || titleLower.includes('reimburse')) {
+            reqType = 'disbursement';
+          } else if (titleLower.includes('transmittal')) {
+            reqType = 'transmittal';
+          }
+        }
+        if (reqType === 'none') reqType = '';
+
+        if (!isArchived && reqType === 'billing' && !linkedInv) {
           const linkHint = el('span', {
+            class: 'task-link-required-badge task-link-required-billing',
             text: '⚠ Link invoice required',
             style: 'font-size:10px;color:var(--warn);font-weight:500;'
           });
           if (!disableIfPending(linkHint, wr)) {
             linkHint.style.cursor = 'pointer';
-            linkHint.addEventListener('click', (e) => { e.stopPropagation(); this.showLinkFinancialModal(t.id); });
+            linkHint.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (Auth.can('billing:edit')) {
+                this.openGenerateBillingModal(wr, t);
+              } else if (Auth.can('billing:request')) {
+                this.submitOperationsRequest('billing', wr, t);
+              }
+            });
           }
           linkedWrap.appendChild(linkHint);
         }
-        if (!isArchived && needsDisbursement && linkedDisb.length === 0) {
+        if (!isArchived && reqType === 'disbursement' && linkedDisb.length === 0) {
           const linkHint = el('span', {
-            text: '⚠ Link expense required',
+            class: 'task-link-required-badge task-link-required-disbursement',
+            text: '⚠ Link disbursement required',
             style: 'font-size:10px;color:var(--warn);font-weight:500;'
           });
           if (!disableIfPending(linkHint, wr)) {
             linkHint.style.cursor = 'pointer';
-            linkHint.addEventListener('click', (e) => { e.stopPropagation(); this.showLinkFinancialModal(t.id); });
+            linkHint.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (Auth.can('disbursement:create')) {
+                this.openGenerateDisbursementModal(wr, t);
+              } else if (Auth.can('disbursement:request')) {
+                this.submitOperationsRequest('disbursement', wr, t);
+              }
+            });
+          }
+          linkedWrap.appendChild(linkHint);
+        }
+        if (!isArchived && reqType === 'transmittal' && linkedTrans.length === 0) {
+          const linkHint = el('span', {
+            class: 'task-link-required-badge task-link-required-transmittal',
+            text: '⚠ Link transmittal required',
+            style: 'font-size:10px;color:var(--warn);font-weight:500;'
+          });
+          if (!disableIfPending(linkHint, wr)) {
+            linkHint.style.cursor = 'pointer';
+            linkHint.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (Auth.can('transmittal:create')) {
+                this.openGenerateTransmittalModal(wr, t);
+              } else if (Auth.can('transmittal:request')) {
+                this.submitOperationsRequest('transmittal', wr, t);
+              }
+            });
           }
           linkedWrap.appendChild(linkHint);
         }
 
-        if (!linkedInv && linkedDisb.length === 0 && !needsInvoice && !needsDisbursement) {
+        if (!linkedInv && linkedDisb.length === 0 && linkedTrans.length === 0 && !reqType) {
           linkedWrap.appendChild(el('span', { text: 'N/A', style: 'color:var(--muted);' }));
         }
         cellLinked.appendChild(linkedWrap);
@@ -13324,6 +13460,17 @@ const Workflow = {
     templateGroup.appendChild(templateSel);
     form.appendChild(templateGroup);
 
+    // Required Linked Record dropdown
+    const reqLinkGroup = el('div', { class: 'form-group' });
+    reqLinkGroup.appendChild(el('label', { text: 'Required Linked Record' }));
+    const reqLinkSel = el('select', { name: 'requiredLinkType', class: 'form-select' });
+    reqLinkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    reqLinkGroup.appendChild(reqLinkSel);
+    form.appendChild(reqLinkGroup);
+
     // ── Task Title free-form ──
     const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
     const titleInput = el('input', {
@@ -13541,6 +13688,11 @@ const Workflow = {
       if (!isNaN(idx) && this.standardTaskTemplates[idx]) {
         const tmpl = this.standardTaskTemplates[idx];
         titleInput.value = tmpl.title;
+        if (tmpl.requiredLinkType) {
+          reqLinkSel.value = tmpl.requiredLinkType;
+        } else {
+          reqLinkSel.value = '';
+        }
         checklistItems = tmpl.defaultChecklist.map(item => {
           const isObj = typeof item === 'object' && item && item.text;
           return this.createChecklistItemData({
@@ -13764,6 +13916,7 @@ const Workflow = {
         id: generateId('t'),
         workRequestId: wrId,
         title: data.title.trim(),
+        requiredLinkType: reqLinkSel.value || '',
         assigneeId: res.id,
         assigneeName: resolvedName,
         coAssignees: isDraft ? coAssignees.filter(Boolean) : [],
@@ -14259,7 +14412,7 @@ const Workflow = {
   renderModernProgressBar(status) {
     // Four-stage lifecycle inside work request detail (Billing/Disbursement are no longer phases).
     const stages = ['Work Request', 'Pre-processing', 'Processing', 'Documentation'];
-    const map = { 'Draft': 0, 'Pre-processing': 1, 'Processing': 2, 'Billing': 2, 'Disbursement': 2, 'Completed': 3, 'Cancelled': 3 };
+    const map = { 'Draft': 0, 'Pre-processing': 1, 'In Progress': 1, 'Processing': 2, 'Billing': 2, 'Disbursement': 2, 'Completed': 3, 'Cancelled': 3 };
     const currentIdx = map[status] ?? 0;
 
     const tracker = el('div', { class: 'stage-tracker', 'aria-label': 'Work request stage' });

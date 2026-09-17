@@ -126,6 +126,7 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
     assigneeName: row.assignee_name || null,
     predecessors: row.predecessors || [],
     dueDate: row.due_date || null,
+    requiredLinkType: row.required_link_type || null,
     displayOrder: row.display_order,
     version: row.version || 1,
     checklist: checklist.map((c) => {
@@ -767,6 +768,7 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
     assignee_name: assigneeName,
     predecessors: Array.isArray(data.predecessors) ? data.predecessors.filter(isValidUUID) : [],
     due_date: data.dueDate || null,
+    required_link_type: data.requiredLinkType || null,
     display_order: data.displayOrder ?? 0,
     created_at: now,
     updated_at: now,
@@ -981,6 +983,10 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     updated_at: new Date().toISOString(),
   };
 
+  if (data.requiredLinkType !== undefined) {
+    updates.required_link_type = data.requiredLinkType || null;
+  }
+
   // OCC (Spec 2.2 / R-10): version-guard the update when the client declares
   // the version it read; zero matching rows become a 409 conflict.
   const expectedVersion = resolveExpectedVersion(data);
@@ -1167,12 +1173,12 @@ const getTaskRelated = async ({ id, entityId }) => {
     .maybeSingle();
 
   if (!wr) {
-    return { invoices: [], disbursements: [] };
+    return { invoices: [], disbursements: [], transmittals: [] };
   }
 
   const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
 
-  const [{ data: invoices }, { data: disbursements }] = await Promise.all([
+  const [{ data: invoices }, { data: disbursements }, { data: transmittals }] = await Promise.all([
     supabaseAdmin
       .from('invoices')
       .select('*, clients(name)')
@@ -1187,11 +1193,19 @@ const getTaskRelated = async ({ id, entityId }) => {
       .eq('linked_work_request_id', task.work_request_id)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('transmittals')
+      .select('*, clients(name)')
+      .eq('entity_id', relatedEntityId)
+      .eq('work_request_id', task.work_request_id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
   ]);
 
   return {
     invoices: invoices || [],
     disbursements: disbursements || [],
+    transmittals: transmittals || [],
   };
 };
 

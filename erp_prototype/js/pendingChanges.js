@@ -128,7 +128,7 @@ const PendingChanges = {
       }
       const createdTasks = [];
       const targetWrId = wr?.id || record.id;
-      const allowedTaskFields = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist'];
+      const allowedTaskFields = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist', 'requiredLinkType'];
       for (const t of tasks) {
         const cleanTask = {};
         allowedTaskFields.forEach(key => { if (t[key] !== undefined) cleanTask[key] = t[key]; });
@@ -142,7 +142,7 @@ const PendingChanges = {
       const wrId = record.workRequestId;
       // The task endpoint only accepts a fixed set of fields; drop UI-only extras
       // so they are not serialized and sent to the backend.
-      const allowed = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist'];
+      const allowed = ['title', 'description', 'status', 'assigneeId', 'assigneeName', 'predecessors', 'dueDate', 'checklist', 'requiredLinkType'];
       Object.keys(cleanRecord).forEach(key => {
         if (!allowed.includes(key)) delete cleanRecord[key];
       });

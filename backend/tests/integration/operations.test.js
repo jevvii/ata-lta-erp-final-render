@@ -129,11 +129,12 @@ describe('/v1/work-requests', () => {
       .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Prepare documents', checklist: [{ text: 'SEC cert', completed: false }] })
+      .send({ title: 'Prepare documents', checklist: [{ text: 'SEC cert', completed: false }], requiredLinkType: 'transmittal' })
       .expect(201);
 
     expect(task.body.data.title).toBe('Prepare documents');
     expect(task.body.data.checklist).toHaveLength(1);
+    expect(task.body.data.requiredLinkType).toBe('transmittal');
 
     const tasks = await request(app)
       .get(`/v1/work-requests/${wr.body.data.id}/tasks`)
