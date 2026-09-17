@@ -440,4 +440,116 @@ describe('/v1/work-requests', () => {
       .send({ title: 'Malformed Entity WR', clientId: client.id, entity: 123 })
       .expect(400);
   });
+
+  it('auto-resolves assigneeName from users table when assigneeId is provided or assigneeName is a raw UUID', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+    const staffId = '22222222-2222-4222-8222-222222222222';
+    registerUser({
+      id: staffId,
+      email: 'staff@ata-lta.ph',
+      name: 'Elena Rostova',
+      role: 'Staff',
+      entities: ['ATA'],
+    });
+    const client = await createClient(admin, 'ATA');
+
+    const wr = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Assignee Resolution Test', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    // 1. Create task with assigneeId and NO assigneeName -> should resolve to 'Elena Rostova'
+    const task1 = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Task With Assignee ID Only',
+        assigneeId: staffId,
+      })
+      .expect(201);
+
+    expect(task1.body.data.assigneeId).toBe(staffId);
+    expect(task1.body.data.assigneeName).toBe('Elena Rostova');
+
+    // 2. Create task where assigneeName was accidentally passed as a raw UUID
+    const task2 = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Task With UUID Assignee Name',
+        assigneeId: staffId,
+        assigneeName: staffId,
+      })
+      .expect(201);
+
+    expect(task2.body.data.assigneeId).toBe(staffId);
+    expect(task2.body.data.assigneeName).toBe('Elena Rostova');
+
+    // 3. Checklist items with assigneeId
+    const task3 = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Task With Checklist Assignee',
+        checklist: [
+          {
+            text: 'Checklist Item 1',
+            assigneeId: staffId,
+            assigneeName: staffId,
+          },
+        ],
+      })
+      .expect(201);
+
+    expect(task3.body.data.checklist[0].assigneeId).toBe(staffId);
+    expect(task3.body.data.checklist[0].assigneeName).toBe('Elena Rostova');
+
+    // 4. List tasks verifies name is resolved
+    const listRes = await request(app)
+      .get(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    const t1InList = listRes.body.data.find((t) => t.id === task1.body.data.id);
+    expect(t1InList.assigneeName).toBe('Elena Rostova');
+  });
+
+  it('allows cross-entity work request retrieval by id with fallback', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+    const client = await createClient(admin, 'LTA');
+
+    // Create in LTA
+    const wr = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'LTA')
+      .send({ title: 'Cross Entity WR', clientId: client.id, entity: 'LTA' })
+      .expect(201);
+
+    // Retrieve while active entity is ATA (cross-entity lookup)
+    const getRes = await request(app)
+      .get(`/v1/work-requests/${wr.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(getRes.body.data.id).toBe(wr.body.data.id);
+    expect(getRes.body.data.title).toBe('Cross Entity WR');
+  });
 });

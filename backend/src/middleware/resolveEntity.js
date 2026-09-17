@@ -67,7 +67,7 @@ function resolveEntity(options = {}) {
           }
         }
 
-        // 4. Detect from route param id (e.g. /operations/:id)
+        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id)
         if (!resolvedCode && req.params?.id) {
           const { data: wr } = await supabaseAdmin
             .from('work_requests')
@@ -77,6 +77,16 @@ function resolveEntity(options = {}) {
           if (wr?.entity_id) {
             resolvedUUID = wr.entity_id;
             resolvedCode = await resolveEntityCode(wr.entity_id);
+          } else {
+            const { data: op } = await supabaseAdmin
+              .from('operations_requests')
+              .select('entity_id')
+              .eq('id', req.params.id)
+              .maybeSingle();
+            if (op?.entity_id) {
+              resolvedUUID = op.entity_id;
+              resolvedCode = await resolveEntityCode(op.entity_id);
+            }
           }
         }
 

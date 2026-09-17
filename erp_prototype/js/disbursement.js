@@ -182,6 +182,36 @@ const Disbursement = {
    * Convert a backend disbursement row (snake_case, joined clients.name)
    * into the camelCase shape expected by the UI.
    */
+  getWorkRequest(d) {
+    if (!d) return null;
+    const wrId = d.linkedWorkRequestId || d.linked_work_request_id || d.workRequestId;
+    if (!wrId) return null;
+    if (d.workRequest) return d.workRequest;
+    if (d.work_requests) return d.work_requests;
+    let wr = null;
+    if (window.apiClient?.workRequestCache?.getById) {
+      wr = window.apiClient.workRequestCache.getById(wrId);
+    }
+    if (!wr && typeof WorkflowData !== 'undefined' && typeof WorkflowData.getWorkRequestById === 'function') {
+      wr = WorkflowData.getWorkRequestById(wrId);
+    }
+    return wr || null;
+  },
+
+  getWorkRequestTitle(d, fallback = '—') {
+    if (!d) return fallback;
+    const wrId = d.linkedWorkRequestId || d.linked_work_request_id || d.workRequestId;
+    if (!wrId) return fallback;
+    const wr = this.getWorkRequest(d);
+    if (wr) {
+      return wr.title || wr.service_name || wr.serviceName || (wr.code ? `${wr.code} - ${wr.title || ''}` : wr.id);
+    }
+    if (d.workRequestTitle) return d.workRequestTitle;
+    if (d.work_request_title) return d.work_request_title;
+    if (d.work_requests?.title) return d.work_requests.title;
+    return fallback;
+  },
+
   normalizeDisbursement(d, entityCodeHint) {
     if (!d) return d;
     let entity = entityCodeHint
@@ -198,7 +228,7 @@ const Disbursement = {
       }
     }
     if ((!entity || entity === 'ALL') && (d.linked_work_request_id || d.linkedWorkRequestId)) {
-      const wr = window.apiClient.workRequestCache.getById(d.linked_work_request_id || d.linkedWorkRequestId);
+      const wr = this.getWorkRequest(d);
       if (wr?.entity) {
         entity = wr.entity;
       }
@@ -242,7 +272,9 @@ const Disbursement = {
       paymentHandledBy: d.payment_handled_by || d.paymentHandledBy || approvedBy || null,
       paymentDetails,
       receiptS3Key: d.receipt_s3_key || d.receiptS3Key || null,
-      receiptFilename: d.receipt_filename || d.receiptFilename || (d.receipt_s3_key ? 'Receipt' : null),
+      receiptUrl: d.receipt_url || d.receiptUrl || d.file_url || d.fileUrl || null,
+      receiptFilename: d.receipt_filename || d.receiptFilename || (d.receipt_s3_key ? 'Receipt' : (d.receipt_url || d.receiptUrl ? 'Receipt' : null)),
+      workRequestTitle: d.work_requests?.title || d.work_request_title || d.workRequestTitle || d.workRequest?.title || null,
       releaseFilename: d.release_filename || d.releaseFilename || null,
       archived: d.archived || false,
       createdAt: d.created_at || d.createdAt || null,
@@ -1352,15 +1384,15 @@ const Disbursement = {
         return u?.name || 'Unassigned';
       }},
       { key: 'workRequest', label: 'Work Request', getName: d => {
-        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
-        return wr?.title || 'No Work Request';
+        const wrTitle = this.getWorkRequestTitle(d, '');
+        return wrTitle || 'No Work Request';
       }},
       { key: 'client', label: 'Client', getName: d => {
-        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
+        const wr = this.getWorkRequest(d);
         const client = wr
           ? window.apiClient.clientCache.getById(wr.clientId)
-          : window.apiClient.clientCache.getById(d.clientId);
-        return client?.name || 'No Client';
+          : (d.clientId ? window.apiClient.clientCache.getById(d.clientId) : null);
+        return client?.name || d.clientName || 'No Client';
       }},
       { key: 'fund', label: 'Fund', getName: d => this.getFundSource(d) || 'No Fund' }
     ];
@@ -1589,16 +1621,17 @@ const Disbursement = {
     // Text search filter
     if (this.searchQuery) {
       items = items.filter(d => {
-        const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
+        const wr = this.getWorkRequest(d);
+        const wrTitle = this.getWorkRequestTitle(d, '');
         const client = wr
           ? window.apiClient.clientCache.getById(wr.clientId)
-          : window.apiClient.clientCache.getById(d.clientId);
+          : (d.clientId ? window.apiClient.clientCache.getById(d.clientId) : null);
         const emp = d.employeeId ? window.apiClient.userCache.getById(d.employeeId) : null;
         const hay = [
           d.voucherNumber || d.disbursementNumber || '',
           d.description || d.purpose || '',
-          client?.name || '',
-          wr?.title || '',
+          client?.name || d.clientName || '',
+          wrTitle,
           emp?.name || '',
           d.status || '',
           String(d.amount || ''),
@@ -1677,15 +1710,19 @@ const Disbursement = {
           if (d.fromTemplate) line.appendChild(this.recurringBadge(d));
           cell.appendChild(line);
           if (d.linkedWorkRequestId) {
-            const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
-            if (wr) {
+            const wr = this.getWorkRequest(d);
+            const wrTitle = this.getWorkRequestTitle(d, '');
+            if (wr || wrTitle) {
               const sub = el('div', { style: 'font-size: 0.725rem; color: var(--color-text-muted);' });
               let suffix = ' (Entire WR)';
               if (d.linkedTaskId) {
-                const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
+                let task = (wr?.tasks || []).find(t => t.id === d.linkedTaskId);
+                if (!task && typeof WorkflowData !== 'undefined' && WorkflowData.getTaskById) {
+                  task = WorkflowData.getTaskById(d.linkedTaskId);
+                }
                 if (task) suffix = ` (Task: ${task.title})`;
               }
-              sub.appendChild(el('span', { text: '🔗 ' + wr.title + suffix, style: 'font-weight: 500;' }));
+              sub.appendChild(el('span', { text: '🔗 ' + (wrTitle || wr?.title || 'Work Request') + suffix, style: 'font-weight: 500;' }));
               cell.appendChild(sub);
             }
           }
@@ -1864,11 +1901,15 @@ const Disbursement = {
 
       const descParts = [];
       if (d.linkedWorkRequestId) {
-        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
-        if (wr) {
-          let linked = wr.title;
+        const wr = this.getWorkRequest(d);
+        const wrTitle = this.getWorkRequestTitle(d, '');
+        if (wr || wrTitle) {
+          let linked = wrTitle || wr?.title || 'Work Request';
           if (d.linkedTaskId) {
-            const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
+            let task = (wr?.tasks || []).find(t => t.id === d.linkedTaskId);
+            if (!task && typeof WorkflowData !== 'undefined' && WorkflowData.getTaskById) {
+              task = WorkflowData.getTaskById(d.linkedTaskId);
+            }
             if (task) linked += ` (Task: ${task.title})`;
           }
           descParts.push(linked);
@@ -2113,11 +2154,15 @@ const Disbursement = {
       left.appendChild(titleRow);
       let wrMeta = '';
       if (d.linkedWorkRequestId) {
-        const wr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
-        if (wr) {
-          wrMeta = ' • WR: ' + wr.title;
+        const wr = this.getWorkRequest(d);
+        const wrTitle = this.getWorkRequestTitle(d, '');
+        if (wr || wrTitle) {
+          wrMeta = ' • WR: ' + (wrTitle || wr?.title || 'Work Request');
           if (d.linkedTaskId) {
-            const task = (wr.tasks || []).find(t => t.id === d.linkedTaskId);
+            let task = (wr?.tasks || []).find(t => t.id === d.linkedTaskId);
+            if (!task && typeof WorkflowData !== 'undefined' && WorkflowData.getTaskById) {
+              task = WorkflowData.getTaskById(d.linkedTaskId);
+            }
             if (task) wrMeta += ` (Task: ${task.title})`;
           } else {
             wrMeta += ' (Entire WR)';
@@ -2292,12 +2337,11 @@ const Disbursement = {
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
-    const activeWrIds = new Set(formWrs.map(wr => wr.id));
-    const existingWr = existing?.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId) : null;
+    const existingWr = existing?.linkedWorkRequestId ? (this.getWorkRequest(existing) || window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId)) : null;
     if (existingWr && !activeWrIds.has(existingWr.id)) {
       const client = window.apiClient.clientCache.getById(existingWr.clientId);
       const inactiveSuffix = existingWr.archived ? ' [Archived]' : (existingWr.status === 'Cancelled' ? ' [Cancelled]' : '');
-      wrSel.appendChild(el('option', { value: existingWr.id, text: existingWr.title + ' — ' + (client?.name || '—') + inactiveSuffix, selected: true }));
+      wrSel.appendChild(el('option', { value: existingWr.id, text: (existingWr.title || 'Work Request') + ' — ' + (client?.name || '—') + inactiveSuffix, selected: true }));
     }
     formWrs.forEach(wr => {
       const client = window.apiClient.clientCache.getById(wr.clientId);
@@ -2837,8 +2881,9 @@ const Disbursement = {
       return el('div');
     }
     const emp = window.apiClient.userCache.getById(this.getEmployeeId(d));
-    const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
-    const client = wr ? window.apiClient.clientCache.getById(wr.clientId) : null;
+    const wr = this.getWorkRequest(d);
+    const wrTitle = this.getWorkRequestTitle(d, '');
+    const client = wr ? window.apiClient.clientCache.getById(wr.clientId) : (d.clientId ? window.apiClient.clientCache.getById(d.clientId) : null);
 
     const container = el('div', { class: 'invoice-detail' });
 
@@ -2852,7 +2897,7 @@ const Disbursement = {
 
     // Meta Info
     const meta = el('div', { class: 'invoice-meta' });
-    meta.appendChild(el('p', { text: 'Client: ' + (client?.name || '—') }));
+    meta.appendChild(el('p', { text: 'Client: ' + (client?.name || d.clientName || '—') }));
     meta.appendChild(el('p', { text: 'Date Submitted: ' + formatDate(d.submittedAt) }));
     meta.appendChild(el('p', { text: 'Fund Source: ' + this.getFundSource(d) }));
     if (d.receiptFilename) {
@@ -2866,8 +2911,13 @@ const Disbursement = {
         try {
           if (d.receiptS3Key) {
             await Workflow.showDocumentPreview(d.receiptS3Key);
+          } else if (d.receiptUrl || d.receipt_url || d.fileUrl || d.file_url) {
+            await Workflow.showDocumentPreview({
+              url: d.receiptUrl || d.receipt_url || d.fileUrl || d.file_url,
+              fileName: d.receiptFilename || 'Receipt'
+            });
           } else {
-            Workflow.showMessage('Error', 'Receipt file key is missing.', 'danger');
+            Workflow.showMessage('Error', 'Receipt file is missing.', 'danger');
           }
         } catch (err) {
           console.error('Failed to show preview', err);
@@ -2883,51 +2933,58 @@ const Disbursement = {
 
     // Linked Work Request / Task info card
     if (d.linkedWorkRequestId) {
-      const linkedWr = window.apiClient.workRequestCache.getById(d.linkedWorkRequestId);
-      if (linkedWr) {
-        const linkCard = el('div', {
-          style: 'background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
-        });
-        const linkHeader = el('div', {
-          style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px;color:#1e40af;font-weight:600;'
-        });
-        linkHeader.appendChild(el('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' }));
-        linkHeader.appendChild(el('span', { text: 'Linked Work Request' }));
-        linkCard.appendChild(linkHeader);
+      const linkedWr = this.getWorkRequest(d);
+      const linkedTitle = this.getWorkRequestTitle(d, '') || linkedWr?.title || 'View Work Request';
+      const linkCard = el('div', {
+        style: 'background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);border-radius: 12px;padding:12px 16px;margin-bottom:var(--spacing-md);font-size:0.8125rem;'
+      });
+      const linkHeader = el('div', {
+        style: 'display:flex;align-items:center;gap:6px;margin-bottom:6px;color:#1e40af;font-weight:600;'
+      });
+      linkHeader.appendChild(el('span', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>' }));
+      linkHeader.appendChild(el('span', { text: 'Linked Work Request' }));
+      linkCard.appendChild(linkHeader);
 
-        const wrLink = el('a', {
-          href: 'javascript:void(0)',
-          text: linkedWr.title,
-          style: 'color:#2563eb;font-weight:500;text-decoration:none;'
-        });
-        wrLink.addEventListener('click', () => {
-          location.hash = '#operations/detail/' + linkedWr.id;
-        });
-        wrLink.addEventListener('mouseenter', () => { wrLink.style.textDecoration = 'underline'; });
-        wrLink.addEventListener('mouseleave', () => { wrLink.style.textDecoration = 'none'; });
-        linkCard.appendChild(wrLink);
+      const wrLink = el('a', {
+        href: 'javascript:void(0)',
+        text: linkedTitle,
+        style: 'color:#2563eb;font-weight:500;text-decoration:none;'
+      });
+      wrLink.addEventListener('click', () => {
+        location.hash = '#operations/detail/' + d.linkedWorkRequestId;
+      });
+      wrLink.addEventListener('mouseenter', () => { wrLink.style.textDecoration = 'underline'; });
+      wrLink.addEventListener('mouseleave', () => { wrLink.style.textDecoration = 'none'; });
+      linkCard.appendChild(wrLink);
 
-        if (d.linkedTaskId) {
-          const linkedTask = (linkedWr.tasks || []).find(t => t.id === d.linkedTaskId);
-          if (linkedTask) {
-            linkCard.appendChild(el('div', {
-              text: '↳ Scope: Task — ' + linkedTask.title,
-              style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
-            }));
-          }
+      if (d.linkedTaskId) {
+        let linkedTask = (linkedWr?.tasks || []).find(t => t.id === d.linkedTaskId);
+        if (!linkedTask && typeof WorkflowData !== 'undefined' && WorkflowData.getTaskById) {
+          linkedTask = WorkflowData.getTaskById(d.linkedTaskId);
+        }
+        if (linkedTask) {
+          linkCard.appendChild(el('div', {
+            text: '↳ Scope: Task — ' + linkedTask.title,
+            style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
+          }));
         } else {
           linkCard.appendChild(el('div', {
-            text: '↳ Scope: Entire Work Request / Project',
+            text: '↳ Scope: Linked Task',
             style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
           }));
         }
-
+      } else {
         linkCard.appendChild(el('div', {
-          text: 'Status: ' + (linkedWr.status || '—'),
+          text: '↳ Scope: Entire Work Request / Project',
           style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
         }));
-        container.appendChild(linkCard);
       }
+
+      linkCard.appendChild(el('div', {
+        text: 'Status: ' + (linkedWr?.status || '—'),
+        style: 'margin-top:4px;color:#64748b;font-size:0.75rem;'
+      }));
+      container.appendChild(linkCard);
     }
 
     // Linked Transmittal info card
@@ -3314,13 +3371,14 @@ const Disbursement = {
     const approver = approverId ? window.apiClient.userCache.getById(approverId) : null;
     const handler = d.paymentHandledBy ? window.apiClient.userCache.getById(d.paymentHandledBy) : null;
     const releaser = d.releasedBy ? window.apiClient.userCache.getById(d.releasedBy) : null;
-    const wr = d.linkedWorkRequestId ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId) : null;
+    const wr = this.getWorkRequest(d);
+    const wrTitle = this.getWorkRequestTitle(d, '—');
 
     return {
       empName: escapeHtml(emp?.name || '—'),
       requesterEmail: escapeHtml(requester?.email || '—'),
       requesterName: escapeHtml(requester?.name || '—'),
-      wrTitle: escapeHtml(wr?.title || '—'),
+      wrTitle: escapeHtml(wrTitle),
       category: escapeHtml(d.category || '—'),
       description: escapeHtml(d.description || '—'),
       approverName: escapeHtml(approver?.name || '—'),

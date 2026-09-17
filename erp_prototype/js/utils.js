@@ -972,7 +972,21 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
       } else {
         const match = options.find(o => o.value === val);
         selectedValue = val;
-        selectedText = match ? match.text : val;
+        if (match) {
+          selectedText = match.text;
+        } else {
+          const cachedUser = window.apiClient?.userCache?.getById?.(val);
+          const cachedGw = typeof WorkflowData !== 'undefined' && typeof WorkflowData._getGroundWorkerById === 'function' ? WorkflowData._getGroundWorkerById(val) : null;
+          if (cachedUser?.name) {
+            selectedText = cachedUser.name;
+          } else if (cachedGw?.name) {
+            selectedText = cachedGw.name;
+          } else if (typeof val === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)) {
+            selectedText = `Employee (${val.slice(0, 8)}...)`;
+          } else {
+            selectedText = val;
+          }
+        }
         input.value = selectedText;
       }
       input.title = input.value || placeholder || '';
@@ -982,6 +996,10 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
 
   Object.defineProperty(wrapper, 'searchText', {
     get() { return input.value; }
+  });
+
+  Object.defineProperty(wrapper, 'selectedText', {
+    get() { return selectedText; }
   });
 
   wrapper.destroy = () => {
@@ -1166,9 +1184,15 @@ function getTaskAllAssigneeNames(task) {
   const names = new Set();
   if (task.assigneeName) names.add(task.assigneeName);
   (task.coAssignees || []).forEach(n => { if (n) names.add(n); });
-  if (!task.assigneeName && (task.assigneeId || task.assignedTo)) {
-    const u = window.apiClient?.userCache?.getById(task.assigneeId || task.assignedTo);
-    if (u?.name) names.add(u.name);
+  const rawId = task.assigneeId || task.assignedTo;
+  if (!task.assigneeName && rawId) {
+    const u = window.apiClient?.userCache?.getById?.(rawId);
+    if (u?.name) {
+      names.add(u.name);
+    } else if (typeof WorkflowData !== 'undefined' && typeof WorkflowData._getGroundWorkerById === 'function') {
+      const gw = WorkflowData._getGroundWorkerById(rawId);
+      if (gw?.name) names.add(gw.name);
+    }
   }
   return Array.from(names);
 }

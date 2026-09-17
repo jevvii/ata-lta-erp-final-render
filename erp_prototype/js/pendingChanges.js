@@ -498,25 +498,110 @@ const PendingChanges = {
     return Auth.canApproveChange(pc.table || pc.tableName);
   },
 
+  _invalidateAllCaches() {
+    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
+    if (usersMod) {
+      if (typeof usersMod.invalidateCache === 'function') usersMod.invalidateCache();
+      usersMod._pendingPreloadTs = 0;
+      usersMod._cachedAllPending = null;
+      usersMod._cachedMyPending = null;
+      usersMod._cachedMyRejected = null;
+      usersMod._cachedPendingOpRequests = null;
+      if (typeof usersMod.invalidateCounts === 'function') usersMod.invalidateCounts();
+    }
+    if (window.apiClient?.pendingApprovals?.invalidateCounts) window.apiClient.pendingApprovals.invalidateCounts();
+    if (window.apiClient?.operationsRequests?.invalidateCounts) window.apiClient.operationsRequests.invalidateCounts();
+    if (window.apiClient?.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+    if (typeof Disbursement !== 'undefined' && typeof Disbursement.invalidateCache === 'function') Disbursement.invalidateCache();
+    if (typeof Billing !== 'undefined' && typeof Billing.invalidateCache === 'function') Billing.invalidateCache();
+    if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidate === 'function') WorkflowData.invalidate();
+  },
+
   async approve(pendingId) {
     const api = this._api();
     if (!api) return false;
-    await api.pendingApprovals.approve(pendingId);
-    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
-    if (usersMod && typeof usersMod.invalidateCache === 'function') {
-      usersMod.invalidateCache();
+    let approved = false;
+    try {
+      await api.pendingApprovals.approve(pendingId);
+      approved = true;
+    } catch (err) {
+      // Fallback: If pendingId belongs to an operations request or direct record
+      if (api.operationsRequests) {
+        try {
+          await api.operationsRequests.update(pendingId, {
+            status: 'fulfilled',
+            fulfilledBy: typeof Auth !== 'undefined' ? Auth.user?.id : null,
+            fulfilledAt: new Date().toISOString()
+          });
+          approved = true;
+        } catch (_) {}
+      }
+      if (!approved && api.disbursements) {
+        try {
+          await api.disbursements.update(pendingId, {
+            status: 'Approved',
+            approvedBy: typeof Auth !== 'undefined' ? Auth.user?.id : null,
+            approvedAt: new Date().toISOString()
+          });
+          approved = true;
+        } catch (_) {}
+      }
+      if (!approved && api.invoices) {
+        try {
+          await api.invoices.update(pendingId, { status: 'Approved' });
+          approved = true;
+        } catch (_) {}
+      }
+      if (!approved) throw err;
     }
+    this._invalidateAllCaches();
     return true;
   },
 
   async reject(pendingId, reason) {
     const api = this._api();
     if (!api) return false;
-    await api.pendingApprovals.reject(pendingId, { reason });
-    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
-    if (usersMod && typeof usersMod.invalidateCache === 'function') {
-      usersMod.invalidateCache();
+    let rejected = false;
+    try {
+      await api.pendingApprovals.reject(pendingId, { reason });
+      rejected = true;
+    } catch (err) {
+      // Fallback: If pendingId belongs to an operations request or direct record
+      if (api.operationsRequests) {
+        try {
+          await api.operationsRequests.update(pendingId, {
+            status: 'rejected',
+            rejectionReason: reason,
+            rejection_reason: reason,
+            fulfilledBy: typeof Auth !== 'undefined' ? Auth.user?.id : null,
+            fulfilledAt: new Date().toISOString()
+          });
+          rejected = true;
+        } catch (_) {}
+      }
+      if (!rejected && api.disbursements) {
+        try {
+          await api.disbursements.update(pendingId, {
+            status: 'Rejected',
+            rejectionReason: reason,
+            rejection_reason: reason
+          });
+          rejected = true;
+        } catch (_) {}
+      }
+      if (!rejected && api.invoices) {
+        try {
+          await api.invoices.update(pendingId, {
+            status: 'Rejected',
+            rejectionReason: reason,
+            rejection_reason: reason
+          });
+          rejected = true;
+        } catch (_) {}
+      }
+      if (!rejected) throw err;
     }
+    this._invalidateAllCaches();
     return true;
   },
 
@@ -535,10 +620,7 @@ const PendingChanges = {
       proposedData: deepClone(pc.proposedData)
     });
     await api.pendingApprovals.reject(pendingId, { reason: 'Resubmitted by submitter' }).catch(() => {});
-    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
-    if (usersMod && typeof usersMod.invalidateCache === 'function') {
-      usersMod.invalidateCache();
-    }
+    this._invalidateAllCaches();
     return true;
   },
 
@@ -555,10 +637,7 @@ const PendingChanges = {
     if (pc.status === 'pending') {
       await api.pendingApprovals.reject(pendingId, { reason: 'Withdrawn by submitter' });
     }
-    const usersMod = (typeof window !== 'undefined' && window.Users) || (typeof Users !== 'undefined' ? Users : null);
-    if (usersMod && typeof usersMod.invalidateCache === 'function') {
-      usersMod.invalidateCache();
-    }
+    this._invalidateAllCaches();
     return true;
   },
 

@@ -80,7 +80,7 @@ router.post(
 );
 router.get(
   '/:id',
-  resolveEntity(),
+  resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
   operationsController.getById
 );

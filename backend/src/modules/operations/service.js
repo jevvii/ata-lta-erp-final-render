@@ -184,6 +184,47 @@ const isBackOffice = (user) => {
   );
 };
 
+const resolveAssigneeName = async (assigneeId, assigneeName) => {
+  if (assigneeName && !isValidUUID(assigneeName)) {
+    return assigneeName;
+  }
+  if (assigneeId && isValidUUID(assigneeId)) {
+    const { data } = await supabaseAdmin
+      .from('users')
+      .select('name')
+      .eq('id', assigneeId)
+      .maybeSingle();
+    if (data?.name) return data.name;
+  }
+  return assigneeName || null;
+};
+
+const resolveTasksAssigneeNames = async (taskRows) => {
+  const missingAssigneeIds = new Set();
+  (taskRows || []).forEach((t) => {
+    if (t.assignee_id && (!t.assignee_name || isValidUUID(t.assignee_name))) {
+      missingAssigneeIds.add(t.assignee_id);
+    }
+  });
+
+  if (missingAssigneeIds.size > 0) {
+    const { data: userRows } = await supabaseAdmin
+      .from('users')
+      .select('id, name')
+      .in('id', Array.from(missingAssigneeIds));
+    const userNameMap = new Map((userRows || []).map((u) => [u.id, u.name]));
+    (taskRows || []).forEach((t) => {
+      if (t.assignee_id && (!t.assignee_name || isValidUUID(t.assignee_name))) {
+        const resolved = userNameMap.get(t.assignee_id);
+        if (resolved) {
+          t.assignee_name = resolved;
+        }
+      }
+    });
+  }
+  return taskRows;
+};
+
 const loadTasksForWorkRequests = async (wrIds) => {
   const tasks = new Map();
   if (!wrIds.length) return tasks;
@@ -194,7 +235,9 @@ const loadTasksForWorkRequests = async (wrIds) => {
     .is('deleted_at', null)
     .order('display_order', { ascending: true });
 
-  (data || []).forEach((t) => {
+  const taskRows = await resolveTasksAssigneeNames(data || []);
+
+  taskRows.forEach((t) => {
     if (!tasks.has(t.work_request_id)) tasks.set(t.work_request_id, []);
     tasks.get(t.work_request_id).push(t);
   });
@@ -215,7 +258,31 @@ const loadTaskExtras = async (taskIds) => {
       .in('linked_task_id', taskIds)
       .is('deleted_at', null),
   ]);
-  (clRows || []).forEach((r) => {
+
+  const checklistRows = clRows || [];
+  const missingClAssigneeIds = new Set();
+  checklistRows.forEach((c) => {
+    if (c.assignee_id && (!c.assignee_name || isValidUUID(c.assignee_name))) {
+      missingClAssigneeIds.add(c.assignee_id);
+    }
+  });
+  if (missingClAssigneeIds.size > 0) {
+    const { data: userRows } = await supabaseAdmin
+      .from('users')
+      .select('id, name')
+      .in('id', Array.from(missingClAssigneeIds));
+    const userNameMap = new Map((userRows || []).map((u) => [u.id, u.name]));
+    checklistRows.forEach((c) => {
+      if (c.assignee_id && (!c.assignee_name || isValidUUID(c.assignee_name))) {
+        const resolved = userNameMap.get(c.assignee_id);
+        if (resolved) {
+          c.assignee_name = resolved;
+        }
+      }
+    });
+  }
+
+  checklistRows.forEach((r) => {
     if (!checklist.has(r.task_id)) checklist.set(r.task_id, []);
     checklist.get(r.task_id).push(r);
   });
@@ -415,13 +482,33 @@ const createWorkRequest = async ({ entityId, data, user }) => {
 };
 
 const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) => {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('work_requests')
     .select('*')
     .eq('id', id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const res = await query.maybeSingle();
+  let data = res.data;
+  const error = res.error;
+
+  // Fallback: If not found under entityId (e.g. cross-entity lookup from consolidated view or link),
+  // lookup by ID alone and verify user has access to that work request's entity
+  if (!data && entityId && entityId !== 'ALL') {
+    const fallbackRes = await supabaseAdmin
+      .from('work_requests')
+      .select('*')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .maybeSingle();
+    if (fallbackRes.data) {
+      data = fallbackRes.data;
+    }
+  }
 
   if (error) {
     throw new AppError({
@@ -435,7 +522,7 @@ const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) 
   const taskMap = await loadTasksForWorkRequests([id]);
   if (!canViewWorkRequest(data, user, taskMap)) return null;
 
-  const entityCode = await resolveEntityCode(entityId);
+  const entityCode = await resolveEntityCode(data.entity_id || entityId);
   const wr = toApiWorkRequest(data, entityCode);
 
   if (includeTasks) {
@@ -616,9 +703,10 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
     });
   }
 
-  const taskIds = (data || []).map((t) => t.id);
+  const taskRows = await resolveTasksAssigneeNames(data || []);
+  const taskIds = taskRows.map((t) => t.id);
   const extras = await loadTaskExtras(taskIds);
-  return (data || []).map((t) =>
+  return taskRows.map((t) =>
     toApiTask(t, {
       checklist: extras.checklist.get(t.id) || [],
       timeLogs: extras.timeLogs.get(t.id) || [],
@@ -628,13 +716,17 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
 };
 
 const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('tasks')
     .select('*')
     .eq('id', taskId)
-    .eq('work_request_id', workRequestId)
-    .is('deleted_at', null)
-    .maybeSingle();
+    .is('deleted_at', null);
+
+  if (workRequestId) {
+    query = query.eq('work_request_id', workRequestId);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     throw new AppError({
@@ -644,6 +736,11 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
     });
   }
   if (!data) return null;
+
+  if (data.assignee_id && (!data.assignee_name || isValidUUID(data.assignee_name))) {
+    const resolved = await resolveAssigneeName(data.assignee_id, data.assignee_name);
+    if (resolved) data.assignee_name = resolved;
+  }
 
   const extras = await loadTaskExtras([taskId]);
   return toApiTask(data, {
@@ -656,6 +753,10 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId }) => {
 const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
   const id = data.id && isValidUUID(data.id) ? data.id : randomUUID();
   const now = new Date().toISOString();
+  let assigneeName = data.assigneeName || null;
+  if ((!assigneeName || isValidUUID(assigneeName)) && data.assigneeId) {
+    assigneeName = await resolveAssigneeName(data.assigneeId, assigneeName);
+  }
   const record = {
     id,
     work_request_id: workRequestId,
@@ -663,7 +764,7 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
     description: data.description || null,
     status: data.status || 'Draft',
     assignee_id: data.assigneeId || null,
-    assignee_name: data.assigneeName || null,
+    assignee_name: assigneeName,
     predecessors: Array.isArray(data.predecessors) ? data.predecessors.filter(isValidUUID) : [],
     due_date: data.dueDate || null,
     display_order: data.displayOrder ?? 0,
@@ -716,6 +817,22 @@ const upsertChecklist = async (taskId, checklist) => {
     }
   });
 
+  const missingUserIds = new Set();
+  checklist.forEach((item) => {
+    if (item.assigneeId && (!item.assigneeName || isValidUUID(item.assigneeName))) {
+      missingUserIds.add(item.assigneeId);
+    }
+  });
+
+  let userNameMap = new Map();
+  if (missingUserIds.size > 0) {
+    const { data: userRows } = await supabaseAdmin
+      .from('users')
+      .select('id, name')
+      .in('id', Array.from(missingUserIds));
+    userNameMap = new Map((userRows || []).map((u) => [u.id, u.name]));
+  }
+
   const rows = checklist.map((item) => {
     let dependsOn = Array.isArray(item.dependsOn)
       ? item.dependsOn
@@ -727,6 +844,10 @@ const upsertChecklist = async (taskId, checklist) => {
     dependsOn = dependsOn.map((id) => chkIdMap.get(id) || id).filter(isValidUUID);
 
     const itemId = item.id ? chkIdMap.get(item.id) || item.id : randomUUID();
+    let clAssigneeName = item.assigneeName || null;
+    if ((!clAssigneeName || isValidUUID(clAssigneeName)) && item.assigneeId) {
+      clAssigneeName = userNameMap.get(item.assigneeId) || clAssigneeName;
+    }
 
     return {
       id: isValidUUID(itemId) ? itemId : randomUUID(),
@@ -735,7 +856,7 @@ const upsertChecklist = async (taskId, checklist) => {
       category: item.category || null,
       completed: item.completed ?? false,
       assignee_id: item.assigneeId || null,
-      assignee_name: item.assigneeName || null,
+      assignee_name: clAssigneeName,
       depends_on: dependsOn,
       period_year: item.periodYear || null,
     };
@@ -837,12 +958,18 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
   }
 
+  let assigneeName = data.assigneeName ?? existing.assigneeName;
+  const assigneeId = data.assigneeId ?? existing.assigneeId;
+  if ((!assigneeName || isValidUUID(assigneeName)) && assigneeId) {
+    assigneeName = await resolveAssigneeName(assigneeId, assigneeName);
+  }
+
   const updates = {
     title: data.title ?? existing.title,
     description: data.description ?? existing.description,
     status: data.status ?? existing.status,
-    assignee_id: data.assigneeId ?? existing.assigneeId,
-    assignee_name: data.assigneeName ?? existing.assigneeName,
+    assignee_id: assigneeId,
+    assignee_name: assigneeName,
     predecessors:
       data.predecessors !== undefined
         ? Array.isArray(data.predecessors)

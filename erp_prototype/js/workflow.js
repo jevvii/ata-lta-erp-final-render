@@ -135,6 +135,7 @@ const WorkflowData = {
       })),
       coAssignees: task.coAssignees || [],
       priority: task.priority || 'Normal',
+      assigneeName: task.assigneeName || (task.assigneeId ? (window.apiClient?.userCache?.getById?.(task.assigneeId)?.name || (typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(task.assigneeId)?.name : null)) : null),
       assignedTo: task.assignedTo || task.assigneeId || null,
       checklist: (task.checklist || []).map(item => ({
         id: item.id || generateUUID(),
@@ -142,7 +143,7 @@ const WorkflowData = {
         category: item.category || 'subtask',
         completed: item.completed ?? false,
         assigneeId: item.assigneeId || null,
-        assigneeName: item.assigneeName || null,
+        assigneeName: item.assigneeName || (item.assigneeId ? (window.apiClient?.userCache?.getById?.(item.assigneeId)?.name || (typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(item.assigneeId)?.name : null)) : null),
         dependsOn: Array.isArray(item.dependsOn)
           ? (item.dependsOn[0] || null)
           : (item.dependsOn || null),
@@ -1870,13 +1871,27 @@ const Workflow = {
   createChecklistItemData(overrides = {}) {
     const category = overrides.category || this.ChecklistCategory.SUBTASK;
     const isDoc = category === this.ChecklistCategory.DOCUMENT;
+    let assigneeName = overrides.assigneeName || null;
+    let assigneeId = overrides.assigneeId || null;
+    if (assigneeId && (!assigneeName || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assigneeName))) {
+      const u = window.apiClient?.userCache?.getById?.(assigneeId);
+      const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(assigneeId) : null;
+      if (u?.name) assigneeName = u.name;
+      else if (gw?.name) assigneeName = gw.name;
+    } else if (assigneeName && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assigneeName)) {
+      if (!assigneeId) assigneeId = assigneeName;
+      const u = window.apiClient?.userCache?.getById?.(assigneeName);
+      const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(assigneeName) : null;
+      if (u?.name) assigneeName = u.name;
+      else if (gw?.name) assigneeName = gw.name;
+    }
     return {
       id: overrides.id || generateUUID(),
       text: overrides.text || '',
       category: category,
       completed: overrides.completed || false,
-      assigneeId: overrides.assigneeId || null,
-      assigneeName: overrides.assigneeName || null,
+      assigneeId: assigneeId || null,
+      assigneeName: assigneeName || null,
       dependsOn: overrides.dependsOn || null,
       periodYear: isDoc ? this.getDefaultPeriodValue(overrides.periodYear) : (overrides.periodYear || null),
       timeLogs: overrides.timeLogs || [],
@@ -2013,21 +2028,43 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId: null, assigneeName }.
    */
-  async resolveAssignee(name) {
-    if (!name) return { id: null, name: null };
-    const trimmed = name.trim();
-    if (!trimmed) return { id: null, name: null };
-
+  async resolveAssignee(nameOrId, explicitId = null) {
+    if (!nameOrId && !explicitId) return { id: null, name: null };
+    const trimmed = (nameOrId || '').trim();
     await this._loadGroundWorkers();
 
-    // Check system users first
-    const user = ((window.apiClient.userCache._users || []) || [])
-      .find(u => (u.name || '').toLowerCase() === trimmed.toLowerCase());
-    if (user) return { id: user.id, name: user.name };
+    const candidateId = explicitId || (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed) || trimmed.startsWith('gw-') || trimmed.startsWith('usr-') ? trimmed : null);
 
-    // Check ground workers next
-    const gw = this._getGroundWorkerByName(trimmed);
-    if (gw) return { id: gw.id, name: gw.name };
+    if (candidateId) {
+      const user = ((window.apiClient?.userCache?._users || []) || []).find(u => u.id === candidateId);
+      if (user) return { id: user.id, name: user.name };
+      const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(candidateId) : null;
+      if (gw) return { id: gw.id, name: gw.name };
+    }
+
+    if (!trimmed) {
+      return { id: candidateId || null, name: null };
+    }
+
+    // Check system users first by exact ID or name
+    const userById = ((window.apiClient?.userCache?._users || []) || []).find(u => u.id === trimmed);
+    if (userById) return { id: userById.id, name: userById.name };
+
+    const gwById = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(trimmed) : null;
+    if (gwById) return { id: gwById.id, name: gwById.name };
+
+    const userByName = ((window.apiClient?.userCache?._users || []) || [])
+      .find(u => (u.name || '').toLowerCase() === trimmed.toLowerCase());
+    if (userByName) return { id: userByName.id, name: userByName.name };
+
+    // Check ground workers next by name
+    const gwByName = this._getGroundWorkerByName(trimmed);
+    if (gwByName) return { id: gwByName.id, name: gwByName.name };
+
+    // If trimmed looks like a UUID or ID, DO NOT create a ground worker named after a UUID!
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed) || trimmed.startsWith('gw-') || trimmed.startsWith('usr-')) {
+      return { id: trimmed, name: null };
+    }
 
     // Generate and register new ground worker
     const newGw = await this._addGroundWorker(trimmed);
@@ -2040,7 +2077,7 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId, assigneeName }.
    */
-  async createGroundWorkerDropdown({ selectedGroundWorkerName, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
+  async createGroundWorkerDropdown({ selectedGroundWorkerName, selectedAssigneeId, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
     await Promise.all([
       window.apiClient.userCache.ensure(),
       this._loadGroundWorkers()
@@ -2137,18 +2174,38 @@ const Workflow = {
     };
 
     // Set initial value
-    if (selectedGroundWorkerName) {
-      const nameLower = selectedGroundWorkerName.toLowerCase();
+    let initialName = (selectedGroundWorkerName || '').trim();
+    let initialId = selectedAssigneeId || null;
+
+    if (!initialId && initialName && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(initialName)) {
+      initialId = initialName;
+      initialName = '';
+    }
+
+    if (initialId) {
+      const user = ((window.apiClient.userCache._users || []) || []).find(u => u.id === initialId);
+      if (user) {
+        dropdown.value = user.id;
+      } else {
+        const gw = this._getGroundWorkerById(initialId);
+        if (gw) {
+          dropdown.value = gw.id;
+        } else {
+          dropdown.value = initialId;
+        }
+      }
+    } else if (initialName) {
+      const nameLower = initialName.toLowerCase();
       const user = ((window.apiClient.userCache._users || []) || [])
         .find(u => (u.name || '').toLowerCase() === nameLower);
       if (user) {
         dropdown.value = user.id;
       } else {
-        const gw = this._getGroundWorkerByName(selectedGroundWorkerName);
+        const gw = this._getGroundWorkerByName(initialName);
         if (gw) {
           dropdown.value = gw.id;
         } else {
-          dropdown.value = selectedGroundWorkerName;
+          dropdown.value = initialName;
         }
       }
     } else {
@@ -6670,6 +6727,7 @@ const Workflow = {
       // Editable mode: dropdown for primary assignee + co-assignee picker
       const gwDropdown = await this.createGroundWorkerDropdown({
         selectedGroundWorkerName: task.assigneeName || '',
+        selectedAssigneeId: task.assigneeId || task.assignedTo || null,
         placeholder: 'Assign primary employee...',
         className: 'side-pane-primary-assignee-dropdown',
         onChange: ({ assigneeId, assigneeName }) => {
@@ -6842,6 +6900,7 @@ const Workflow = {
               if (allowAssignChecklist) {
                 const assigneeDropdown = await this.createGroundWorkerDropdown({
                   selectedGroundWorkerName: item.assigneeName,
+                  selectedAssigneeId: item.assigneeId || null,
                   placeholder: 'Assign...',
                   className: 'checklist-assignee-dropdown',
                   priorityNames: getTaskAllAssigneeNames(task),
@@ -7830,6 +7889,7 @@ const Workflow = {
     // Ground worker assignee — typable dropdown like the filter tray
     const gwDropdown = await this.createGroundWorkerDropdown({
       selectedGroundWorkerName: taskData?.assigneeName || '',
+      selectedAssigneeId: taskData?.assigneeId || taskData?.assignedTo || null,
       placeholder: 'Employee...',
       className: 'task-assignee-groundworker',
       onChange: () => {} // value is read at submit time
@@ -8128,8 +8188,15 @@ const Workflow = {
       if (!title) continue;
       const gwAutocomplete = row.querySelector('.task-assignee-groundworker');
       const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
+      const groundWorkerId = gwAutocomplete?.value || null;
 
-      const res = await this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
+      let resolvedName = res.name;
+      if (!resolvedName && res.id) {
+        const u = window.apiClient?.userCache?.getById?.(res.id);
+        const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
+        resolvedName = u?.name || gw?.name || null;
+      }
 
       const predKeysStr = row.dataset.predKeys || '';
       const predecessorKeys = predKeysStr.split(',').filter(Boolean);
@@ -8137,7 +8204,7 @@ const Workflow = {
         key: row.dataset.taskKey || generateId('tmp'),
         title,
         assigneeId: res.id,
-        assigneeName: res.name,
+        assigneeName: resolvedName,
         coAssignees: row._coAssignees || [],
         predecessorKeys: predecessorKeys,
         checklist: row._checklist || []
@@ -9864,6 +9931,7 @@ const Workflow = {
           // Ground worker assignee — typable dropdown like the filter tray
           const gwDropdown = await this.createGroundWorkerDropdown({
             selectedGroundWorkerName: t.assigneeName || '',
+            selectedAssigneeId: t.assigneeId || t.assignedTo || null,
             placeholder: 'Employee...',
             className: 'inline-ground-worker-autocomplete',
             onChange: ({ assigneeId, assigneeName }) => {
@@ -10395,6 +10463,7 @@ const Workflow = {
                 if (allowAssignChecklist) {
                   const assigneeDropdown = await this.createGroundWorkerDropdown({
                     selectedGroundWorkerName: item.assigneeName,
+                    selectedAssigneeId: item.assigneeId || null,
                     placeholder: 'Assign...',
                     className: 'checklist-assignee-dropdown',
                     priorityNames: getTaskAllAssigneeNames(t),
@@ -11604,6 +11673,16 @@ const Workflow = {
         fileSize = docInput.file.size || 0;
         url = URL.createObjectURL(docInput.file);
         isLocalBlob = true;
+      } else if (docInput && typeof docInput === 'object' && docInput.url) {
+        url = docInput.url;
+        fileName = docInput.fileName || docInput.filename || docInput.name || 'Receipt';
+        contentType = docInput.contentType || '';
+        fileSize = docInput.fileSize || docInput.size || 0;
+        createdAt = docInput.createdAt || new Date().toISOString();
+      } else if (typeof docInput === 'string' && (docInput.startsWith('http://') || docInput.startsWith('https://') || docInput.startsWith('data:') || docInput.startsWith('blob:'))) {
+        url = docInput;
+        fileName = 'Receipt Document';
+        createdAt = new Date().toISOString();
       } else {
         const docRes = await window.apiClient.documents.get(docInput);
         const doc = docRes.data;
@@ -13376,6 +13455,7 @@ const Workflow = {
 
           const assigneeDropdown = await this.createGroundWorkerDropdown({
             selectedGroundWorkerName: item.assigneeName,
+            selectedAssigneeId: item.assigneeId || null,
             placeholder: 'Assign...',
             maxWidth: '140px',
             className: 'modal-checklist-assignee',
@@ -13667,20 +13747,27 @@ const Workflow = {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const groundWorkerName = gwDropdown.searchText.trim();
+      const groundWorkerId = gwDropdown.value || null;
       const data = Object.fromEntries(new FormData(form).entries());
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = await this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
+      let resolvedName = res.name;
+      if (!resolvedName && res.id) {
+        const u = window.apiClient?.userCache?.getById?.(res.id);
+        const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
+        resolvedName = u?.name || gw?.name || null;
+      }
 
       const newTask = {
         id: generateId('t'),
         workRequestId: wrId,
         title: data.title.trim(),
         assigneeId: res.id,
-        assigneeName: res.name,
+        assigneeName: resolvedName,
         coAssignees: isDraft ? coAssignees.filter(Boolean) : [],
-        status: (groundWorkerName || coAssignees.length > 0) ? 'Assigned' : 'Draft',
+        status: (resolvedName || coAssignees.length > 0) ? 'Assigned' : 'Draft',
         priority: data.priority || 'Priority',
         dueDate: data.dueDate || '',
         createdAt: new Date().toISOString(),
@@ -13835,6 +13922,7 @@ const Workflow = {
       placeholder: 'Employee...',
       className: 'modal-task-assignee',
       selectedGroundWorkerName: task.assigneeName || '',
+      selectedAssigneeId: task.assigneeId || task.assignedTo || null,
       onChange: () => {}
     });
     const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
@@ -13945,6 +14033,7 @@ const Workflow = {
 
         const assigneeDropdown = await this.createGroundWorkerDropdown({
           selectedGroundWorkerName: item.assigneeName,
+          selectedAssigneeId: item.assigneeId || null,
           placeholder: 'Assign...',
           maxWidth: '140px',
           className: 'modal-checklist-assignee',
@@ -14122,11 +14211,18 @@ const Workflow = {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
       const groundWorkerName = gwDropdown.searchText.trim();
+      const groundWorkerId = gwDropdown.value || null;
       const data = Object.fromEntries(new FormData(form).entries());
       const allExistingIds = existingTasks.map(t => t.id);
       const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
-      const res = await this.resolveAssignee(groundWorkerName);
+      const res = await this.resolveAssignee(groundWorkerName, groundWorkerId);
+      let resolvedName = res.name;
+      if (!resolvedName && res.id) {
+        const u = window.apiClient?.userCache?.getById?.(res.id);
+        const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(res.id) : null;
+        resolvedName = u?.name || gw?.name || null;
+      }
 
       const runResult = await this.runBlockingArchiveAction({
         title: 'Saving Task',
@@ -14135,7 +14231,7 @@ const Workflow = {
           await WorkflowData.updateTask(task.id, {
             title: data.title.trim(),
             assigneeId: res.id,
-            assigneeName: res.name,
+            assigneeName: resolvedName,
             coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],
             priority: data.priority || 'Priority',
             dueDate: data.dueDate || '',
