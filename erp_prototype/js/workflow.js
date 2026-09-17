@@ -8614,7 +8614,7 @@ const Workflow = {
     try {
       if (window.apiClient?.operationsRequests?.list) {
         const opRes = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, status: 'pending' });
-        pendingOpsReqs = opRes?.data || [];
+        pendingOpsReqs = (opRes?.data || []).map(r => (window.Users?._normalizeOperationsRequest ? window.Users._normalizeOperationsRequest(r) : r));
       }
     } catch (e) {
       console.warn('[Workflow.renderDetail] failed to load pending operations requests', e);
@@ -8632,10 +8632,28 @@ const Workflow = {
       pendingOpsReqs.forEach(req => {
         const row = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; font-size: 0.875rem; padding: 4px 0;' });
         const reqType = req.type ? req.type.toUpperCase() : 'REQUEST';
-        const submitter = window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(req.requestedBy) : null;
+        const reqBy = req.requestedBy || req.requested_by;
+        const reqAt = req.requestedAt || req.requested_at || req.created_at || req.createdAt;
+        const submitter = window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(reqBy) : null;
         const subName = submitter ? submitter.name : 'Staff';
-        row.innerHTML = `<span><strong>${reqType} Request:</strong> ${escapeHtml(req.notes || 'Awaiting review')} <span style="color: var(--color-text-muted); font-size: 0.8125rem;">(Requested by ${escapeHtml(subName)} on ${formatDate(req.requestedAt)})</span></span>`;
-        row.appendChild(el('span', { class: 'badge badge-warning', text: 'Pending' }));
+        row.innerHTML = `<span><strong>${reqType} Request:</strong> ${escapeHtml(req.notes || 'Awaiting review')} <span style="color: var(--color-text-muted); font-size: 0.8125rem;">(Requested by ${escapeHtml(subName)} on ${formatDate(reqAt)})</span></span>`;
+        const rightWrap = el('div', { style: 'display: flex; align-items: center; gap: 8px;' });
+        rightWrap.appendChild(el('span', { class: 'badge badge-warning', text: 'Pending' }));
+        const reviewBtn = el('button', {
+          class: 'btn btn-secondary btn-sm',
+          text: 'Review',
+          style: 'padding: 2px 8px; font-size: 0.75rem;'
+        });
+        reviewBtn.addEventListener('click', () => {
+          const normReq = window.Users?._normalizeOperationsRequest ? window.Users._normalizeOperationsRequest(req) : req;
+          if (window.Users && typeof window.Users.openRequestDetailSidePeek === 'function') {
+            window.Users.openRequestDetailSidePeek(normReq);
+          } else {
+            location.hash = `#admin/pending/${req.id}`;
+          }
+        });
+        rightWrap.appendChild(reviewBtn);
+        row.appendChild(rightWrap);
         banner.appendChild(row);
       });
       container.appendChild(banner);

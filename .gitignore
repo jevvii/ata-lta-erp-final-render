@@ -24,3 +24,4 @@ erp_prototype/env.js
 erp_prototype/.build-tmp/
 *.gz
 *.br
+.playwright-mcp/

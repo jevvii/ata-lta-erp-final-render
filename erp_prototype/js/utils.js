@@ -1673,7 +1673,7 @@ class SidePane {
       location.hash = this.fullPageRoute;
       const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
       if (appRef && typeof appRef.handleRoute === 'function') appRef.handleRoute();
-      setTimeout(() => { this._forceMode = null; }, 0);
+      setTimeout(() => { this._forceMode = null; }, 500);
     } else {
       console.warn('SidePane: full-page requested but no route or onExpand provided.');
     }

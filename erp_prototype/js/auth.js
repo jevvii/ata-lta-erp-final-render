@@ -93,6 +93,12 @@ const Auth = {
       this.activeEntity = this.user.activeEntity || (this.user.entities.includes('ATA') ? 'ATA' : 'LTA');
       localStorage.setItem(this._sessionKey, JSON.stringify({ activeEntity: this.activeEntity }));
       this.updateSessionClasses(true);
+
+      if (typeof Users !== 'undefined') {
+        Users.container = null;
+        Users.lastUserId = null;
+        if (typeof Users.invalidateCache === 'function') Users.invalidateCache();
+      }
       return true;
     } catch (e) {
       // Log the real error in dev so we can distinguish
@@ -171,6 +177,8 @@ const Auth = {
         Users._usersLoaded = false;
         Users.view = 'users';
         Users.lastUserId = null;
+        Users.container = null;
+        Users._counts = { users: 0, audit: 0, pending: 0, myPending: 0, myRequests: 0 };
       }
       if (window.apiClient) {
         if (window.apiClient.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();

@@ -646,3 +646,7 @@ const PendingChanges = {
     return el('div', {}, rows);
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.PendingChanges = PendingChanges;
+}

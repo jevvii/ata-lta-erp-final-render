@@ -702,7 +702,11 @@ const App = {
         Users.editingId = (pathParts[3] && pathParts[3] !== 'new') ? pathParts[3] : 'new';
         Users.sidePeekId = null;
       } else if (pathParts[1]) {
-        Users.view = pathParts[1];
+        let viewKey = pathParts[1];
+        if (viewKey === 'my-requests' || viewKey === 'myRequests') viewKey = 'myRequests';
+        else if (viewKey === 'my-pending' || viewKey === 'myPending') viewKey = 'myPending';
+        else if (viewKey === 'pending-approvals' || viewKey === 'pendingApprovals') viewKey = 'pending';
+        Users.view = viewKey;
         Users.sidePeekId = pathParts[2] || null;
         Users.editingId = null;
       } else {

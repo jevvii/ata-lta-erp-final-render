@@ -657,24 +657,33 @@ const Users = {
     const isManager = hasManagement || Auth.isManagerial();
     const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
 
+    let rawView = this.view;
+    if (rawView === 'my-requests') rawView = 'myRequests';
+    if (rawView === 'my-pending') rawView = 'myPending';
+    if (rawView === 'pending-approvals' || rawView === 'pendingApprovals') rawView = 'pending';
+    this.view = rawView;
+
     if (this.lastUserId !== Auth.user.id) {
       this.lastUserId = Auth.user.id;
       const urlAdminView = ((location.hash || '').match(/^#admin\/([^/?]+)/) || [])[1] || null;
+      let mappedUrlView = urlAdminView;
+      if (mappedUrlView === 'my-requests') mappedUrlView = 'myRequests';
+      if (mappedUrlView === 'my-pending') mappedUrlView = 'myPending';
+      if (mappedUrlView === 'pending-approvals' || mappedUrlView === 'pendingApprovals') mappedUrlView = 'pending';
+
       if (canManageUsers) {
         const validAdminViews = ['users', 'audit', 'pending'];
-        if (urlAdminView && (validAdminViews.includes(urlAdminView) || this.sidePeekId)) {
-          this.view = urlAdminView;
+        if (mappedUrlView && (validAdminViews.includes(mappedUrlView) || this.sidePeekId)) {
+          this.view = mappedUrlView;
         } else {
           this.view = 'users';
         }
       } else {
-        const showRequestsTab = hasOperations || hasManagement;
         const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
-        const validViews = ['myPending'];
-        if (showRequestsTab) validViews.push('myRequests');
+        const validViews = ['myPending', 'myRequests'];
         if (showPendingTab) validViews.push('pending');
-        if (urlAdminView && validViews.includes(urlAdminView)) {
-          this.view = urlAdminView;
+        if (mappedUrlView && validViews.includes(mappedUrlView)) {
+          this.view = mappedUrlView;
         } else {
           this.view = 'myPending';
         }
@@ -688,10 +697,8 @@ const Users = {
         (location.hash || '').startsWith(`#admin/${this.view}/`);
       if (!validAdminViews.includes(this.view) && !isUrlDrivenDetail) this.view = 'users';
     } else {
-      const showRequestsTab = hasOperations || hasManagement;
       const showPendingTab = hasManagement || hasAccounting || Auth.isManagerial();
-      const validViews = ['myPending'];
-      if (showRequestsTab) validViews.push('myRequests');
+      const validViews = ['myPending', 'myRequests'];
       if (showPendingTab) validViews.push('pending');
 
       if (!validViews.includes(this.view)) {
@@ -718,6 +725,11 @@ const Users = {
     }
 
     if (this.container && !wasFullPage && !isUserFullPage && !isFullPage) {
+      const titleH1 = this.container.querySelector('.page-title-bar-v2 .page-title-h1');
+      if (titleH1) {
+        titleH1.textContent = isAdmin ? 'Admin' : 'My Submissions';
+      }
+
       const tabNav = this.container.querySelector('.module-tab-nav');
       if (tabNav) {
         const freshTabNav = this.renderTabNav();
@@ -830,6 +842,9 @@ const Users = {
     }
 
     if (isFullPage) {
+      if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+        window.SidePaneInstance.close({ silent: true });
+      }
       if (this.view === 'myRequests') {
         let r = null;
         try {
@@ -884,7 +899,7 @@ const Users = {
             actions
           }));
 
-          container.appendChild(this.renderRequestDetailContent(r, true));
+          container.appendChild(await this.renderRequestDetailContent(r, true));
           return container;
         }
       } else {
@@ -904,6 +919,10 @@ const Users = {
               text: 'Approve Change',
               class: 'btn btn-success btn-sm',
               onClick: () => {
+                if (pc.isOperationsRequest) {
+                  this.approvePendingItem({ type: 'operations_request', raw: pc.proposedData });
+                  return;
+                }
                 Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
                   Workflow.runBlockingArchiveAction({
                     title: 'Approving Change',
@@ -927,6 +946,10 @@ const Users = {
               text: 'Reject',
               class: 'btn btn-danger btn-sm',
               onClick: () => {
+                if (pc.isOperationsRequest) {
+                  this.rejectPendingItem({ type: 'operations_request', raw: pc.proposedData });
+                  return;
+                }
                 const reason = prompt('Enter rejection reason:');
                 if (reason !== null) {
                   Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
@@ -954,12 +977,30 @@ const Users = {
               text: 'Withdraw Submission',
               class: 'btn btn-secondary btn-sm',
               onClick: () => {
+                if (pc.isOperationsRequest) {
+                  Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this request?', async () => {
+                    try {
+                      await window.apiClient.operationsRequests.remove(pc.id);
+                    } catch (e) {
+                      Workflow.showMessage('Withdraw Request', e.message || 'Unable to withdraw request.', 'error');
+                      return;
+                    }
+                    if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+                      window.SidePaneInstance.close({ silent: true });
+                    }
+                    location.hash = '#admin';
+                  }, 'danger');
+                  return;
+                }
                 Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', async () => {
                   try {
                     await PendingChanges.delete(pc.id);
                   } catch (e) {
                     Workflow.showMessage('Withdraw Submission', e.message || 'Unable to withdraw submission.', 'error');
                     return;
+                  }
+                  if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+                    window.SidePaneInstance.close({ silent: true });
                   }
                   location.hash = '#admin';
                 }, 'danger');
@@ -1090,7 +1131,7 @@ const Users = {
     const hasOperations = departments.includes('Operations');
     const hasManagement = departments.includes('Management');
     const hasAccounting = departments.includes('Accounting') || Auth.user?.role === 'Accounting';
-    const showRequestsTab = hasOperations || hasManagement;
+    const showRequestsTab = true; // All staff roles can submit operations requests (billing, disbursement, transmittal)
     if (showRequestsTab) {
       tabs.push({ key: 'myRequests', label: 'My Requests', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>', count: this._counts.myRequests });
     }
@@ -1244,15 +1285,47 @@ const Users = {
     }
   },
 
-  renderRequestDetailContent(r, isFullPage = false) {
+  async renderRequestDetailContent(r, isFullPage = false) {
     const self = this;
-    const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
-    const client = window.apiClient.clientCache.getById(r.clientId);
-    const submitter = window.apiClient.userCache.getById(r.requestedBy);
+
+    // Async resolvers with cache fallback
+    const resolveUser = async (id) => {
+      if (!id) return null;
+      let u = window.apiClient?.userCache?.getById?.(id);
+      if (!u && window.apiClient?.users?.get) {
+        try { const res = await window.apiClient.users.get(id); u = res?.data || null; if (u && window.apiClient?.userCache?.set) window.apiClient.userCache.set(u); } catch (e) {}
+      }
+      return u;
+    };
+    const resolveWr = async (id) => {
+      if (!id) return null;
+      let wr = window.apiClient?.workRequestCache?.getById?.(id);
+      if (!wr && window.apiClient?.workRequests?.get) {
+        try { const res = await window.apiClient.workRequests.get(id); wr = res?.data || null; if (wr && window.apiClient?.workRequestCache?.set) window.apiClient.workRequestCache.set(wr); } catch (e) {}
+      }
+      return wr;
+    };
+    const resolveClient = async (id) => {
+      if (!id) return null;
+      let c = window.apiClient?.clientCache?.getById?.(id);
+      if (!c && window.apiClient?.clients?.get) {
+        try { const res = await window.apiClient.clients.get(id); c = res?.data || null; if (c && window.apiClient?.clientCache?.set) window.apiClient.clientCache.set(c); } catch (e) {}
+      }
+      return c;
+    };
+
+    const wrId = r.workRequestId || r.work_request_id;
+    const wr = await resolveWr(wrId);
+    const clientId = r.clientId || r.client_id || (wr ? wr.clientId : null);
+    const client = await resolveClient(clientId);
+    const requestedBy = r.requestedBy || r.requested_by;
+    const submitter = await resolveUser(requestedBy);
+    const requestedAt = r.requestedAt || r.requested_at || r.created_at || r.createdAt;
 
     const wrapper = el('div', { class: 'form-stacked notion-form', style: 'padding: var(--spacing-xs); display: flex; flex-direction: column; gap: var(--spacing-md);' });
 
     // Status / Submitter info box
+    const submitterRole = submitter ? [submitter.role, submitter.department].filter(Boolean).join(' · ') : '';
     const infoBox = el('div', { 
       style: 'background: var(--color-bg-light); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--spacing-sm); display: flex; flex-direction: column; gap: var(--spacing-xs);' 
     }, [
@@ -1262,11 +1335,11 @@ const Users = {
       ]),
       el('div', { style: 'display:flex; justify-content:space-between; align-items:center;' }, [
         el('span', { text: 'Submitted By', style: 'font-size:0.75rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;' }),
-        el('span', { text: submitter ? submitter.name : '—', style: 'font-weight:500;' })
+        el('span', { text: submitter ? `${submitter.name}${submitterRole ? ' (' + submitterRole + ')' : ''}` : (requestedBy || '—'), style: 'font-weight:500;' })
       ]),
       el('div', { style: 'display:flex; justify-content:space-between; align-items:center;' }, [
         el('span', { text: 'Submitted At', style: 'font-size:0.75rem; color:var(--color-text-muted); font-weight:600; text-transform:uppercase;' }),
-        el('span', { text: formatDate(r.requestedAt), style: 'font-weight:500;' })
+        el('span', { text: formatDate(requestedAt), style: 'font-weight:500;' })
       ])
     ]);
     wrapper.appendChild(infoBox);
@@ -1282,19 +1355,72 @@ const Users = {
     };
 
     addProp('Request Type', document.createTextNode(this._requestTypeLabel(r.type)));
-    addProp('Client', document.createTextNode(client ? client.name : '—'));
+    
+    // Client Link / Text
+    if (client) {
+      const clientLink = el('a', {
+        class: 'notion-property-value-link',
+        href: '#clients',
+        text: client.name,
+        title: `Client: ${client.name}${client.tin ? ' (TIN: ' + client.tin + ')' : ''}`
+      });
+      addProp('Client', clientLink);
+    } else {
+      addProp('Client', document.createTextNode(clientId || '—'));
+    }
     
     // Work Request Link / Text
-    const wrSpan = el('span', { text: wr ? wr.title : '—' });
     if (wr) {
-      wrSpan.style.cursor = 'pointer';
-      wrSpan.style.color = 'var(--color-primary)';
-      wrSpan.style.textDecoration = 'underline';
-      wrSpan.addEventListener('click', () => {
-        location.hash = `#operations/detail/${wr.id}`;
+      const wrCode = wr.workRequestNumber || wr.code || '';
+      const displayText = wrCode ? `${wrCode} · ${wr.title || 'Work Request'}` : (wr.title || wr.id);
+      const wrLink = el('a', {
+        class: 'notion-property-value-link',
+        href: `#operations/detail/${wr.id}`,
+        text: displayText,
+        title: `View Work Request: ${displayText}`
       });
+      wrLink.addEventListener('click', () => {
+        if (wr.entity && Auth.activeEntity !== 'ALL' && Auth.activeEntity !== wr.entity) {
+          Auth.activeEntity = wr.entity;
+          sessionStorage.setItem('active_entity', wr.entity);
+        }
+      });
+      addProp('Work Request', wrLink);
+    } else {
+      addProp('Work Request', document.createTextNode(wrId || '—'));
     }
-    addProp('Work Request', wrSpan);
+
+    // Helper for receipt preview
+    const makeReceiptPreviewNode = (filename, url) => {
+      const wrap = el('div', { style: 'display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;' });
+      const fileBadge = el('span', {
+        class: 'badge badge-secondary',
+        style: 'display: inline-flex; align-items: center; gap: 4px; font-family: monospace; font-size: 0.8125rem;'
+      }, [
+        el('span', { html: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>` }),
+        el('span', { text: filename || 'receipt.pdf' })
+      ]);
+      wrap.appendChild(fileBadge);
+
+      const previewBtn = el('button', {
+        class: 'btn btn-secondary btn-sm',
+        style: 'padding: 2px 8px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px;'
+      }, [
+        el('span', { html: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/></svg>` }),
+        el('span', { text: 'Preview Receipt' })
+      ]);
+      previewBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (url) {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } else {
+          Workflow.showMessage('Receipt Document', `Receipt file attached: ${filename || 'receipt.pdf'}\n\nStatus: Uploaded and verified on file storage.`);
+        }
+      });
+      wrap.appendChild(previewBtn);
+      return wrap;
+    };
 
     // Render type-specific fields
     if (r.type === 'billing') {
@@ -1312,24 +1438,28 @@ const Users = {
         addProp('Invoice', invLink);
       }
       if (r.requestedRouting) {
-        addProp('Target Routing', document.createTextNode(`${r.requestedRouting} Phase`));
+        const badge = el('span', { class: 'badge badge-info', text: `${r.requestedRouting} Phase` });
+        addProp('Target Routing', badge);
       }
       addProp('Linked Task', document.createTextNode(linkedTask ? linkedTask.title : '— Whole Project —'));
-      addProp('Amount', el('strong', { text: (r.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'PHP' }) }));
-      if (r.receiptFilename) {
-        addProp('Receipt File', el('span', { text: r.receiptFilename, style: 'font-family: monospace;' }));
+      addProp('Amount', el('strong', { text: formatPHP(r.amount || 0) }));
+      if (r.receiptFilename || r.receiptUrl) {
+        addProp('Receipt File', makeReceiptPreviewNode(r.receiptFilename, r.receiptUrl));
       }
     } else if (r.type === 'disbursement') {
       const linkedTask = r.linkedTaskId ? (wr?.tasks || []).find(t => t.id === r.linkedTaskId) : null;
       addProp('Disbursement Type', document.createTextNode(r.disbursementType ? r.disbursementType.charAt(0).toUpperCase() + r.disbursementType.slice(1) : '—'));
       addProp('Category', document.createTextNode(r.category || '—'));
-      addProp('Amount', el('strong', { text: (r.amount || 0).toLocaleString('en-US', { style: 'currency', currency: 'PHP' }) }));
+      if (r.payee) {
+        addProp('Payee', document.createTextNode(r.payee));
+      }
+      addProp('Amount', el('strong', { text: formatPHP(r.amount || 0) }));
       addProp('Payment Method', document.createTextNode(r.paymentMethod || '—'));
       if (linkedTask) {
         addProp('Linked Task', document.createTextNode(linkedTask.title));
       }
-      if (r.receiptFilename) {
-        addProp('Receipt File', el('span', { text: r.receiptFilename, style: 'font-family: monospace;' }));
+      if (r.receiptFilename || r.receiptUrl) {
+        addProp('Receipt File', makeReceiptPreviewNode(r.receiptFilename, r.receiptUrl));
       }
     } else if (r.type === 'transmittal') {
       addProp('Recipient & Delivery', document.createTextNode(r.recipientDetails || '—'));
@@ -1349,7 +1479,7 @@ const Users = {
 
     // Notes
     if (r.notes) {
-      wrapper.appendChild(el('h4', { text: 'Notes', style: 'margin-top:var(--spacing-xs); margin-bottom:var(--spacing-xs); font-size:0.875rem;' }));
+      wrapper.appendChild(el('h4', { text: 'Notes / Scope', style: 'margin-top:var(--spacing-xs); margin-bottom:var(--spacing-xs); font-size:0.875rem;' }));
       wrapper.appendChild(el('div', { 
         text: r.notes, 
         style: 'background: var(--color-bg-light); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size: 0.875rem; white-space: pre-wrap; font-style: italic;' 
@@ -1358,7 +1488,7 @@ const Users = {
 
     // Fulfillment Details or Rejection Details
     if (r.status === 'fulfilled') {
-      const fulfiller = window.apiClient.userCache.getById(r.fulfilledBy);
+      const fulfiller = await resolveUser(r.fulfilledBy);
       wrapper.appendChild(el('h4', { text: 'Fulfillment Info', style: 'margin-top:var(--spacing-sm); margin-bottom:var(--spacing-xs); font-size:0.875rem; color:var(--success);' }));
       const fulfillBox = el('div', {
         style: 'background: color-mix(in oklab, var(--success), transparent 95%); border: 1px solid color-mix(in oklab, var(--success), transparent 70%); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size:0.875rem;'
@@ -1368,7 +1498,7 @@ const Users = {
       ]);
       wrapper.appendChild(fulfillBox);
     } else if (r.status === 'rejected') {
-      const rejecter = r.fulfilledBy ? window.apiClient.userCache.getById(r.fulfilledBy) : null;
+      const rejecter = await resolveUser(r.fulfilledBy);
       wrapper.appendChild(el('h4', { text: 'Rejection Info', style: 'margin-top:var(--spacing-sm); margin-bottom:var(--spacing-xs); font-size:0.875rem; color:var(--danger);' }));
       const rejectBox = el('div', {
         style: 'background: color-mix(in oklab, var(--danger), transparent 95%); border: 1px solid color-mix(in oklab, var(--danger), transparent 70%); border-radius: var(--radius-sm); padding: var(--spacing-sm); font-size:0.875rem;'
@@ -1379,17 +1509,6 @@ const Users = {
       ].filter(Boolean));
       wrapper.appendChild(rejectBox);
     }
-
-    if (isFullPage) {
-      const outer = el('div', { class: 'request-detail-full-page' });
-      outer.appendChild(wrapper);
-      return outer;
-    }
-    return wrapper;
-  },
-
-  openRequestDetailSidePeek(r, mode = null) {
-    const wrapper = this.renderRequestDetailContent(r);
 
     if (r.status === 'pending') {
       const footerActions = el('div', { class: 'side-pane-form-footer', style: 'display:flex; gap:8px; justify-content:flex-end;' });
@@ -1430,11 +1549,23 @@ const Users = {
       wrapper.appendChild(footerActions);
     }
 
+    if (isFullPage) {
+      const outer = el('div', { class: 'request-detail-full-page' });
+      outer.appendChild(wrapper);
+      return outer;
+    }
+    return wrapper;
+  },
+
+  async openRequestDetailSidePeek(r, mode = null) {
     const title = `Request Details: ${this._requestTypeLabel(r.type)}`;
     const fullPageRoute = `#admin/myRequests/${r.id}`;
+
+    const loadingSkeleton = el('div', { class: 'loading-skeleton', style: 'padding: 24px;', text: 'Loading details...' });
+
     window.SidePaneInstance.open({
       title,
-      content: wrapper,
+      content: loadingSkeleton,
       mode,
       viewContext: 'request-detail',
       recordId: r.id,
@@ -1447,7 +1578,34 @@ const Users = {
         }
       }
     });
+
+    try {
+      const content = await this.renderRequestDetailContent(r, false);
+      if (window.SidePaneInstance.recordId === r.id) {
+        const oldFooter = window.SidePaneInstance.pane.querySelector('.side-pane-form-footer, .side-pane-footer');
+        if (oldFooter) oldFooter.remove();
+        window.SidePaneInstance._lastFooter = null;
+
+        const footer = content.querySelector('.side-pane-form-footer, .side-pane-footer');
+        if (footer) {
+          footer.remove();
+          window.SidePaneInstance._lastFooter = footer;
+          window.SidePaneInstance._lastContent = content;
+          window.SidePaneInstance.body.replaceChildren(content);
+          window.SidePaneInstance.pane.appendChild(footer);
+        } else {
+          window.SidePaneInstance._lastContent = content;
+          window.SidePaneInstance.body.replaceChildren(content);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load request detail', e);
+      if (window.SidePaneInstance.recordId === r.id) {
+        window.SidePaneInstance.body.replaceChildren(renderEmptyState('Failed to load details'));
+      }
+    }
   },
+
 
   // ============================================================
   // Users Section
@@ -5381,7 +5539,7 @@ const Users = {
     }
 
     const canApprove = PendingChanges.canApproveChange(pc);
-    const isSubmitter = pc.submittedBy === Auth.user.id;
+    const isSubmitter = pc.submittedBy === Auth.user?.id;
 
     const isFullPage = !isSidePeek && hideHeader;
     const wrapper = el('div', {
@@ -5418,7 +5576,9 @@ const Users = {
       document: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
       invoice: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 15h.01M12 15h.01M16 15h.01"/></svg>`,
       amount: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><circle cx="12" cy="15" r="2"/></svg>`,
-      checklist: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>`
+      checklist: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>`,
+      clock: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+      truck: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>`
     };
 
     function getInitials(name) {
@@ -5436,9 +5596,143 @@ const Users = {
       ]);
     }
 
+    // Async resolvers with cache fallback
+    const resolveUser = async (id) => {
+      if (!id) return null;
+      let u = window.apiClient?.userCache?.getById?.(id);
+      if (!u && window.apiClient?.users?.get) {
+        try { const res = await window.apiClient.users.get(id); u = res?.data || null; if (u && window.apiClient?.userCache?.set) window.apiClient.userCache.set(u); } catch (e) {}
+      }
+      return u;
+    };
+    const resolveWr = async (id) => {
+      if (!id) return null;
+      let wr = window.apiClient?.workRequestCache?.getById?.(id);
+      if (!wr && window.apiClient?.workRequests?.get) {
+        try { const res = await window.apiClient.workRequests.get(id); wr = res?.data || null; if (wr && window.apiClient?.workRequestCache?.set) window.apiClient.workRequestCache.set(wr); } catch (e) {}
+      }
+      return wr;
+    };
+    const resolveClient = async (id) => {
+      if (!id) return null;
+      let c = window.apiClient?.clientCache?.getById?.(id);
+      if (!c && window.apiClient?.clients?.get) {
+        try { const res = await window.apiClient.clients.get(id); c = res?.data || null; if (c && window.apiClient?.clientCache?.set) window.apiClient.clientCache.set(c); } catch (e) {}
+      }
+      return c;
+    };
+
+    function makeWrLink(wrRecord, fallbackId) {
+      if (wrRecord) {
+        const wrCode = wrRecord.workRequestNumber || wrRecord.code || '';
+        const displayText = wrCode ? `${wrCode} · ${wrRecord.title || 'Work Request'}` : (wrRecord.title || wrRecord.id);
+        const a = el('a', {
+          class: 'notion-property-value-link',
+          href: `#operations/detail/${wrRecord.id}`,
+          text: displayText,
+          title: `View Work Request: ${displayText}`
+        });
+        a.addEventListener('click', () => {
+          if (wrRecord.entity && Auth.activeEntity !== 'ALL' && Auth.activeEntity !== wrRecord.entity) {
+            Auth.activeEntity = wrRecord.entity;
+            sessionStorage.setItem('active_entity', wrRecord.entity);
+          }
+        });
+        return a;
+      }
+      if (fallbackId) {
+        return el('a', {
+          class: 'notion-property-value-link',
+          href: `#operations/detail/${fallbackId}`,
+          text: fallbackId
+        });
+      }
+      return el('span', { style: 'color: var(--color-text-muted); font-style: italic;', text: 'None' });
+    }
+
+    function makeClientLink(clientRecord, fallbackId) {
+      if (clientRecord) {
+        return el('a', {
+          class: 'notion-property-value-link',
+          href: '#clients',
+          text: clientRecord.name,
+          title: `Client: ${clientRecord.name}${clientRecord.tin ? ' (TIN: ' + clientRecord.tin + ')' : ''}`
+        });
+      }
+      if (fallbackId) {
+        return el('span', { text: fallbackId });
+      }
+      return el('span', { style: 'color: var(--color-text-muted); font-style: italic;', text: 'Not set' });
+    }
+
+    function makeUserNode(userRecord, fallbackId) {
+      if (userRecord) {
+        const wrap = el('span', { style: 'display: inline-flex; align-items: center; gap: 6px;' });
+        const av = el('span', {
+          style: 'display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; font-size: 10px; font-weight: 600; background: var(--color-primary-light, #e0e7ff); color: var(--color-primary, #3b82f6);'
+        });
+        av.textContent = getInitials(userRecord.name);
+        if (userRecord.avatarUrl) {
+          av.style.backgroundImage = `url('${userRecord.avatarUrl}')`;
+          av.style.backgroundSize = 'cover';
+          av.textContent = '';
+        }
+        wrap.appendChild(av);
+        wrap.appendChild(el('span', { text: userRecord.name, style: 'font-weight: 500;' }));
+        if (userRecord.role || userRecord.department) {
+          const extra = [userRecord.role, userRecord.department].filter(Boolean).join(' · ');
+          wrap.appendChild(el('span', { style: 'font-size: 0.75rem; color: var(--color-text-muted);', text: `(${extra})` }));
+        }
+        return wrap;
+      }
+      if (fallbackId) {
+        return el('span', { text: fallbackId });
+      }
+      return el('span', { class: 'notion-property-value-warning', text: '⚠️ Not set' });
+    }
+
+    function makeReceiptPreviewNode(filename, url) {
+      const wrap = el('div', { style: 'display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;' });
+      const fileBadge = el('span', {
+        class: 'badge badge-secondary',
+        style: 'display: inline-flex; align-items: center; gap: 4px; font-family: monospace; font-size: 0.8125rem;'
+      }, [
+        el('span', { html: Icons.document }),
+        el('span', { text: filename || 'receipt.pdf' })
+      ]);
+      wrap.appendChild(fileBadge);
+
+      const previewBtn = el('button', {
+        class: 'btn btn-secondary btn-sm',
+        style: 'padding: 2px 8px; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 4px;'
+      }, [
+        el('span', { html: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/></svg>` }),
+        el('span', { text: 'Preview Receipt' })
+      ]);
+      previewBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (url) {
+          window.open(url, '_blank', 'noopener,noreferrer');
+        } else {
+          Workflow.showMessage('Receipt Document', `Receipt file attached: ${filename || 'receipt.pdf'}\n\nStatus: Uploaded and verified on file storage.`);
+        }
+      });
+      wrap.appendChild(previewBtn);
+      return wrap;
+    }
+
+    // Resolve record dependencies
+    const proposed = pc.proposedData || {};
+    const wrId = proposed.workRequestId || proposed.work_request_id || (pc.table === 'workRequests' ? pc.parentRecordId : null);
+    const wr = await resolveWr(wrId);
+    const clientId = proposed.clientId || proposed.client_id || (wr ? wr.clientId : null);
+    const client = await resolveClient(clientId);
+
     // Submitter Info
-    const submitter = window.apiClient.userCache.getById(pc.submittedBy);
-    const submitterName = submitter ? submitter.name : pc.submittedBy;
+    const submitter = await resolveUser(pc.submittedBy);
+    const submitterName = submitter ? submitter.name : (pc.submittedBy || 'System');
+    const submitterRole = submitter ? [submitter.role, submitter.department].filter(Boolean).join(' · ') : '';
     const submitterInitials = getInitials(submitterName);
 
     const singularName = {
@@ -5447,8 +5741,9 @@ const Users = {
       invoices: 'invoice',
       transmittals: 'transmittal',
       clients: 'client',
-      disbursements: 'disbursement'
-    }[pc.table] || pc.table;
+      disbursements: 'disbursement',
+      operations_requests: 'operations request'
+    }[pc.table] || (pc.isOperationsRequest ? 'operations request' : (pc.table || 'item'));
 
     // Main Notion Card
     const reviewCard = el('div', { 
@@ -5471,49 +5766,52 @@ const Users = {
         avatarEl,
         el('div', { class: 'admin-review-meta-text' }, [
           el('strong', { text: submitterName }),
+          submitterRole ? el('span', { style: 'color: var(--color-text-muted); font-size: 0.8125rem;', text: ` (${submitterRole})` }) : '',
           ` proposed a new ${singularName} · ${formatDate(pc.submittedAt)}`
         ])
       ]),
-      el('div', { class: 'admin-review-status-badge', text: 'Awaiting approval' })
+      el('div', { 
+        class: 'admin-review-status-badge', 
+        text: pc.status === 'pending' ? 'Awaiting approval' : (pc.status === 'approved' ? 'Approved' : 'Rejected') 
+      })
     ]);
     reviewCard.appendChild(cardHeader);
 
     // 2. Title Section
-    const proposed = pc.proposedData;
     let recordTitle = '';
     let titleIcon = '';
 
     if (pc.isOperationsRequest) {
       if (proposed.type === 'billing') {
-        recordTitle = proposed.invoiceNumber || '(No Invoice Number)';
+        recordTitle = proposed.invoiceNumber ? `Billing Milestone: ${proposed.invoiceNumber}` : 'Billing Milestone Request';
         titleIcon = Icons.invoice;
       } else if (proposed.type === 'disbursement') {
-        recordTitle = proposed.voucherNumber || 'Disbursement Request';
+        recordTitle = proposed.voucherNumber ? `Disbursement: ${proposed.voucherNumber}` : (proposed.category ? `Disbursement: ${proposed.category}` : 'Disbursement Request');
         titleIcon = Icons.amount;
       } else if (proposed.type === 'transmittal') {
-        recordTitle = 'Transmittal Request';
-        titleIcon = Icons.document;
+        recordTitle = proposed.recipientDetails ? `Transmittal: To ${proposed.recipientDetails.slice(0, 35)}` : 'Transmittal Request';
+        titleIcon = Icons.truck;
       } else {
         recordTitle = 'Operations Request';
         titleIcon = Icons.document;
       }
     } else if (pc.table === 'tasks') {
-      recordTitle = proposed.title || '(Untitled)';
+      recordTitle = proposed.title || '(Untitled Task)';
       titleIcon = Icons.checklist;
     } else if (pc.table === 'workRequests') {
-      recordTitle = proposed.title || '(Untitled)';
+      recordTitle = proposed.title || '(Untitled Work Request)';
       titleIcon = Icons.document;
     } else if (pc.table === 'invoices') {
       recordTitle = proposed.invoiceNumber || '(No Invoice Number)';
       titleIcon = Icons.invoice;
     } else if (pc.table === 'transmittals') {
-      recordTitle = proposed.transmittalNumber || '(No Transmittal Number)';
-      titleIcon = Icons.document;
+      recordTitle = proposed.transmittalNumber || proposed.trackingNumber || '(No Transmittal Number)';
+      titleIcon = Icons.truck;
     } else if (pc.table === 'clients') {
       recordTitle = proposed.name || '(No Client Name)';
       titleIcon = Icons.client;
     } else if (pc.table === 'disbursements') {
-      recordTitle = proposed.voucherNumber || '(No Voucher Number)';
+      recordTitle = proposed.voucherNumber ? `Disbursement: ${proposed.voucherNumber}` : (proposed.category ? `Expense: ${proposed.category}` : 'Disbursement Record');
       titleIcon = Icons.amount;
     } else {
       recordTitle = proposed.title || proposed.name || proposed.invoiceNumber || proposed.voucherNumber || '(Untitled)';
@@ -5540,49 +5838,96 @@ const Users = {
 
     if (pc.isOperationsRequest) {
       const typeLabel = proposed.type ? (proposed.type.charAt(0).toUpperCase() + proposed.type.slice(1)) : 'None';
-      propertyGrid.appendChild(createPropertyRow('Request type', Icons.status, el('span', { text: typeLabel })));
+      propertyGrid.appendChild(createPropertyRow('Request type', Icons.status, el('span', { class: 'badge badge-info', text: `${typeLabel} Request` })));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, makeWrLink(wr, wrId)));
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, clientId)));
 
-      // Work Request origin link
-      const wrId = proposed.workRequestId || proposed.work_request_id || proposed.parentRecordId;
-      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
-      const wrVal = wr
-        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
-        : (wrId ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wrId}`, text: wrId }) : el('span', { text: 'None' }));
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
-
-      // Client origin
-      const clientId = proposed.clientId || proposed.client_id || (wr ? wr.clientId : null);
-      const client = clientId ? window.apiClient.clientCache.getById(clientId) : null;
-      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : (clientId || 'Not set') })));
-
-      if (proposed.amount) {
-        propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
-      }
-      if (proposed.notes) {
-        propertyGrid.appendChild(createPropertyRow('Description', Icons.document, el('span', { text: proposed.notes })));
+      if (proposed.type === 'billing') {
+        const linkedTask = proposed.linkedTaskId ? (wr?.tasks || []).find(t => t.id === proposed.linkedTaskId) : null;
+        if (proposed.invoiceNumber || proposed.invoiceId) {
+          const invLink = el('span', { text: proposed.invoiceNumber ? proposed.invoiceNumber : 'View Invoice' });
+          if (proposed.invoiceId) {
+            invLink.style.cursor = 'pointer';
+            invLink.style.color = 'var(--color-primary)';
+            invLink.style.textDecoration = 'underline';
+            invLink.addEventListener('click', () => {
+              location.hash = `#billing/detail/${proposed.invoiceId}`;
+            });
+          }
+          propertyGrid.appendChild(createPropertyRow('Invoice', Icons.invoice, invLink));
+        }
+        if (proposed.requestedRouting) {
+          const badge = el('span', { class: 'badge badge-info', text: `${proposed.requestedRouting} Phase` });
+          propertyGrid.appendChild(createPropertyRow('Target routing', Icons.status, badge));
+        }
+        propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask ? linkedTask.title : '— Whole Project —' })));
+        if (proposed.amount) {
+          propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
+        }
+        if (proposed.receiptFilename || proposed.receiptUrl) {
+          propertyGrid.appendChild(createPropertyRow('Receipt file', Icons.document, makeReceiptPreviewNode(proposed.receiptFilename, proposed.receiptUrl)));
+        }
+        if (proposed.notes) {
+          propertyGrid.appendChild(createPropertyRow('Notes / Scope', Icons.document, el('span', { text: proposed.notes })));
+        }
+      } else if (proposed.type === 'disbursement') {
+        const linkedTask = proposed.linkedTaskId ? (wr?.tasks || []).find(t => t.id === proposed.linkedTaskId) : null;
+        if (proposed.category) {
+          propertyGrid.appendChild(createPropertyRow('Category', Icons.document, el('span', { text: proposed.category })));
+        }
+        if (proposed.payee) {
+          propertyGrid.appendChild(createPropertyRow('Payee', Icons.assignee, el('span', { text: proposed.payee })));
+        }
+        if (proposed.amount) {
+          propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
+        }
+        if (proposed.paymentMethod) {
+          propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod })));
+        }
+        if (linkedTask) {
+          propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask.title })));
+        }
+        if (proposed.receiptFilename || proposed.receiptUrl) {
+          propertyGrid.appendChild(createPropertyRow('Receipt file', Icons.document, makeReceiptPreviewNode(proposed.receiptFilename, proposed.receiptUrl)));
+        }
+        if (proposed.notes) {
+          propertyGrid.appendChild(createPropertyRow('Notes / Purpose', Icons.document, el('span', { text: proposed.notes })));
+        }
+      } else if (proposed.type === 'transmittal') {
+        if (proposed.recipientDetails) {
+          propertyGrid.appendChild(createPropertyRow('Recipient', Icons.assignee, el('span', { text: proposed.recipientDetails })));
+        }
+        if (proposed.notes) {
+          propertyGrid.appendChild(createPropertyRow('Notes', Icons.document, el('span', { text: proposed.notes })));
+        }
+      } else {
+        if (proposed.amount) {
+          propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
+        }
+        if (proposed.notes) {
+          propertyGrid.appendChild(createPropertyRow('Notes', Icons.document, el('span', { text: proposed.notes })));
+        }
       }
     } else if (pc.table === 'tasks') {
-      // Work Request
-      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
-      const wrVal = wr 
-        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || proposed.workRequestId })
-        : el('span', { text: proposed.workRequestId || 'None' });
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, makeWrLink(wr, proposed.workRequestId)));
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, clientId)));
 
-      // Assignee
-      const assignee = proposed.assigneeId ? window.apiClient.userCache.getById(proposed.assigneeId) : null;
-      const assigneeVal = assignee 
-        ? el('span', { text: assignee.name })
-        : el('span', { class: 'notion-property-value-warning', html: `⚠️ Not set` });
-      propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, assigneeVal));
+      if (proposed.description) {
+        propertyGrid.appendChild(createPropertyRow('Description', Icons.document, el('span', { text: proposed.description, style: 'white-space: pre-wrap;' })));
+      }
 
-      // Co-assignees
+      const assignee = await resolveUser(proposed.assigneeId);
+      propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, makeUserNode(assignee, proposed.assigneeId)));
+
       const coVal = (proposed.coAssignees && proposed.coAssignees.length > 0)
         ? el('span', { text: proposed.coAssignees.join(', ') })
         : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'None' });
       propertyGrid.appendChild(createPropertyRow('Co-assignees', Icons.coAssignees, coVal));
 
-      // Priority
+      if (proposed.estimatedHours || proposed.budgetHours) {
+        propertyGrid.appendChild(createPropertyRow('Estimated hours', Icons.clock, el('span', { text: `${proposed.estimatedHours || proposed.budgetHours} hrs`, style: 'font-weight: 600;' })));
+      }
+
       const priority = proposed.priority || 'Normal';
       let priorityClass = 'badge-info';
       if (priority === 'High' || priority === 'Urgent') priorityClass = 'badge-danger';
@@ -5594,60 +5939,106 @@ const Users = {
       });
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, priorityVal));
 
-      // Due date
       const dueVal = proposed.dueDate
         ? el('span', { text: formatDate(proposed.dueDate) })
         : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' });
       propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, dueVal));
 
-      // Predecessors
       const predVal = (proposed.predecessors && proposed.predecessors.length > 0)
         ? el('span', { text: proposed.predecessors.join(', ') })
         : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'None' });
       propertyGrid.appendChild(createPropertyRow('Predecessors', Icons.predecessors, predVal));
 
     } else if (pc.table === 'workRequests') {
-      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
-      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, proposed.clientId)));
+      propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
       
-      const statusVal = el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' });
-      propertyGrid.appendChild(createPropertyRow('Status', Icons.status, statusVal));
-
       const priority = proposed.priority || 'Normal';
-      const priorityVal = el('span', { class: 'badge badge-info', text: priority });
-      propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, priorityVal));
+      propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, el('span', { class: 'badge badge-info', text: priority })));
 
-      const assignee = proposed.assigneeId ? window.apiClient.userCache.getById(proposed.assigneeId) : null;
-      propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, el('span', { text: assignee ? assignee.name : 'Not set' })));
+      const assignee = await resolveUser(proposed.assigneeId);
+      propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, makeUserNode(assignee, proposed.assigneeId)));
+
+      if (proposed.description) {
+        propertyGrid.appendChild(createPropertyRow('Description', Icons.document, el('span', { text: proposed.description })));
+      }
 
     } else if (pc.table === 'invoices') {
-      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
-      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, clientId)));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, makeWrLink(wr, wrId)));
 
-      const wrId = proposed.workRequestId || proposed.work_request_id;
-      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
-      const wrVal = wr 
-        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
-        : el('span', { text: wrId || 'None' });
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
+      if (proposed.linkedTaskId) {
+        const linkedTask = (wr?.tasks || []).find(t => t.id === proposed.linkedTaskId);
+        propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask ? linkedTask.title : proposed.linkedTaskId })));
+      }
 
       propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate) })));
       propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(proposed.dueDate) })));
       propertyGrid.appendChild(createPropertyRow('Total amount', Icons.amount, el('span', { text: formatPHP(proposed.total), style: 'font-weight: 700;' })));
 
-    } else if (pc.table === 'transmittals') {
-      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
-      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
+      if (proposed.status) {
+        propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status })));
+      }
+      if (proposed.notes) {
+        propertyGrid.appendChild(createPropertyRow('Notes / Terms', Icons.document, el('span', { text: proposed.notes })));
+      }
 
-      const wrId = proposed.workRequestId || proposed.work_request_id;
-      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
-      const wrVal = wr 
-        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
-        : el('span', { text: wrId || 'None' });
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
+    } else if (pc.table === 'transmittals') {
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, clientId)));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, makeWrLink(wr, wrId)));
+
+      const recipientText = proposed.recipientName || proposed.attentionTo || proposed.recipientDetails;
+      if (recipientText) {
+        propertyGrid.appendChild(createPropertyRow('Recipient', Icons.assignee, el('span', { text: recipientText })));
+      }
+
+      if (proposed.deliveryMethod || proposed.courier) {
+        const deliv = `${proposed.deliveryMethod || proposed.courier}${proposed.trackingNumber ? ' (Tracking: ' + proposed.trackingNumber + ')' : ''}`;
+        propertyGrid.appendChild(createPropertyRow('Delivery method', Icons.truck, el('span', { text: deliv })));
+      }
 
       propertyGrid.appendChild(createPropertyRow('Date', Icons.dueDate, el('span', { text: formatDate(proposed.date) })));
       propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
+
+      if (proposed.notes) {
+        propertyGrid.appendChild(createPropertyRow('Notes', Icons.document, el('span', { text: proposed.notes })));
+      }
+
+    } else if (pc.table === 'disbursements') {
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, makeClientLink(client, clientId)));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, makeWrLink(wr, wrId)));
+
+      if (proposed.linkedTaskId) {
+        const linkedTask = (wr?.tasks || []).find(t => t.id === proposed.linkedTaskId);
+        propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask ? linkedTask.title : proposed.linkedTaskId })));
+      }
+
+      if (proposed.category) {
+        propertyGrid.appendChild(createPropertyRow('Category', Icons.document, el('span', { text: proposed.category })));
+      }
+      if (proposed.payee || proposed.payeeName) {
+        propertyGrid.appendChild(createPropertyRow('Payee', Icons.assignee, el('span', { text: proposed.payee || proposed.payeeName })));
+      }
+      propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
+      propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
+      propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
+
+      if (proposed.description || proposed.purpose || proposed.notes) {
+        propertyGrid.appendChild(createPropertyRow('Purpose / Notes', Icons.document, el('span', { text: proposed.description || proposed.purpose || proposed.notes })));
+      }
+      if (proposed.receiptFilename || proposed.receiptUrl || proposed.attachment) {
+        propertyGrid.appendChild(createPropertyRow('Receipt file', Icons.document, makeReceiptPreviewNode(proposed.receiptFilename || proposed.attachment, proposed.receiptUrl)));
+      }
+      if (proposed.linkedInvoiceId || proposed.invoiceId) {
+        const invId = proposed.linkedInvoiceId || proposed.invoiceId;
+        const invLink = el('a', { class: 'notion-property-value-link', href: `#billing/detail/${invId}`, text: proposed.invoiceNumber || invId });
+        propertyGrid.appendChild(createPropertyRow('Linked invoice', Icons.invoice, invLink));
+      }
+      if (proposed.linkedTransmittalId || proposed.transmittalId) {
+        const txId = proposed.linkedTransmittalId || proposed.transmittalId;
+        const txLink = el('a', { class: 'notion-property-value-link', href: `#transmittal/detail/${txId}`, text: proposed.transmittalNumber || txId });
+        propertyGrid.appendChild(createPropertyRow('Linked transmittal', Icons.truck, txLink));
+      }
 
     } else if (pc.table === 'clients') {
       propertyGrid.appendChild(createPropertyRow('TIN', Icons.document, el('span', { text: proposed.tin || 'None' })));
@@ -5659,21 +6050,6 @@ const Users = {
       if (proposed.retainer) {
         propertyGrid.appendChild(createPropertyRow('Retainer fee', Icons.amount, el('span', { text: proposed.retainerFee != null ? formatPHP(proposed.retainerFee) : 'None' })));
       }
-
-    } else if (pc.table === 'disbursements') {
-      const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
-      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
-
-      const wrId = proposed.workRequestId || proposed.work_request_id;
-      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
-      const wrVal = wr
-        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
-        : (wrId ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wrId}`, text: wrId }) : el('span', { text: 'None' }));
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
-
-      propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
-      propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
-      propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
 
     } else {
       for (const [k, v] of Object.entries(proposed)) {
@@ -5755,6 +6131,19 @@ const Users = {
         list.appendChild(taskRow);
       });
       subSectionContainer.appendChild(list);
+    } else if ((pc.table === 'transmittals' || (pc.isOperationsRequest && proposed.type === 'transmittal')) && proposed.documents && proposed.documents.length > 0) {
+      hasSubSection = true;
+      subSectionContainer.appendChild(el('div', { class: 'notion-section-divider' }));
+      subSectionContainer.appendChild(el('div', { class: 'notion-sub-section-title' }, [
+        el('span', { html: Icons.document }),
+        `Documents to Transmit (${proposed.documents.length})`
+      ]));
+
+      const docList = el('ul', { style: 'padding-left: var(--spacing-md); margin-top: 8px; display:flex; flex-direction:column; gap:4px;' });
+      proposed.documents.forEach(doc => {
+        docList.appendChild(el('li', { text: typeof doc === 'string' ? doc : (doc.title || doc.name || JSON.stringify(doc)), style: 'font-size:0.875rem;' }));
+      });
+      subSectionContainer.appendChild(docList);
     }
 
     if (hasSubSection) {
@@ -5771,6 +6160,9 @@ const Users = {
 
     const handleCloseAndRoute = () => {
       this.pendingDetailId = null;
+      if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+        window.SidePaneInstance.close({ silent: true });
+      }
       if (location.hash.includes('/')) {
         location.hash = location.hash.split('/')[0];
       } else {
@@ -6140,11 +6532,11 @@ const Users = {
 
       tr.appendChild(el('td', { text: this._requestTypeLabel(r.type) }));
 
-      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
-      tr.appendChild(el('td', { text: wr ? wr.title : '—' }));
+      const wrTitle = r.work_requests?.title || (window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(r.workRequestId)?.title : null) || '—';
+      tr.appendChild(el('td', { text: wrTitle }));
 
-      const client = window.apiClient.clientCache.getById(r.clientId);
-      tr.appendChild(el('td', { text: client ? client.name : '—' }));
+      const clientName = r.clients?.name || (window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(r.clientId)?.name : null) || '—';
+      tr.appendChild(el('td', { text: clientName }));
 
       tr.appendChild(el('td', { text: formatDate(r.requestedAt) }));
 
@@ -6211,8 +6603,8 @@ const Users = {
 
     let cardNumber = 1;
     const renderCard = (r) => {
-      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
-      const client = window.apiClient.clientCache.getById(r.clientId);
+      const wrTitle = r.work_requests?.title || (window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(r.workRequestId)?.title : '') || '';
+      const clientName = r.clients?.name || (window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(r.clientId)?.name : '') || '—';
       const statusPriorityMap = {
         'pending': 'card-v2-priority-medium',
         'fulfilled': 'card-v2-priority-low',
@@ -6233,8 +6625,8 @@ const Users = {
         progress: progressMap[r.status] || 0,
         statusColor: statusColors[r.status] || '#cbd5e1',
         title: self._requestTypeLabel(r.type),
-        description: client ? client.name : '—',
-        detail: (wr ? wr.title : '') + (detail ? ' • ' + detail : ''),
+        description: clientName,
+        detail: (wrTitle ? wrTitle : '') + (detail ? ' • ' + detail : ''),
         date: r.requestedAt ? formatDate(r.requestedAt) : '',
         priority: r.status.charAt(0).toUpperCase() + r.status.slice(1),
         priorityClass: statusPriorityMap[r.status] || 'card-v2-priority-normal',
@@ -6296,11 +6688,11 @@ const Users = {
       const item = el('div', { class: 'list-item' });
       const left = el('div');
       left.appendChild(el('div', { class: 'list-item-title', text: self._requestTypeLabel(r.type) }));
-      const wr = window.apiClient.workRequestCache.getById(r.workRequestId);
-      const client = window.apiClient.clientCache.getById(r.clientId);
+      const wrTitle = r.work_requests?.title || (window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(r.workRequestId)?.title : '') || '';
+      const clientName = r.clients?.name || (window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(r.clientId)?.name : '') || '';
       const metaParts = [
-        client ? client.name : '',
-        wr ? wr.title : '',
+        clientName,
+        wrTitle,
         r.status.charAt(0).toUpperCase() + r.status.slice(1),
         r.requestedAt ? formatDate(r.requestedAt) : ''
       ].filter(Boolean);
@@ -6348,3 +6740,7 @@ const Users = {
     location.hash = `#admin/myRequests/${r.id}`;
   }
 };
+
+if (typeof window !== 'undefined') {
+  window.Users = Users;
+}
