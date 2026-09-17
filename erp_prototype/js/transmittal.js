@@ -829,7 +829,11 @@ const Transmittal = {
       container.appendChild(contentContainer);
 
       if (this.view === 'list') {
-        contentContainer.appendChild(await this.renderList());
+        if (!this.hasCachedData(Auth.activeEntity)) {
+          contentContainer.innerHTML = Utils.getSkeletonForView('transmittals');
+        } else {
+          contentContainer.appendChild(await this.renderList());
+        }
       } else {
         contentContainer.innerHTML = Utils.getSkeletonForView('transmittals');
       }
@@ -848,7 +852,10 @@ const Transmittal = {
             tabNav = freshTabNav;
           }
 
-          if (this.view === 'archive') {
+          if (this.view === 'list') {
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await this.renderList());
+          } else if (this.view === 'archive') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderArchive());
           }

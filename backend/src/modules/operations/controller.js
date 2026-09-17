@@ -157,6 +157,9 @@ const getById = async (req, res, next) => {
       id: req.params.id,
       entityId,
       user: req.user,
+      // Deep links (audit log, dashboard) land directly on the detail view,
+      // which needs embedded tasks even when the local list cache missed.
+      includeTasks: true,
     });
     if (!wr) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });

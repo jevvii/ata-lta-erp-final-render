@@ -1082,7 +1082,11 @@ const Disbursement = {
       container.appendChild(contentContainer);
 
       if (this.view === 'list') {
-        contentContainer.appendChild(await this.renderList());
+        if (!this.hasCachedData(Auth.activeEntity)) {
+          contentContainer.innerHTML = Utils.getSkeletonForView('disbursement');
+        } else {
+          contentContainer.appendChild(await this.renderList());
+        }
       } else {
         contentContainer.innerHTML = Utils.getSkeletonForView('disbursement');
       }
@@ -1102,7 +1106,10 @@ const Disbursement = {
             tabNav = freshTabNav;
           }
 
-          if (this.view === 'report') {
+          if (this.view === 'list') {
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await this.renderList());
+          } else if (this.view === 'report') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderReport());
           } else if (this.view === 'templates') {

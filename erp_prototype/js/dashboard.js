@@ -66,7 +66,7 @@ const Dashboard = {
     }
   },
 
-  async _routeToItem(type, item) {
+  async _routeToItem(type, item, taskId = null) {
     this._switchToItemEntity(item);
 
     // Drop the dashboard cache so a return visit loads data for the new entity.
@@ -78,7 +78,8 @@ const Dashboard = {
       Disbursement.invalidateCache();
     }
 
-    const hash = type === 'wr' ? '#operations/detail/' + item.id : '#disbursement/detail/' + item.id;
+    const taskQuery = (type === 'wr' && taskId) ? '?taskId=' + taskId : '';
+    const hash = type === 'wr' ? '#operations/detail/' + item.id + taskQuery : '#disbursement/detail/' + item.id;
 
     // Use normal hash navigation. This lets the router handle the route exactly
     // once through the hashchange listener, avoiding the hash-suppression bug
@@ -397,9 +398,13 @@ const Dashboard = {
     left.innerHTML = `<span style="font-size: 1.25rem;">⏰</span> <div><strong>End of Day Reminder:</strong> You have ${tasksNeedingLogs.length} incomplete assigned task(s) but haven't submitted your daily time log for them yet. Please log your time before finishing your day.</div>`;
     banner.appendChild(left);
 
+    const firstTask = tasksNeedingLogs[0];
+    const targetHash = (firstTask && firstTask.workRequestId)
+      ? `#operations/detail/${firstTask.workRequestId}?taskId=${firstTask.id}`
+      : '#operations';
     const right = el('button', { class: 'btn btn-primary btn-sm', text: 'Go to Tasks' });
     right.onclick = () => {
-      location.hash = '#operations';
+      location.hash = targetHash;
       App.handleRoute();
     };
     banner.appendChild(right);
@@ -1779,6 +1784,10 @@ const Dashboard = {
 
     if (isExpanded) {
       const details = el('div', { class: 'sidebar-item-details' });
+      // Hoisted so the shared "View" button below can reference it for both
+      // 'wr' and 'db' item types (previously block-scoped to the 'wr' branch,
+      // which made the button click throw a ReferenceError and do nothing).
+      let myTasks = [];
 
       if (type === 'wr') {
         const client = item.clientId ? window.apiClient.clientCache.getById(item.clientId) : null;
@@ -1788,13 +1797,22 @@ const Dashboard = {
         details.appendChild(this.renderDetailRow('Status', item.status));
         details.appendChild(this.renderDetailRow('Assigned', assigned ? assigned.name : '—'));
 
-        const myTasks = (this._dataCache?.tasks || []).filter(t => t.workRequestId === item.id && t.assigneeId === Auth.user?.id && t.status !== 'Completed');
+        myTasks = (this._dataCache?.tasks || []).filter(t => t.workRequestId === item.id && t.assigneeId === Auth.user?.id && t.status !== 'Completed');
         if (myTasks.length > 0) {
           const taskWrap = el('div', { class: 'detail-desc', style: 'border-left-color: var(--color-warning);' });
           taskWrap.appendChild(el('strong', { text: `My Incomplete Tasks (${myTasks.length}):` }));
           const ul = el('ul', { style: 'margin: 4px 0 0 16px; padding: 0;' });
           myTasks.forEach(t => {
-            ul.appendChild(el('li', { text: t.title }));
+            const li = el('li', {
+              style: 'cursor: pointer; color: var(--color-primary); text-decoration: underline; margin-bottom: 3px;',
+              text: t.title,
+              title: 'Click to open and highlight this task'
+            });
+            li.onclick = async (e) => {
+              e.stopPropagation();
+              await this._routeToItem(type, item, t.id);
+            };
+            ul.appendChild(li);
           });
           taskWrap.appendChild(ul);
           details.appendChild(taskWrap);
@@ -1815,7 +1833,8 @@ const Dashboard = {
       const viewBtn = el('button', { class: 'btn btn-primary btn-xs btn-block', style: 'margin-top:12px;', text: btnText });
       viewBtn.onclick = async (e) => {
         e.stopPropagation();
-        await this._routeToItem(type, item);
+        const firstIncomplete = myTasks[0]?.id || null;
+        await this._routeToItem(type, item, firstIncomplete);
       };
       details.appendChild(viewBtn);
 
@@ -1854,6 +1873,7 @@ const Dashboard = {
 
   hasCachedData(entity) {
     if (!this._dataCache) return false;
+    if (this._dataCache.userId && Auth.user?.id && this._dataCache.userId !== Auth.user.id) return false;
     if (entity && this._dataCache.entity !== entity) return false;
     if (!this._dataCache.loadedAt) return false;
     return (Date.now() - this._dataCache.loadedAt) < this.CACHE_TTL_MS;
@@ -1902,11 +1922,39 @@ const Dashboard = {
     let workRequests = [];
 
     if (isConsolidated) {
-      // In consolidated mode the dashboard endpoint returns calendar items from
-      // both entities. Build the work-request list from those instead of calling
-      // the entity-scoped list endpoint, which only supports a single entity.
+      // The dashboard report's calendar only covers overdue items plus the
+      // coming 30 days. The per-entity view builds its calendar from the full
+      // work-request list instead, so the consolidated view must do the same
+      // or any WR with no due date (or due beyond 30 days) silently vanishes
+      // from the calendar. The list endpoint is single-entity, so fetch each
+      // entity explicitly via header override (the consolidated gate on the
+      // backend already guarantees the user may access both).
+      const userEntities = (Auth.user?.entities || [])
+        .map(e => (e || '').toUpperCase())
+        .filter(e => e === 'ATA' || e === 'LTA');
+      const wrLists = await Promise.all(userEntities.map(ent =>
+        window.apiClient.workRequests.list({ includeTasks: true }, {
+          signal,
+          headers: { 'X-Active-Entity': ent },
+        }).catch(err => {
+          if (!isAbortError(err)) console.warn(`Work requests fetch failed for ${ent}:`, err);
+          return { data: [] };
+        })
+      ));
+      wrLists.forEach((res, idx) => {
+        const ent = userEntities[idx];
+        (res.data || []).forEach(wr => workRequests.push({
+          ...wr,
+          entity: (wr.entity || ent || active).toUpperCase(),
+          tasks: (wr.tasks || []).map(t => ({ ...t, workRequestId: wr.id })),
+        }));
+      });
+
+      // Merge any calendar-sourced work requests the lists did not include
+      // (e.g. freshly created items), without duplicating IDs.
       if (Array.isArray(dash.calendar)) {
-        workRequests = dash.calendar
+        const existingIds = new Set(workRequests.map(wr => wr.id));
+        const calendarWrs = dash.calendar
           .filter(ev => ev.type === 'wr')
           .map(ev => {
             const raw = ev.data || ev;
@@ -1917,10 +1965,11 @@ const Dashboard = {
               tasks: (raw.tasks || []).map(t => ({ ...t, workRequestId: raw.id })),
             };
           })
-          .filter(wr => wr.id);
+          .filter(wr => wr.id && !existingIds.has(wr.id));
+        workRequests.push(...calendarWrs);
       }
     } else {
-      const wrRes = await window.apiClient.workRequests.list({ includeTasks: true, signal }).catch(err => {
+      const wrRes = await window.apiClient.workRequests.list({ includeTasks: true }, { signal }).catch(err => {
         if (!isAbortError(err)) console.warn('Work requests fetch failed:', err);
         return { data: [] };
       });
@@ -1975,6 +2024,7 @@ const Dashboard = {
       tasks,
       loadedAt: Date.now(),
       entity: active,
+      userId: Auth.user?.id || null,
     };
   },
 

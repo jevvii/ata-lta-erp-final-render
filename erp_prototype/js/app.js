@@ -132,6 +132,9 @@ const App = {
     this.initTheme();
     this.setupThemeToggle();
     this.renderShell();
+    if (typeof CommandPalette !== 'undefined' && typeof CommandPalette._injectNavTrigger === 'function') {
+      CommandPalette._injectNavTrigger();
+    }
     this.setupRouting();
     this.setupNavigation();
     this.setupResponsiveMenu();
@@ -359,20 +362,16 @@ const App = {
       Auth.switchEntity(newEntity);
       this.updateEntityBadge();
 
-      // When switching into consolidated mode, reset persisted filters so stale
+      // When switching entities, reset legacy unscoped sessionStorage filters so stale
       // per-entity filters (client, status, assignee, etc.) don't hide records
-      // from the other entity. The backend falls back to the user's first real
-      // entity for non-report modules, so starting with a clean filter state is
-      // the safest UX.
-      if (newEntity === 'ALL') {
-        try {
-          Object.keys(sessionStorage).forEach((key) => {
-            if (key.startsWith('erp_filters_') || key.startsWith('erp_group_') || key.startsWith('erp_sort_')) {
-              sessionStorage.removeItem(key);
-            }
-          });
-        } catch (e) { /* ignore storage errors */ }
-      }
+      // across entities.
+      try {
+        Object.keys(sessionStorage).forEach((key) => {
+          if (key.startsWith('erp_filters_') || key.startsWith('erp_group_') || key.startsWith('erp_sort_')) {
+            sessionStorage.removeItem(key);
+          }
+        });
+      } catch (e) { /* ignore storage errors */ }
 
       // Clean up module states for any detail/form view
       if (typeof Workflow !== 'undefined') {
@@ -396,13 +395,19 @@ const App = {
         Clients.editingId = null;
       }
 
-      // If the current route has subpaths (e.g. #billing/detail/123), reset to the base route (e.g. #billing)
+      // If the current route has detail/form subpaths (e.g. #billing/detail/123), reset to the base route (e.g. #billing).
+      // Module-level sub-tabs like #admin/audit or #admin/pending are preserved.
       const rawHash = location.hash || '#dashboard';
-      const baseHash = rawHash.split('?')[0].split('/')[0];
+      const pathParts = rawHash.split('?')[0].split('/');
+      const baseHash = pathParts[0];
+      let targetRoute = baseHash;
+      if (baseHash === '#admin' && (pathParts[1] === 'audit' || pathParts[1] === 'pending' || pathParts[1] === 'users')) {
+        targetRoute = `${baseHash}/${pathParts[1]}`;
+      }
 
       // Let triggerSyncReload reset the hash (when needed) and re-route once,
       // avoiding a duplicate handleRoute from both hashchange and a direct call.
-      await triggerSyncReload(baseHash);
+      await triggerSyncReload(targetRoute);
     };
   },
 
@@ -431,6 +436,9 @@ const App = {
   },
 
   setupRouting() {
+    if (this._routingWired) return;
+    this._routingWired = true;
+
     window.addEventListener('hashchange', () => {
       if (this._suppressHashChange) {
         this._suppressHashChange = false;
@@ -441,6 +449,9 @@ const App = {
   },
 
   setupNavigation() {
+    if (this._navigationWired) return;
+    this._navigationWired = true;
+
     document.querySelectorAll('nav a[data-module]').forEach(link => {
       link.addEventListener('click', (e) => {
         e.preventDefault();
@@ -476,6 +487,9 @@ const App = {
     const headerActions = document.querySelector('.header-actions');
     if (!toggle || !sidebar) return;
 
+    if (this._responsiveMenuWired) return;
+    this._responsiveMenuWired = true;
+
     toggle.addEventListener('click', () => {
       sidebar.classList.toggle('open');
       if (headerActions) headerActions.classList.toggle('show');
@@ -499,6 +513,9 @@ const App = {
       sidebar.classList.add('collapsed');
       btn.title = 'Expand sidebar';
     }
+
+    if (this._sidebarCollapseWired) return;
+    this._sidebarCollapseWired = true;
 
     btn.addEventListener('click', () => {
       sidebar.classList.toggle('collapsed');
@@ -556,12 +573,8 @@ const App = {
       const dropdown = document.getElementById('user-menu-dropdown');
       if (dropdown) dropdown.classList.add('hidden');
       Auth.logout();
-      document.getElementById('app-shell').classList.add('hidden');
-      document.getElementById('login-screen').classList.remove('hidden');
-      const form = document.getElementById('login-form');
-      if (form) form.reset();
-      const errorEl = document.getElementById('login-error');
-      if (errorEl) errorEl.classList.add('hidden');
+      window.location.hash = '#dashboard';
+      window.location.reload();
     });
   },
 
@@ -615,6 +628,8 @@ const App = {
     // form inline in the main content area (PaneMode.FULL_PAGE behavior) and set the module
     // editing state so that module.render() can display the form directly.
     if (baseHash === '#operations') {
+      const qParams = new URLSearchParams(parts[1] || '');
+      Workflow.targetTaskId = qParams.get('taskId') || null;
       if (pathParts[1] === 'detail' && pathParts[2]) {
         Workflow.view = 'detail';
         Workflow.detailWrId = pathParts[2];
@@ -809,15 +824,26 @@ const App = {
     }
   },
 
+  _getFilterStorageKey(module) {
+    const userId = (window.Auth && window.Auth.user && window.Auth.user.id) || 'default';
+    const entity = (window.Auth && window.Auth.activeEntity) || 'ALL';
+    return `erp_filters_${userId}_${entity}_${module}`;
+  },
+
   saveFilters(module, filterMap) {
-    const key = `erp_filters_${module}`;
-    try { sessionStorage.setItem(key, JSON.stringify(filterMap)); } catch (e) { /* ignore */ }
+    const key = this._getFilterStorageKey(module);
+    const legacyKey = `erp_filters_${module}`;
+    try {
+      const dataStr = JSON.stringify(filterMap);
+      localStorage.setItem(key, dataStr);
+      sessionStorage.setItem(legacyKey, dataStr);
+    } catch (e) { /* ignore */ }
   },
 
   restoreFilters(module) {
-    const key = `erp_filters_${module}`;
+    const key = this._getFilterStorageKey(module);
     try {
-      const stored = sessionStorage.getItem(key);
+      const stored = localStorage.getItem(key);
       return stored ? JSON.parse(stored) : null;
     } catch (e) { return null; }
   },
@@ -832,8 +858,59 @@ const App = {
   },
 
   clearSavedFilters(module) {
-    const key = `erp_filters_${module}`;
-    try { sessionStorage.removeItem(key); } catch (e) { /* ignore */ }
+    const key = this._getFilterStorageKey(module);
+    const legacyKey = `erp_filters_${module}`;
+    try {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(legacyKey);
+    } catch (e) { /* ignore */ }
+  },
+
+  saveFilterPreset(module, presetName, filterMap) {
+    if (!presetName) return;
+    const key = `erp_presets_${module}`;
+    try {
+      const existing = JSON.parse(localStorage.getItem(key) || '{}');
+      existing[presetName] = filterMap;
+      localStorage.setItem(key, JSON.stringify(existing));
+      if (typeof showToast === 'function') {
+        showToast('Filter Preset Saved', `Preset "${presetName}" saved successfully.`, 'success');
+      }
+    } catch (e) {
+      console.warn('Failed to save filter preset', e);
+    }
+  },
+
+  listFilterPresets(module) {
+    const key = `erp_presets_${module}`;
+    try {
+      return JSON.parse(localStorage.getItem(key) || '{}');
+    } catch (e) { return {}; }
+  },
+
+  applyFilterPreset(module, presetName) {
+    const presets = this.listFilterPresets(module);
+    if (presets[presetName]) {
+      this.saveFilters(module, presets[presetName]);
+      this.handleRoute();
+      if (typeof showToast === 'function') {
+        showToast('Filter Preset Applied', `Applied "${presetName}" preset.`, 'info');
+      }
+      return true;
+    }
+    return false;
+  },
+
+  deleteFilterPreset(module, presetName) {
+    const key = `erp_presets_${module}`;
+    try {
+      const existing = JSON.parse(localStorage.getItem(key) || '{}');
+      delete existing[presetName];
+      localStorage.setItem(key, JSON.stringify(existing));
+      if (typeof showToast === 'function') {
+        showToast('Preset Deleted', `Removed preset "${presetName}".`, 'info');
+      }
+    } catch (e) { /* ignore */ }
   },
 
   saveGroupBy(module, groupBy) {
@@ -943,10 +1020,27 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const loginForm = document.getElementById('login-form');
   if (loginForm) {
+    const passwordToggleBtn = document.getElementById('password-toggle-btn');
+    const passwordInput = document.getElementById('password');
+    if (passwordToggleBtn && passwordInput) {
+      passwordToggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const isPassword = passwordInput.type === 'password';
+        passwordInput.type = isPassword ? 'text' : 'password';
+        passwordToggleBtn.setAttribute('title', isPassword ? 'Hide password' : 'Show password');
+        passwordToggleBtn.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
+        const showIcon = passwordToggleBtn.querySelector('.eye-show');
+        const hideIcon = passwordToggleBtn.querySelector('.eye-hide');
+        if (showIcon && hideIcon) {
+          showIcon.classList.toggle('hidden', isPassword);
+          hideIcon.classList.toggle('hidden', !isPassword);
+        }
+      });
+    }
+
     loginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const emailInput = document.getElementById('email');
-      const passwordInput = document.getElementById('password');
       const submitBtn = loginForm.querySelector('button[type="submit"]');
       const errorEl = document.getElementById('login-error');
 
@@ -959,6 +1053,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Disable inputs and button
       emailInput.disabled = true;
       passwordInput.disabled = true;
+      if (passwordToggleBtn) passwordToggleBtn.disabled = true;
       if (submitBtn) {
         submitBtn.disabled = true;
         submitBtn.textContent = 'Signing In...';
@@ -971,6 +1066,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Re-enable inputs and button
       emailInput.disabled = false;
       passwordInput.disabled = false;
+      if (passwordToggleBtn) passwordToggleBtn.disabled = false;
       if (submitBtn) {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Sign In';
@@ -983,9 +1079,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         await App.init();
       } else {
         if (errorEl) {
-          errorEl.textContent = loginResult === 'disabled'
-            ? 'Your account has been disabled. Please contact the administrator.'
-            : 'Invalid email or password.';
+          if (loginResult === 'rate_limited') {
+            errorEl.textContent = 'Too many authentication attempts. Please wait 15 minutes before trying again.';
+          } else if (loginResult === 'disabled') {
+            errorEl.textContent = 'Your account has been disabled. Please contact the administrator.';
+          } else {
+            errorEl.textContent = 'Invalid email or password.';
+          }
           errorEl.classList.remove('hidden');
         }
       }

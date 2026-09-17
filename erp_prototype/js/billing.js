@@ -1040,7 +1040,11 @@ const Billing = {
       container.appendChild(contentContainer);
 
       if (this.view === "list") {
-        contentContainer.appendChild(await this.renderList());
+        if (!this.hasCachedData(Auth.activeEntity)) {
+          contentContainer.innerHTML = Utils.getSkeletonForView("billing");
+        } else {
+          contentContainer.appendChild(await this.renderList());
+        }
       } else {
         contentContainer.innerHTML = Utils.getSkeletonForView("billing");
       }
@@ -1061,7 +1065,10 @@ const Billing = {
             tabNav = freshTabNav;
           }
 
-          if (this.view === "aging") {
+          if (this.view === "list") {
+            contentContainer.innerHTML = "";
+            contentContainer.appendChild(await this.renderList());
+          } else if (this.view === "aging") {
             contentContainer.innerHTML = "";
             contentContainer.appendChild(await this.renderAging());
           } else if (this.view === "templates") {

@@ -312,7 +312,47 @@ const Users = {
   _getItemIdentifier(l) {
     if (!l) return '—';
     const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
-    
+    const actionLower = (l.action || '').toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    // 0. Task special handling: resolve task title and parent work request
+    if (tableLower.includes('task') || actionLower.includes('task')) {
+      const taskId = d.taskId || d.task_id || d.recordId || d.record_id || l.recordId || l.record_id;
+      let taskObj = null;
+      let parentWr = null;
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getTaskById === 'function') {
+        taskObj = WorkflowData.getTaskById(taskId);
+        if (taskObj?.workRequestId && typeof WorkflowData.getWorkRequestById === 'function') {
+          parentWr = WorkflowData.getWorkRequestById(taskObj.workRequestId);
+        }
+      }
+      if (!parentWr && window.apiClient?.workRequestCache?._wrs) {
+        for (const wr of window.apiClient.workRequestCache._wrs) {
+          const t = (wr.tasks || []).find(tk => tk.id === taskId);
+          if (t) {
+            taskObj = taskObj || t;
+            parentWr = wr;
+            break;
+          }
+        }
+      }
+      const wrId = d.workRequestId || d.work_request_id || d.parentRecordId || taskObj?.workRequestId;
+      if (!parentWr && wrId) {
+        if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getWorkRequestById === 'function') {
+          parentWr = WorkflowData.getWorkRequestById(wrId);
+        }
+        if (!parentWr && window.apiClient?.workRequestCache?.getById) {
+          parentWr = window.apiClient.workRequestCache.getById(wrId);
+        }
+      }
+
+      const taskName = d.name || d.title || taskObj?.title || taskObj?.name || 'Task';
+      if (parentWr?.title) {
+        return `${taskName} (WR: ${parentWr.title})`;
+      }
+      return taskName;
+    }
+
     // 1. Explicit business numbers and titles in details
     const businessId = d.disbursementNumber || d.disbursement_number ||
                        d.trackingNumber || d.tracking_number ||
@@ -326,9 +366,6 @@ const Users = {
     // 2. Resolve target record ID from details or root log object
     const recId = d.recordId || d.record_id || d.id || d.parentRecordId || l.recordId || l.record_id;
     if (!recId) return '—';
-
-    const actionLower = (l.action || '').toLowerCase();
-    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
 
     // 3. Dynamic lookup in client cache
     if (tableLower.includes('client') || actionLower.includes('client')) {
@@ -375,6 +412,103 @@ const Users = {
     // 9. If recId is a standard UUID or ID string
     const recIdStr = String(recId);
     return recIdStr.length > 20 ? recIdStr.slice(0, 8) + '...' : recIdStr;
+  },
+
+  _getItemRouteLink(l) {
+    if (!l) return null;
+    const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
+    const recId = d.recordId || d.record_id || d.id || d.parentRecordId || l.recordId || l.record_id;
+    const actionLower = (l.action || '').toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    // 1. Task (check before work requests: task rows carry their parent WR id)
+    if (tableLower.includes('task') || actionLower.includes('task')) {
+      const taskId = d.taskId || d.task_id || recId;
+      let wrId = d.workRequestId || d.work_request_id || d.parentRecordId;
+      if (!wrId) {
+        if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getTaskById === 'function') {
+          const t = WorkflowData.getTaskById(taskId);
+          if (t?.workRequestId) wrId = t.workRequestId;
+        }
+        if (!wrId && window.apiClient?.workRequestCache?._wrs) {
+          for (const wr of window.apiClient.workRequestCache._wrs) {
+            if ((wr.tasks || []).some(tk => tk.id === taskId)) {
+              wrId = wr.id;
+              break;
+            }
+          }
+        }
+      }
+      if (wrId) {
+        return { href: `#operations/detail/${wrId}${taskId ? '?taskId=' + taskId : ''}` };
+      }
+    }
+
+    // 2. Work Request
+    if (tableLower.includes('work') || tableLower.includes('request') || actionLower.includes('work') || actionLower.includes('request')) {
+      const wrId = recId || d.workRequestId || d.work_request_id;
+      if (wrId) return { href: `#operations/detail/${wrId}` };
+    }
+
+    // 3. Billing / Invoice
+    if (tableLower.includes('billing') || tableLower.includes('invoice') || actionLower.includes('invoice') || actionLower.includes('billing')) {
+      return { href: recId ? `#billing/detail/${recId}` : '#billing' };
+    }
+
+    // 4. Disbursement
+    if (tableLower.includes('disbursement') || actionLower.includes('disbursement')) {
+      return { href: recId ? `#disbursement/detail/${recId}` : '#disbursement' };
+    }
+
+    // 5. Transmittal (route hash is singular: #transmittal)
+    if (tableLower.includes('transmittal') || actionLower.includes('transmittal')) {
+      return { href: recId ? `#transmittal/detail/${recId}` : '#transmittal' };
+    }
+
+    // 6. Client (no detail route; record view is an accordion on the list page)
+    if (tableLower.includes('client') || actionLower.includes('client')) {
+      return { href: '#clients' };
+    }
+
+    // 7. User (lives under the Admin module)
+    if (tableLower.includes('user') || actionLower.includes('user')) {
+      return { href: '#admin/users' };
+    }
+
+    // 8. Operations Request
+    if (tableLower.includes('operations_request') || actionLower.includes('operations_request') || tableLower.includes('operation_request')) {
+      const wrId = d.workRequestId || d.work_request_id;
+      const taskId = d.linkedTaskId || d.linked_task_id;
+      if (wrId) {
+        return { href: `#operations/detail/${wrId}${taskId ? '?taskId=' + taskId : ''}` };
+      }
+      return { href: Auth.user?.role === 'Admin' ? '#admin/pending-approvals' : '#admin/my-requests' };
+    }
+
+    return null;
+  },
+
+  /**
+   * Navigate to an audit log's target record, first switching the active
+   * entity when the record belongs to the other entity — otherwise the
+   * entity-scoped detail fetch would 404 and the router would fall back to
+   * the module list.
+   */
+  _navigateToItemLink(l, href, recordEntity) {
+    const targetEntity = (recordEntity || l?.entity || '').toUpperCase();
+    if (
+      (targetEntity === 'ATA' || targetEntity === 'LTA') &&
+      typeof Auth !== 'undefined' &&
+      Auth.activeEntity !== targetEntity &&
+      (Auth.user?.entities || []).includes(targetEntity)
+    ) {
+      Auth.switchEntity(targetEntity);
+      if (typeof App !== 'undefined') {
+        if (typeof App.renderEntitySwitcher === 'function') App.renderEntitySwitcher();
+        if (typeof App.updateEntityBadge === 'function') App.updateEntityBadge();
+      }
+    }
+    location.hash = href;
   },
 
   /**
@@ -512,12 +646,6 @@ const Users = {
   cleanup() {
     this.container = null;
     this._datesResolved = false;
-  },
-
-  hasCachedData() {
-    const now = Date.now();
-    const cacheAge = now - (this._pendingPreloadTs || 0);
-    return cacheAge < 15 * 1000 && Array.isArray(this._cachedMyPending);
   },
 
   async render(routeId) {
@@ -1347,6 +1475,7 @@ const Users = {
     this._activeSkipGeneration = 0;
     this._pendingPreloadTs = 0;
     this._countTs.myRequests = 0;
+    this.container = null;
   },
 
   hasCachedData(entity) {
@@ -1354,8 +1483,10 @@ const Users = {
     if (isAdmin) {
       return this._usersLoaded && Array.isArray(this.users);
     }
-    // For non-admins/staff, the cache is warm if we have preloaded myPending lists
-    return Array.isArray(this._cachedMyPending);
+    // For non-admins/staff, the cache is warm if we have preloaded myPending lists within 15s TTL
+    const now = Date.now();
+    const cacheAge = now - (this._pendingPreloadTs || 0);
+    return cacheAge < 15 * 1000 && Array.isArray(this._cachedMyPending);
   },
 
   renderUsersSection() {
@@ -2254,10 +2385,12 @@ const Users = {
   async renderAuditSection() {
     const wrapper = el('div');
 
-    // Warm shared caches before building user/client filter dropdowns.
+    // Warm shared caches before building user/client/work-request filter dropdowns.
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      window.apiClient.workRequestCache.ensure(),
+      window.apiClient.transmittalCache?.ensure ? window.apiClient.transmittalCache.ensure() : Promise.resolve()
     ]);
 
     const canViewAllAudit = Auth.can('audit:view_all');
@@ -2361,10 +2494,11 @@ const Users = {
         const res = await window.apiClient.admin.listAudit({ limit: pageSize, offset });
         const page = (res?.data || []).map(r => this._normalizeAuditLog(r));
         allLogs = allLogs.concat(page);
-        if (!res?.meta?.hasMore || page.length === 0) break;
+        if (!res?.meta?.hasMore || page.length === 0 || allLogs.length >= 200) break;
         offset += pageSize;
       }
     } catch (err) {
+      if (isAbortError(err)) return;
       console.error('[Users.refreshAuditLog] failed to load audit log', err);
       Utils.clearSkeleton(container);
       container.appendChild(renderEmptyState('Unable to load audit log', null, { variant: 'zero-state' }));
@@ -2497,14 +2631,39 @@ const Users = {
       const seqNum = (l.id && logSequenceMap.get(l.id)) || (idx + 1);
       const itemTarget = this._getItemIdentifier(l);
       const actionDisplay = this._formatAuditAction(l);
+      const itemLink = this._getItemRouteLink(l);
+
+      let itemTagNode = null;
+      if (itemLink) {
+        itemTagNode = el('a', {
+          href: itemLink.href,
+          text: itemTarget,
+          style: 'color: inherit; text-decoration: underline; font-weight: 500; cursor: pointer;',
+          title: `Navigate to ${itemTarget}`
+        });
+        itemTagNode.addEventListener('click', (e) => {
+          e.preventDefault();
+          this._navigateToItemLink(l, itemLink.href);
+        });
+      }
+
+      const itemTag = itemTagNode
+        ? {
+            text: itemTarget,
+            type: 'item',
+            className: 'jira-backlog-tag-item',
+            node: itemTagNode
+          }
+        : { text: itemTarget, type: 'item', className: 'jira-backlog-tag-item' };
 
       return {
         id: l.id || idx,
+        raw: l,
         keyText: 'AUR-' + String(seqNum).padStart(3, '0'),
         iconHtml: avatarIcon,
         tags: [
           { text: actionDisplay, type: 'action', className: 'jira-backlog-tag-action ' + getActionClass(l.action || actionDisplay) },
-          { text: itemTarget, type: 'item', className: 'jira-backlog-tag-item' },
+          itemTag,
           { text: l.entity || 'ATA', type: 'entity', className: 'badge badge-' + ((l.entity || 'ATA') === 'ATA' ? 'ata' : 'lta') },
           { text: userName, type: 'client' },
           { text: formatDate(l.timestamp) + ' ' + ts.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit' }), type: 'schedule' }
@@ -2523,6 +2682,16 @@ const Users = {
       selectable: false,
       titleColumnWidth: '0px',
       leadColumnLabel: 'ID',
+      rowActions: (item) => [
+        {
+          text: 'Details',
+          className: 'btn btn-secondary btn-xs',
+          title: 'View audit entry details',
+          onClick: () => {
+            this.showAuditLogDetailsModal(item.raw);
+          }
+        }
+      ],
       pagination: { pageSize: 20, currentPage },
       onPageChange: onPageChange || ((newPage) => {
         this.refreshAuditLog(container, activeFilters, searchQuery, sortOrder, newPage, onPageChange);
@@ -2537,6 +2706,1266 @@ const Users = {
     });
 
     container.appendChild(backlog);
+  },
+
+  _resolveAuditContextSync(l) {
+    if (!l) return null;
+    const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
+    const recId = d.recordId || d.record_id || d.id || d.parentRecordId || l.recordId || l.record_id;
+    const actionLower = (l.action || '').toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    const resolveWr = (id) => {
+      if (!id) return null;
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getWorkRequestById === 'function') {
+        const wr = WorkflowData.getWorkRequestById(id);
+        if (wr) return wr;
+      }
+      if (window.apiClient?.workRequestCache?.getById) {
+        const wr = window.apiClient.workRequestCache.getById(id);
+        if (wr) return wr;
+      }
+      return null;
+    };
+
+    const resolveTask = (taskId, parentWr) => {
+      if (!taskId) return null;
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getTaskById === 'function') {
+        const t = WorkflowData.getTaskById(taskId);
+        if (t) return t;
+      }
+      if (parentWr?.tasks) {
+        const t = parentWr.tasks.find(tk => tk.id === taskId);
+        if (t) return t;
+      }
+      if (window.apiClient?.workRequestCache?._wrs) {
+        for (const wr of window.apiClient.workRequestCache._wrs) {
+          const t = (wr.tasks || []).find(tk => tk.id === taskId);
+          if (t) return t;
+        }
+      }
+      return null;
+    };
+
+    const resolveTransmittal = (id) => {
+      if (!id) return null;
+      if (this._auditTransmittalCache?.has(id)) return this._auditTransmittalCache.get(id);
+      if (window.apiClient?.transmittalCache?.getById) {
+        const t = window.apiClient.transmittalCache.getById(id);
+        if (t) return t;
+      }
+      if (typeof Transmittal !== 'undefined' && Array.isArray(Transmittal._items)) {
+        const t = Transmittal._items.find(i => i.id === id || i.trackingNumber === id || i.tracking_number === id);
+        if (t) return t;
+      }
+      return null;
+    };
+
+    const resolveDisbursement = (id) => {
+      if (!id) return null;
+      if (this._auditDisbursementCache?.has(id)) return this._auditDisbursementCache.get(id);
+      if (typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items)) {
+        const db = Disbursement._items.find(i => i.id === id);
+        if (db) return db;
+      }
+      return null;
+    };
+
+    const resolveInvoice = (id) => {
+      if (!id) return null;
+      if (this._auditInvoiceCache?.has(id)) return this._auditInvoiceCache.get(id);
+      if (typeof Billing !== 'undefined') {
+        if (Billing._detailCache && Billing._detailCache[id]) return Billing._detailCache[id];
+        if (Array.isArray(Billing._listCache)) {
+          const inv = Billing._listCache.find(i => i.id === id);
+          if (inv) return inv;
+        }
+      }
+      return null;
+    };
+
+    const context = {
+      category: 'Business Context',
+      badge: 'Record Context',
+      fields: []
+    };
+
+    // 1. Task (created, updated, completed, etc.)
+    if (tableLower.includes('task') || actionLower.includes('task')) {
+      context.category = 'Task & Operations Context';
+      context.badge = 'Task Record';
+
+      const taskId = d.taskId || d.task_id || recId;
+      let taskObj = null;
+      let parentWr = null;
+
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.getTaskById === 'function') {
+        taskObj = WorkflowData.getTaskById(taskId);
+        if (taskObj?.workRequestId && typeof WorkflowData.getWorkRequestById === 'function') {
+          parentWr = WorkflowData.getWorkRequestById(taskObj.workRequestId);
+        }
+      }
+
+      if ((!taskObj || !parentWr) && window.apiClient?.workRequestCache?._wrs) {
+        for (const wr of window.apiClient.workRequestCache._wrs) {
+          const t = (wr.tasks || []).find(tk => tk.id === taskId);
+          if (t) {
+            taskObj = taskObj || t;
+            parentWr = parentWr || wr;
+            break;
+          }
+        }
+      }
+
+      const wrId = d.workRequestId || d.work_request_id || d.parentRecordId || taskObj?.workRequestId;
+      if (!parentWr && wrId) {
+        parentWr = resolveWr(wrId);
+      }
+
+      const taskName = d.name || d.title || taskObj?.title || taskObj?.name || 'Task';
+      context.fields.push({ label: 'Task Title', value: taskName });
+
+      if (parentWr) {
+        const wrLink = `#operations/detail/${parentWr.id}${taskId ? '?taskId=' + taskId : ''}`;
+        context.fields.push({
+          label: 'Belongs to Work Request',
+          value: parentWr.title || parentWr.trackingNumber || `WR-${parentWr.id.slice(0, 8)}`,
+          isLink: true,
+          href: wrLink,
+          hint: 'View Parent Work Request in Operations'
+        });
+
+        if (parentWr.status) {
+          context.fields.push({
+            label: 'Work Request Status',
+            value: parentWr.status,
+            badgeClass: 'badge badge-outline'
+          });
+        }
+
+        if (parentWr.priority) {
+          context.fields.push({
+            label: 'Work Request Priority',
+            value: parentWr.priority,
+            badgeClass: 'badge badge-secondary'
+          });
+        }
+
+        const client = parentWr.clientId && window.apiClient?.clientCache?.getById
+          ? window.apiClient.clientCache.getById(parentWr.clientId)
+          : null;
+        if (client?.name) {
+          context.fields.push({
+            label: 'Associated Client',
+            value: `${client.name} (${client.entity || parentWr.entity || l.entity || 'ATA'})`
+          });
+        }
+      } else if (wrId) {
+        context.fields.push({
+          label: 'Belongs to Work Request',
+          value: `Work Request (${wrId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#operations/detail/${wrId}${taskId ? '?taskId=' + taskId : ''}`
+        });
+      }
+
+      const assigneeId = d.assigneeId || d.assignee_id || taskObj?.assigneeId;
+      const assigneeName = d.assigneeName || d.assignee_name || taskObj?.assigneeName;
+      if (assigneeName || assigneeId) {
+        const user = assigneeId && window.apiClient?.userCache?.getById
+          ? window.apiClient.userCache.getById(assigneeId)
+          : null;
+        context.fields.push({
+          label: 'Assigned Staff',
+          value: user ? `${user.name}${user.email ? ' (' + user.email + ')' : ''}` : (assigneeName || assigneeId)
+        });
+      }
+
+      const taskStatus = d.status || taskObj?.status;
+      if (taskStatus) {
+        context.fields.push({
+          label: 'Task Status',
+          value: taskStatus,
+          badgeClass: 'badge badge-primary'
+        });
+      }
+
+      const dueDate = d.dueDate || d.due_date || taskObj?.dueDate;
+      if (dueDate) {
+        context.fields.push({
+          label: 'Task Due Date',
+          value: typeof formatDate === 'function' ? formatDate(dueDate) : String(dueDate).slice(0, 10)
+        });
+      }
+
+      // Check for Linked Items for this task
+      const wrRel = parentWr?.id && typeof WorkflowData !== 'undefined' && WorkflowData._relatedByWr ? WorkflowData._relatedByWr.get(parentWr.id) : null;
+      const taskRel = typeof WorkflowData !== 'undefined' && WorkflowData._relatedByTask ? WorkflowData._relatedByTask.get(taskId) : null;
+
+      // Linked Disbursements for this task
+      const taskDisbs = (taskRel?.disbursements || [])
+        .concat((wrRel?.disbursements || []).filter(db => db.linkedTaskId === taskId))
+        .concat(typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items) ? Disbursement._items.filter(db => db.linkedTaskId === taskId) : [])
+        .filter((db, i, arr) => arr.findIndex(x => x.id === db.id) === i);
+      if (taskDisbs.length > 0) {
+        if (taskDisbs.length === 1) {
+          context.fields.push({
+            label: 'Linked Disbursement',
+            value: taskDisbs[0].disbursementNumber || taskDisbs[0].disbursement_number || `DB-${taskDisbs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#disbursement/detail/${taskDisbs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Disbursements',
+            links: taskDisbs.map(db => ({
+              text: db.disbursementNumber || db.disbursement_number || `DB-${db.id.slice(0, 6)}`,
+              href: `#disbursement/detail/${db.id}`
+            }))
+          });
+        }
+      }
+
+      // Linked Invoices for this task
+      const taskInvs = (taskRel?.invoices || [])
+        .concat((wrRel?.invoices || []).filter(inv => inv.linkedTaskId === taskId))
+        .concat(typeof Billing !== 'undefined' && Array.isArray(Billing._listCache) ? Billing._listCache.filter(inv => inv.linkedTaskId === taskId) : [])
+        .filter((inv, i, arr) => arr.findIndex(x => x.id === inv.id) === i);
+      if (taskInvs.length > 0) {
+        if (taskInvs.length === 1) {
+          context.fields.push({
+            label: 'Linked Invoice',
+            value: taskInvs[0].invoiceNumber || taskInvs[0].invoice_number || `INV-${taskInvs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#billing/detail/${taskInvs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Invoices',
+            links: taskInvs.map(inv => ({
+              text: inv.invoiceNumber || inv.invoice_number || `INV-${inv.id.slice(0, 6)}`,
+              href: `#billing/detail/${inv.id}`
+            }))
+          });
+        }
+      }
+
+      return context;
+    }
+
+    // 2. Work Request
+    if (tableLower.includes('work') || tableLower.includes('request') || actionLower.includes('work') || actionLower.includes('request')) {
+      context.category = 'Operations Context';
+      context.badge = 'Work Request';
+
+      const wr = resolveWr(recId);
+      const wrTitle = d.title || d.name || wr?.title || 'Work Request';
+      context.fields.push({
+        label: 'Work Request Title',
+        value: wrTitle,
+        isLink: !!recId,
+        href: recId ? `#operations/detail/${recId}` : '#operations'
+      });
+
+      const clientId = d.clientId || d.client_id || wr?.clientId;
+      const client = clientId && window.apiClient?.clientCache?.getById
+        ? window.apiClient.clientCache.getById(clientId)
+        : null;
+      if (client?.name) {
+        context.fields.push({
+          label: 'Client',
+          value: `${client.name} (${client.entity || wr?.entity || l.entity || 'ATA'})`
+        });
+      }
+
+      const wrStatus = d.status || wr?.status;
+      if (wrStatus) {
+        context.fields.push({
+          label: 'Status',
+          value: wrStatus,
+          badgeClass: 'badge badge-primary'
+        });
+      }
+
+      const wrPriority = d.priority || wr?.priority;
+      if (wrPriority) {
+        context.fields.push({
+          label: 'Priority',
+          value: wrPriority,
+          badgeClass: 'badge badge-secondary'
+        });
+      }
+
+      const totalTasks = Array.isArray(wr?.tasks) ? wr.tasks.length : (d.tasksCount || d.totalTasks);
+      if (totalTasks !== undefined) {
+        context.fields.push({
+          label: 'Configured Tasks',
+          value: `${totalTasks} task${totalTasks === 1 ? '' : 's'}`
+        });
+      }
+
+      const dueDate = d.dueDate || d.due_date || wr?.dueDate;
+      if (dueDate) {
+        context.fields.push({
+          label: 'Target Completion Date',
+          value: typeof formatDate === 'function' ? formatDate(dueDate) : String(dueDate).slice(0, 10)
+        });
+      }
+
+      // Linked Items from related cache or list stores
+      const wrRel = recId && typeof WorkflowData !== 'undefined' && WorkflowData._relatedByWr ? WorkflowData._relatedByWr.get(recId) : null;
+
+      // Linked Invoices
+      const relInvoices = (wrRel?.invoices || [])
+        .concat(typeof Billing !== 'undefined' && Array.isArray(Billing._listCache) ? Billing._listCache.filter(inv => inv.workRequestId === recId) : [])
+        .filter((inv, i, arr) => arr.findIndex(x => x.id === inv.id) === i);
+      if (relInvoices.length > 0) {
+        if (relInvoices.length === 1) {
+          context.fields.push({
+            label: 'Linked Invoice',
+            value: relInvoices[0].invoiceNumber || relInvoices[0].invoice_number || `INV-${relInvoices[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#billing/detail/${relInvoices[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Invoices',
+            links: relInvoices.map(inv => ({
+              text: inv.invoiceNumber || inv.invoice_number || `INV-${inv.id.slice(0, 6)}`,
+              href: `#billing/detail/${inv.id}`
+            }))
+          });
+        }
+      }
+
+      // Linked Disbursements
+      const relDisbs = (wrRel?.disbursements || [])
+        .concat(typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items) ? Disbursement._items.filter(db => db.linkedWorkRequestId === recId) : [])
+        .filter((db, i, arr) => arr.findIndex(x => x.id === db.id) === i);
+      if (relDisbs.length > 0) {
+        if (relDisbs.length === 1) {
+          context.fields.push({
+            label: 'Linked Disbursement',
+            value: relDisbs[0].disbursementNumber || relDisbs[0].disbursement_number || `DB-${relDisbs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#disbursement/detail/${relDisbs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Disbursements',
+            links: relDisbs.map(db => ({
+              text: db.disbursementNumber || db.disbursement_number || `DB-${db.id.slice(0, 6)}`,
+              href: `#disbursement/detail/${db.id}`
+            }))
+          });
+        }
+      }
+
+      // Linked Transmittals
+      const relTrans = (wrRel?.transmittals || [])
+        .concat(typeof Transmittal !== 'undefined' && Array.isArray(Transmittal._items) ? Transmittal._items.filter(tx => tx.workRequestId === recId) : [])
+        .concat(window.apiClient?.transmittalCache?._transmittals ? window.apiClient.transmittalCache._transmittals.filter(tx => (tx.work_request_id || tx.workRequestId) === recId) : [])
+        .filter((tx, i, arr) => arr.findIndex(x => x.id === tx.id) === i);
+      if (relTrans.length > 0) {
+        if (relTrans.length === 1) {
+          context.fields.push({
+            label: 'Linked Transmittal',
+            value: relTrans[0].trackingNumber || relTrans[0].tracking_number || `TX-${relTrans[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#transmittal/detail/${relTrans[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Transmittals',
+            links: relTrans.map(tx => ({
+              text: tx.trackingNumber || tx.tracking_number || `TX-${tx.id.slice(0, 6)}`,
+              href: `#transmittal/detail/${tx.id}`
+            }))
+          });
+        }
+      }
+
+      return context;
+    }
+
+    // 3. Disbursement
+    if (tableLower.includes('disbursement') || actionLower.includes('disbursement')) {
+      context.category = 'Finance & Expense Context';
+      context.badge = 'Disbursement';
+
+      const disb = resolveDisbursement(recId);
+      const disbNo = d.disbursementNumber || d.disbursement_number || d.name || disb?.disbursementNumber || disb?.disbursement_number;
+      if (disbNo) {
+        context.fields.push({
+          label: 'Disbursement Number',
+          value: disbNo,
+          isLink: !!recId,
+          href: recId ? `#disbursement/detail/${recId}` : '#disbursement'
+        });
+      }
+
+      const payee = d.payee || disb?.payee;
+      if (payee) {
+        context.fields.push({ label: 'Payee / Recipient', value: payee });
+      }
+
+      const amount = d.amount !== undefined && d.amount !== null ? d.amount : disb?.amount;
+      if (amount !== undefined && amount !== null && amount !== '') {
+        context.fields.push({
+          label: 'Amount',
+          value: typeof formatCurrency === 'function' ? formatCurrency(amount) : `₱${Number(amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+        });
+      }
+
+      const category = d.category || disb?.category;
+      if (category) {
+        context.fields.push({ label: 'Expense Category', value: category });
+      }
+
+      const method = d.paymentMethod || d.payment_method || disb?.paymentMethod || disb?.payment_method;
+      if (method) {
+        context.fields.push({ label: 'Payment Method', value: method });
+      }
+
+      const status = d.status || disb?.status;
+      if (status) {
+        context.fields.push({
+          label: 'Disbursement Status',
+          value: status,
+          badgeClass: 'badge badge-primary'
+        });
+      }
+
+      const clientId = d.clientId || d.client_id || disb?.clientId || disb?.client_id;
+      if (clientId) {
+        const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(clientId) : null;
+        if (client?.name) context.fields.push({ label: 'Linked Client', value: client.name });
+      }
+
+      // Linked Work Request
+      const wrId = d.workRequestId || d.work_request_id || d.linkedWorkRequestId || d.linked_work_request_id || disb?.workRequestId || disb?.linkedWorkRequestId || disb?.linked_work_request_id;
+      let linkedWr = null;
+      if (wrId) {
+        linkedWr = resolveWr(wrId);
+        context.fields.push({
+          label: 'Linked Work Request',
+          value: linkedWr?.title || linkedWr?.trackingNumber || `WR-${wrId.slice(0, 8)}`,
+          isLink: true,
+          href: `#operations/detail/${wrId}`
+        });
+      }
+
+      // Linked Task
+      const taskId = d.linkedTaskId || d.linked_task_id || disb?.linkedTaskId || disb?.linked_task_id;
+      if (taskId) {
+        const task = resolveTask(taskId, linkedWr);
+        context.fields.push({
+          label: 'Linked Task',
+          value: task?.title || task?.name || `Task (${taskId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#operations/detail/${wrId || task?.workRequestId || ''}?taskId=${taskId}`
+        });
+      }
+
+      // Linked Invoice
+      const invoiceId = d.linkedInvoiceId || d.linked_invoice_id || disb?.linkedInvoiceId || disb?.linked_invoice_id;
+      if (invoiceId) {
+        const inv = resolveInvoice(invoiceId);
+        context.fields.push({
+          label: 'Linked Invoice',
+          value: inv?.invoiceNumber || inv?.invoice_number || `Invoice (${invoiceId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#billing/detail/${invoiceId}`
+        });
+      }
+
+      // Linked Transmittal
+      const transmittalId = d.linkedTransmittalId || d.linked_transmittal_id || disb?.linkedTransmittalId || disb?.linked_transmittal_id;
+      if (transmittalId) {
+        const trans = resolveTransmittal(transmittalId);
+        context.fields.push({
+          label: 'Linked Transmittal',
+          value: trans?.trackingNumber || trans?.tracking_number || `Transmittal (${transmittalId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#transmittal/detail/${transmittalId}`
+        });
+      }
+
+      return context;
+    }
+
+    // 4. Invoices / Billing
+    if (tableLower.includes('invoice') || tableLower.includes('billing') || actionLower.includes('invoice') || actionLower.includes('billing')) {
+      context.category = 'Billing & Invoice Context';
+      context.badge = 'Invoice';
+
+      const inv = resolveInvoice(recId);
+      const invNo = d.invoiceNumber || d.invoice_number || d.name || inv?.invoiceNumber || inv?.invoice_number;
+      if (invNo) {
+        context.fields.push({
+          label: 'Invoice Number',
+          value: invNo,
+          isLink: !!recId,
+          href: recId ? `#billing/detail/${recId}` : '#billing'
+        });
+      }
+
+      const clientId = d.clientId || d.client_id || inv?.clientId || inv?.client_id;
+      const client = clientId && window.apiClient?.clientCache?.getById
+        ? window.apiClient.clientCache.getById(clientId)
+        : null;
+      if (client?.name) {
+        context.fields.push({ label: 'Billed Client', value: `${client.name} (${client.entity || inv?.entity || l.entity || 'ATA'})` });
+      }
+
+      const total = d.totalAmount || d.amount || inv?.totalAmount || inv?.total_amount || inv?.amount;
+      if (total !== undefined && total !== null && total !== '') {
+        context.fields.push({
+          label: 'Invoice Amount',
+          value: typeof formatCurrency === 'function' ? formatCurrency(total) : `₱${Number(total).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+        });
+      }
+
+      const status = d.status || inv?.status;
+      if (status) {
+        context.fields.push({
+          label: 'Invoice Status',
+          value: status,
+          badgeClass: 'badge badge-primary'
+        });
+      }
+
+      const dueDate = d.dueDate || d.due_date || inv?.dueDate || inv?.due_date;
+      if (dueDate) {
+        context.fields.push({ label: 'Payment Due Date', value: typeof formatDate === 'function' ? formatDate(dueDate) : String(dueDate).slice(0, 10) });
+      }
+
+      // Linked Work Request
+      const wrId = d.workRequestId || d.work_request_id || inv?.workRequestId || inv?.work_request_id;
+      let linkedWr = null;
+      if (wrId) {
+        linkedWr = resolveWr(wrId);
+        context.fields.push({
+          label: 'Linked Work Request',
+          value: linkedWr?.title || linkedWr?.trackingNumber || `WR-${wrId.slice(0, 8)}`,
+          isLink: true,
+          href: `#operations/detail/${wrId}`
+        });
+      }
+
+      // Linked Task
+      const taskId = d.linkedTaskId || d.linked_task_id || inv?.linkedTaskId || inv?.linked_task_id;
+      if (taskId) {
+        const task = resolveTask(taskId, linkedWr);
+        context.fields.push({
+          label: 'Linked Task',
+          value: task?.title || task?.name || `Task (${taskId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#operations/detail/${wrId || inv?.workRequestId || task?.workRequestId || ''}?taskId=${taskId}`
+        });
+      }
+
+      // Linked Transmittal
+      const transmittalId = d.linkedTransmittalId || d.linked_transmittal_id || inv?.linkedTransmittalId || inv?.linked_transmittal_id;
+      if (transmittalId) {
+        const trans = resolveTransmittal(transmittalId);
+        context.fields.push({
+          label: 'Linked Transmittal',
+          value: trans?.trackingNumber || trans?.tracking_number || `Transmittal (${transmittalId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#transmittal/detail/${transmittalId}`
+        });
+      }
+
+      // Linked Disbursements
+      const wrRel = wrId && typeof WorkflowData !== 'undefined' && WorkflowData._relatedByWr ? WorkflowData._relatedByWr.get(wrId) : null;
+      const linkedDisbs = (wrRel?.disbursements || [])
+        .concat(typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items) ? Disbursement._items.filter(db => db.linkedInvoiceId === recId) : [])
+        .filter((db, i, arr) => arr.findIndex(x => x.id === db.id) === i);
+      if (linkedDisbs.length > 0) {
+        if (linkedDisbs.length === 1) {
+          context.fields.push({
+            label: 'Linked Disbursement',
+            value: linkedDisbs[0].disbursementNumber || linkedDisbs[0].disbursement_number || `DB-${linkedDisbs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#disbursement/detail/${linkedDisbs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Disbursements',
+            links: linkedDisbs.map(db => ({
+              text: db.disbursementNumber || db.disbursement_number || `DB-${db.id.slice(0, 6)}`,
+              href: `#disbursement/detail/${db.id}`
+            }))
+          });
+        }
+      }
+
+      // Payment Summary
+      if (inv?.payments && Array.isArray(inv.payments) && inv.payments.length > 0) {
+        const paidTotal = typeof inv.paidAmount === 'number' ? inv.paidAmount : inv.payments.reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
+        context.fields.push({
+          label: 'Payment Progress',
+          value: `${inv.payments.length} payment(s) (${typeof formatCurrency === 'function' ? formatCurrency(paidTotal) : '₱' + Number(paidTotal).toLocaleString('en-PH', { minimumFractionDigits: 2 })} paid)`
+        });
+      }
+
+      return context;
+    }
+
+    // 5. Transmittal
+    if (tableLower.includes('transmittal') || actionLower.includes('transmittal')) {
+      context.category = 'Transmittal Record Context';
+      context.badge = 'Transmittal';
+
+      const trans = resolveTransmittal(recId);
+      const txNo = d.trackingNumber || d.tracking_number || d.name || trans?.trackingNumber || trans?.tracking_number;
+      if (txNo) {
+        context.fields.push({
+          label: 'Tracking Number',
+          value: txNo,
+          isLink: !!recId,
+          href: recId ? `#transmittal/detail/${recId}` : '#transmittal'
+        });
+      }
+
+      const recipient = d.recipientName || d.recipient_name || d.recipient || trans?.recipientName || trans?.recipient_name || trans?.recipient;
+      if (recipient) {
+        context.fields.push({ label: 'Recipient', value: recipient });
+      }
+
+      const type = d.transmittalType || d.transmittal_type || d.type || trans?.transmittalType || trans?.transmittal_type || trans?.type;
+      if (type) {
+        context.fields.push({ label: 'Transmittal Type', value: type });
+      }
+
+      const status = d.status || trans?.status;
+      if (status) {
+        context.fields.push({
+          label: 'Status',
+          value: status,
+          badgeClass: 'badge badge-primary'
+        });
+      }
+
+      const clientId = d.clientId || d.client_id || trans?.clientId || trans?.client_id;
+      if (clientId) {
+        const client = window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(clientId) : null;
+        if (client?.name) context.fields.push({ label: 'Linked Client', value: client.name });
+      }
+
+      // Linked Work Request
+      const wrId = d.workRequestId || d.work_request_id || trans?.workRequestId || trans?.work_request_id;
+      if (wrId) {
+        const wr = resolveWr(wrId);
+        context.fields.push({
+          label: 'Linked Work Request',
+          value: wr?.title || wr?.trackingNumber || `WR-${wrId.slice(0, 8)}`,
+          isLink: true,
+          href: `#operations/detail/${wrId}`
+        });
+      }
+
+      // Linked Invoices
+      const wrRel = wrId && typeof WorkflowData !== 'undefined' && WorkflowData._relatedByWr ? WorkflowData._relatedByWr.get(wrId) : null;
+      const linkedInvs = (wrRel?.invoices || [])
+        .concat(typeof Billing !== 'undefined' && Array.isArray(Billing._listCache) ? Billing._listCache.filter(i => i.linkedTransmittalId === recId) : [])
+        .filter((inv, i, arr) => arr.findIndex(x => x.id === inv.id) === i);
+      if (linkedInvs.length > 0) {
+        if (linkedInvs.length === 1) {
+          context.fields.push({
+            label: 'Linked Invoice',
+            value: linkedInvs[0].invoiceNumber || linkedInvs[0].invoice_number || `INV-${linkedInvs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#billing/detail/${linkedInvs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Invoices',
+            links: linkedInvs.map(inv => ({
+              text: inv.invoiceNumber || inv.invoice_number || `INV-${inv.id.slice(0, 6)}`,
+              href: `#billing/detail/${inv.id}`
+            }))
+          });
+        }
+      }
+
+      // Linked Disbursements
+      const linkedDisbs = (wrRel?.disbursements || [])
+        .concat(typeof Disbursement !== 'undefined' && Array.isArray(Disbursement._items) ? Disbursement._items.filter(db => db.linkedTransmittalId === recId) : [])
+        .filter((db, i, arr) => arr.findIndex(x => x.id === db.id) === i);
+      if (linkedDisbs.length > 0) {
+        if (linkedDisbs.length === 1) {
+          context.fields.push({
+            label: 'Linked Disbursement',
+            value: linkedDisbs[0].disbursementNumber || linkedDisbs[0].disbursement_number || `DB-${linkedDisbs[0].id.slice(0, 6)}`,
+            isLink: true,
+            href: `#disbursement/detail/${linkedDisbs[0].id}`
+          });
+        } else {
+          context.fields.push({
+            label: 'Linked Disbursements',
+            links: linkedDisbs.map(db => ({
+              text: db.disbursementNumber || db.disbursement_number || `DB-${db.id.slice(0, 6)}`,
+              href: `#disbursement/detail/${db.id}`
+            }))
+          });
+        }
+      }
+
+      // Transmitted Items
+      const items = d.items || trans?.items || trans?.transmittal_items;
+      if (Array.isArray(items) && items.length > 0) {
+        context.fields.push({
+          label: 'Transmitted Items',
+          value: `${items.length} item(s) (${items.map(it => it.description || it.documentType || it.document_type || 'Doc').slice(0, 2).join(', ')}${items.length > 2 ? '...' : ''})`
+        });
+      }
+
+      return context;
+    }
+
+    // 6. Operations Requests
+    if (tableLower.includes('operations_request') || actionLower.includes('operations_request') || tableLower.includes('operation_request')) {
+      context.category = 'Operations Request Context';
+      context.badge = 'Operations Request';
+
+      const type = d.type || d.requestType || 'Request';
+      context.fields.push({ label: 'Request Type', value: type, badgeClass: 'badge badge-secondary' });
+
+      const status = d.status || 'Pending';
+      context.fields.push({ label: 'Status', value: status, badgeClass: 'badge badge-primary' });
+
+      const amount = d.amount;
+      if (amount !== undefined && amount !== null && amount !== '') {
+        context.fields.push({
+          label: 'Amount',
+          value: typeof formatCurrency === 'function' ? formatCurrency(amount) : `₱${Number(amount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+        });
+      }
+
+      const wrId = d.workRequestId || d.work_request_id;
+      let wr = null;
+      if (wrId) {
+        wr = resolveWr(wrId);
+        context.fields.push({
+          label: 'Linked Work Request',
+          value: wr?.title || `WR-${wrId.slice(0, 8)}`,
+          isLink: true,
+          href: `#operations/detail/${wrId}`
+        });
+      }
+
+      const taskId = d.linkedTaskId || d.linked_task_id;
+      if (taskId) {
+        const task = resolveTask(taskId, wr);
+        context.fields.push({
+          label: 'Linked Task',
+          value: task?.title || `Task (${taskId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#operations/detail/${wrId || task?.workRequestId || ''}?taskId=${taskId}`
+        });
+      }
+
+      const invoiceId = d.invoiceId || d.invoice_id || d.linkedInvoiceId;
+      if (invoiceId) {
+        const inv = resolveInvoice(invoiceId);
+        context.fields.push({
+          label: 'Linked Invoice',
+          value: inv?.invoiceNumber || d.invoiceNumber || `Invoice (${invoiceId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#billing/detail/${invoiceId}`
+        });
+      }
+
+      const disbId = d.disbursementId || d.disbursement_id || d.linkedDisbursementId;
+      if (disbId) {
+        const db = resolveDisbursement(disbId);
+        context.fields.push({
+          label: 'Linked Disbursement',
+          value: db?.disbursementNumber || d.disbursementNumber || `Disbursement (${disbId.slice(0, 8)}...)`,
+          isLink: true,
+          href: `#disbursement/detail/${disbId}`
+        });
+      }
+
+      return context;
+    }
+
+    // 7. User Management
+    if (tableLower.includes('user') || actionLower.includes('user')) {
+      context.category = 'User Account Context';
+      context.badge = 'User';
+
+      const user = recId && window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(recId) : null;
+      const name = d.name || user?.name;
+      const email = d.email || user?.email;
+      const role = d.role || user?.role;
+      const depts = d.departments || user?.departments;
+      const entities = d.entities || user?.entities;
+
+      if (name) context.fields.push({ label: 'Full Name', value: name });
+      if (email) context.fields.push({ label: 'Email Address', value: email });
+      if (role) context.fields.push({ label: 'Role', value: role, badgeClass: 'badge badge-secondary' });
+      if (depts && (Array.isArray(depts) ? depts.length : true)) {
+        context.fields.push({ label: 'Departments', value: Array.isArray(depts) ? depts.join(', ') : String(depts) });
+      }
+      if (entities && (Array.isArray(entities) ? entities.length : true)) {
+        context.fields.push({ label: 'Assigned Entities', value: Array.isArray(entities) ? entities.join(', ') : String(entities) });
+      }
+
+      return context;
+    }
+
+    // 8. Client Management
+    if (tableLower.includes('client') || actionLower.includes('client')) {
+      context.category = 'Client Profile Context';
+      context.badge = 'Client';
+
+      const client = recId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(recId) : null;
+      const name = d.name || client?.name;
+      const code = d.code || client?.code;
+      const entity = d.entity || client?.entity;
+      const contactPerson = d.contactPerson || d.contact_person || client?.contactPerson;
+
+      if (name) context.fields.push({ label: 'Client / Company Name', value: name });
+      if (code) context.fields.push({ label: 'Company Code', value: code });
+      if (entity) context.fields.push({ label: 'Entity Assignment', value: entity, badgeClass: 'badge badge-primary' });
+      if (contactPerson) context.fields.push({ label: 'Primary Contact Person', value: contactPerson });
+
+      return context;
+    }
+
+    return null;
+  },
+
+  async _resolveAuditContext(l) {
+    if (!l) return null;
+    const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
+    const recId = d.recordId || d.record_id || d.id || d.parentRecordId || l.recordId || l.record_id;
+    const actionLower = (l.action || '').toLowerCase();
+    const tableLower = (l.tableName || l.table_name || '').toLowerCase();
+
+    try {
+      const tasks = [
+        window.apiClient?.userCache?.ensure ? window.apiClient.userCache.ensure() : Promise.resolve(),
+        window.apiClient?.clientCache?.ensure ? window.apiClient.clientCache.ensure() : Promise.resolve(),
+        window.apiClient?.workRequestCache?.ensure ? window.apiClient.workRequestCache.ensure() : Promise.resolve(),
+        window.apiClient?.transmittalCache?.ensure ? window.apiClient.transmittalCache.ensure() : Promise.resolve()
+      ];
+
+      // Work Request: fetch related records
+      if (tableLower.includes('work') || tableLower.includes('request') || actionLower.includes('work') || actionLower.includes('request')) {
+        if (recId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForWorkRequest === 'function') {
+          tasks.push(WorkflowData.loadRelatedForWorkRequest(recId).catch(() => null));
+        }
+      } else if (tableLower.includes('task') || actionLower.includes('task')) {
+        const taskId = d.taskId || d.task_id || recId;
+        if (taskId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForTask === 'function') {
+          tasks.push(WorkflowData.loadRelatedForTask(taskId).catch(() => null));
+        }
+      } else if (tableLower.includes('disbursement') || actionLower.includes('disbursement')) {
+        if (recId && window.apiClient?.disbursements?.get) {
+          tasks.push(
+            window.apiClient.disbursements.get(recId)
+              .then(res => {
+                if (res?.data) {
+                  this._auditDisbursementCache = this._auditDisbursementCache || new Map();
+                  this._auditDisbursementCache.set(recId, res.data);
+                  const wrId = res.data.linked_work_request_id || res.data.linkedWorkRequestId;
+                  if (wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForWorkRequest === 'function') {
+                    return WorkflowData.loadRelatedForWorkRequest(wrId).catch(() => null);
+                  }
+                }
+              })
+              .catch(() => null)
+          );
+        }
+      } else if (tableLower.includes('invoice') || tableLower.includes('billing') || actionLower.includes('invoice') || actionLower.includes('billing')) {
+        if (recId && window.apiClient?.invoices?.get) {
+          tasks.push(
+            window.apiClient.invoices.get(recId)
+              .then(res => {
+                if (res?.data) {
+                  this._auditInvoiceCache = this._auditInvoiceCache || new Map();
+                  this._auditInvoiceCache.set(recId, res.data);
+                  const wrId = res.data.work_request_id || res.data.workRequestId;
+                  if (wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForWorkRequest === 'function') {
+                    return WorkflowData.loadRelatedForWorkRequest(wrId).catch(() => null);
+                  }
+                }
+              })
+              .catch(() => null)
+          );
+        }
+      } else if (tableLower.includes('transmittal') || actionLower.includes('transmittal')) {
+        if (recId && window.apiClient?.transmittals?.get) {
+          tasks.push(
+            window.apiClient.transmittals.get(recId)
+              .then(res => {
+                if (res?.data) {
+                  this._auditTransmittalCache = this._auditTransmittalCache || new Map();
+                  this._auditTransmittalCache.set(recId, res.data);
+                  const wrId = res.data.work_request_id || res.data.workRequestId;
+                  if (wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForWorkRequest === 'function') {
+                    return WorkflowData.loadRelatedForWorkRequest(wrId).catch(() => null);
+                  }
+                }
+              })
+              .catch(() => null)
+          );
+        }
+      } else if (tableLower.includes('operations_request') || actionLower.includes('operations_request') || tableLower.includes('operation_request')) {
+        const wrId = d.workRequestId || d.work_request_id;
+        if (wrId && typeof WorkflowData !== 'undefined' && typeof WorkflowData.loadRelatedForWorkRequest === 'function') {
+          tasks.push(WorkflowData.loadRelatedForWorkRequest(wrId).catch(() => null));
+        }
+      }
+
+      await Promise.all(tasks);
+    } catch (e) {
+      // ignore
+    }
+    return this._resolveAuditContextSync(l);
+  },
+
+  showAuditLogDetailsModal(l) {
+    if (!l) return;
+    const user = window.apiClient?.userCache?.getById(l.userId);
+    const userName = user ? user.name : (l.userName || l.userId || 'Unknown');
+    const userEmail = user ? user.email : (l.userEmail || '');
+    const ts = new Date(l.timestamp || l.created_at || Date.now());
+    const actionDisplay = this._formatAuditAction(l);
+    const itemTarget = this._getItemIdentifier(l);
+    const itemLink = this._getItemRouteLink(l);
+
+    const body = el('div', { class: 'audit-log-details-modal', style: 'display:flex; flex-direction:column; gap:16px;' });
+
+    const summaryCard = el('div', { 
+      style: 'background: var(--color-surface, #fff); border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px; padding: 14px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;' 
+    });
+
+    const createDetailField = (label, valNode) => {
+      const field = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
+      field.appendChild(el('span', { text: label, style: 'font-size: 11px; color: var(--color-text-muted, #6b7280); text-transform: uppercase; font-weight: 600;' }));
+      field.appendChild(typeof valNode === 'string' ? el('span', { text: valNode, style: 'font-weight: 500;' }) : valNode);
+      return field;
+    };
+
+    summaryCard.appendChild(createDetailField('Action', el('span', { 
+      class: 'jira-backlog-tag-action', 
+      text: actionDisplay,
+      style: 'display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600;'
+    })));
+
+    summaryCard.appendChild(createDetailField('Entity', el('span', { 
+      class: 'badge badge-' + ((l.entity || 'ATA') === 'ATA' ? 'ata' : 'lta'),
+      text: l.entity || 'ATA'
+    })));
+
+    summaryCard.appendChild(createDetailField('User', el('span', { text: `${userName}${userEmail ? ' (' + userEmail + ')' : ''}` })));
+    summaryCard.appendChild(createDetailField('Timestamp', formatDate(l.timestamp || l.created_at) + ' ' + ts.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })));
+
+    let recordVal;
+    if (itemLink) {
+      recordVal = el('a', {
+        href: itemLink.href,
+        text: `${itemTarget} ↗`,
+        style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600;',
+        title: 'Navigate to record'
+      });
+      recordVal.addEventListener('click', (e) => {
+        e.preventDefault();
+        const overlay = document.querySelector('.modal-overlay');
+        if (overlay) overlay.remove();
+        this._navigateToItemLink(l, itemLink.href);
+      });
+    } else {
+      recordVal = el('span', { text: itemTarget, style: 'font-weight: 500;' });
+    }
+    summaryCard.appendChild(createDetailField('Target Record', recordVal));
+
+    summaryCard.appendChild(createDetailField('Table / Category', l.tableName || l.table_name || 'General'));
+
+    if (l.ipAddress || l.ip_address) {
+      summaryCard.appendChild(createDetailField('IP Address', l.ipAddress || l.ip_address));
+    }
+
+    body.appendChild(summaryCard);
+
+    // Render Insightful Context Card
+    const insightBox = el('div', {
+      class: 'audit-insight-card',
+      style: 'background: var(--color-bg-subtle, #f8fafc); border: 1px solid var(--color-border, #cbd5e1); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;'
+    });
+
+    const renderInsightContent = (ctx) => {
+      insightBox.innerHTML = '';
+      if (!ctx || !ctx.fields || ctx.fields.length === 0) {
+        insightBox.style.display = 'none';
+        return;
+      }
+      insightBox.style.display = 'flex';
+
+      const header = el('div', { style: 'display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border, #e2e8f0); padding-bottom: 8px;' });
+      header.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--color-text-main, #1e293b); text-transform: uppercase;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>${ctx.category || 'Business Context'}</span>
+        </div>
+        <span class="badge badge-secondary" style="font-size: 11px;">${ctx.badge || 'Record Insights'}</span>
+      `;
+      insightBox.appendChild(header);
+
+      const grid = el('div', {
+        style: 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 12.5px; margin-top: 4px;'
+      });
+
+      ctx.fields.forEach(f => {
+        const item = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
+        item.appendChild(el('span', {
+          text: f.label,
+          style: 'font-size: 10.5px; color: var(--color-text-muted, #64748b); text-transform: uppercase; font-weight: 600;'
+        }));
+
+        let valEl;
+        if (Array.isArray(f.links) && f.links.length > 0) {
+          valEl = el('div', { style: 'display: flex; flex-wrap: wrap; gap: 6px; align-items: center;' });
+          f.links.forEach((lk, idx) => {
+            const linkTag = el('a', {
+              href: lk.href,
+              text: `${lk.text || lk.label} ↗`,
+              style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600; word-break: break-word;',
+              title: lk.hint || 'Navigate to record'
+            });
+            linkTag.addEventListener('click', (e) => {
+              e.preventDefault();
+              const overlay = document.querySelector('.modal-overlay');
+              if (overlay) overlay.remove();
+              this._navigateToItemLink(l, lk.href, lk.entity);
+            });
+            valEl.appendChild(linkTag);
+            if (idx < f.links.length - 1) {
+              valEl.appendChild(el('span', { text: ',', style: 'color: var(--color-text-muted, #64748b);' }));
+            }
+          });
+        } else if (f.isLink && f.href) {
+          valEl = el('a', {
+            href: f.href,
+            text: `${f.value} ↗`,
+            style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600; word-break: break-word;',
+            title: f.hint || 'Navigate to record'
+          });
+          valEl.addEventListener('click', (e) => {
+            e.preventDefault();
+            const overlay = document.querySelector('.modal-overlay');
+            if (overlay) overlay.remove();
+            this._navigateToItemLink(l, f.href, f.entity);
+          });
+        } else if (f.badgeClass) {
+          valEl = el('span', {
+            class: f.badgeClass,
+            text: f.value,
+            style: 'display: inline-block; width: fit-content; font-weight: 600;'
+          });
+        } else {
+          valEl = el('span', {
+            text: f.value,
+            style: 'font-weight: 500; color: var(--color-text-main, #0f172a); word-break: break-word;'
+          });
+        }
+        item.appendChild(valEl);
+        grid.appendChild(item);
+      });
+
+      insightBox.appendChild(grid);
+    };
+
+    body.appendChild(insightBox);
+
+    const immediateCtx = this._resolveAuditContextSync(l);
+    if (immediateCtx && immediateCtx.fields && immediateCtx.fields.length > 0) {
+      renderInsightContent(immediateCtx);
+    } else {
+      insightBox.innerHTML = '<span style="font-size: 12px; color: var(--color-text-muted, #64748b); font-style: italic;">Loading record context...</span>';
+    }
+
+    this._resolveAuditContext(l).then(asyncCtx => {
+      if (asyncCtx) renderInsightContent(asyncCtx);
+    }).catch(() => {});
+
+    const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
+    const hasDetails = Object.keys(d).length > 0 || (typeof l.details === 'string' && l.details.trim());
+
+    if (hasDetails) {
+      const detailsBox = el('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+
+      // Build visual diff entries
+      const diffEntries = [];
+      if (typeof d === 'object') {
+        if (d.changes && typeof d.changes === 'object') {
+          for (const [k, v] of Object.entries(d.changes)) {
+            const oldVal = v?.from !== undefined ? v.from : (v?.old !== undefined ? v.old : (v?.before !== undefined ? v.before : '—'));
+            const newVal = v?.to !== undefined ? v.to : (v?.new !== undefined ? v.new : (v?.after !== undefined ? v.after : JSON.stringify(v)));
+            diffEntries.push({ field: k, oldVal: String(oldVal), newVal: String(newVal) });
+          }
+        } else if (d.before && d.after && typeof d.before === 'object' && typeof d.after === 'object') {
+          const allKeys = new Set([...Object.keys(d.before), ...Object.keys(d.after)]);
+          allKeys.forEach(k => {
+            const b = d.before[k];
+            const a = d.after[k];
+            if (JSON.stringify(b) !== JSON.stringify(a)) {
+              diffEntries.push({ field: k, oldVal: String(b !== undefined ? b : '—'), newVal: String(a !== undefined ? a : '—') });
+            }
+          });
+        } else {
+          // Check common pair fields
+          const commonPairs = [
+            { oldK: 'previousStatus', newK: 'status', label: 'Status' },
+            { oldK: 'oldStatus', newK: 'newStatus', label: 'Status' },
+            { oldK: 'previousAssignee', newK: 'assignee', label: 'Assignee' },
+            { oldK: 'oldPriority', newK: 'priority', label: 'Priority' },
+            { oldK: 'previousAmount', newK: 'amount', label: 'Amount' },
+            { oldK: 'fromPhase', newK: 'toPhase', label: 'Phase Routing' }
+          ];
+          commonPairs.forEach(p => {
+            if (d[p.oldK] !== undefined || d[p.newK] !== undefined) {
+              diffEntries.push({ field: p.label, oldVal: String(d[p.oldK] || '—'), newVal: String(d[p.newK] || '—') });
+            }
+          });
+
+          if (diffEntries.length === 0) {
+            // General property list
+            for (const [k, v] of Object.entries(d)) {
+              if (['id', 'recordId', 'workRequestId', 'clientId', 'userId'].includes(k)) continue;
+              const niceKey = k.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+              const valStr = typeof v === 'object' ? JSON.stringify(v) : String(v);
+              diffEntries.push({ field: niceKey, oldVal: '—', newVal: valStr });
+            }
+          }
+        }
+      }
+
+      // Header with view switcher
+      const dHeader = el('div', { style: 'display:flex; justify-content:space-between; align-items:center;' });
+      dHeader.appendChild(el('h4', { text: 'Audit Change Details', style: 'margin:0; font-size:12px; text-transform:uppercase; color:var(--color-text-muted, #6b7280); font-weight:600;' }));
+
+      const switchWrap = el('div', { style: 'display:flex; gap:4px;' });
+      const visualBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Visual Diff', style: 'padding: 2px 8px; font-size: 11px;' });
+      const rawBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Raw JSON', style: 'padding: 2px 8px; font-size: 11px;' });
+      switchWrap.appendChild(visualBtn);
+      switchWrap.appendChild(rawBtn);
+      dHeader.appendChild(switchWrap);
+      detailsBox.appendChild(dHeader);
+
+      // 1. Visual Diff View
+      const diffContainer = el('div', { class: 'audit-diff-view' });
+      if (diffEntries.length > 0) {
+        const table = el('table', { style: 'width:100%; border-collapse:collapse; font-size:12px; border:1px solid var(--color-border, #e5e7eb); border-radius:6px; overflow:hidden;' });
+        const thead = el('thead', { style: 'background:var(--color-bg-subtle, #f8fafc); border-bottom:1px solid var(--color-border, #e5e7eb); text-align:left;' });
+        thead.innerHTML = `
+          <tr>
+            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">FIELD / PROPERTY</th>
+            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">PREVIOUS VALUE</th>
+            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">UPDATED VALUE</th>
+          </tr>
+        `;
+        table.appendChild(thead);
+        const tbody = el('tbody');
+        diffEntries.forEach(de => {
+          const tr = el('tr', { style: 'border-bottom:1px solid var(--color-border, #f1f5f9);' });
+          const tdField = el('td', { style: 'padding:6px 10px; font-weight:500;', text: de.field });
+          const tdOld = el('td', { style: 'padding:6px 10px;' });
+          if (de.oldVal !== '—') {
+            tdOld.appendChild(el('span', { 
+              text: de.oldVal, 
+              style: 'display:inline-block; padding:2px 6px; border-radius:4px; background:#fee2e2; color:#991b1b; text-decoration:line-through; font-family:monospace;' 
+            }));
+          } else {
+            tdOld.appendChild(el('span', { text: '—', style: 'color:var(--color-text-muted, #94a3b8);' }));
+          }
+
+          const tdNew = el('td', { style: 'padding:6px 10px;' });
+          tdNew.appendChild(el('span', { 
+            text: de.newVal, 
+            style: 'display:inline-block; padding:2px 6px; border-radius:4px; background:#dcfce7; color:#166534; font-weight:600; font-family:monospace;' 
+          }));
+
+          tr.appendChild(tdField);
+          tr.appendChild(tdOld);
+          tr.appendChild(tdNew);
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        diffContainer.appendChild(table);
+      } else {
+        diffContainer.appendChild(el('div', { text: 'No property-level changes recorded for this entry.', style: 'font-size:12px; color:var(--color-text-muted, #64748b); font-style:italic; padding:8px 0;' }));
+      }
+      detailsBox.appendChild(diffContainer);
+
+      // 2. Raw JSON View (hidden by default)
+      const rawContainer = el('pre', {
+        class: 'hidden',
+        style: 'background: var(--color-bg-subtle, #f8fafc); border: 1px solid var(--color-border, #e5e7eb); border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;',
+        text: typeof l.details === 'object' ? JSON.stringify(l.details, null, 2) : String(l.details)
+      });
+      detailsBox.appendChild(rawContainer);
+
+      // Tab switcher event handlers
+      visualBtn.addEventListener('click', () => {
+        visualBtn.className = 'btn btn-primary btn-xs';
+        rawBtn.className = 'btn btn-secondary btn-xs';
+        diffContainer.classList.remove('hidden');
+        rawContainer.classList.add('hidden');
+      });
+      rawBtn.addEventListener('click', () => {
+        rawBtn.className = 'btn btn-primary btn-xs';
+        visualBtn.className = 'btn btn-secondary btn-xs';
+        rawContainer.classList.remove('hidden');
+        diffContainer.classList.add('hidden');
+      });
+
+      body.appendChild(detailsBox);
+    }
+
+    const footer = el('div', { style: 'display:flex; justify-content:flex-end; gap:8px; margin-top:8px;' });
+    if (itemLink) {
+      const openBtn = el('a', {
+        class: 'btn btn-primary btn-sm',
+        href: itemLink.href,
+        text: 'View Record ↗'
+      });
+      openBtn.addEventListener('click', () => {
+        const overlay = document.querySelector('.modal-overlay');
+        if (overlay) overlay.remove();
+      });
+      footer.appendChild(openBtn);
+    }
+    const closeBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Close' });
+    closeBtn.addEventListener('click', () => {
+      const overlay = document.querySelector('.modal-overlay');
+      if (overlay) overlay.remove();
+    });
+    footer.appendChild(closeBtn);
+    body.appendChild(footer);
+
+    if (typeof Workflow !== 'undefined' && typeof Workflow.showModal === 'function') {
+      Workflow.showModal('Audit Log Entry Details', body);
+    } else {
+      const overlay = el('div', { class: 'modal-overlay' });
+      const modal = el('div', { class: 'modal', style: 'max-width: 600px; width: 90%;' });
+      const mHeader = el('div', { class: 'modal-header' });
+      mHeader.appendChild(el('h3', { class: 'modal-title', text: 'Audit Log Entry Details' }));
+      const mClose = el('button', { class: 'btn btn-secondary btn-sm', text: '✕' });
+      mClose.addEventListener('click', () => overlay.remove());
+      mHeader.appendChild(mClose);
+      modal.appendChild(mHeader);
+      const mBody = el('div', { class: 'modal-body' });
+      mBody.appendChild(body);
+      modal.appendChild(mBody);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+    }
   },
 
   // ============================================================
@@ -2628,13 +4057,15 @@ const Users = {
           raw: pc
         });
       } else if (pc.table === 'invoices' && (isAdmin || isAccounting)) {
+        const wrId = data.workRequestId || data.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         billingToRelease.push({
           type: 'change',
           kind: 'billingInvoiceCreation',
           id: pc.id,
           recordId: data.id || pc.parentRecordId,
           title: `Invoice: ${data.invoiceNumber || data.id || '—'}`,
-          description: isNew ? 'New invoice awaiting approval' : 'Invoice edit awaiting approval',
+          description: wr ? `For WR: ${wr.title}` : (isNew ? 'New invoice awaiting approval' : 'Invoice edit awaiting approval'),
           amount: data.total || null,
           submittedBy: pc.submittedBy,
           submitter,
@@ -2643,13 +4074,15 @@ const Users = {
           raw: pc
         });
       } else if (pc.table === 'disbursements' && (isAdmin || isAccounting)) {
+        const wrId = data.workRequestId || data.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         disbursementToRelease.push({
           type: 'change',
           kind: 'disbursementCreation',
           id: pc.id,
           recordId: data.id || pc.parentRecordId,
-          title: `Expense: ${data.category || '—'}`,
-          description: isNew ? 'New expense awaiting approval' : 'Expense edit awaiting approval',
+          title: `Expense: ${data.category || data.voucherNumber || '—'}`,
+          description: wr ? `For WR: ${wr.title}` : (isNew ? 'New expense awaiting approval' : 'Expense edit awaiting approval'),
           amount: data.amount || null,
           submittedBy: pc.submittedBy,
           submitter,
@@ -2658,13 +4091,15 @@ const Users = {
           raw: pc
         });
       } else if (pc.table === 'transmittals' && isAdmin) {
+        const wrId = data.workRequestId || data.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         transmittalSent.push({
           type: 'change',
           kind: 'transmittalSent',
           id: pc.id,
           recordId: data.id || pc.parentRecordId,
           title: `Transmittal: ${data.trackingNumber || data.transmittalNumber || data.id || '—'}`,
-          description: isNew ? 'New transmittal awaiting approval' : 'Transmittal edit awaiting approval',
+          description: wr ? `For WR: ${wr.title}` : (isNew ? 'New transmittal awaiting approval' : 'Transmittal edit awaiting approval'),
           amount: null,
           submittedBy: pc.submittedBy,
           submitter,
@@ -2708,13 +4143,15 @@ const Users = {
 
       if (normReq.type === 'billing' && (isAdmin || isAccounting)) {
         const invNum = normReq.invoiceNumber ? ` (${normReq.invoiceNumber})` : '';
+        const wrId = normReq.workRequestId || normReq.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         billingToRelease.push({
           type: 'operations_request',
           kind: 'billingRouting',
           id: normReq.id,
           recordId: normReq.invoiceId || normReq.workRequestId,
           title: `Billing Request${invNum}`,
-          description: normReq.notes || 'Request to route invoice to Paid phase',
+          description: wr ? `For WR: ${wr.title}` : (normReq.notes || 'Request to route invoice to Paid phase'),
           amount: normReq.amount || null,
           submittedBy: normReq.requestedBy,
           submitter,
@@ -2723,13 +4160,15 @@ const Users = {
           raw: normReq
         });
       } else if (normReq.type === 'disbursement' && (isAdmin || isAccounting)) {
+        const wrId = normReq.workRequestId || normReq.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         disbursementToRelease.push({
           type: 'operations_request',
           kind: 'disbursementRequest',
           id: normReq.id,
           recordId: normReq.workRequestId,
           title: `Disbursement Request: ${normReq.category || '—'}`,
-          description: normReq.notes || 'Disbursement request awaiting approval',
+          description: wr ? `For WR: ${wr.title}` : (normReq.notes || 'Disbursement request awaiting approval'),
           amount: normReq.amount || null,
           submittedBy: normReq.requestedBy,
           submitter,
@@ -2738,13 +4177,15 @@ const Users = {
           raw: normReq
         });
       } else if (normReq.type === 'transmittal' && isAdmin) {
+        const wrId = normReq.workRequestId || normReq.work_request_id;
+        const wr = wrId ? window.apiClient?.workRequestCache?.getById(wrId) : null;
         transmittalSent.push({
           type: 'operations_request',
           kind: 'transmittalRequest',
           id: normReq.id,
           recordId: normReq.workRequestId,
           title: `Transmittal Request`,
-          description: normReq.notes || 'Transmittal request awaiting approval',
+          description: wr ? `For WR: ${wr.title}` : (normReq.notes || 'Transmittal request awaiting approval'),
           amount: null,
           submittedBy: normReq.requestedBy,
           submitter,
@@ -4100,6 +5541,20 @@ const Users = {
     if (pc.isOperationsRequest) {
       const typeLabel = proposed.type ? (proposed.type.charAt(0).toUpperCase() + proposed.type.slice(1)) : 'None';
       propertyGrid.appendChild(createPropertyRow('Request type', Icons.status, el('span', { text: typeLabel })));
+
+      // Work Request origin link
+      const wrId = proposed.workRequestId || proposed.work_request_id || proposed.parentRecordId;
+      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
+      const wrVal = wr
+        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
+        : (wrId ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wrId}`, text: wrId }) : el('span', { text: 'None' }));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
+
+      // Client origin
+      const clientId = proposed.clientId || proposed.client_id || (wr ? wr.clientId : null);
+      const client = clientId ? window.apiClient.clientCache.getById(clientId) : null;
+      propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : (clientId || 'Not set') })));
+
       if (proposed.amount) {
         propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
       }
@@ -4169,8 +5624,12 @@ const Users = {
       const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
 
-      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, el('span', { text: wr ? wr.title : 'None' })));
+      const wrId = proposed.workRequestId || proposed.work_request_id;
+      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
+      const wrVal = wr 
+        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
+        : el('span', { text: wrId || 'None' });
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
 
       propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate) })));
       propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(proposed.dueDate) })));
@@ -4180,8 +5639,12 @@ const Users = {
       const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
 
-      const wr = proposed.workRequestId ? window.apiClient.workRequestCache.getById(proposed.workRequestId) : null;
-      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, el('span', { text: wr ? wr.title : 'None' })));
+      const wrId = proposed.workRequestId || proposed.work_request_id;
+      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
+      const wrVal = wr 
+        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
+        : el('span', { text: wrId || 'None' });
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
 
       propertyGrid.appendChild(createPropertyRow('Date', Icons.dueDate, el('span', { text: formatDate(proposed.date) })));
       propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
@@ -4200,6 +5663,14 @@ const Users = {
     } else if (pc.table === 'disbursements') {
       const client = proposed.clientId ? window.apiClient.clientCache.getById(proposed.clientId) : null;
       propertyGrid.appendChild(createPropertyRow('Client', Icons.client, el('span', { text: client ? client.name : 'Not set' })));
+
+      const wrId = proposed.workRequestId || proposed.work_request_id;
+      const wr = wrId ? window.apiClient.workRequestCache.getById(wrId) : null;
+      const wrVal = wr
+        ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wr.id}`, text: wr.title || wrId })
+        : (wrId ? el('a', { class: 'notion-property-value-link', href: `#operations/detail/${wrId}`, text: wrId }) : el('span', { text: 'None' }));
+      propertyGrid.appendChild(createPropertyRow('Work request', Icons.workRequest, wrVal));
+
       propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
       propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
       propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));

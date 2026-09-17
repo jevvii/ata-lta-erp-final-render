@@ -1315,11 +1315,45 @@ const Clients = {
         if (!isAbortError(e)) console.error('Failed to load client form', e);
       }
     }
+    let userCacheEnsured = false;
+    let clientCacheEnsured = false;
     await Promise.all([
-      window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure(),
-      window.apiClient.workRequestCache.ensure()
+      window.apiClient?.userCache?.ensure
+        ? window.apiClient.userCache.ensure().then(() => {
+            userCacheEnsured = typeof window.apiClient.userCache._stale === 'function'
+              ? !window.apiClient.userCache._stale()
+              : true;
+          }).catch(() => {})
+        : Promise.resolve(),
+      window.apiClient?.clientCache?.ensure
+        ? window.apiClient.clientCache.ensure().then(() => {
+            clientCacheEnsured = typeof window.apiClient.clientCache._stale === 'function'
+              ? !window.apiClient.clientCache._stale()
+              : true;
+          }).catch(() => {})
+        : Promise.resolve(),
+      window.apiClient?.workRequestCache?.ensure
+        ? window.apiClient.workRequestCache.ensure().catch(() => {})
+        : Promise.resolve()
     ]);
+    if (!userCacheEnsured && window.apiClient?.me?.team) {
+      try {
+        const teamRes = await window.apiClient.me.team();
+        if (teamRes?.data && Array.isArray(teamRes.data) && window.apiClient.userCache) {
+          window.apiClient.userCache._users = teamRes.data;
+          window.apiClient.userCache._loadedAt = Date.now();
+        }
+      } catch (e) {}
+    }
+    if (!clientCacheEnsured && window.apiClient?.clients?.list) {
+      try {
+        const clRes = await window.apiClient.clients.list({});
+        if (clRes?.data && Array.isArray(clRes.data) && window.apiClient.clientCache) {
+          window.apiClient.clientCache._clients = clRes.data.map(c => window.apiClient.clientCache._normalize(c));
+          window.apiClient.clientCache._loadedAt = Date.now();
+        }
+      } catch (e) {}
+    }
     this.clearNode(container);
 
     // Inline action bar for embedded/list views. Full-page forms render their own
@@ -1567,7 +1601,13 @@ const Clients = {
     const entity = Auth.activeEntity;
     const clientSel = el('select', { class: 'notion-line-item-type', name: 'rc-client-' + idx, style: 'flex: 1 1 auto; min-width: 160px;' });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
-    const allClients = window.apiClient.clientCache._clients || [];
+    let allClients = [];
+    if (typeof ClientsData !== 'undefined' && ClientsData.hasData() && Array.isArray(ClientsData.getAllClients()) && ClientsData.getAllClients().length > 0) {
+      allClients = ClientsData.getAllClients();
+    }
+    if (allClients.length === 0 && window.apiClient?.clientCache) {
+      allClients = window.apiClient.clientCache.getAll?.() || window.apiClient.clientCache._clients || [];
+    }
     allClients.filter(c => {
       return matchesEntity(c.entity, entity);
     }).forEach(c => {

@@ -10,9 +10,9 @@
     <link rel="preconnect" href="http://localhost:3000" />
     <!-- Production API origin preconnect is injected dynamically by env.js based on ERP_API_BASE_URL -->
     <!-- Preload critical JS to start download early while HTML parses -->
-    <link rel="preload" href="js/utils.js" as="script" />
-    <link rel="preload" href="js/apiClient.js" as="script" />
-    <link rel="preload" href="js/auth.js" as="script" />
+    <link rel="preload" href="js/utils.js?v=2.3.4" as="script" />
+    <link rel="preload" href="js/apiClient.js?v=2.3.4" as="script" />
+    <link rel="preload" href="js/auth.js?v=2.3.4" as="script" />
     <!-- Critical CSS for instant first paint (loading screen + login + app shell) -->
     <style>
       *,
@@ -147,13 +147,31 @@
           </div>
           <div class="form-group">
             <label for="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              required
-              placeholder="Enter password"
-            />
+            <div class="password-input-wrapper">
+              <input
+                type="password"
+                id="password"
+                name="password"
+                required
+                placeholder="Enter password"
+              />
+              <button
+                type="button"
+                id="password-toggle-btn"
+                class="password-toggle-btn"
+                aria-label="Toggle password visibility"
+                title="Show password"
+              >
+                <svg class="eye-icon eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <svg class="eye-icon eye-hide hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              </button>
+            </div>
           </div>
           <button type="submit" class="btn btn-primary btn-block">
             Sign In
@@ -398,18 +416,18 @@
     </div>
 
     <!-- Core scripts: always needed for app shell, auth, and default routes -->
-    <script src="js/utils.js"></script>
-    <script src="env.js"></script>
-    <script src="js/apiClient.js"></script>
-    <script src="js/auth.js"></script>
-    <script src="js/dataTable.js" defer></script>
-    <script src="js/kanban.js" defer></script>
-    <script src="js/datepicker.js" defer></script>
-    <script src="js/timepicker.js" defer></script>
-    <script src="js/dashboard.js" defer></script>
-    <script src="js/clients.js" defer></script>
-    <script src="js/workflow.js" defer></script>
-    <script src="js/pendingChanges.js" defer></script>
+    <script src="js/utils.js?v=2.3.4"></script>
+    <script src="env.js?v=2.3.4"></script>
+    <script src="js/apiClient.js?v=2.3.4"></script>
+    <script src="js/auth.js?v=2.3.4"></script>
+    <script src="js/dataTable.js?v=2.3.4" defer></script>
+    <script src="js/kanban.js?v=2.3.4" defer></script>
+    <script src="js/datepicker.js?v=2.3.4" defer></script>
+    <script src="js/timepicker.js?v=2.3.4" defer></script>
+    <script src="js/dashboard.js?v=2.3.4" defer></script>
+    <script src="js/clients.js?v=2.3.4" defer></script>
+    <script src="js/workflow.js?v=2.3.4" defer></script>
+    <script src="js/pendingChanges.js?v=2.3.4" defer></script>
     <script>
       // Dev-mode lazy bundle definitions.
       // In production, build.js sets window.__ERP_BUNDLES__ to hashed single-file bundles.
@@ -417,12 +435,13 @@
       // loaded on demand when the user navigates to the relevant route.
       if (!window.__ERP_BUNDLES__) {
         window.__ERP_DEV_BUNDLES__ = {
-          billing: ["js/billing.js", "js/disbursement.js", "js/transmittal.js"],
-          admin: ["js/users.js", "js/reports.js", "js/profile.js", "js/dms.js"],
+          billing: ["js/billing.js?v=2.3.4", "js/disbursement.js?v=2.3.4", "js/transmittal.js?v=2.3.4"],
+          admin: ["js/users.js?v=2.3.4", "js/reports.js?v=2.3.4", "js/profile.js?v=2.3.4", "js/dms.js?v=2.3.4"],
         };
       }
     </script>
-    <script src="js/app.js" defer></script>
+    <script src="js/commandPalette.js?v=2.3.4" defer></script>
+    <script src="js/app.js?v=2.3.4" defer></script>
     <script>
       (function () {
         if (!("serviceWorker" in navigator)) return;
@@ -443,7 +462,7 @@
         // In development, check for updates but never auto-reload so open forms
         // are not interrupted.
         navigator.serviceWorker
-          .register("sw.js?v=2.3.0")
+          .register("sw.js?v=2.3.4")
           .then(function (registration) {
             registration.addEventListener("updatefound", function () {
               var installing = registration.installing;

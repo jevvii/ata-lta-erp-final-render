@@ -180,9 +180,7 @@ const isBackOffice = (user) => {
   return (
     user.role === 'Admin' ||
     user.role === 'Manager' ||
-    depts.includes('Management') ||
-    depts.includes('Accounting') ||
-    depts.includes('Documentation')
+    depts.includes('Management')
   );
 };
 
@@ -236,6 +234,7 @@ const canViewWorkRequest = (wr, user, taskMap) => {
   if (!user) return false;
   if (user.role === 'Admin') return true;
   if (isBackOffice(user)) return true;
+  if (wr.submitted_by === user.id || wr.requested_by === user.id) return true;
   const tasks = taskMap.get(wr.id) || [];
   return tasks.some((t) => {
     if (t.assignee_id === user.id || t.assignee_name === user.name) return true;
@@ -308,6 +307,7 @@ const listWorkRequests = async ({
     const allWrIds = (data || []).map((r) => r.id);
     allTaskMap = await loadTasksForWorkRequests(allWrIds);
     visibleRows = (data || []).filter((row) => {
+      if (row.submitted_by === user.id || row.requested_by === user.id) return true;
       const tasks = allTaskMap.get(row.id) || [];
       return tasks.some((t) => t.assignee_id === user.id || t.assignee_name === user.name);
     });
@@ -414,7 +414,7 @@ const createWorkRequest = async ({ entityId, data, user }) => {
   return getWorkRequestById({ id, entityId, user });
 };
 
-const getWorkRequestById = async ({ id, entityId, user }) => {
+const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) => {
   const { data, error } = await supabaseAdmin
     .from('work_requests')
     .select('*')
@@ -436,7 +436,21 @@ const getWorkRequestById = async ({ id, entityId, user }) => {
   if (!canViewWorkRequest(data, user, taskMap)) return null;
 
   const entityCode = await resolveEntityCode(entityId);
-  return toApiWorkRequest(data, entityCode);
+  const wr = toApiWorkRequest(data, entityCode);
+
+  if (includeTasks) {
+    const taskRows = taskMap.get(id) || [];
+    const extras = await loadTaskExtras(taskRows.map((t) => t.id));
+    wr.tasks = taskRows.map((t) =>
+      toApiTask(t, {
+        checklist: extras.checklist.get(t.id) || [],
+        timeLogs: extras.timeLogs.get(t.id) || [],
+        taskDocuments: extras.taskDocuments.get(t.id) || [],
+      })
+    );
+  }
+
+  return wr;
 };
 
 const updateWorkRequest = async ({ id, entityId, data, user }) => {

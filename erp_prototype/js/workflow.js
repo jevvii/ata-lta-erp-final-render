@@ -433,6 +433,47 @@ const WorkflowData = {
   getAllTasks() { return this._tasks || []; },
   getWorkRequestById(id) { return (this._workRequests || []).find(r => r.id === id) || null; },
   getTaskById(id) { return (this._tasks || []).find(t => t.id === id) || null; },
+
+  /**
+   * Fetch a single work request from the API and merge it (plus its embedded
+   * tasks) into the local caches. Used by the detail view when the WR is not
+   * in the list cache — deep links (audit log, dashboard) can target archived
+   * or previously-unloaded records. The server enforces visibility, returning
+   * null/404 for records the user may not see.
+   */
+  async fetchWorkRequestById(id) {
+    if (!id || this._isTempId(id)) return null;
+    try {
+      const res = await window.apiClient.workRequests.get(id, { _t: Date.now() });
+      if (!res || !res.data) return null;
+      const wr = this.normalizeWorkRequest(res.data);
+      wr.tasks = (wr.tasks || []).map(t => {
+        const normalized = this.normalizeTask(t);
+        normalized.workRequestId = wr.id;
+        return normalized;
+      });
+
+      if (!Array.isArray(this._workRequests)) this._workRequests = [];
+      const wrIdx = this._workRequests.findIndex(r => r.id === wr.id);
+      if (wrIdx >= 0) this._workRequests[wrIdx] = wr;
+      else this._workRequests.push(wr);
+
+      if (!Array.isArray(this._tasks)) this._tasks = [];
+      const fetchedTaskIds = new Set(wr.tasks.map(t => t.id));
+      // Drop stale cached tasks for this WR that the server no longer returns.
+      this._tasks = this._tasks.filter(t =>
+        !(t.workRequestId === wr.id && !fetchedTaskIds.has(t.id) && !this._isTempId(t.id)));
+      wr.tasks.forEach(t => {
+        const tIdx = this._tasks.findIndex(x => x.id === t.id);
+        if (tIdx >= 0) this._tasks[tIdx] = t;
+        else this._tasks.push(t);
+      });
+      return wr;
+    } catch (err) {
+      // 404 = not found or not visible to this user; treat as unavailable.
+      return null;
+    }
+  },
   getWorkRequestsWhere(predicate) { return (this._workRequests || []).filter(predicate); },
   getTasksWhere(predicate) { return (this._tasks || []).filter(predicate); },
 
@@ -825,6 +866,7 @@ const WorkflowData = {
       console.error('Cannot update task without work request id', id, changes);
       return existing;
     }
+    const previousSnapshot = existing ? JSON.parse(JSON.stringify(existing)) : null;
     const updated = { ...(existing || {}), ...changes, id };
     if (existing) Object.assign(existing, changes);
     try {
@@ -859,6 +901,11 @@ const WorkflowData = {
       }
     } catch (e) {
       console.error('Failed to update task', e);
+      if (existing && previousSnapshot) {
+        Object.assign(existing, previousSnapshot);
+      }
+      this.invalidateRelatedForTask(id);
+      throw e;
     }
     this.invalidateRelatedForTask(id);
     this._needsFreshFetch = true;
@@ -2880,12 +2927,13 @@ const Workflow = {
     }
   },
 
-  toggleChecklistItem(task, itemId, isCompleted) {
+  async toggleChecklistItem(task, itemId, isCompleted, cbElement = null) {
     if (!task) return;
     const checklist = task.checklist || [];
     const item = checklist.find(c => c.id === itemId);
     if (!item) return;
 
+    const previousCompleted = !!item.completed;
     item.completed = !!isCompleted;
     if (!isCompleted) {
       checklist.forEach(other => {
@@ -2895,7 +2943,18 @@ const Workflow = {
       });
     }
 
-    WorkflowData.updateTask(task.id, { checklist: checklist, updatedAt: new Date().toISOString() });
+    try {
+      await WorkflowData.updateTask(task.id, { checklist: checklist, updatedAt: new Date().toISOString() });
+    } catch (err) {
+      console.warn('[Workflow.toggleChecklistItem] Rollback triggered due to error:', err);
+      item.completed = previousCompleted;
+      if (cbElement) {
+        cbElement.checked = previousCompleted;
+      }
+      if (typeof showToast === 'function') {
+        showToast('Checklist Sync Failed', 'Unable to sync checklist change with server. Reverting.', 'error');
+      }
+    }
   },
 
   ensureTaskChecklistNormalized(task, persist = false) {
@@ -3039,7 +3098,7 @@ const Workflow = {
             subCb.addEventListener('click', (e) => e.stopPropagation());
             subCb.addEventListener('change', (e) => {
               e.stopPropagation();
-              this.toggleChecklistItem(t, item.id, subCb.checked);
+              this.toggleChecklistItem(t, item.id, subCb.checked, subCb);
               App.handleRoute();
             });
             subRow.appendChild(subCb);
@@ -4382,6 +4441,13 @@ const Workflow = {
               wr.status = 'Draft';
             }
           }
+          if (!wr) {
+            // Deep-link cache miss (audit log, dashboard link, archived or
+            // never-listed record): fall back to a direct fetch. The server
+            // enforces visibility and returns 404 for inaccessible records.
+            wr = await WorkflowData.fetchWorkRequestById(this.detailWrId);
+            if (routeId !== App._routeId) return;
+          }
           if (!wr || !Auth.canViewWr(wr)) {
             this.view = 'list';
             this.detailWrId = null;
@@ -4498,7 +4564,11 @@ const Workflow = {
       container.appendChild(contentContainer);
 
       if (this.view === 'list') {
-        contentContainer.appendChild(this.renderList());
+        if (!this.hasCachedData(Auth.activeEntity)) {
+          contentContainer.innerHTML = Utils.getSkeletonForView('operations');
+        } else {
+          contentContainer.appendChild(this.renderList());
+        }
       } else {
         contentContainer.innerHTML = Utils.getSkeletonForView('operations');
       }
@@ -4521,7 +4591,10 @@ const Workflow = {
             tabNav = freshTabNav;
           }
 
-          if (this.view === 'templates') {
+          if (this.view === 'list') {
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(this.renderList());
+          } else if (this.view === 'templates') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderTemplates());
           } else if (this.view === 'archive') {
@@ -6679,7 +6752,7 @@ const Workflow = {
 
             if (!wr || !wr.isPendingApproval) {
               cb.addEventListener('change', () => {
-                this.toggleChecklistItem(task, item.id, cb.checked);
+                this.toggleChecklistItem(task, item.id, cb.checked, cb);
                 this.showTaskSidePane(taskId, triggerElement);
                 App.handleRoute(); // Refresh background
               });
@@ -8536,6 +8609,38 @@ const Workflow = {
     container.searchQuery = '';
     container.employeeFilter = null;
 
+    // Load and render active Operations Requests for this Work Request
+    let pendingOpsReqs = [];
+    try {
+      if (window.apiClient?.operationsRequests?.list) {
+        const opRes = await window.apiClient.operationsRequests.list({ workRequestId: wr.id, status: 'pending' });
+        pendingOpsReqs = opRes?.data || [];
+      }
+    } catch (e) {
+      console.warn('[Workflow.renderDetail] failed to load pending operations requests', e);
+    }
+
+    if (pendingOpsReqs.length > 0) {
+      const banner = el('div', {
+        class: 'alert-banner pending-requests-banner',
+        style: 'background: color-mix(in oklab, var(--color-warning) 12%, transparent); border: 1px solid var(--color-warning); border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;'
+      });
+      const bHeader = el('div', { style: 'font-weight: 600; display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--color-text);' });
+      bHeader.innerHTML = `<span style="font-size: 1.1rem;">⏳</span> Pending Operations Requests for this Work Request:`;
+      banner.appendChild(bHeader);
+
+      pendingOpsReqs.forEach(req => {
+        const row = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; font-size: 0.875rem; padding: 4px 0;' });
+        const reqType = req.type ? req.type.toUpperCase() : 'REQUEST';
+        const submitter = window.apiClient?.userCache?.getById ? window.apiClient.userCache.getById(req.requestedBy) : null;
+        const subName = submitter ? submitter.name : 'Staff';
+        row.innerHTML = `<span><strong>${reqType} Request:</strong> ${escapeHtml(req.notes || 'Awaiting review')} <span style="color: var(--color-text-muted); font-size: 0.8125rem;">(Requested by ${escapeHtml(subName)} on ${formatDate(req.requestedAt)})</span></span>`;
+        row.appendChild(el('span', { class: 'badge badge-warning', text: 'Pending' }));
+        banner.appendChild(row);
+      });
+      container.appendChild(banner);
+    }
+
     // Lifecycle Card Redesign
     const lifecycleCard = el('div', { class: 'lifecycle-card' });
     const lifecycleHeader = el('div', { class: 'lifecycle-header' });
@@ -9659,10 +9764,22 @@ const Workflow = {
         const hours = getTaskTotalHours(t);
         totalHours += hours;
 
+        const targetTaskId = this.targetTaskId || (new URLSearchParams(location.hash.split('?')[1] || '')).get('taskId');
+        const isTargetTask = Boolean(targetTaskId && (t.id === targetTaskId || String(t.id) === String(targetTaskId)));
+        if (isTargetTask) {
+          this.expandedTaskIds.add(t.id);
+        }
         const expanded = this.expandedTaskIds.has(t.id);
         const selected = container.selectedTaskIds.has(t.id);
-        const rowEl = el('div', { class: classNames('task-row', expanded && 'expanded', selected && 'selected', this.getCompletedClass(t)) });
+        const rowEl = el('div', { class: classNames('task-row', expanded && 'expanded', selected && 'selected', isTargetTask && 'task-row--highlighted', this.getCompletedClass(t)) });
         rowEl.dataset.id = t.id;
+        if (isTargetTask) {
+          setTimeout(() => {
+            if (rowEl.isConnected) {
+              rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }, 300);
+        }
 
         // 1. Checkbox cell
         const cellCheckbox = el('div', { class: 'cell' });
@@ -10167,7 +10284,7 @@ const Workflow = {
 
               cb.addEventListener('change', async (e) => {
                 e.stopPropagation();
-                this.toggleChecklistItem(t, item.id, cb.checked);
+                await this.toggleChecklistItem(t, item.id, cb.checked, cb);
                 await renderChecklist();
               });
 

@@ -4,6 +4,7 @@
  */
 
 const { supabaseAdmin } = require('../services/supabaseClient');
+const { resolveEntityCode } = require('../lib/entityResolver');
 const AppError = require('../lib/AppError');
 
 /**
@@ -19,11 +20,21 @@ const AppError = require('../lib/AppError');
 const log = async (params) => {
   const { action, table, recordId, entity, userId, details = {} } = params;
 
+  let normalizedEntity = entity || null;
+  if (normalizedEntity && normalizedEntity.length > 5) {
+    try {
+      const code = await resolveEntityCode(normalizedEntity);
+      if (code) normalizedEntity = code;
+    } catch (_err) {
+      // Ignore resolution failure and keep original entity
+    }
+  }
+
   const { error } = await supabaseAdmin.from('audit_logs').insert({
     action,
     table_name: table || null,
     record_id: recordId || null,
-    entity: entity || null,
+    entity: normalizedEntity,
     user_id: userId || null,
     details,
   });
@@ -44,11 +55,21 @@ const log = async (params) => {
 const logOrFail = async (params) => {
   const { action, table, recordId, entity, userId, details = {} } = params;
 
+  let normalizedEntity = entity || null;
+  if (normalizedEntity && normalizedEntity.length > 5) {
+    try {
+      const code = await resolveEntityCode(normalizedEntity);
+      if (code) normalizedEntity = code;
+    } catch (_err) {
+      // Ignore resolution failure and keep original entity
+    }
+  }
+
   const { error } = await supabaseAdmin.from('audit_logs').insert({
     action,
     table_name: table || null,
     record_id: recordId || null,
-    entity: entity || null,
+    entity: normalizedEntity,
     user_id: userId || null,
     details,
   });

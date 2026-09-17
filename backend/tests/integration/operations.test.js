@@ -159,6 +159,43 @@ describe('/v1/work-requests', () => {
       .expect(204);
   });
 
+  it('GET /v1/work-requests/:id embeds tasks so deep links open the detail view directly', async () => {
+    const admin = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Admin',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+    const client = await createClient(admin, 'ATA');
+
+    const wr = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Deep Link WR', clientId: client.id, entity: 'ATA' })
+      .expect(201);
+
+    const task = await request(app)
+      .post(`/v1/work-requests/${wr.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ title: 'Deep link task', checklist: [{ text: 'Item 1', completed: false }] })
+      .expect(201);
+
+    const res = await request(app)
+      .get(`/v1/work-requests/${wr.body.data.id}`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(Array.isArray(res.body.data.tasks)).toBe(true);
+    expect(res.body.data.tasks).toHaveLength(1);
+    expect(res.body.data.tasks[0].id).toBe(task.body.data.id);
+    expect(res.body.data.tasks[0].title).toBe('Deep link task');
+    expect(res.body.data.tasks[0].workRequestId).toBe(wr.body.data.id);
+    expect(res.body.data.tasks[0].checklist).toHaveLength(1);
+  });
+
   it('supports logging time under a task via POST /time-logs', async () => {
     const admin = registerUser({
       email: 'admin-tl@ata-lta.ph',

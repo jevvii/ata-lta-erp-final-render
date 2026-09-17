@@ -100,6 +100,12 @@ const Auth = {
       if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         console.error('[Auth.login] failed:', e);
       }
+      if (e?.status === 429 || (e?.message && e.message.toLowerCase().includes('too many'))) {
+        return 'rate_limited';
+      }
+      if (e?.status === 403 || (e?.message && e.message.toLowerCase().includes('disabled'))) {
+        return 'disabled';
+      }
       return false;
     }
   },
@@ -112,9 +118,68 @@ const Auth = {
       localStorage.removeItem(this._tokenKey);
       localStorage.removeItem('erp_refresh_token');
       Object.keys(sessionStorage).forEach(key => {
-        if (key.startsWith('erp_filters_')) sessionStorage.removeItem(key);
+        if (key.startsWith('erp_filters_') || key.startsWith('erp_group_') || key.startsWith('erp_sort_')) {
+          sessionStorage.removeItem(key);
+        }
+      });
+      Object.keys(localStorage).forEach(key => {
+        if (key.startsWith('erp_filters_') || key.startsWith('erp_group_') || key.startsWith('erp_sort_')) {
+          localStorage.removeItem(key);
+        }
       });
     } catch (e) {}
+
+    // Invalidate all in-memory module states and caches to prevent cross-account contamination
+    try {
+      if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+        Dashboard.invalidateCache();
+        Dashboard._dataCache = null;
+        Dashboard._dataPromise = null;
+      }
+      if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidate === 'function') {
+        WorkflowData.invalidate();
+      }
+      if (typeof Workflow !== 'undefined') {
+        Workflow.view = 'list';
+        Workflow.detailWrId = null;
+        Workflow.editingId = null;
+      }
+      if (typeof Clients !== 'undefined' && typeof Clients.invalidateCache === 'function') {
+        Clients.invalidateCache();
+        Clients.editingId = null;
+      }
+      if (typeof Billing !== 'undefined' && typeof Billing.invalidateCache === 'function') {
+        Billing.invalidateCache();
+        Billing.view = 'list';
+        Billing.detailId = null;
+      }
+      if (typeof Disbursement !== 'undefined' && typeof Disbursement.invalidateCache === 'function') {
+        Disbursement.invalidateCache();
+        Disbursement.view = 'list';
+        Disbursement.detailId = null;
+        if (Disbursement._items) Disbursement._items = [];
+      }
+      if (typeof Transmittal !== 'undefined' && typeof Transmittal.invalidateCache === 'function') {
+        Transmittal.invalidateCache();
+        Transmittal.view = 'list';
+        Transmittal.detailId = null;
+        if (Transmittal._items) Transmittal._items = [];
+      }
+      if (typeof Users !== 'undefined') {
+        if (typeof Users.invalidateCache === 'function') Users.invalidateCache();
+        Users.users = [];
+        Users._usersLoaded = false;
+        Users.view = 'users';
+        Users.lastUserId = null;
+      }
+      if (window.apiClient) {
+        if (window.apiClient.workRequestCache?.invalidate) window.apiClient.workRequestCache.invalidate();
+        if (window.apiClient.transmittalCache?.invalidate) window.apiClient.transmittalCache.invalidate();
+        if (window.apiClient.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+        if (window.apiClient.userCache?.invalidate) window.apiClient.userCache.invalidate();
+      }
+    } catch (e) {}
+
     this.updateSessionClasses(false);
   },
 
@@ -144,7 +209,12 @@ const Auth = {
     if (!this.user) return false;
     entity = (entity || this.activeEntity || '').toUpperCase();
     if (this.user.role === 'Admin') return true;
-    if (!this.user.entities.includes(entity)) return false;
+    if (entity === 'ALL') {
+      const hasBoth = ['ATA', 'LTA'].every(e => (this.user.entities || []).includes(e));
+      if (!hasBoth && !this.isManagerial()) return false;
+    } else if (!(this.user.entities || []).includes(entity)) {
+      return false;
+    }
 
     // RBAC is driven entirely by department assignment. The effective
     // permission set is the union of the permission sets for each allowed
@@ -213,11 +283,10 @@ const Auth = {
   canViewWr(wr) {
     if (!this.user) return false;
     if (this.user.role === 'Admin') return true;
-    // Managerial users (Management department or legacy Manager role) can view
-    // work requests they own or are directly involved in.
-    if (this.isManagerial()) {
-      return wr && (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
-    }
+    // Managerial users (Management department or legacy Manager role) are
+    // back-office: the backend serves them every work request (isBackOffice),
+    // so the frontend must not bounce their detail views to the list.
+    if (this.isManagerial()) return !!wr;
     // Staff-level users can see work requests they are assigned to via tasks.
     if (!wr) return false;
     
@@ -239,9 +308,7 @@ const Auth = {
   canViewWrWithTasks(wr, taskMap) {
     if (!this.user) return false;
     if (this.user.role === 'Admin') return true;
-    if (this.isManagerial()) {
-      return wr && (wr.submittedBy === this.user.id || wr.requestedBy === this.user.id);
-    }
+    if (this.isManagerial()) return !!wr;
     if (!wr) return false;
     const tasks = wr.isPendingApproval ? (wr.tasks || []) : (taskMap[wr.id] || []);
     return tasks.some(t => {

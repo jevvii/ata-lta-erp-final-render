@@ -290,7 +290,10 @@
    */
   const get = (path, options = {}) => {
     const url = `${API_BASE_URL}${path}`;
-    const entity = getActiveEntity();
+    // Key on the EFFECTIVE entity: an explicit X-Active-Entity override (e.g.
+    // per-entity fetches while the consolidated view is active) must produce
+    // distinct cache/dedupe entries per entity.
+    const entity = options.headers?.['X-Active-Entity'] || getActiveEntity();
     const key = `GET ${url} ${entity || ''}`;
 
     // If the caller supplied their own signal, do not deduplicate; start fresh.
@@ -344,9 +347,9 @@
   const isAbortError = (err) => {
     if (!err) return false;
     if (err.name === 'AbortError') return true;
-    if (err.message === 'route-change' || err.reason === 'route-change') return true;
+    if (err.message === 'route-change' || err.message === 'sync-reload' || err.reason === 'route-change' || err.reason === 'sync-reload') return true;
     const str = String(err.message || err.reason || err || '').toLowerCase();
-    return str.includes('aborted') || str.includes('route-change') || str.includes('cancel');
+    return str.includes('aborted') || str.includes('route-change') || str.includes('sync-reload') || str.includes('cancel');
   };
 
   const cachedCount = (cacheKey, fetcher, fallback) => {
@@ -466,23 +469,29 @@
       _users: null,
       _promise: null,
       _loadedAt: null,
+      _generation: 0,
       TTL_MS: 5 * 60 * 1000,
       _stale() {
         return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
       },
       async ensure() {
-        if (this._users && !this._stale()) return this._users;
+        if (this._users && this._loadedAt && !this._stale()) return this._users;
         if (this._promise) return this._promise;
+        const currentGen = this._generation;
         this._promise = window.apiClient.me.team().then(res => {
+          if (this._generation !== currentGen) {
+            return this._users || [];
+          }
           this._users = res.data || [];
           this._loadedAt = Date.now();
           return this._users;
         }).catch(err => {
-          this._users = [];
-          this._loadedAt = Date.now();
-          return this._users;
+          // Do not stamp _loadedAt on error/abort so subsequent calls can retry cleanly
+          return this._users || [];
         }).finally(() => {
-          this._promise = null;
+          if (this._generation === currentGen) {
+            this._promise = null;
+          }
         });
         return this._promise;
       },
@@ -499,8 +508,10 @@
         return this._users.find(u => u && typeof u.name === 'string' && u.name.trim().toLowerCase() === target) || null;
       },
       invalidate() {
+        this._generation++;
         this._users = null;
         this._loadedAt = null;
+        this._promise = null;
       }
     },
 
@@ -508,25 +519,34 @@
       _clients: null,
       _promise: null,
       _loadedAt: null,
+      _generation: 0,
       TTL_MS: 5 * 60 * 1000,
       _stale() {
         return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
       },
       async ensure() {
-        if (this._clients && !this._stale()) return this._clients;
+        if (this._clients && this._loadedAt && !this._stale()) return this._clients;
         if (this._promise) return this._promise;
+        const currentGen = this._generation;
         this._promise = window.apiClient.clients.list({}).then(res => {
+          if (this._generation !== currentGen) {
+            return this._clients || [];
+          }
           this._clients = (res.data || []).map(c => this._normalize(c));
           this._loadedAt = Date.now();
           return this._clients;
         }).catch(err => {
-          this._clients = [];
-          this._loadedAt = Date.now();
-          return this._clients;
+          // Do not stamp _loadedAt on error/abort so subsequent calls can retry cleanly
+          return this._clients || [];
         }).finally(() => {
-          this._promise = null;
+          if (this._generation === currentGen) {
+            this._promise = null;
+          }
         });
         return this._promise;
+      },
+      getAll() {
+        return [...(this._clients || [])];
       },
       _normalize(client) {
         if (!client) return client;
@@ -549,8 +569,10 @@
         return this._clients.find(c => c.name === name) || null;
       },
       invalidate() {
+        this._generation++;
         this._clients = null;
         this._loadedAt = null;
+        this._promise = null;
       }
     },
 
@@ -558,23 +580,29 @@
       _wrs: null,
       _promise: null,
       _loadedAt: null,
+      _generation: 0,
       TTL_MS: 5 * 60 * 1000,
       _stale() {
         return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
       },
       async ensure() {
-        if (this._wrs && !this._stale()) return this._wrs;
+        if (this._wrs && this._loadedAt && !this._stale()) return this._wrs;
         if (this._promise) return this._promise;
+        const currentGen = this._generation;
         this._promise = window.apiClient.workRequests.list({ includeTasks: true }).then(res => {
+          if (this._generation !== currentGen) {
+            return this._wrs || [];
+          }
           this._wrs = res.data || [];
           this._loadedAt = Date.now();
           return this._wrs;
         }).catch(err => {
-          this._wrs = [];
-          this._loadedAt = Date.now();
-          return this._wrs;
+          // Do not stamp _loadedAt on error/abort so subsequent calls can retry cleanly
+          return this._wrs || [];
         }).finally(() => {
-          this._promise = null;
+          if (this._generation === currentGen) {
+            this._promise = null;
+          }
         });
         return this._promise;
       },
@@ -593,8 +621,10 @@
         return this._wrs.find(wr => wr.title === title) || null;
       },
       invalidate() {
+        this._generation++;
         this._wrs = null;
         this._loadedAt = null;
+        this._promise = null;
       }
     },
 
@@ -602,23 +632,29 @@
       _transmittals: null,
       _promise: null,
       _loadedAt: null,
+      _generation: 0,
       TTL_MS: 5 * 60 * 1000,
       _stale() {
         return !this._loadedAt || (Date.now() - this._loadedAt > this.TTL_MS);
       },
       async ensure() {
-        if (this._transmittals && !this._stale()) return this._transmittals;
+        if (this._transmittals && this._loadedAt && !this._stale()) return this._transmittals;
         if (this._promise) return this._promise;
+        const currentGen = this._generation;
         this._promise = window.apiClient.transmittals.list().then(res => {
+          if (this._generation !== currentGen) {
+            return this._transmittals || [];
+          }
           this._transmittals = res.data || [];
           this._loadedAt = Date.now();
           return this._transmittals;
         }).catch(err => {
-          this._transmittals = [];
-          this._loadedAt = Date.now();
-          return this._transmittals;
+          // Do not stamp _loadedAt on error/abort so subsequent calls can retry cleanly
+          return this._transmittals || [];
         }).finally(() => {
-          this._promise = null;
+          if (this._generation === currentGen) {
+            this._promise = null;
+          }
         });
         return this._promise;
       },
@@ -641,8 +677,10 @@
         return (this._transmittals || []).filter(t => (t.work_request_id || t.workRequestId) === wrId);
       },
       invalidate() {
+        this._generation++;
         this._transmittals = null;
         this._loadedAt = null;
+        this._promise = null;
       }
     },
 
@@ -692,11 +730,11 @@
     },
 
     workRequests: {
-      list: (query = {}) => {
+      list: (query = {}, options = {}) => {
         const qs = new URLSearchParams();
         Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
         const q = qs.toString();
-        return get(`/work-requests${q ? '?' + q : ''}`);
+        return get(`/work-requests${q ? '?' + q : ''}`, options);
       },
       counts: (entityId) => cachedCount(
         `workRequests.counts:${entityId || getActiveEntity() || 'none'}`,
@@ -705,7 +743,10 @@
       ),
       invalidateCounts: () => invalidateCountCache('workRequests.counts'),
       create: (data) => post('/work-requests', data).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
-      get: (id) => get(`/work-requests/${id}`),
+      get: (id, params) => {
+        const q = params ? new URLSearchParams(params).toString() : '';
+        return get(`/work-requests/${id}${q ? '?' + q : ''}`);
+      },
       update: (id, data, options) => put(`/work-requests/${id}`, data, options).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       archive: (id) => post(`/work-requests/${id}/archive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),
       unarchive: (id) => post(`/work-requests/${id}/unarchive`).then((res) => { invalidateCountCache('workRequests.counts'); return res; }),

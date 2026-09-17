@@ -204,12 +204,12 @@ function isAbortError(e) {
   if (e.name === 'AbortError') return true;
   if (typeof e === 'string') {
     const s = e.toLowerCase();
-    return s === 'route-change' || s.includes('aborterror') || s.includes('aborted') || s.includes('cancel');
+    return s === 'route-change' || s === 'sync-reload' || s.includes('aborterror') || s.includes('aborted') || s.includes('cancel');
   }
   const msg = typeof e.message === 'string' ? e.message.toLowerCase() : '';
-  if (msg === 'route-change' || msg.includes('aborterror') || msg.includes('aborted') || msg.includes('cancel')) return true;
+  if (msg === 'route-change' || msg === 'sync-reload' || msg.includes('aborterror') || msg.includes('aborted') || msg.includes('cancel')) return true;
   const reason = typeof e.reason === 'string' ? e.reason.toLowerCase() : '';
-  if (reason === 'route-change' || reason.includes('aborterror') || reason.includes('aborted') || reason.includes('cancel')) return true;
+  if (reason === 'route-change' || reason === 'sync-reload' || reason.includes('aborterror') || reason.includes('aborted') || reason.includes('cancel')) return true;
   return false;
 }
 if (typeof window !== 'undefined') {
@@ -2495,7 +2495,45 @@ async function triggerSyncReload(hash, messageConfig) {
     }
   }
 
+  // Invalidate Service Worker API Cache
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'INVALIDATE_API_CACHE' });
+    }
+  } catch (e) { /* ignore */ }
+
+  // Broadcast cross-tab synchronization event
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const syncBc = new BroadcastChannel('erp_concurrency_sync');
+      syncBc.postMessage({ type: 'CACHE_INVALIDATED', hash, timestamp: Date.now() });
+      syncBc.close();
+    }
+  } catch (e) { /* ignore */ }
+
   sessionStorage.removeItem('is_syncing');
+}
+
+// Cross-Tab Concurrency Synchronization Listener
+if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+  try {
+    const tabSyncChannel = new BroadcastChannel('erp_concurrency_sync');
+    tabSyncChannel.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'CACHE_INVALIDATED') {
+        if (typeof window.apiClient !== 'undefined') {
+          if (window.apiClient.workRequestCache) window.apiClient.workRequestCache.invalidate();
+          if (window.apiClient.clientCache) window.apiClient.clientCache.invalidate();
+          if (window.apiClient.userCache) window.apiClient.userCache.invalidate();
+        }
+        if (typeof WorkflowData !== 'undefined' && typeof WorkflowData.invalidate === 'function') {
+          WorkflowData.invalidate();
+        }
+        if (typeof Dashboard !== 'undefined' && typeof Dashboard.invalidateCache === 'function') {
+          Dashboard.invalidateCache();
+        }
+      }
+    });
+  } catch (e) { /* ignore */ }
 }
 
 /**

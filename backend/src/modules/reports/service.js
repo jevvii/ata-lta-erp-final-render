@@ -10,6 +10,27 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const logger = require('../../lib/logger');
 const { resolveEntityId, resolveEntityCode } = require('../../lib/entityResolver');
+const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+
+// Mirror of the operations module's back-office gate: only these roles may see
+// work requests they are not directly involved in (assignee / requester).
+const isBackOfficeUser = (user) => {
+  if (!user) return false;
+  const depts = user.departments || [];
+  return (
+    user.role === 'Admin' ||
+    user.role === 'Manager' ||
+    depts.includes('Management')
+  );
+};
+
+// Mirror of the disbursements module's list gate for calendar disbursements.
+const isAccountingUser = (user) =>
+  !!user && ((user.departments || []).includes('Accounting') || user.role === 'Accounting');
+
+// Disbursement statuses visible to non-admin/non-accounting users, matching
+// the disbursements module list restriction.
+const STAFF_VISIBLE_DISB_STATUSES = ['Released', 'Funded', 'Rejected'];
 
 // ============================================================
 // Helper: get Monday and Sunday of the week containing a date
@@ -186,10 +207,17 @@ const resolveEntityIdOrAll = async (entityId) => {
 /**
  * Load upcoming calendar items for a single entity UUID.
  * Returns work requests (with embedded tasks) and disbursements due soon.
+ *
+ * Visibility is user-scoped, mirroring the owning modules:
+ * - Work requests: back-office users (Admin / Manager / Management) see all;
+ *   staff only see WRs they submitted, requested, or are assigned a task on.
+ * - Disbursements: Admin/Accounting see all; others only see Released/Funded/
+ *   Rejected disbursements linked to a work request they are concerned with.
  * @param {string} entityUuid
+ * @param {object} [user] - authenticated user (null/omitted = most restrictive view)
  * @returns {Promise<Array>}
  */
-const loadCalendarItemsForEntity = async (entityUuid) => {
+const loadCalendarItemsForEntity = async (entityUuid, user) => {
   const today = new Date().toISOString().slice(0, 10);
   const thirtyDaysLater = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     .toISOString()
@@ -207,7 +235,7 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
   ] = await Promise.all([
     supabaseAdmin
       .from('work_requests')
-      .select('id, title, status, due_date, client_id, assigned_to, requested_by, entity_id')
+      .select('id, title, status, due_date, client_id, assigned_to, requested_by, submitted_by, entity_id')
       .eq('entity_id', entityUuid)
       .is('deleted_at', null)
       .not('due_date', 'is', null)
@@ -217,7 +245,7 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
       .limit(200),
     supabaseAdmin
       .from('work_requests')
-      .select('id, title, status, due_date, client_id, assigned_to, requested_by, entity_id')
+      .select('id, title, status, due_date, client_id, assigned_to, requested_by, submitted_by, entity_id')
       .eq('entity_id', entityUuid)
       .is('deleted_at', null)
       .not('due_date', 'is', null)
@@ -227,7 +255,7 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
       .limit(100),
     supabaseAdmin
       .from('disbursements')
-      .select('id, disbursement_number, status, due_date, amount, client_id, entity_id')
+      .select('id, disbursement_number, status, due_date, amount, client_id, entity_id, linked_work_request_id')
       .eq('entity_id', entityUuid)
       .is('deleted_at', null)
       .not('due_date', 'is', null)
@@ -237,7 +265,7 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
       .limit(200),
     supabaseAdmin
       .from('disbursements')
-      .select('id, disbursement_number, status, due_date, amount, client_id, entity_id')
+      .select('id, disbursement_number, status, due_date, amount, client_id, entity_id, linked_work_request_id')
       .eq('entity_id', entityUuid)
       .is('deleted_at', null)
       .not('due_date', 'is', null)
@@ -268,8 +296,19 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
 
   const entityCode = await resolveEntityCode(entityUuid);
 
+  // Per-user visibility scope. Back-office users see every work request;
+  // Admin/Accounting see every disbursement. Anyone else is limited to the
+  // records they are concerned with (the same rule the list endpoints enforce).
+  const seeAllWrs = isBackOfficeUser(user);
+  const canSeeAllDisbursements = user?.role === 'Admin' || isAccountingUser(user);
+  let concernedWrIds = null;
+  if (!seeAllWrs || !canSeeAllDisbursements) {
+    concernedWrIds = new Set(await getUserConcernedWorkRequestIds(user));
+  }
+
   const items = [];
   for (const wr of workRequests || []) {
+    if (!seeAllWrs && wr.submitted_by !== user?.id && !concernedWrIds.has(wr.id)) continue;
     items.push({
       id: wr.id,
       type: 'wr',
@@ -291,6 +330,10 @@ const loadCalendarItemsForEntity = async (entityUuid) => {
   }
 
   for (const d of disbursements || []) {
+    if (!canSeeAllDisbursements) {
+      if (!STAFF_VISIBLE_DISB_STATUSES.includes(d.status)) continue;
+      if (!d.linked_work_request_id || !concernedWrIds.has(d.linked_work_request_id)) continue;
+    }
     items.push({
       id: d.id,
       type: 'db',
@@ -324,44 +367,53 @@ const getAnalyticsForEntityCode = async (codeOrUuid) => {
  * Optimized dashboard summary intended for the dashboard widget.
  * Attempts a single Supabase RPC call; falls back to the parallelized
  * computeAnalytics aggregator with a 30-second in-memory cache.
+ *
+ * The aggregate analytics are user-agnostic and safe to share via the
+ * entity-keyed cache. The `calendar` payload is user-specific (visibility
+ * filtered), so it is ALWAYS computed per request and never stored in the
+ * shared cache — otherwise one user's calendar could be served to another.
  * @param {object} params
  * @param {string} params.entityId
+ * @param {object} [params.user] - authenticated user for calendar visibility
  * @returns {Promise<object>}
  */
-const getDashboardSummary = async ({ entityId }) => {
+const getDashboardSummary = async ({ entityId, user }) => {
   // Consolidated view for ALL: the RPC path is single-entity only, so we
   // always compute both entities in parallel through the JS aggregator.
   if (entityId === 'ALL') {
-    const cached = getCachedAnalytics('ALL');
-    if (cached) return cached;
+    let analyticsPayload = getCachedAnalytics('ALL');
+    if (!analyticsPayload) {
+      const [ataAnalytics, ltaAnalytics] = await Promise.all([
+        getAnalyticsForEntityCode('ATA'),
+        getAnalyticsForEntityCode('LTA'),
+      ]);
+      analyticsPayload = {
+        analyticsByEntity: { ATA: ataAnalytics, LTA: ltaAnalytics },
+        ATA: ataAnalytics,
+        LTA: ltaAnalytics,
+      };
+      setCachedAnalytics('ALL', analyticsPayload);
+    }
 
-    const [ataAnalytics, ltaAnalytics, ataCalendar, ltaCalendar] = await Promise.all([
-      getAnalyticsForEntityCode('ATA'),
-      getAnalyticsForEntityCode('LTA'),
-      resolveEntityId('ATA').then(loadCalendarItemsForEntity),
-      resolveEntityId('LTA').then(loadCalendarItemsForEntity),
+    const [ataCalendar, ltaCalendar] = await Promise.all([
+      resolveEntityId('ATA').then((uuid) => loadCalendarItemsForEntity(uuid, user)),
+      resolveEntityId('LTA').then((uuid) => loadCalendarItemsForEntity(uuid, user)),
     ]);
 
-    const result = {
-      analyticsByEntity: { ATA: ataAnalytics, LTA: ltaAnalytics },
-      ATA: ataAnalytics,
-      LTA: ltaAnalytics,
-      calendar: [...ataCalendar, ...ltaCalendar],
-    };
-    setCachedAnalytics('ALL', result);
-    return result;
+    return { ...analyticsPayload, calendar: [...ataCalendar, ...ltaCalendar] };
   }
 
   const resolved = await resolveEntityIdOrAll(entityId);
+
+  // The calendar is user-scoped; always compute it fresh for the caller.
+  const calendarPromise = loadCalendarItemsForEntity(resolved, user);
+
   const cached = getCachedAnalytics(resolved);
   if (cached) {
-    // If cached analytics came from an earlier request without calendar,
-    // still compute calendar on the fly rather than returning stale/incomplete data.
-    if (!cached.calendar) {
-      const calendar = await loadCalendarItemsForEntity(resolved);
-      return { ...cached, calendar };
-    }
-    return cached;
+    // Strip any legacy cached calendar defensively; the fresh, user-filtered
+    // calendar computed above is authoritative.
+    const { calendar: _ignoredCalendar, ...analytics } = cached;
+    return { ...analytics, calendar: await calendarPromise };
   }
 
   try {
@@ -371,21 +423,18 @@ const getDashboardSummary = async ({ entityId }) => {
     if (!error && data) {
       const result = Array.isArray(data) ? data[0] : data;
       if (result && typeof result === 'object') {
-        setCachedAnalytics(resolved, result);
-        return result;
+        const { calendar: _ignoredCalendar, ...analytics } = result;
+        setCachedAnalytics(resolved, analytics);
+        return { ...analytics, calendar: await calendarPromise };
       }
     }
   } catch (rpcErr) {
     logger.warn('getDashboardSummary rpc fallback', { entityId, error: rpcErr.message });
   }
 
-  const [analytics, calendar] = await Promise.all([
-    computeAnalytics(resolved),
-    loadCalendarItemsForEntity(resolved),
-  ]);
-  const data = { ...analytics, calendar };
-  setCachedAnalytics(resolved, data);
-  return data;
+  const analytics = await computeAnalytics(resolved);
+  setCachedAnalytics(resolved, analytics);
+  return { ...analytics, calendar: await calendarPromise };
 };
 
 // ============================================================

@@ -1,0 +1,316 @@
+{
+  "authTests": {
+    "admin": {
+      "email": "lorein@ata-lta.ph",
+      "role": "Admin",
+      "loggedInAs": "Lorein Wong",
+      "success": true,
+      "navLinks": [
+        {
+          "module": "dashboard",
+          "text": "Dashboard",
+          "visible": true
+        },
+        {
+          "module": "clients",
+          "text": "Client List",
+          "visible": true
+        },
+        {
+          "module": "operations",
+          "text": "Operations",
+          "visible": true
+        },
+        {
+          "module": "billing",
+          "text": "Billing",
+          "visible": true
+        },
+        {
+          "module": "disbursement",
+          "text": "Disbursement",
+          "visible": true
+        },
+        {
+          "module": "transmittal",
+          "text": "Transmittal",
+          "visible": true
+        },
+        {
+          "module": "reports",
+          "text": "Reports",
+          "visible": true
+        },
+        {
+          "module": "admin",
+          "text": "Admin",
+          "visible": true
+        }
+      ],
+      "entityOptions": [
+        "Consolidated View",
+        "ATA Accounting",
+        "LTA Accounting"
+      ]
+    },
+    "manager": {
+      "email": "love@ata-lta.ph",
+      "role": "Manager",
+      "loggedInAs": "Lovelyn Rebong",
+      "success": true,
+      "navLinks": [
+        {
+          "module": "dashboard",
+          "text": "Dashboard",
+          "visible": true
+        },
+        {
+          "module": "clients",
+          "text": "Client List",
+          "visible": true
+        },
+        {
+          "module": "operations",
+          "text": "Operations",
+          "visible": true
+        },
+        {
+          "module": "billing",
+          "text": "Billing",
+          "visible": true
+        },
+        {
+          "module": "disbursement",
+          "text": "Disbursement",
+          "visible": true
+        },
+        {
+          "module": "transmittal",
+          "text": "Transmittal",
+          "visible": true
+        },
+        {
+          "module": "reports",
+          "text": "Reports",
+          "visible": false
+        },
+        {
+          "module": "admin",
+          "text": "My Submissions",
+          "visible": true
+        }
+      ],
+      "entityOptions": [
+        "Consolidated View",
+        "ATA Accounting",
+        "LTA Accounting"
+      ]
+    },
+    "operations": {
+      "email": "ann@ata-lta.ph",
+      "role": "Operations",
+      "loggedInAs": "Mary Ann Baraquiel",
+      "success": true,
+      "navLinks": [
+        {
+          "module": "dashboard",
+          "text": "Dashboard",
+          "visible": true
+        },
+        {
+          "module": "clients",
+          "text": "Client List",
+          "visible": true
+        },
+        {
+          "module": "operations",
+          "text": "Operations",
+          "visible": true
+        },
+        {
+          "module": "billing",
+          "text": "Billing",
+          "visible": true
+        },
+        {
+          "module": "disbursement",
+          "text": "Disbursement",
+          "visible": true
+        },
+        {
+          "module": "transmittal",
+          "text": "Transmittal",
+          "visible": true
+        },
+        {
+          "module": "reports",
+          "text": "Reports",
+          "visible": false
+        },
+        {
+          "module": "admin",
+          "text": "My Submissions",
+          "visible": true
+        }
+      ],
+      "entityOptions": [
+        "ATA Accounting",
+        "LTA Accounting"
+      ]
+    },
+    "accounting": {
+      "email": "rachel@ata-lta.ph",
+      "role": "Accounting",
+      "loggedInAs": "Rachel Baradas",
+      "success": true,
+      "navLinks": [
+        {
+          "module": "dashboard",
+          "text": "Dashboard",
+          "visible": true
+        },
+        {
+          "module": "clients",
+          "text": "Client List",
+          "visible": true
+        },
+        {
+          "module": "operations",
+          "text": "Operations",
+          "visible": true
+        },
+        {
+          "module": "billing",
+          "text": "Billing",
+          "visible": true
+        },
+        {
+          "module": "disbursement",
+          "text": "Disbursement",
+          "visible": true
+        },
+        {
+          "module": "transmittal",
+          "text": "Transmittal",
+          "visible": true
+        },
+        {
+          "module": "reports",
+          "text": "Reports",
+          "visible": false
+        },
+        {
+          "module": "admin",
+          "text": "My Submissions",
+          "visible": true
+        }
+      ],
+      "entityOptions": [
+        "ATA Accounting",
+        "LTA Accounting"
+      ]
+    },
+    "docs": {
+      "email": "twinkle@ata-lta.ph",
+      "role": "Documentation",
+      "loggedInAs": "Twinkle Marquez",
+      "success": true,
+      "navLinks": [
+        {
+          "module": "dashboard",
+          "text": "Dashboard",
+          "visible": true
+        },
+        {
+          "module": "clients",
+          "text": "Client List",
+          "visible": true
+        },
+        {
+          "module": "operations",
+          "text": "Operations",
+          "visible": true
+        },
+        {
+          "module": "billing",
+          "text": "Billing",
+          "visible": true
+        },
+        {
+          "module": "disbursement",
+          "text": "Disbursement",
+          "visible": true
+        },
+        {
+          "module": "transmittal",
+          "text": "Transmittal",
+          "visible": true
+        },
+        {
+          "module": "reports",
+          "text": "Reports",
+          "visible": false
+        },
+        {
+          "module": "admin",
+          "text": "My Submissions",
+          "visible": true
+        }
+      ],
+      "entityOptions": [
+        "ATA Accounting",
+        "LTA Accounting"
+      ]
+    }
+  },
+  "rbacModuleInteractions": {
+    "admin": {
+      "canCreateClient": true,
+      "canCreateWorkRequest": true,
+      "canCreateInvoice": true,
+      "canCreateDisbursement": true,
+      "canCreateTransmittal": true,
+      "canCreateUser": false
+    },
+    "operations": {
+      "canCreateClient": false,
+      "canCreateWorkRequestDirectly": false,
+      "canAddTask": false,
+      "canCreateInvoiceDirectly": false,
+      "canRequestInvoice": true,
+      "canCreateDisbursementDirectly": false,
+      "canRequestDisbursement": true
+    },
+    "accounting": {
+      "canCreateInvoice": true,
+      "canCreateDisbursement": true
+    }
+  },
+  "dashboardTaskNavigation": {
+    "userRole": "Operations Staff",
+    "dashboardView": "Entity Scoped",
+    "eodButtonTested": false,
+    "eodTargetUrl": null,
+    "codeAnalysis": {
+      "routesToWrOnly": false,
+      "readsTaskIdParam": true,
+      "hasTaskHighlightClass": true
+    }
+  },
+  "workRequestOrigins": {
+    "pendingApprovalModal_OpsRequestShowsWrOrigin": true,
+    "pendingApprovalModal_DisbursementShowsWrOrigin": true,
+    "wrDetailPage_FetchesOpsRequests": true,
+    "wrDetailPage_RendersPendingOpsSection": true
+  },
+  "adminAuditLogViewability": {
+    "totalRowsRendered": 16,
+    "rowsWithClickHandlers": 0,
+    "rowsWithLinks": 16,
+    "hasRowActionsInCode": true,
+    "hasOnRowClickInCode": false,
+    "isAuditItemClickableViewable": true
+  },
+  "cachingAndDailyOperations": {},
+  "summaryFindings": []
+}

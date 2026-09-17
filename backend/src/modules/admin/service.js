@@ -678,7 +678,12 @@ const getAuditLogCount = async ({ entityCode }) => {
   let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact', head: true });
 
   if (entityCode && entityCode !== 'ALL') {
-    query = query.eq('entity', entityCode);
+    const entityUuid = await resolveEntityId(entityCode).catch(() => null);
+    if (entityUuid && entityUuid !== entityCode) {
+      query = query.or(`entity.eq.${entityCode},entity.eq.${entityUuid}`);
+    } else {
+      query = query.eq('entity', entityCode);
+    }
   }
 
   const { count, error } = await query;
@@ -707,7 +712,12 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
   let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact' });
 
   if (entityCode && entityCode !== 'ALL') {
-    query = query.eq('entity', entityCode);
+    const entityUuid = await resolveEntityId(entityCode).catch(() => null);
+    if (entityUuid && entityUuid !== entityCode) {
+      query = query.or(`entity.eq.${entityCode},entity.eq.${entityUuid}`);
+    } else {
+      query = query.eq('entity', entityCode);
+    }
   }
 
   if (userId) {

@@ -118,8 +118,11 @@ const tableQuery = (table) => {
   let insertRecords = null;
   let updateValues = null;
 
-  const matchFilter = (row, { column, value, op: fop = 'eq' }) => {
+  const matchFilter = (row, { column, value, op: fop = 'eq', innerOp }) => {
     const rowValue = row[column];
+    if (fop === 'not') {
+      return !matchFilter(row, { column, value, op: innerOp || 'eq' });
+    }
     if (fop === 'is') {
       return value === null ? rowValue === null || rowValue === undefined : rowValue === value;
     }
@@ -129,14 +132,31 @@ const tableQuery = (table) => {
     if (fop === 'neq') {
       return rowValue !== value;
     }
+    // Ordered comparisons: numeric when both sides are numeric, otherwise
+    // lexicographic — ISO date/timestamp strings order correctly as strings,
+    // matching Postgres semantics for date columns.
+    const cmp = (a, b) => {
+      if (a === null || a === undefined) return null;
+      const na = Number(a);
+      const nb = Number(b);
+      if (!Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+      return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+    };
     if (fop === 'gt') {
-      return rowValue !== null && rowValue !== undefined && Number(rowValue) > Number(value);
+      const c = cmp(rowValue, value);
+      return c !== null && c > 0;
     }
     if (fop === 'gte') {
-      return rowValue !== null && rowValue !== undefined && Number(rowValue) >= Number(value);
+      const c = cmp(rowValue, value);
+      return c !== null && c >= 0;
+    }
+    if (fop === 'lt') {
+      const c = cmp(rowValue, value);
+      return c !== null && c < 0;
     }
     if (fop === 'lte') {
-      return rowValue !== null && rowValue !== undefined && Number(rowValue) <= Number(value);
+      const c = cmp(rowValue, value);
+      return c !== null && c <= 0;
     }
     if (fop === 'ilike') {
       if (rowValue === null || rowValue === undefined) return false;
@@ -262,6 +282,14 @@ const tableQuery = (table) => {
     },
     lte: (column, value) => {
       filters.push({ column, value, op: 'lte' });
+      return builder;
+    },
+    lt: (column, value) => {
+      filters.push({ column, value, op: 'lt' });
+      return builder;
+    },
+    not: (column, op, value) => {
+      filters.push({ column, value, op: 'not', innerOp: op });
       return builder;
     },
     ilike: (column, value) => {

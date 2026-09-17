@@ -23,8 +23,10 @@ const analytics = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const dashboard = async (req, res, next) => {
   try {
-    const data = await service.getDashboardSummary({ entityId: req.activeEntity });
-    res.set('Cache-Control', 'private, max-age=30');
+    const data = await service.getDashboardSummary({ entityId: req.activeEntity, user: req.user });
+    // The calendar payload is visibility-filtered per user; never let a
+    // shared or browser cache serve it to a different account.
+    res.set('Cache-Control', 'private, no-store');
     res.json({ data });
   } catch (err) {
     next(err);
