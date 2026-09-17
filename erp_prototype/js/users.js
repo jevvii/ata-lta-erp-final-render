@@ -309,6 +309,87 @@ const Users = {
     return verbFormatted || actionRaw;
   },
 
+  _getAuditActionClass(actionOrLog) {
+    if (!actionOrLog) return '';
+    let actionStr = '';
+    if (typeof actionOrLog === 'string') {
+      actionStr = actionOrLog;
+    } else if (typeof actionOrLog === 'object') {
+      actionStr = actionOrLog.action || this._formatAuditAction(actionOrLog) || '';
+    }
+    const normalized = actionStr.toLowerCase().replace(/_/g, ' ');
+    const actionClassMap = {
+      login: 'jira-backlog-tag-action-login',
+      logout: 'jira-backlog-tag-action-logout',
+      'work request created': 'jira-backlog-tag-action-create',
+      'task completed': 'jira-backlog-tag-action-approve',
+      'invoice sent': 'jira-backlog-tag-action-info',
+      'disbursement released': 'jira-backlog-tag-action-release',
+      'document stored': 'jira-backlog-tag-action-info',
+      'disbursement submitted': 'jira-backlog-tag-action-warning',
+      create: 'jira-backlog-tag-action-create',
+      add: 'jira-backlog-tag-action-create',
+      update: 'jira-backlog-tag-action-update',
+      edit: 'jira-backlog-tag-action-update',
+      delete: 'jira-backlog-tag-action-delete',
+      remove: 'jira-backlog-tag-action-delete',
+      archive: 'jira-backlog-tag-action-archive',
+      unarchive: 'jira-backlog-tag-action-approve',
+      restore: 'jira-backlog-tag-action-approve',
+      approve: 'jira-backlog-tag-action-approve',
+      complete: 'jira-backlog-tag-action-approve',
+      reject: 'jira-backlog-tag-action-reject',
+      submit: 'jira-backlog-tag-action-warning',
+      release: 'jira-backlog-tag-action-release',
+      sent: 'jira-backlog-tag-action-info',
+      stored: 'jira-backlog-tag-action-info'
+    };
+    const key = Object.keys(actionClassMap).find(k => normalized.includes(k));
+    return key ? actionClassMap[key] : '';
+  },
+
+  _getStatusBadgeClass(status) {
+    if (!status) return 'badge badge-outline';
+    const s = String(status).trim().toLowerCase();
+    if (['completed', 'approved', 'active', 'paid', 'funded', 'released', 'resolved'].includes(s)) {
+      return 'badge badge-success';
+    }
+    if (['cancelled', 'rejected', 'disabled', 'deleted', 'failed'].includes(s)) {
+      return 'badge badge-danger';
+    }
+    if (['processing', 'in progress', 'in-progress', 'pending', 'submitted'].includes(s)) {
+      return 'badge badge-processing';
+    }
+    if (['pre-processing', 'preprocessing', 'assigned'].includes(s)) {
+      return 'badge badge-preprocessing';
+    }
+    if (['billing', 'for review', 'review'].includes(s)) {
+      return 'badge badge-billing';
+    }
+    if (s === 'disbursement') {
+      return 'badge badge-disbursement';
+    }
+    if (s === 'draft') {
+      return 'badge badge-draft';
+    }
+    return 'badge badge-primary';
+  },
+
+  _getPriorityBadgeClass(priority) {
+    if (!priority) return 'badge badge-secondary';
+    const p = String(priority).trim().toLowerCase();
+    if (['urgent', 'high', 'critical'].includes(p)) {
+      return 'badge badge-danger';
+    }
+    if (['priority', 'medium'].includes(p)) {
+      return 'badge badge-warning';
+    }
+    if (['low', 'low priority'].includes(p)) {
+      return 'badge badge-info';
+    }
+    return 'badge badge-secondary';
+  },
+
   _getItemIdentifier(l) {
     if (!l) return '—';
     const d = (typeof l.details === 'object' && l.details !== null) ? l.details : {};
@@ -2799,41 +2880,7 @@ const Users = {
       return;
     }
 
-    const actionClassMap = {
-      // Specific audit action phrases first so they win over generic partials.
-      login: 'jira-backlog-tag-action-login',
-      logout: 'jira-backlog-tag-action-logout',
-      'work request created': 'jira-backlog-tag-action-create',
-      'task completed': 'jira-backlog-tag-action-approve',
-      'invoice sent': 'jira-backlog-tag-action-info',
-      'disbursement released': 'jira-backlog-tag-action-release',
-      'document stored': 'jira-backlog-tag-action-info',
-      'disbursement submitted': 'jira-backlog-tag-action-warning',
-      // Generic partials
-      create: 'jira-backlog-tag-action-create',
-      add: 'jira-backlog-tag-action-create',
-      update: 'jira-backlog-tag-action-update',
-      edit: 'jira-backlog-tag-action-update',
-      delete: 'jira-backlog-tag-action-delete',
-      remove: 'jira-backlog-tag-action-delete',
-      archive: 'jira-backlog-tag-action-archive',
-      unarchive: 'jira-backlog-tag-action-approve',
-      restore: 'jira-backlog-tag-action-approve',
-      approve: 'jira-backlog-tag-action-approve',
-      complete: 'jira-backlog-tag-action-approve',
-      reject: 'jira-backlog-tag-action-reject',
-      submit: 'jira-backlog-tag-action-warning',
-      release: 'jira-backlog-tag-action-release',
-      sent: 'jira-backlog-tag-action-info',
-      stored: 'jira-backlog-tag-action-info'
-    };
-
-    const getActionClass = (action) => {
-      if (!action) return '';
-      const normalized = action.toLowerCase().replace(/_/g, ' ');
-      const key = Object.keys(actionClassMap).find(k => normalized.includes(k));
-      return key ? actionClassMap[key] : '';
-    };
+    const getActionClass = (action) => this._getAuditActionClass(action);
 
     const items = logs.map((l, idx) => {
       const user = window.apiClient.userCache.getById(l.userId);
@@ -3055,7 +3102,7 @@ const Users = {
           context.fields.push({
             label: 'Work Request Status',
             value: parentWr.status,
-            badgeClass: 'badge badge-outline'
+            badgeClass: this._getStatusBadgeClass(parentWr.status)
           });
         }
 
@@ -3063,7 +3110,7 @@ const Users = {
           context.fields.push({
             label: 'Work Request Priority',
             value: parentWr.priority,
-            badgeClass: 'badge badge-secondary'
+            badgeClass: this._getPriorityBadgeClass(parentWr.priority)
           });
         }
 
@@ -3102,7 +3149,7 @@ const Users = {
         context.fields.push({
           label: 'Task Status',
           value: taskStatus,
-          badgeClass: 'badge badge-primary'
+          badgeClass: this._getStatusBadgeClass(taskStatus)
         });
       }
 
@@ -3199,7 +3246,7 @@ const Users = {
         context.fields.push({
           label: 'Status',
           value: wrStatus,
-          badgeClass: 'badge badge-primary'
+          badgeClass: this._getStatusBadgeClass(wrStatus)
         });
       }
 
@@ -3208,7 +3255,7 @@ const Users = {
         context.fields.push({
           label: 'Priority',
           value: wrPriority,
-          badgeClass: 'badge badge-secondary'
+          badgeClass: this._getPriorityBadgeClass(wrPriority)
         });
       }
 
@@ -3348,7 +3395,7 @@ const Users = {
         context.fields.push({
           label: 'Disbursement Status',
           value: status,
-          badgeClass: 'badge badge-primary'
+          badgeClass: this._getStatusBadgeClass(status)
         });
       }
 
@@ -3447,7 +3494,7 @@ const Users = {
         context.fields.push({
           label: 'Invoice Status',
           value: status,
-          badgeClass: 'badge badge-primary'
+          badgeClass: this._getStatusBadgeClass(status)
         });
       }
 
@@ -3560,7 +3607,7 @@ const Users = {
         context.fields.push({
           label: 'Status',
           value: status,
-          badgeClass: 'badge badge-primary'
+          badgeClass: this._getStatusBadgeClass(status)
         });
       }
 
@@ -3650,7 +3697,7 @@ const Users = {
       context.fields.push({ label: 'Request Type', value: type, badgeClass: 'badge badge-secondary' });
 
       const status = d.status || 'Pending';
-      context.fields.push({ label: 'Status', value: status, badgeClass: 'badge badge-primary' });
+      context.fields.push({ label: 'Status', value: status, badgeClass: this._getStatusBadgeClass(status) });
 
       const amount = d.amount;
       if (amount !== undefined && amount !== null && amount !== '') {
@@ -3855,23 +3902,25 @@ const Users = {
     const itemTarget = this._getItemIdentifier(l);
     const itemLink = this._getItemRouteLink(l);
 
-    const body = el('div', { class: 'audit-log-details-modal', style: 'display:flex; flex-direction:column; gap:16px;' });
+    const body = el('div', { class: 'audit-log-details-modal' });
 
-    const summaryCard = el('div', { 
-      style: 'background: var(--color-surface, #fff); border: 1px solid var(--color-border, #e5e7eb); border-radius: 8px; padding: 14px 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 13px;' 
-    });
+    const summaryCard = el('div', { class: 'audit-summary-card' });
 
     const createDetailField = (label, valNode) => {
-      const field = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
-      field.appendChild(el('span', { text: label, style: 'font-size: 11px; color: var(--color-text-muted, #6b7280); text-transform: uppercase; font-weight: 600;' }));
-      field.appendChild(typeof valNode === 'string' ? el('span', { text: valNode, style: 'font-weight: 500;' }) : valNode);
+      const field = el('div', { class: 'audit-detail-field' });
+      field.appendChild(el('span', { text: label, class: 'audit-detail-label' }));
+      if (typeof valNode === 'string') {
+        field.appendChild(el('span', { text: valNode, class: 'audit-detail-value' }));
+      } else {
+        field.appendChild(valNode);
+      }
       return field;
     };
 
+    const actionClass = this._getAuditActionClass(l.action || actionDisplay);
     summaryCard.appendChild(createDetailField('Action', el('span', { 
-      class: 'jira-backlog-tag-action', 
-      text: actionDisplay,
-      style: 'display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 600;'
+      class: `jira-backlog-tag-action ${actionClass}`.trim(), 
+      text: actionDisplay
     })));
 
     summaryCard.appendChild(createDetailField('Entity', el('span', { 
@@ -3879,7 +3928,7 @@ const Users = {
       text: l.entity || 'ATA'
     })));
 
-    summaryCard.appendChild(createDetailField('User', el('span', { text: `${userName}${userEmail ? ' (' + userEmail + ')' : ''}` })));
+    summaryCard.appendChild(createDetailField('User', `${userName}${userEmail ? ' (' + userEmail + ')' : ''}`));
     summaryCard.appendChild(createDetailField('Timestamp', formatDate(l.timestamp || l.created_at) + ' ' + ts.toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })));
 
     let recordVal;
@@ -3887,7 +3936,7 @@ const Users = {
       recordVal = el('a', {
         href: itemLink.href,
         text: `${itemTarget} ↗`,
-        style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600;',
+        class: 'audit-insight-link',
         title: 'Navigate to record'
       });
       recordVal.addEventListener('click', (e) => {
@@ -3897,7 +3946,7 @@ const Users = {
         this._navigateToItemLink(l, itemLink.href);
       });
     } else {
-      recordVal = el('span', { text: itemTarget, style: 'font-weight: 500;' });
+      recordVal = el('span', { class: 'audit-detail-value', text: itemTarget });
     }
     summaryCard.appendChild(createDetailField('Target Record', recordVal));
 
@@ -3911,37 +3960,76 @@ const Users = {
 
     // Render Insightful Context Card
     const insightBox = el('div', {
-      class: 'audit-insight-card',
-      style: 'background: var(--color-bg-subtle, #f8fafc); border: 1px solid var(--color-border, #cbd5e1); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;'
+      class: 'audit-insight-card'
     });
 
     const renderInsightContent = (ctx) => {
-      insightBox.innerHTML = '';
+      insightBox.replaceChildren();
       if (!ctx || !ctx.fields || ctx.fields.length === 0) {
         insightBox.style.display = 'none';
         return;
       }
       insightBox.style.display = 'flex';
 
-      const header = el('div', { style: 'display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border, #e2e8f0); padding-bottom: 8px;' });
-      header.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--color-text-main, #1e293b); text-transform: uppercase;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>${ctx.category || 'Business Context'}</span>
-        </div>
-        <span class="badge badge-secondary" style="font-size: 11px;">${ctx.badge || 'Record Insights'}</span>
-      `;
+      const isOperations = !!(ctx.category && (
+        ctx.category.toLowerCase().includes('operations') ||
+        ctx.category.toLowerCase().includes('task')
+      ));
+      if (isOperations) {
+        insightBox.classList.add('audit-insight-card--operations');
+      } else {
+        insightBox.classList.remove('audit-insight-card--operations');
+      }
+
+      const header = el('div', { class: 'audit-insight-header' });
+      const titleBox = el('div', { class: 'audit-insight-title' });
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', '15');
+      svg.setAttribute('height', '15');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+
+      const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', '12');
+      circle.setAttribute('cy', '12');
+      circle.setAttribute('r', '10');
+      svg.appendChild(circle);
+
+      const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line1.setAttribute('x1', '12');
+      line1.setAttribute('y1', '16');
+      line1.setAttribute('x2', '12');
+      line1.setAttribute('y2', '12');
+      svg.appendChild(line1);
+
+      const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line2.setAttribute('x1', '12');
+      line2.setAttribute('y1', '8');
+      line2.setAttribute('x2', '12.01');
+      line2.setAttribute('y2', '8');
+      svg.appendChild(line2);
+
+      titleBox.appendChild(svg);
+      titleBox.appendChild(el('span', { text: ctx.category || 'Business Context' }));
+
+      const badge = el('span', { class: 'audit-insight-badge', text: ctx.badge || 'Record Insights' });
+
+      header.appendChild(titleBox);
+      header.appendChild(badge);
       insightBox.appendChild(header);
 
-      const grid = el('div', {
-        style: 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 12.5px; margin-top: 4px;'
-      });
+      const grid = el('div', { class: 'audit-insight-grid' });
 
       ctx.fields.forEach(f => {
-        const item = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
+        const item = el('div', { class: 'audit-insight-item' });
         item.appendChild(el('span', {
           text: f.label,
-          style: 'font-size: 10.5px; color: var(--color-text-muted, #64748b); text-transform: uppercase; font-weight: 600;'
+          class: 'audit-insight-label'
         }));
 
         let valEl;
@@ -3951,7 +4039,7 @@ const Users = {
             const linkTag = el('a', {
               href: lk.href,
               text: `${lk.text || lk.label} ↗`,
-              style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600; word-break: break-word;',
+              class: 'audit-insight-link',
               title: lk.hint || 'Navigate to record'
             });
             linkTag.addEventListener('click', (e) => {
@@ -3962,14 +4050,14 @@ const Users = {
             });
             valEl.appendChild(linkTag);
             if (idx < f.links.length - 1) {
-              valEl.appendChild(el('span', { text: ',', style: 'color: var(--color-text-muted, #64748b);' }));
+              valEl.appendChild(el('span', { text: ',', class: 'audit-insight-label' }));
             }
           });
         } else if (f.isLink && f.href) {
           valEl = el('a', {
             href: f.href,
             text: `${f.value} ↗`,
-            style: 'color: var(--color-primary, #2563eb); text-decoration: underline; font-weight: 600; word-break: break-word;',
+            class: 'audit-insight-link',
             title: f.hint || 'Navigate to record'
           });
           valEl.addEventListener('click', (e) => {
@@ -3987,7 +4075,7 @@ const Users = {
         } else {
           valEl = el('span', {
             text: f.value,
-            style: 'font-weight: 500; color: var(--color-text-main, #0f172a); word-break: break-word;'
+            class: 'audit-insight-val'
           });
         }
         item.appendChild(valEl);
@@ -4003,7 +4091,7 @@ const Users = {
     if (immediateCtx && immediateCtx.fields && immediateCtx.fields.length > 0) {
       renderInsightContent(immediateCtx);
     } else {
-      insightBox.innerHTML = '<span style="font-size: 12px; color: var(--color-text-muted, #64748b); font-style: italic;">Loading record context...</span>';
+      insightBox.replaceChildren(el('span', { class: 'audit-insight-label', text: 'Loading record context...', style: 'font-style: italic;' }));
     }
 
     this._resolveAuditContext(l).then(asyncCtx => {
@@ -4064,7 +4152,7 @@ const Users = {
 
       // Header with view switcher
       const dHeader = el('div', { style: 'display:flex; justify-content:space-between; align-items:center;' });
-      dHeader.appendChild(el('h4', { text: 'Audit Change Details', style: 'margin:0; font-size:12px; text-transform:uppercase; color:var(--color-text-muted, #6b7280); font-weight:600;' }));
+      dHeader.appendChild(el('h4', { text: 'Audit Change Details', class: 'audit-detail-label' }));
 
       const switchWrap = el('div', { style: 'display:flex; gap:4px;' });
       const visualBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Visual Diff', style: 'padding: 2px 8px; font-size: 11px;' });
@@ -4077,34 +4165,32 @@ const Users = {
       // 1. Visual Diff View
       const diffContainer = el('div', { class: 'audit-diff-view' });
       if (diffEntries.length > 0) {
-        const table = el('table', { style: 'width:100%; border-collapse:collapse; font-size:12px; border:1px solid var(--color-border, #e5e7eb); border-radius:6px; overflow:hidden;' });
-        const thead = el('thead', { style: 'background:var(--color-bg-subtle, #f8fafc); border-bottom:1px solid var(--color-border, #e5e7eb); text-align:left;' });
-        thead.innerHTML = `
-          <tr>
-            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">FIELD / PROPERTY</th>
-            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">PREVIOUS VALUE</th>
-            <th style="padding:6px 10px; font-weight:600; color:var(--color-text-muted, #64748b);">UPDATED VALUE</th>
-          </tr>
-        `;
+        const table = el('table', { class: 'audit-diff-table' });
+        const thead = el('thead');
+        const trHeader = el('tr');
+        trHeader.appendChild(el('th', { text: 'FIELD / PROPERTY' }));
+        trHeader.appendChild(el('th', { text: 'PREVIOUS VALUE' }));
+        trHeader.appendChild(el('th', { text: 'UPDATED VALUE' }));
+        thead.appendChild(trHeader);
         table.appendChild(thead);
         const tbody = el('tbody');
         diffEntries.forEach(de => {
-          const tr = el('tr', { style: 'border-bottom:1px solid var(--color-border, #f1f5f9);' });
-          const tdField = el('td', { style: 'padding:6px 10px; font-weight:500;', text: de.field });
-          const tdOld = el('td', { style: 'padding:6px 10px;' });
+          const tr = el('tr');
+          const tdField = el('td', { style: 'font-weight:500;', text: de.field });
+          const tdOld = el('td');
           if (de.oldVal !== '—') {
             tdOld.appendChild(el('span', { 
               text: de.oldVal, 
-              style: 'display:inline-block; padding:2px 6px; border-radius:4px; background:#fee2e2; color:#991b1b; text-decoration:line-through; font-family:monospace;' 
+              class: 'audit-diff-tag-removed'
             }));
           } else {
-            tdOld.appendChild(el('span', { text: '—', style: 'color:var(--color-text-muted, #94a3b8);' }));
+            tdOld.appendChild(el('span', { text: '—', class: 'audit-insight-label' }));
           }
 
-          const tdNew = el('td', { style: 'padding:6px 10px;' });
+          const tdNew = el('td');
           tdNew.appendChild(el('span', { 
             text: de.newVal, 
-            style: 'display:inline-block; padding:2px 6px; border-radius:4px; background:#dcfce7; color:#166534; font-weight:600; font-family:monospace;' 
+            class: 'audit-diff-tag-added'
           }));
 
           tr.appendChild(tdField);
@@ -4115,14 +4201,13 @@ const Users = {
         table.appendChild(tbody);
         diffContainer.appendChild(table);
       } else {
-        diffContainer.appendChild(el('div', { text: 'No property-level changes recorded for this entry.', style: 'font-size:12px; color:var(--color-text-muted, #64748b); font-style:italic; padding:8px 0;' }));
+        diffContainer.appendChild(el('div', { text: 'No property-level changes recorded for this entry.', class: 'audit-insight-label', style: 'font-style:italic; padding:8px 0;' }));
       }
       detailsBox.appendChild(diffContainer);
 
       // 2. Raw JSON View (hidden by default)
       const rawContainer = el('pre', {
-        class: 'hidden',
-        style: 'background: var(--color-bg-subtle, #f8fafc); border: 1px solid var(--color-border, #e5e7eb); border-radius: 6px; padding: 10px 12px; font-family: monospace; font-size: 12px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;',
+        class: 'audit-raw-json-pre hidden',
         text: typeof l.details === 'object' ? JSON.stringify(l.details, null, 2) : String(l.details)
       });
       detailsBox.appendChild(rawContainer);
