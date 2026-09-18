@@ -2187,7 +2187,10 @@ const Disbursement = {
   // Expense Filing Form
   // ============================================================
   async renderForm(opts = {}) {
-    const { hideHeader = false, existing = null } = opts;
+    let { hideHeader = false, existing = null } = opts;
+    if (!existing && this.detailId) {
+      existing = await this.loadDisbursement(this.detailId);
+    }
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),
@@ -2337,6 +2340,7 @@ const Disbursement = {
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(formWrs.map(w => w.id));
     const existingWr = existing?.linkedWorkRequestId ? (this.getWorkRequest(existing) || window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId)) : null;
     if (existingWr && !activeWrIds.has(existingWr.id)) {
       const client = window.apiClient.clientCache.getById(existingWr.clientId);

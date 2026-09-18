@@ -910,8 +910,28 @@ const Billing = {
       }
 
       container.classList.add("billing-tab-page");
-      const isNew = !this.detailId;
-      const inv = isNew ? null : this.getInvoiceById(this.detailId);
+      const isNew = !this.detailId || this.detailId === "new";
+      let inv = isNew ? null : this.getInvoiceById(this.detailId);
+      if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+        try {
+          const res = await window.apiClient.invoices.get(this.detailId);
+          if (res?.data) {
+            inv = this.normalizeInvoice(res.data);
+            this._detailCache[this.detailId] = inv;
+          }
+        } catch (e) {
+          if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+        }
+      }
+      if (!isNew && !inv) {
+        if (typeof showToast === "function") {
+          showToast("Error", "The requested invoice could not be loaded.", "error");
+        }
+        this.view = "list";
+        this.detailId = null;
+        location.hash = "#billing";
+        return container;
+      }
       const fullPageRoute = isNew
         ? "#billing/form/new"
         : `#billing/form/${this.detailId}`;
@@ -1090,7 +1110,8 @@ const Billing = {
 
     if (this.view === "form") {
       await this._loadPrefilledOpReq();
-      container.appendChild(await this.renderForm(this.detailId));
+      const formEl = await this.renderForm(this.detailId);
+      if (formEl) container.appendChild(formEl);
     } else if (this.view === "templateForm") {
       const template = !this.templateEditingId
         ? null
@@ -3175,7 +3196,30 @@ const Billing = {
 
     const entity = Auth.activeEntity;
     const activeId = invoiceId || this.detailId;
-    const inv = activeId ? this.getInvoiceById(activeId) : null;
+    const isNew = !activeId || activeId === "new";
+    let inv = isNew ? null : this.getInvoiceById(activeId);
+    if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+      try {
+        const res = await window.apiClient.invoices.get(activeId);
+        if (res?.data) {
+          inv = this.normalizeInvoice(res.data);
+          this._detailCache[activeId] = inv;
+        }
+      } catch (e) {
+        if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+      }
+    }
+    if (!isNew && !inv) {
+      if (typeof showToast === "function") {
+        showToast("Error", "The requested invoice could not be loaded.", "error");
+      }
+      this.detailId = null;
+      if (this.view === "form") {
+        this.view = "list";
+        location.hash = "#billing";
+      }
+      return null;
+    }
     const opReq = this._prefilledOpReq || null;
     const prefill =
       this.pendingPrefill ||
@@ -4034,8 +4078,30 @@ const Billing = {
   async showForm(invoiceId = null, mode = null) {
     this.detailId = invoiceId;
     await this._loadPrefilledOpReq();
-    const isNew = !invoiceId;
-    const inv = isNew ? null : this.getInvoiceById(invoiceId);
+    const isNew = !invoiceId || invoiceId === "new";
+    let inv = isNew ? null : this.getInvoiceById(invoiceId);
+    if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+      try {
+        const res = await window.apiClient.invoices.get(invoiceId);
+        if (res?.data) {
+          inv = this.normalizeInvoice(res.data);
+          this._detailCache[invoiceId] = inv;
+        }
+      } catch (e) {
+        if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+      }
+    }
+    if (!isNew && !inv) {
+      if (typeof showToast === "function") {
+        showToast("Error", "The requested invoice could not be loaded.", "error");
+      }
+      this.detailId = null;
+      return;
+    }
+
+    const formContent = await this.renderForm(invoiceId);
+    if (!formContent) return;
+
     const fullPageRoute = isNew
       ? "#billing/form/new"
       : `#billing/form/${invoiceId}`;
@@ -4047,7 +4113,7 @@ const Billing = {
       title: isNew
         ? "Create Sales Invoice"
         : `Edit Invoice ${inv?.invoiceNumber || ""}`.trim(),
-      formContent: await this.renderForm(invoiceId),
+      formContent,
       formId: "invoice-form",
       mode,
       viewContext: "invoice-form",

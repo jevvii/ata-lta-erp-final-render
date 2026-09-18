@@ -556,12 +556,29 @@
         if (!client) return client;
         return {
           ...client,
-          relatedCompanies: (client.relatedCompanies || []).map(rc => ({
-            clientId: rc.relatedClientId || rc.clientId,
-            relationType: rc.relationship || rc.relationType,
-            relationship: rc.relationship || rc.relationType,
-            id: rc.id
-          }))
+          tradeName: client.tradeName || client.trade_name || '',
+          rdoCode: client.rdoCode || client.rdo_code || '',
+          contactUserId: client.contactUserId || client.contact_user_id || null,
+          contactPerson: client.contactPerson || client.contact_person || '',
+          retainer: client.retainer ?? client.isRetainer ?? false,
+          retainerFee: client.retainerFee != null ? client.retainerFee : (client.retainer_fee != null ? client.retainer_fee : null),
+          contactDetails: (client.contactDetails || client.contact_details || []).map(cd => ({
+            id: cd.id,
+            type: cd.type,
+            value: cd.value,
+            label: cd.label || null
+          })),
+          relatedCompanies: (client.relatedCompanies || client.related_companies || []).map(rc => {
+            const targetId = rc.relatedClientId || rc.related_client_id || rc.clientId;
+            const rel = rc.relationship || rc.relationType || rc.relation_type || '';
+            return {
+              id: rc.id,
+              clientId: targetId,
+              relatedClientId: targetId,
+              relationType: rel,
+              relationship: rel
+            };
+          })
         };
       },
       getById(id) {

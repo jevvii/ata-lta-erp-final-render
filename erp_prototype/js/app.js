@@ -9,6 +9,7 @@ const App = {
   _lastNavTime: 0,
   _bundlePromises: {},
   _suppressHashChange: false,
+  _currentBaseHash: null,
 
   /**
    * Load a route-specific JS bundle on demand. Each bundle is only injected
@@ -551,21 +552,34 @@ const App = {
         this._lastNavTime = now;
 
         const href = link.getAttribute('href');
-        // Reset module view to 'list' when clicking a nav link directly
-        const moduleViewMap = {
-          '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; },
-          '#billing': () => { if (typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; } },
-          '#disbursement': () => { if (typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; } },
-          '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } },
-          '#admin': () => { if (typeof Users !== 'undefined') { Users.view = Auth.user?.role === 'Admin' ? 'users' : 'myPending'; Users.editingId = null; Users.pendingDetailId = null; } }
+        const executeNav = () => {
+          // Reset module view to 'list' when clicking a nav link directly
+          const moduleViewMap = {
+            '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; },
+            '#billing': () => { if (typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; } },
+            '#disbursement': () => { if (typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; } },
+            '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } },
+            '#admin': () => { if (typeof Users !== 'undefined') { Users.view = Auth.user?.role === 'Admin' ? 'users' : 'myPending'; Users.editingId = null; Users.pendingDetailId = null; } }
+          };
+          if (moduleViewMap[href]) moduleViewMap[href]();
+          if (location.hash === href) {
+            // Hash won't change, so hashchange won't fire — call handleRoute manually
+            this.handleRoute();
+          } else {
+            location.hash = href;
+          }
         };
-        if (moduleViewMap[href]) moduleViewMap[href]();
-        if (location.hash === href) {
-          // Hash won't change, so hashchange won't fire — call handleRoute manually
-          this.handleRoute();
-        } else {
-          location.hash = href;
+
+        if (window.SidePaneInstance && window.SidePaneInstance.isOpen() && window.SidePaneInstance._formGuard?.dirty) {
+          const closed = window.SidePaneInstance.close({
+            onDiscardConfirmed: () => {
+              executeNav();
+            }
+          });
+          if (closed === false) return;
         }
+
+        executeNav();
       });
     });
   },
@@ -684,7 +698,21 @@ const App = {
     const routeId = ++this._routeId;
     performance.mark('route-start-' + routeId);
 
-    if (window.SidePaneInstance) window.SidePaneInstance.close();
+    if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+      const closed = window.SidePaneInstance.close({
+        onDiscardConfirmed: () => {
+          this.handleRoute();
+        },
+        onKeepEditing: () => {
+          if (this._currentBaseHash && location.hash !== this._currentBaseHash) {
+            this._suppressHashChange = true;
+            location.hash = this._currentBaseHash;
+          }
+        }
+      });
+      if (closed === false) return;
+    }
+    this._currentBaseHash = location.hash || '#dashboard';
     const rawHash = location.hash || '#dashboard';
 
     // Abort in-flight GET requests from the previous route so the dashboard N+1

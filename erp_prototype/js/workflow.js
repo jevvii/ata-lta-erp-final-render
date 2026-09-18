@@ -896,6 +896,7 @@ const WorkflowData = {
         normalized.comments = existing.comments || [];
         normalized.taskDocuments = existing.taskDocuments || [];
         normalized.coAssignees = existing.coAssignees || [];
+        normalized.requiredLinkType = existing.requiredLinkType || normalized.requiredLinkType || '';
         normalized.priority = existing.priority || normalized.priority || 'Normal';
         // Merge backend checklist with local dependency/timeLog/coAssignee extras by id.
         const existingClById = new Map((existing.checklist || []).map(c => [c.id, c]));
@@ -2097,7 +2098,7 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId, assigneeName }.
    */
-  async createGroundWorkerDropdown({ selectedGroundWorkerName, selectedAssigneeId, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [] } = {}) {
+  async createGroundWorkerDropdown({ selectedGroundWorkerName, selectedAssigneeId, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [], allowClear = true } = {}) {
     await Promise.all([
       window.apiClient.userCache.ensure(),
       this._loadGroundWorkers()
@@ -2151,6 +2152,7 @@ const Workflow = {
       options: buildOptions(),
       allowFreeText: true,
       maxWidth,
+      allowClear,
       addNewLabel: (text) => `Add employee: ${text}`
     });
     if (className) dropdown.classList.add(className);
@@ -7762,7 +7764,8 @@ const Workflow = {
 
     await Promise.all([
       window.apiClient.userCache.ensure(),
-      window.apiClient.clientCache.ensure()
+      window.apiClient.clientCache.ensure(),
+      WorkflowData.ensure()
     ]);
 
     // Cancel any previous form-level document listener so repeated renders
@@ -7798,18 +7801,20 @@ const Workflow = {
     form.appendChild(titleSection);
 
     // QoL 4.1: in consolidated mode, let the creator pin the target entity
-    // explicitly instead of silently inheriting it from the client.
-    if (entity === 'ALL' && !wr) {
+    // explicitly, overridden automatically by the selected client's entity.
+    let pillToggle = null;
+    if (entity === 'ALL') {
       const entities = (Auth.user?.entities || []).filter(e => e && e !== 'ALL');
       if (entities.length > 1) {
+        const defaultEntity = wr?.entity || entities[0];
         const entityWrap = el('div', { class: 'entity-pill-toggle-wrap' });
         entityWrap.appendChild(el('label', { class: 'notion-section-label', text: 'Record Entity' }));
-        const pillToggle = buildEntityPillToggle({
-          value: entities[0],
+        pillToggle = buildEntityPillToggle({
+          value: defaultEntity,
           entities,
           onChange: (val) => { form.dataset.recordEntity = val; }
         });
-        form.dataset.recordEntity = entities[0];
+        form.dataset.recordEntity = defaultEntity;
         entityWrap.appendChild(pillToggle.el);
         form.appendChild(entityWrap);
       }
@@ -7828,6 +7833,21 @@ const Workflow = {
       if (wr && wr.clientId === c.id) opt.selected = true;
       clientSel.appendChild(opt);
     });
+
+    const syncClientEntity = () => {
+      const selectedClientId = clientSel.value;
+      const selectedClient = (window.apiClient.clientCache._clients || []).find(c => c.id === selectedClientId);
+      if (selectedClient && selectedClient.entity) {
+        if (pillToggle && typeof pillToggle.setValue === 'function') {
+          pillToggle.setValue(selectedClient.entity);
+        }
+        form.dataset.recordEntity = selectedClient.entity;
+      }
+    };
+    clientSel.addEventListener('change', syncClientEntity);
+    if (clientSel.value) {
+      syncClientEntity();
+    }
     clientGroup.appendChild(clientSel);
     propsGrid.appendChild(clientGroup);
 
@@ -8011,7 +8031,7 @@ const Workflow = {
 
     // Pre-populate existing tasks if editing
     if (wr) {
-      const existingTasks = wr.tasks || WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
+      const existingTasks = (wr.tasks && wr.tasks.length > 0) ? wr.tasks : WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
       for (const t of existingTasks) await this.addTaskRow(tasksList, t);
     } else {
       await this.addTaskRow(tasksList);
@@ -8074,7 +8094,7 @@ const Workflow = {
     const gwDropdown = await this.createGroundWorkerDropdown({
       selectedGroundWorkerName: taskData?.assigneeName || '',
       selectedAssigneeId: taskData?.assigneeId || taskData?.assignedTo || null,
-      placeholder: 'Employee...',
+      placeholder: 'Employee *',
       className: 'task-assignee-groundworker',
       onChange: () => {} // value is read at submit time
     });
@@ -8262,16 +8282,41 @@ const Workflow = {
   },
 
   validateManualAssignees(form) {
-    // With the typable ground-worker-only dropdown, assignment is optional.
-    // Just clear any lingering input-error states.
+    if (form.id === 'retainer-template-form' || form.id === 'wr-template-form') {
+      return true;
+    }
     const taskRows = form.querySelectorAll('.task-row');
+    let hasError = false;
+    let firstErrorInput = null;
+
     taskRows.forEach(row => {
+      const titleInput = row.querySelector('.task-title-input');
+      const title = titleInput?.value.trim() || '';
       const gwAutocomplete = row.querySelector('.task-assignee-groundworker');
-      if (gwAutocomplete) {
-        const gwInput = gwAutocomplete.querySelector('input');
+      const gwInput = gwAutocomplete?.querySelector('input');
+      const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
+      const groundWorkerId = gwAutocomplete?.value || null;
+
+      if (title) {
+        if (!groundWorkerName && !groundWorkerId) {
+          hasError = true;
+          gwInput?.classList.add('input-error');
+          if (!firstErrorInput) firstErrorInput = gwInput;
+        } else {
+          gwInput?.classList.remove('input-error');
+        }
+      } else {
         gwInput?.classList.remove('input-error');
       }
     });
+
+    if (hasError) {
+      if (typeof this.showMessage === 'function') {
+        this.showMessage('Missing Assignee', 'Please assign an employee to each task.', 'danger');
+      }
+      firstErrorInput?.focus();
+      return false;
+    }
     return true;
   },
 
@@ -8352,10 +8397,10 @@ const Workflow = {
     const data = Object.fromEntries(new FormData(form).entries());
     let entity = Auth.activeEntity;
     if (entity === 'ALL') {
-      // Precedence: explicit entity pill (QoL 4.1) → client autodetect → first entity.
+      // Overridden by selected client's entity, falling back to pill choice or first entity
+      const selectedClient = data.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(data.clientId) : (window.apiClient?.clientCache?._clients || []).find(c => c.id === data.clientId);
       const pillChoice = form.dataset.recordEntity;
-      const selectedClient = data.clientId && window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(data.clientId) : null;
-      entity = pillChoice || selectedClient?.entity || (Auth.user?.entities || []).find(e => e !== 'ALL') || 'ATA';
+      entity = selectedClient?.entity || pillChoice || (Auth.user?.entities || []).find(e => e !== 'ALL') || 'ATA';
     }
 
     const now = new Date().toISOString();
@@ -10150,17 +10195,22 @@ const Workflow = {
             selectedAssigneeId: t.assigneeId || t.assignedTo || null,
             placeholder: 'Employee...',
             className: 'inline-ground-worker-autocomplete',
+            allowClear: false,
             onChange: ({ assigneeId, assigneeName }) => {
+              if (!assigneeName && !assigneeId) {
+                // Unassigning is invalid - only reassigning is permitted
+                return;
+              }
               WorkflowData.updateTask(t.id, {
                 assigneeId: assigneeId || null,
                 assigneeName: assigneeName || null,
-                status: assigneeName ? 'Assigned' : 'Draft',
+                status: 'Assigned',
                 updatedAt: new Date().toISOString()
               });
               // Update status dropdown inline instead of full page re-render
               const statusDropdown = rowEl.querySelector('.status-select');
               if (statusDropdown) {
-                const newStatus = assigneeName ? 'Assigned' : 'Draft';
+                const newStatus = 'Assigned';
                 statusDropdown.value = newStatus;
                 const sColors = { 'Completed': '#22c55e', 'In Progress': '#f59e0b', 'Draft': '#94a3b8', 'For Review': '#3b82f6', 'Assigned': '#3b82f6', 'Cancelled': '#ef4444' };
                 statusDropdown.style.color = sColors[newStatus] || 'var(--fg)';
@@ -13587,31 +13637,11 @@ const Workflow = {
     let checklistItems = [];
     let checklistFromTemplate = false;
     const isDraft = wr?.status === 'Draft';
+    const wrDeadline = wr?.dueDate || wr?.deadline || '';
 
-    // Standard Task Template dropdown
-    const templateGroup = el('div', { class: 'form-group' });
-    templateGroup.appendChild(el('label', { text: 'Standard Task Template' }));
-    const templateSel = el('select', { name: 'template' });
-    templateSel.appendChild(el('option', { value: '', text: '— Custom —' }));
-    this.standardTaskTemplates.forEach((tmpl, idx) => {
-      templateSel.appendChild(el('option', { value: String(idx), text: tmpl.title }));
-    });
-    templateGroup.appendChild(templateSel);
-    form.appendChild(templateGroup);
-
-    // Required Linked Record dropdown
-    const reqLinkGroup = el('div', { class: 'form-group' });
-    reqLinkGroup.appendChild(el('label', { text: 'Required Linked Record' }));
-    const reqLinkSel = el('select', { name: 'requiredLinkType', class: 'form-select' });
-    reqLinkSel.appendChild(el('option', { value: '', text: '— None —' }));
-    reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
-    reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
-    reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
-    reqLinkGroup.appendChild(reqLinkSel);
-    form.appendChild(reqLinkGroup);
-
-    // ── Task Title free-form ──
+    // ── Task Title free-form (Topmost) ──
     const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
+    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Task Title' }));
     const titleInput = el('input', {
       type: 'text', name: 'title', class: 'notion-freeform-input notion-title-input',
       placeholder: 'New Task', required: true
@@ -13619,9 +13649,144 @@ const Workflow = {
     titleSection.appendChild(titleInput);
     form.appendChild(titleSection);
 
-    // Checklist builder
+    // ── Top property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
+
+    // Assignee (Required)
+    const assigneeGroup = el('div', { class: 'notion-prop is-required' });
+    assigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Assignee *' }));
+    const gwDropdown = await this.createGroundWorkerDropdown({
+      placeholder: 'Employee *',
+      className: 'modal-task-assignee',
+      onChange: () => {}
+    });
+    const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
+    assigneeWrapper.appendChild(gwDropdown);
+    assigneeGroup.appendChild(assigneeWrapper);
+    propsGrid.appendChild(assigneeGroup);
+
+    // Due Date (Required, capped to WR deadline)
+    const dueGroup = el('div', { class: 'notion-prop is-required' });
+    dueGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date *' + (wrDeadline ? ` <span style="font-size:0.75rem; color:var(--color-text-muted);">(Max: ${wrDeadline})</span>` : '') }));
+    const dueInputAttrs = {
+      type: 'date',
+      name: 'dueDate',
+      class: 'notion-prop-input',
+      required: true
+    };
+    if (wrDeadline) {
+      dueInputAttrs.max = wrDeadline;
+    }
+    const dueInput = el('input', dueInputAttrs);
+    dueGroup.appendChild(dueInput);
+    propsGrid.appendChild(dueGroup);
+
+    // Priority
+    const priorityGroup = el('div', { class: 'notion-prop' });
+    priorityGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg> Priority' }));
+    const prioritySel = el('select', { name: 'priority', class: 'notion-prop-select' });
+    ['Priority', 'Low Priority', 'Urgent'].forEach(p => {
+      prioritySel.appendChild(el('option', { value: p, text: p }));
+    });
+    prioritySel.value = 'Priority';
+    priorityGroup.appendChild(prioritySel);
+    propsGrid.appendChild(priorityGroup);
+
+    // Standard Task Template
+    const templateGroup = el('div', { class: 'notion-prop' });
+    templateGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg> Standard Task Template' }));
+    const templateSel = el('select', { name: 'template', class: 'notion-prop-select' });
+    templateSel.appendChild(el('option', { value: '', text: '— Custom —' }));
+    this.standardTaskTemplates.forEach((tmpl, idx) => {
+      templateSel.appendChild(el('option', { value: String(idx), text: tmpl.title }));
+    });
+    templateGroup.appendChild(templateSel);
+    propsGrid.appendChild(templateGroup);
+
+    // Required Linked Record
+    const reqLinkGroup = el('div', { class: 'notion-prop' });
+    reqLinkGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Required Linked Record' }));
+    const reqLinkSel = el('select', { name: 'requiredLinkType', class: 'notion-prop-select' });
+    reqLinkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    reqLinkGroup.appendChild(reqLinkSel);
+    propsGrid.appendChild(reqLinkGroup);
+
+    // Dependency
+    const dependencyGroup = el('div', { class: 'notion-prop' });
+    dependencyGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg> Dependency' }));
+    const predWrapper = el('div', { class: 'multi-select-dropdown', style: 'width: 100%;' });
+    const predBtn = el('button', { type: 'button', class: 'multi-select-btn', text: '— No dependency —', style: 'width: 100%;' });
+    const predMenu = el('div', { class: 'multi-select-menu', style: 'width: 100%;' });
+    predWrapper.appendChild(predBtn);
+    predWrapper.appendChild(predMenu);
+    dependencyGroup.appendChild(predWrapper);
+    propsGrid.appendChild(dependencyGroup);
+
+    predBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('.multi-select-menu.show').forEach(m => {
+        if (m !== predMenu) m.classList.remove('show');
+      });
+      predMenu.classList.toggle('show');
+    });
+    predMenu.addEventListener('click', (e) => e.stopPropagation());
+
+    // Co-assignees
+    let coAssignees = [];
+    const coAssigneeChips = el('div', { class: 'co-assignee-chips' });
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
+      placeholder: 'Add co-assignee...',
+      className: 'modal-co-assignee',
+      onChange: ({ assigneeName }) => {
+        const name = assigneeName?.trim();
+        if (!name) return;
+        const primaryName = (gwDropdown.searchText || '').trim();
+        if (name === primaryName) {
+          coAssigneeDropdown.value = '';
+          return;
+        }
+        if (!coAssignees.includes(name)) {
+          coAssignees.push(name);
+          const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
+          if (!isUser) {
+            this._addGroundWorker(name);
+          }
+          renderCoAssigneeChips();
+        }
+        coAssigneeDropdown.value = '';
+      }
+    });
+
+    const renderCoAssigneeChips = () => {
+      coAssigneeChips.innerHTML = '';
+      coAssignees.forEach((name, idx) => {
+        const chip = el('span', { class: 'co-assignee-chip', text: name });
+        const remove = el('span', { class: 'co-assignee-chip-remove', text: '×' });
+        remove.addEventListener('click', () => {
+          coAssignees.splice(idx, 1);
+          renderCoAssigneeChips();
+        });
+        chip.appendChild(remove);
+        coAssigneeChips.appendChild(chip);
+      });
+    };
+
+    if (isDraft) {
+      const coAssigneeGroup = el('div', { class: 'notion-prop' });
+      coAssigneeGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Co-assignees' }));
+      coAssigneeGroup.appendChild(coAssigneeChips);
+      coAssigneeGroup.appendChild(coAssigneeDropdown);
+      propsGrid.appendChild(coAssigneeGroup);
+    }
+
+    form.appendChild(propsGrid);
+
+    // ── Checklist items section ──
     const checklistGroup = el('div', { class: 'form-group' + (opts.showChecklist ? '' : ' hidden') });
-    checklistGroup.appendChild(el('label', { text: 'Checklist Items' }));
+    checklistGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Checklist Items' }));
     const checklistContainer = el('div', { class: 'checklist-items-container' });
 
     const checklistBuilder = el('div', { class: 'checklist-builder-row' });
@@ -13853,107 +14018,6 @@ const Workflow = {
       renderCoAssigneeChips();
     });
 
-    const assigneeGroup = el('div', { class: 'form-group' });
-    assigneeGroup.appendChild(el('label', { text: 'Assignee' }));
-
-    // Ground worker assignee — typable dropdown like the filter tray
-    const gwDropdown = await this.createGroundWorkerDropdown({
-      placeholder: 'Employee...',
-      className: 'modal-task-assignee',
-      onChange: () => {} // value read at submit time
-    });
-
-    const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
-    assigneeWrapper.appendChild(gwDropdown);
-    assigneeGroup.appendChild(assigneeWrapper);
-    form.appendChild(assigneeGroup);
-
-    // Co-assignees
-    let coAssignees = [];
-    const coAssigneeGroup = el('div', { class: 'form-group' });
-    coAssigneeGroup.appendChild(el('label', { text: 'Co-assignees' }));
-
-    const coAssigneeChips = el('div', { class: 'co-assignee-chips' });
-    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
-      placeholder: 'Add co-assignee...',
-      className: 'modal-co-assignee',
-      onChange: ({ assigneeName }) => {
-        const name = assigneeName?.trim();
-        if (!name) return;
-        const primaryName = (gwDropdown.searchText || '').trim();
-        if (name === primaryName) {
-          coAssigneeDropdown.value = '';
-          return;
-        }
-        if (!coAssignees.includes(name)) {
-          coAssignees.push(name);
-          const isUser = ((window.apiClient.userCache._users || []) || []).some(u => u.name.toLowerCase() === name.toLowerCase());
-          if (!isUser) {
-            this._addGroundWorker(name);
-          }
-          renderCoAssigneeChips();
-        }
-        coAssigneeDropdown.value = '';
-      }
-    });
-
-    const renderCoAssigneeChips = () => {
-      coAssigneeChips.innerHTML = '';
-      coAssignees.forEach((name, idx) => {
-        const chip = el('span', { class: 'co-assignee-chip', text: name });
-        const remove = el('span', { class: 'co-assignee-chip-remove', text: '×' });
-        remove.addEventListener('click', () => {
-          coAssignees.splice(idx, 1);
-          renderCoAssigneeChips();
-        });
-        chip.appendChild(remove);
-        coAssigneeChips.appendChild(chip);
-      });
-    };
-
-    coAssigneeGroup.appendChild(coAssigneeChips);
-    coAssigneeGroup.appendChild(coAssigneeDropdown);
-    if (isDraft) {
-      form.appendChild(coAssigneeGroup);
-    }
-
-    form.appendChild(el('div', { class: 'form-group' }, [
-      el('label', { text: 'Due Date' }),
-      el('input', { type: 'date', name: 'dueDate' })
-    ]));
-
-    const priorityGroup = el('div', { class: 'form-group' });
-    priorityGroup.appendChild(el('label', { text: 'Priority' }));
-    const prioritySel = el('select', { name: 'priority' });
-    ['Priority', 'Low Priority', 'Urgent'].forEach(p => {
-      prioritySel.appendChild(el('option', { value: p, text: p }));
-    });
-    prioritySel.value = 'Priority';
-    priorityGroup.appendChild(prioritySel);
-    form.appendChild(priorityGroup);
-
-    const dependencyGroup = el('div', { class: 'form-group' });
-    dependencyGroup.appendChild(el('label', { text: 'Dependency' }));
-
-    const predWrapper = el('div', { class: 'multi-select-dropdown', style: 'width: 100%;' });
-    const predBtn = el('button', { type: 'button', class: 'multi-select-btn', text: '— No dependency —', style: 'width: 100%;' });
-    const predMenu = el('div', { class: 'multi-select-menu', style: 'width: 100%;' });
-
-    predWrapper.appendChild(predBtn);
-    predWrapper.appendChild(predMenu);
-    dependencyGroup.appendChild(predWrapper);
-    form.appendChild(dependencyGroup);
-
-    predBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.querySelectorAll('.multi-select-menu.show').forEach(m => {
-        if (m !== predMenu) m.classList.remove('show');
-      });
-      predMenu.classList.toggle('show');
-    });
-
-    predMenu.addEventListener('click', (e) => e.stopPropagation());
-
     const existingTasks = WorkflowData.getTasksWhere(t => t.workRequestId === wrId);
     let selectedPreds = [];
 
@@ -14038,6 +14102,29 @@ const Workflow = {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       if (isSubmitting) return;
+
+      const groundWorkerName = gwDropdown.searchText.trim();
+      const groundWorkerId = gwDropdown.value || null;
+      if (!groundWorkerName && !groundWorkerId) {
+        this.showMessage('Required Field', 'Please assign an employee to this task.', 'danger');
+        const gwInput = gwDropdown.querySelector('input');
+        gwInput?.classList.add('input-error');
+        gwInput?.focus();
+        return;
+      }
+
+      const data = Object.fromEntries(new FormData(form).entries());
+      if (!data.dueDate) {
+        this.showMessage('Required Field', 'Please specify a due date for this task.', 'danger');
+        dueInput.focus();
+        return;
+      }
+      if (wrDeadline && data.dueDate > wrDeadline) {
+        this.showMessage('Invalid Due Date', `Due date cannot exceed the Work Request deadline (${wrDeadline}).`, 'danger');
+        dueInput.focus();
+        return;
+      }
+
       if (!validateRequiredFields(form)) return;
       const submitBtn = form.querySelector('button[type="submit"]') || document.querySelector('button[form="add-task-form"]');
       const origHtml = submitBtn ? submitBtn.innerHTML : null;
@@ -14048,9 +14135,6 @@ const Workflow = {
         submitBtn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Adding...';
       }
       try {
-        const groundWorkerName = gwDropdown.searchText.trim();
-        const groundWorkerId = gwDropdown.value || null;
-        const data = Object.fromEntries(new FormData(form).entries());
         const allExistingIds = existingTasks.map(t => t.id);
         const predecessors = selectedPreds.includes('*') ? allExistingIds : selectedPreds;
 
@@ -14410,6 +14494,18 @@ const Workflow = {
     priorityGroup.appendChild(prioritySel);
     form.appendChild(priorityGroup);
 
+    // Required Linked Record
+    const reqLinkGroup = el('div', { class: 'form-group' });
+    reqLinkGroup.appendChild(el('label', { text: 'Required Linked Record' }));
+    const reqLinkSel = el('select', { name: 'requiredLinkType', class: 'form-select' });
+    reqLinkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    reqLinkSel.value = task.requiredLinkType || task.required_link_type || '';
+    reqLinkGroup.appendChild(reqLinkSel);
+    form.appendChild(reqLinkGroup);
+
     // Dependencies selector
     const dependencyGroup = el('div', { class: 'form-group' });
     dependencyGroup.appendChild(el('label', { text: 'Dependency' }));
@@ -14557,6 +14653,7 @@ const Workflow = {
           apiCall: async () => {
             await WorkflowData.updateTask(task.id, {
               title: data.title.trim(),
+              requiredLinkType: reqLinkSel.value || '',
               assigneeId: res.id,
               assigneeName: resolvedName,
               coAssignees: isDraft ? coAssignees.filter(Boolean) : task.coAssignees || [],

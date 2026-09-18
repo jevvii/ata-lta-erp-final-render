@@ -5072,7 +5072,13 @@ tbody tr:hover {
   border: 1px solid #e2e8f0;
   border-radius: var(--radius-md);
   margin-bottom: var(--spacing-lg);
-  overflow: hidden;
+  overflow: visible;
+}
+
+.task-group-v2 > :last-child,
+.task-group-v2 > .task-row:last-child {
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
 }
 
 .task-group-header {
@@ -8254,9 +8260,26 @@ tbody tr:hover {
   animation: searchDropFadeIn 0.15s ease-out;
 }
 
+.searchable-dropdown.drop-up .searchable-dropdown-listbox {
+  top: auto;
+  bottom: calc(100% + 4px);
+  animation: searchDropFadeInUp 0.15s ease-out;
+}
+
 @keyframes searchDropFadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes searchDropFadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.task-row:has(.searchable-dropdown.open),
+.task-row.has-open-dropdown {
+  z-index: 60;
+  position: relative;
 }
 
 .searchable-dropdown-item {
@@ -10417,6 +10440,7 @@ tbody tr:hover {
   background: var(--surface);
   border-color: var(--border);
   border-radius: var(--radius-md);
+  overflow: visible;
 }
 .project-detail-v2 .task-group-header {
   background: var(--bg);

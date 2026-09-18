@@ -876,7 +876,7 @@ const Users = {
 
     if (isUserFullPage) {
       const isNew = this.editingId === 'new';
-      const user = isNew ? null : this.users.find(u => u.id === this.editingId);
+      const user = isNew ? null : ((this.users || []).find(u => u.id === this.editingId) || (window.apiClient?.userCache?._users || []).find(u => u.id === this.editingId));
       const fullPageRoute = isNew ? '#admin/users/form/new' : `#admin/users/form/${this.editingId}`;
 
       const viewSwitcher = buildFormViewSwitcher({
@@ -2416,7 +2416,7 @@ const Users = {
       return;
     }
     this.editingId = userId || 'new';
-    const user = userId ? this.users.find(u => u.id === userId) : null;
+    const user = userId ? (((this.users || []).find(u => u.id === userId)) || (window.apiClient?.userCache?._users || []).find(u => u.id === userId)) : null;
     const form = this.renderUserFormContent(user);
 
     const fullPageRoute = userId ? `#admin/users/form/${userId}` : '#admin/users/form/new';
