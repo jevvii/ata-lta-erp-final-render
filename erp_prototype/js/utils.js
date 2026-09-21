@@ -409,7 +409,24 @@ function buildEntityPillToggle(opts = {}) {
     });
     root.appendChild(pill);
   });
-  return { el: root, getValue: () => current };
+  return {
+    el: root,
+    getValue: () => current,
+    setValue: (val) => {
+      if (!val || !entities.includes(val)) return;
+      current = val;
+      const pills = root.querySelectorAll('.entity-pill');
+      entities.forEach((ent, idx) => {
+        const p = pills[idx];
+        if (p) {
+          const isActive = ent === val;
+          p.classList.toggle('active', isActive);
+          p.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        }
+      });
+      if (typeof opts.onChange === 'function') opts.onChange(val);
+    }
+  };
 }
 
 /* ── Dirty-form guard + session draft caching ─────────────────────────── */
@@ -653,6 +670,11 @@ function el(tag, attrs = {}, children = []) {
     if (k === 'text') node.textContent = v;
     else if (k === 'html') node.innerHTML = v; // only for static HTML in plan
     else if (k === 'disabled') node.disabled = !!v;
+    else if (k === 'checked') node.checked = !!v;
+    else if (k === 'value') {
+      node.value = v;
+      node.setAttribute(k, v);
+    }
     else node.setAttribute(k, v);
   }
   children.forEach(c => {
@@ -1125,10 +1147,11 @@ function _ensureSearchableDropdownDocListener() {
   });
 }
 
-function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null }) {
+function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null, allowClear = true }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
   if (maxWidth) wrapper.style.maxWidth = maxWidth;
+  const canClear = allowClear !== false;
 
   let iconHtml = '';
   if (placeholder.includes('Client')) {
@@ -1164,7 +1187,9 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   listbox.className = 'searchable-dropdown-listbox';
 
   wrapper.appendChild(input);
-  wrapper.appendChild(clearBtn);
+  if (canClear) {
+    wrapper.appendChild(clearBtn);
+  }
   wrapper.appendChild(arrow);
   wrapper.appendChild(listbox);
 
@@ -1222,7 +1247,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     selectedText = text;
     input.value = val ? text : '';
     input.title = input.value || placeholder || '';
-    clearBtn.style.display = val ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = val ? 'flex' : 'none';
     if (changed) {
       wrapper.dispatchEvent(new Event('change', { bubbles: true }));
       wrapper.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1234,22 +1259,47 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = true;
     highlightIdx = -1;
     wrapper.classList.add('open');
+    const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
+    if (parentRow) parentRow.classList.add('has-open-dropdown');
     _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
+    // Check if listbox would clip at bottom of viewport or nearest container
+    requestAnimationFrame(() => {
+      if (!isOpen) return;
+      const rect = wrapper.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      const scrollParent = wrapper.closest('.task-group-v2, .task-list, [style*="overflow"]');
+      let parentSpaceBelow = spaceBelow;
+      if (scrollParent) {
+        const parentRect = scrollParent.getBoundingClientRect();
+        parentSpaceBelow = parentRect.bottom - rect.bottom;
+      }
+      if ((spaceBelow < 250 || parentSpaceBelow < 220) && spaceAbove > 180) {
+        wrapper.classList.add('drop-up');
+      } else {
+        wrapper.classList.remove('drop-up');
+      }
+    });
   }
 
   function close() {
     if (!isOpen) return;
     isOpen = false;
     wrapper.classList.remove('open');
+    wrapper.classList.remove('drop-up');
+    const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
+    if (parentRow) parentRow.classList.remove('has-open-dropdown');
     _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {
       selectedValue = input.value.trim();
       selectedText = selectedValue;
+    } else if (!canClear && !input.value.trim() && selectedValue) {
+      input.value = selectedText;
     }
     input.value = selectedValue ? selectedText : '';
-    clearBtn.style.display = input.value ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = input.value ? 'flex' : 'none';
   }
 
   const dropdownRef = { wrapper, close };
@@ -1270,7 +1320,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     highlightIdx = -1;
     if (!isOpen) open();
     renderList(input.value);
-    clearBtn.style.display = input.value ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = input.value ? 'flex' : 'none';
     wrapper.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
@@ -1288,6 +1338,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
       if (items[highlightIdx]) items[highlightIdx].scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (!isOpen) { open(); return; }
       highlightIdx = Math.max(highlightIdx - 1, 0);
       items.forEach((el, i) => el.classList.toggle('highlighted', i === highlightIdx));
       if (items[highlightIdx]) items[highlightIdx].scrollIntoView({ block: 'nearest' });
@@ -1304,12 +1355,14 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     }
   });
 
-  on(clearBtn, 'mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    selectOption('', '');
-    close();
-  });
+  if (canClear) {
+    on(clearBtn, 'mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectOption('', '');
+      close();
+    });
+  }
 
   on(arrow, 'mousedown', (e) => {
     e.preventDefault();
