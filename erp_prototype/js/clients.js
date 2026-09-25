@@ -62,6 +62,22 @@ function buildContactDetailsList(contactDetails) {
 }
 
 /**
+ * Normalized predicate to determine if a client record is archived.
+ * Considers status, boolean flag, and both camelCase/snake_case soft delete timestamps.
+ * @param {Object} client
+ * @returns {boolean}
+ */
+function isClientArchived(client) {
+  if (!client) return false;
+  return Boolean(
+    client.status === 'Archived' ||
+    client.archived === true ||
+    client.deletedAt ||
+    client.deleted_at
+  );
+}
+
+/**
  * API-backed, entity-tagged data layer for the Clients module.
  * Mirrors WorkflowData: cache is keyed to Auth.activeEntity, supports
  * optimistic local mutations with rollback on API failure.
@@ -72,6 +88,10 @@ const ClientsData = {
   _loadingEntity: null,
   _loadGeneration: 0,
   _entity: null,
+
+  isArchived(client) {
+    return isClientArchived(client);
+  },
 
   _getActiveEntity() {
     return (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
@@ -287,8 +307,8 @@ const Clients = {
       return cEnt === entity.toUpperCase();
     });
     return {
-      activeCount: clients.filter(c => c.status !== 'Archived' && !c.archived).length,
-      archivedCount: clients.filter(c => c.status === 'Archived' || c.archived).length
+      activeCount: clients.filter(c => !isClientArchived(c)).length,
+      archivedCount: clients.filter(c => isClientArchived(c)).length
     };
   },
 
@@ -333,15 +353,15 @@ const Clients = {
     await ClientsData.ensure();
     const originalClient = ClientsData.getClientById(id);
     const originalSnapshot = originalClient ? deepClone(originalClient) : null;
-    const wasActive = originalSnapshot ? (originalSnapshot.status !== 'Archived' && !originalSnapshot.archived) : false;
-    const wasArchived = originalSnapshot ? (originalSnapshot.status === 'Archived' || originalSnapshot.archived) : false;
+    const wasActive = originalSnapshot ? !isClientArchived(originalSnapshot) : false;
+    const wasArchived = originalSnapshot ? isClientArchived(originalSnapshot) : false;
 
     if (originalClient) {
       Object.assign(originalClient, patch, { updatedAt: new Date().toISOString() });
     }
 
-    const isNowActive = originalClient ? (originalClient.status !== 'Archived' && !originalClient.archived) : false;
-    const isNowArchived = originalClient ? (originalClient.status === 'Archived' || originalClient.archived) : false;
+    const isNowActive = originalClient ? !isClientArchived(originalClient) : false;
+    const isNowArchived = originalClient ? isClientArchived(originalClient) : false;
 
     const activeDelta = (isNowActive ? 1 : 0) - (wasActive ? 1 : 0);
     const archivedDelta = (isNowArchived ? 1 : 0) - (wasArchived ? 1 : 0);
@@ -394,8 +414,8 @@ const Clients = {
     await ClientsData.ensure();
     const originalClient = ClientsData.getClientById(id);
     const originalSnapshot = originalClient ? deepClone(originalClient) : null;
-    const wasActive = originalSnapshot ? (originalSnapshot.status !== 'Archived' && !originalSnapshot.archived) : false;
-    const wasArchived = originalSnapshot ? (originalSnapshot.status === 'Archived' || originalSnapshot.archived) : false;
+    const wasActive = originalSnapshot ? !isClientArchived(originalSnapshot) : false;
+    const wasArchived = originalSnapshot ? isClientArchived(originalSnapshot) : false;
 
     ClientsData._removeFromCache(id);
     this._updateCounts(wasActive ? -1 : 0, wasArchived ? -1 : 0);
@@ -450,8 +470,13 @@ const Clients = {
    */
   normalizeClient(client) {
     if (!client) return client;
+    const archived = isClientArchived(client);
     return {
       ...client,
+      status: archived ? 'Archived' : (client.status || 'Active'),
+      archived,
+      deletedAt: client.deletedAt || client.deleted_at || null,
+      deleted_at: client.deleted_at || client.deletedAt || null,
       tradeName: client.tradeName || client.trade_name || '',
       rdoCode: client.rdoCode || client.rdo_code || '',
       contactUserId: client.contactUserId || client.contact_user_id || null,
@@ -476,6 +501,10 @@ const Clients = {
         };
       })
     };
+  },
+
+  isArchived(client) {
+    return isClientArchived(client);
   },
 
   /**
@@ -506,7 +535,7 @@ const Clients = {
       if (!isNew) {
         try {
           const res = await window.apiClient.clients.get(this.editingId, { includeArchived: 'true' });
-          client = res.data;
+          client = this.normalizeClient(res.data);
         } catch (e) {
           if (!isAbortError(e)) {
             console.error('Failed to load client for form', e);
@@ -537,7 +566,7 @@ const Clients = {
         }
       });
 
-      const isArchived = client?.status === 'Archived' || client?.archived;
+      const isArchived = this.isArchived(client);
       const actions = isArchived ? [
         ...(Auth.user?.role === 'Admin' ? [{
           text: 'Restore Client',
@@ -836,7 +865,7 @@ const Clients = {
   },
 
   getFilteredClients(query) {
-    let clients = ClientsData.getAllClients().filter(c => c.status !== 'Archived');
+    let clients = ClientsData.getAllClients().filter(c => !this.isArchived(c));
     if (query) {
       const q = query.toLowerCase();
       clients = clients.filter(c => {
@@ -1374,7 +1403,7 @@ const Clients = {
     const formContainer = el('div', { class: 'form-container' });
     await this.renderForm(formContainer, this.editingId, client);
 
-    const isArchived = client?.status === 'Archived' || client?.archived;
+    const isArchived = this.isArchived(client);
     const actions = isArchived ? [
       ...(Auth.user?.role === 'Admin' ? [{
         text: 'Restore Client',
@@ -1454,7 +1483,7 @@ const Clients = {
     }
     this.clearNode(container);
 
-    const isArchived = client && (client.status === 'Archived' || client.archived);
+    const isArchived = this.isArchived(client);
     if (isArchived) {
       const banner = el('div', {
         class: 'alert alert-info',
@@ -2059,7 +2088,7 @@ const Clients = {
     }
     await ClientsData.ensure();
     const client = ClientsData.getClientById(clientId);
-    if (!client || client.status === 'Archived') return;
+    if (!client || this.isArchived(client)) return;
 
     Workflow.showConfirm('Archive Client',
       'Are you sure you want to archive this client? This will cancel all related work requests and archive all associated documents.',
@@ -2174,7 +2203,7 @@ const Clients = {
     await ClientsData.ensure();
     const eligible = (clientIds || [])
       .map(id => ClientsData.getClientById(id))
-      .filter(c => c && c.status !== 'Archived' && !c.archived);
+      .filter(c => c && !this.isArchived(c));
 
     if (eligible.length === 0) {
       Workflow.showMessage('No eligible records', 'No active clients selected for archiving.', 'info');
@@ -2304,8 +2333,7 @@ const Clients = {
         if (res && res.data) client = this.normalizeClient(res.data);
       } catch (e) {}
     }
-    const isArchived = (c) => Boolean(c && (c.status === 'Archived' || c.archived || c.deleted_at));
-    if (!isArchived(client)) return;
+    if (!this.isArchived(client)) return;
 
     Workflow.showConfirm('Restore Client',
       `Are you sure you want to restore client "${client.name || '(untitled)'}"?`,
@@ -2353,7 +2381,6 @@ const Clients = {
   async bulkUnarchiveClients(clientIds) {
     if (!clientIds || clientIds.length === 0) return;
     await ClientsData.ensure();
-    const isArchived = (c) => Boolean(c && (c.status === 'Archived' || c.archived || c.deleted_at));
 
     const candidates = await Promise.all((clientIds || []).map(async (id) => {
       let client = this._archivedMap?.get(id) ||
@@ -2369,7 +2396,7 @@ const Clients = {
       return client;
     }));
 
-    const eligible = candidates.filter(isArchived);
+    const eligible = candidates.filter(c => this.isArchived(c));
 
     if (eligible.length === 0) {
       Workflow.showMessage('No eligible records', 'No archived clients selected.', 'info');
@@ -2465,7 +2492,7 @@ const Clients = {
     };
 
     let archived = await this.getArchivedClients(query);
-    const localArchived = (ClientsData.getAllClients() || []).filter(c => entFilter(c.entity) && c.status === 'Archived');
+    const localArchived = (ClientsData.getAllClients() || []).filter(c => entFilter(c.entity) && this.isArchived(c));
     const cMap = new Map();
     archived.forEach(c => cMap.set(c.id, c));
     localArchived.forEach(c => {

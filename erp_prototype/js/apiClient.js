@@ -554,8 +554,18 @@
       },
       _normalize(client) {
         if (!client) return client;
+        const archived = Boolean(
+          client.status === 'Archived' ||
+          client.archived === true ||
+          client.deletedAt ||
+          client.deleted_at
+        );
         return {
           ...client,
+          status: archived ? 'Archived' : (client.status || 'Active'),
+          archived,
+          deletedAt: client.deletedAt || client.deleted_at || null,
+          deleted_at: client.deleted_at || client.deletedAt || null,
           tradeName: client.tradeName || client.trade_name || '',
           rdoCode: client.rdoCode || client.rdo_code || '',
           contactUserId: client.contactUserId || client.contact_user_id || null,
