@@ -548,25 +548,24 @@ const Clients = {
       }
       const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
 
+      const isArchived = this.isArchived(client);
       const viewSwitcher = buildFormViewSwitcher({
         currentMode: PaneMode.FULL_PAGE,
         viewContext: 'client-form',
         onSidePeek: async () => {
           const clientId = this.editingId === 'new' ? null : this.editingId;
-          await closeFormPanelAndRoute('#clients');
+          await closeFormPanelAndRoute(isArchived ? '#clients?tab=archived' : '#clients');
           this.showForm(clientId, PaneMode.SIDE_PEEK);
         },
         onCenterPeek: async () => {
           const clientId = this.editingId === 'new' ? null : this.editingId;
-          await closeFormPanelAndRoute('#clients');
+          await closeFormPanelAndRoute(isArchived ? '#clients?tab=archived' : '#clients');
           this.showForm(clientId, PaneMode.CENTER_PEEK);
         },
         onNewTab: () => {
           window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
         }
       });
-
-      const isArchived = this.isArchived(client);
       const actions = isArchived ? [
         ...(Auth.user?.role === 'Admin' ? [{
           text: 'Restore Client',
@@ -1414,7 +1413,7 @@ const Clients = {
           this.unarchiveClient(clientId, client);
         }
       }] : []),
-      { text: 'Close', class: 'btn btn-secondary', onClick: () => { closeFormPanelAndRoute('#clients?tab=archived'); this.showList(); }, testId: 'client-cancel' }
+      { text: 'Close', class: 'btn btn-secondary', onClick: () => { closeFormPanelAndRoute('#clients?tab=archived'); }, testId: 'client-cancel' }
     ] : [
       { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
       { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
@@ -1806,7 +1805,8 @@ const Clients = {
 
   showList() {
     this.editingId = null;
-    closeFormPanelAndRoute('#clients');
+    const target = this.activeTab === 'archived' ? '#clients?tab=archived' : '#clients';
+    closeFormPanelAndRoute(target);
   },
 
   async submitForm(form) {
@@ -2566,7 +2566,7 @@ const Clients = {
           {
             label: 'View',
             icon: ArchivePage.icons.view,
-            onClick: () => { location.hash = '#clients/form/' + c.id; }
+            onClick: () => { self.showForm(c.id); }
           },
           ...(category === 'accomplished' && canEdit ? [{
             label: 'Restore',
@@ -2600,7 +2600,7 @@ const Clients = {
           ...(clientId ? [{
             label: 'View Client',
             icon: ArchivePage.icons.view,
-            onClick: () => { location.hash = '#clients/form/' + clientId; }
+            onClick: () => { self.showForm(clientId); }
           }] : [])
         ]
       };

@@ -2834,6 +2834,13 @@ tbody tr:hover {
 .approval-item:focus-within {
   background: var(--color-bg-light);
 }
+.approval-item.selected {
+  background: color-mix(in oklab, var(--color-primary), transparent 94%);
+}
+.approval-item.selected:hover,
+.approval-item.selected:focus-within {
+  background: color-mix(in oklab, var(--color-primary), transparent 90%);
+}
 .approval-item-icon {
   flex-shrink: 0;
   width: 34px;
