@@ -206,6 +206,8 @@ const Billing = {
       }
       this._listCacheEntity = entity;
       if (freshFetch) this._needsFreshFetch = false;
+      this._refreshCounts();
+      this.updateTabNav();
     } catch (e) {
       if (!isAbortError(e)) console.error("Failed to load invoices", e);
     }
@@ -487,31 +489,36 @@ const Billing = {
       0,
       (this._counts.archived || 0) + archivedDelta,
     );
+    this.updateTabNav();
   },
 
   _refreshCounts() {
     const entity = Auth.activeEntity;
-    const cached =
-      Array.isArray(this._listCache) && this._listCacheEntity === entity
-        ? this._listCache
-        : [];
+    const hasListCache =
+      Array.isArray(this._listCache) && this._listCacheEntity === entity;
+    const cached = hasListCache ? this._listCache : [];
+    const hasTemplates =
+      Array.isArray(this._templates) && this._templatesEntity === entity;
     const templateCount = (this._templates || []).filter((t) =>
       this._entityMatches(t.entity, entity),
     ).length;
+    const prevCounts =
+      this._counts && this._countsEntity === entity ? this._counts : null;
     this._counts = {
-      active: cached.filter((inv) => this._isActiveInvoice(inv, entity)).length,
-      archived: cached.filter((inv) => this._isArchiveInvoice(inv, entity))
-        .length,
+      active: hasListCache
+        ? cached.filter((inv) => this._isActiveInvoice(inv, entity)).length
+        : (prevCounts ? prevCounts.active || 0 : 0),
+      archived: hasListCache
+        ? cached.filter((inv) => this._isArchiveInvoice(inv, entity)).length
+        : (prevCounts ? prevCounts.archived || 0 : 0),
       rejected:
-        this._counts && this._countsEntity === entity
-          ? this._counts.rejected || 0
+        prevCounts
+          ? prevCounts.rejected || 0
           : 0,
       templates:
-        this._templatesEntity === entity
+        hasTemplates
           ? templateCount
-          : this._counts && this._countsEntity === entity
-            ? this._counts.templates || 0
-            : 0,
+          : (prevCounts ? prevCounts.templates || 0 : 0),
     };
     this._countsEntity = entity;
   },
@@ -715,6 +722,7 @@ const Billing = {
       this._counts = { active: 0, archived: 0, rejected: 0, templates: 0 };
       this._countsEntity = entity;
     }
+    this.updateTabNav();
     return this._counts;
   },
 
@@ -781,12 +789,14 @@ const Billing = {
       templates: this._counts?.templates || 0,
     };
     this._countsEntity = entity;
-    if (changed) App.handleRoute();
+    this.updateTabNav();
+    if (changed && !this.container) App.handleRoute();
     return rejected;
   },
 
   async render(routeId) {
     const container = el("div", { class: "page" });
+    this.container = container;
     if (!this._isEntityFresh()) this.invalidateCache();
 
     if (this.view === "detail" && this.detailId) {
@@ -1075,19 +1085,19 @@ const Billing = {
 
       (async () => {
         try {
-          await this.ensure();
-          await this.ensureTemplates();
-          await this.loadCounts();
-          await this.loadRejectedCount();
+          await Promise.all([
+            this.ensure(),
+            this.ensureTemplates(),
+            this.loadCounts(true),
+            this.loadRejectedCount(),
+          ]);
 
           if (routeId !== App._routeId) return;
 
           this._refreshCounts();
-          const freshTabNav = this.renderTabNav();
-          if (tabNav.parentNode) {
-            tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-            tabNav = freshTabNav;
-          }
+          this.updateTabNav();
+          const freshTabNav = this.container?.querySelector('.module-tab-nav');
+          if (freshTabNav) tabNav = freshTabNav;
 
           if (this.view === "list") {
             contentContainer.innerHTML = "";
@@ -1137,6 +1147,15 @@ const Billing = {
     App.updateStickyOffsets();
   },
 
+  updateTabNav() {
+    if (!this.container) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
+  },
+
   renderTabNav() {
     const entity = Auth.activeEntity;
     // Derive active/archive badges synchronously from the local _listCache for the
@@ -1159,9 +1178,11 @@ const Billing = {
       ? cacheArchiveCount
       : this._counts?.archived || 0;
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
-    const templateCount = (this._templates || []).filter((t) =>
-      this._entityMatches(t.entity, entity),
-    ).length;
+    const hasTemplates =
+      Array.isArray(this._templates) && this._templatesEntity === entity;
+    const templateCount = hasTemplates
+      ? (this._templates || []).filter((t) => this._entityMatches(t.entity, entity)).length
+      : (this._counts?.templates || 0);
 
     const isLimitedView =
       Auth.user?.departments?.includes("Operations") ||
@@ -1620,12 +1641,14 @@ const Billing = {
         this._templates = filtered;
       }
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     } catch (e) {
       if (!isAbortError(e)) console.error("Failed to load billing templates", e);
       if (loadGen !== this._templatesGeneration) return this._templates || [];
       if (!Array.isArray(this._templates)) this._templates = [];
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     }
   },

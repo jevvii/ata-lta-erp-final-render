@@ -176,7 +176,10 @@ const ClientsData = {
       this._clients = clients;
     }
     this._entity = entity;
-    if (typeof Clients !== 'undefined') Clients._refreshCounts();
+    if (typeof Clients !== 'undefined') {
+      Clients._refreshCounts();
+      if (typeof Clients.updateTabNav === 'function') Clients.updateTabNav();
+    }
     return { clients };
   },
 
@@ -298,7 +301,11 @@ const Clients = {
   },
 
   _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
-    const clients = (ClientsData.getAllClients() || []).filter(c => {
+    let all = ClientsData.getAllClients();
+    if ((!all || all.length === 0) && Array.isArray(window.apiClient?.clientCache?._clients) && window.apiClient.clientCache._clients.length > 0) {
+      all = window.apiClient.clientCache.getAll();
+    }
+    const clients = (all || []).filter(c => {
       const cEnt = (c.entity || '').toUpperCase();
       if (!entity) return true;
       if (entity === 'ALL') {
@@ -314,7 +321,8 @@ const Clients = {
 
   _refreshCounts() {
     const entity = this._getActiveEntity();
-    if (!ClientsData.hasData()) {
+    const hasData = ClientsData.hasData() || (Array.isArray(window.apiClient?.clientCache?._clients) && window.apiClient.clientCache._clients.length > 0);
+    if (!hasData) {
       if (!this._countsFromApi) {
         this._counts = null;
         this._countsEntity = null;
@@ -322,7 +330,7 @@ const Clients = {
       }
       return;
     }
-    const local = this._recalcCounts();
+    const local = this._recalcCounts(entity);
     if (this._counts && this._countsEntity === entity && this._countsFromApi) {
       this._counts.activeCount = local.activeCount;
     } else {
@@ -343,6 +351,7 @@ const Clients = {
     if (!this._counts) return;
     this._counts.activeCount = Math.max(0, (this._counts.activeCount || 0) + activeDelta);
     this._counts.archivedCount = Math.max(0, (this._counts.archivedCount || 0) + archivedDelta);
+    this.updateTabNav();
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
@@ -526,6 +535,7 @@ const Clients = {
       if (tabParam === 'archived' || tabParam === 'active') this.activeTab = tabParam;
     }
     const container = el('div', { class: 'page clients-tab-page' });
+    this.container = container;
 
     // Full-page form route (#clients/form/new or #clients/form/:id) renders inline
     // with its own breadcrumb header and right-aligned Save/Cancel actions.
@@ -677,11 +687,9 @@ const Clients = {
         this._refreshCounts();
 
         // Update tab navigation with actual badge counts
-        const freshTabNav = this.renderTabNav();
-        if (tabNav.parentNode) {
-          tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-          tabNav = freshTabNav;
-        }
+        this.updateTabNav();
+        const freshTabNav = this.container?.querySelector('.module-tab-nav');
+        if (freshTabNav) tabNav = freshTabNav;
 
         // Render actual list
         if (this.activeTab === 'active') {
@@ -765,6 +773,7 @@ const Clients = {
       this._countsEntity = entity;
       this._countsFromApi = false;
     }
+    this.updateTabNav();
     return this._counts;
   },
 
@@ -798,7 +807,17 @@ const Clients = {
       if (!isAbortError(e)) console.error('Failed to load client rejected archive counts', e);
     }
     this._rejectedArchiveCounts = { total: rejectedCount };
+    this.updateTabNav();
     return this._rejectedArchiveCounts;
+  },
+
+  updateTabNav() {
+    if (!this.container) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
   },
 
   renderTabNav() {

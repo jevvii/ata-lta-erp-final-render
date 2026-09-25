@@ -233,21 +233,29 @@ const Transmittal = {
   _countsEntity: null,
 
   _recalcCounts(entity = this._getActiveEntity()) {
-    const items = (this._items || []).filter(t => this._entityMatches(t, entity));
+    let items = this._items || [];
+    if (items.length === 0 && Array.isArray(window.apiClient?.transmittalCache?._transmittals) && window.apiClient.transmittalCache._transmittals.length > 0) {
+      items = window.apiClient.transmittalCache._transmittals;
+    }
+    const filtered = items.filter(t => this._entityMatches(t, entity));
     return {
-      active: items.filter(t => !t.archived && t.status !== 'Cancelled').length,
-      archived: items.filter(t => t.archived || t.status === 'Cancelled').length
+      active: filtered.filter(t => !t.archived && t.status !== 'Cancelled').length,
+      archived: filtered.filter(t => t.archived || t.status === 'Cancelled').length
     };
   },
 
   _refreshCounts() {
-    if (!this.hasData()) {
-      this._counts = null;
-      this._countsEntity = null;
+    const hasData = this.hasData() || (Array.isArray(window.apiClient?.transmittalCache?._transmittals) && window.apiClient.transmittalCache._transmittals.length > 0);
+    if (!hasData) {
+      if (!this._counts || this._countsEntity !== this._getActiveEntity()) {
+        this._counts = null;
+        this._countsEntity = null;
+      }
       return;
     }
     this._counts = this._recalcCounts();
     this._countsEntity = this._getActiveEntity();
+    this.updateTabNav();
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -256,9 +264,37 @@ const Transmittal = {
       this._refreshCounts();
     }
     if (!this._counts) return;
-    if (wasMissing) return; // fresh recount already reflects the current state
+    if (wasMissing) {
+      this.updateTabNav();
+      return; // fresh recount already reflects the current state
+    }
     this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
     this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+    this.updateTabNav();
+  },
+
+  async loadCounts(force = false) {
+    const entity = this._getActiveEntity();
+    if (!force && this._counts && this._countsEntity === entity) {
+      return this._counts;
+    }
+    try {
+      const res = await window.apiClient.transmittals.counts(entity);
+      const data = res?.data || res || {};
+      this._counts = {
+        active: data.active ?? 0,
+        archived: data.archived ?? 0
+      };
+      this._countsEntity = entity;
+    } catch (err) {
+      if (!isAbortError(err)) console.error('Failed to load transmittal counts', err);
+      if (!this._counts) {
+        this._counts = this._recalcCounts(entity);
+        this._countsEntity = entity;
+      }
+    }
+    this.updateTabNav();
+    return this._counts;
   },
 
   /**
@@ -643,6 +679,7 @@ const Transmittal = {
   async render(routeId) {
     this.listViewMode = App.getPreferredViewMode('transmittals');
     const container = el('div', { class: 'page' });
+    this.container = container;
 
     if (this.view === 'detail' && this.detailId) {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
@@ -840,17 +877,18 @@ const Transmittal = {
 
       (async () => {
         try {
-          await this.ensure();
-          await this._loadRejectedArchiveCounts();
+          await Promise.all([
+            this.ensure(),
+            this.loadCounts(true),
+            this._loadRejectedArchiveCounts(),
+          ]);
 
           if (routeId !== App._routeId) return;
 
           this._refreshCounts();
-          const freshTabNav = this.renderTabNav();
-          if (tabNav.parentNode) {
-            tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-            tabNav = freshTabNav;
-          }
+          this.updateTabNav();
+          const freshTabNav = this.container?.querySelector('.module-tab-nav');
+          if (freshTabNav) tabNav = freshTabNav;
 
           if (this.view === 'list') {
             contentContainer.innerHTML = '';
@@ -901,7 +939,17 @@ const Transmittal = {
       console.error('Failed to load rejected transmittal requests', e);
     }
     this._rejectedArchiveCounts = { total: requests };
+    this.updateTabNav();
     return this._rejectedArchiveCounts;
+  },
+
+  updateTabNav() {
+    if (!this.container) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
   },
 
   renderTabNav() {

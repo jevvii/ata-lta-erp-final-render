@@ -199,6 +199,9 @@ const WorkflowData = {
       .then(res => {
         this._pendingApprovals = (res?.data || []).map(pc => this._normalizePendingApproval(pc));
         this._pendingApprovalsLoadedAt = Date.now();
+        if (typeof Workflow !== 'undefined' && typeof Workflow.updateTabNav === 'function') {
+          Workflow.updateTabNav();
+        }
         return this._pendingApprovals;
       })
       .catch(err => {
@@ -315,7 +318,10 @@ const WorkflowData = {
     }
     this._entity = entity;
     if (freshFetch) this._needsFreshFetch = false;
-    if (typeof Workflow !== 'undefined') Workflow._refreshCounts();
+    if (typeof Workflow !== 'undefined') {
+      Workflow._refreshCounts();
+      if (typeof Workflow.updateTabNav === 'function') Workflow.updateTabNav();
+    }
     return { workRequests: this._workRequests, tasks: this._tasks, meta: res.meta || {} };
   },
 
@@ -1419,7 +1425,11 @@ const Workflow = {
   _countsEntity: null,
 
   _recalcCounts(entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null) {
-    const wrs = (WorkflowData.getAllWorkRequests() || []).filter(r => {
+    let wrs = WorkflowData.getAllWorkRequests() || [];
+    if (wrs.length === 0 && Array.isArray(window.apiClient?.workRequestCache?._workRequests) && window.apiClient.workRequestCache._workRequests.length > 0) {
+      wrs = window.apiClient.workRequestCache._workRequests;
+    }
+    const filtered = wrs.filter(r => {
       const rEnt = (r.entity || '').toUpperCase();
       if (!entity) return true;
       if (entity === 'ALL') {
@@ -1428,15 +1438,18 @@ const Workflow = {
       return rEnt === entity.toUpperCase();
     });
     return {
-      active: wrs.filter(r => !r.archived && r.status !== 'Cancelled').length,
-      archived: wrs.filter(r => r.archived || r.status === 'Cancelled').length
+      active: filtered.filter(r => !r.archived && r.status !== 'Cancelled').length,
+      archived: filtered.filter(r => r.archived || r.status === 'Cancelled').length
     };
   },
 
   _refreshCounts() {
-    if (!WorkflowData.hasData()) {
-      this._counts = null;
-      this._countsEntity = null;
+    const hasData = WorkflowData.hasData() || (Array.isArray(window.apiClient?.workRequestCache?._workRequests) && window.apiClient.workRequestCache._workRequests.length > 0);
+    if (!hasData) {
+      if (!this._counts || this._countsEntity !== Auth.activeEntity) {
+        this._counts = null;
+        this._countsEntity = null;
+      }
       return;
     }
     this._counts = this._recalcCounts();
@@ -1454,6 +1467,31 @@ const Workflow = {
     if (!this._counts) return;
     this._counts.active = Math.max(0, (this._counts.active || 0) + activeDelta);
     this._counts.archived = Math.max(0, (this._counts.archived || 0) + archivedDelta);
+    this.updateTabNav();
+  },
+
+  async loadCounts(force = false) {
+    const entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    if (!force && this._counts && this._countsEntity === entity) {
+      return this._counts;
+    }
+    try {
+      const res = await window.apiClient.workRequests.counts(entity);
+      const data = res?.data || res || {};
+      this._counts = {
+        active: data.active ?? 0,
+        archived: data.archived ?? 0
+      };
+      this._countsEntity = entity;
+    } catch (err) {
+      if (!isAbortError(err)) console.error('Failed to load work request counts', err);
+      if (!this._counts) {
+        this._counts = this._recalcCounts();
+        this._countsEntity = entity;
+      }
+    }
+    this.updateTabNav();
+    return this._counts;
   },
 
   async _optimisticUpdate(id, patch, apiCall, errorTitle = 'Error') {
@@ -1701,12 +1739,14 @@ const Workflow = {
         this._retainerTemplates = templates;
       }
       this._retainerTemplatesEntity = entity;
+      this.updateTabNav();
       return this._retainerTemplates;
     } catch (err) {
       if (!isAbortError(err)) console.error('[Workflow] failed to load retainer templates', err);
       if (loadGen !== this._retainerTemplatesGeneration) return this._retainerTemplates || [];
       if (!Array.isArray(this._retainerTemplates)) this._retainerTemplates = [];
       this._retainerTemplatesEntity = entity;
+      this.updateTabNav();
       return this._retainerTemplates;
     }
   },
@@ -4568,6 +4608,7 @@ const Workflow = {
 
   async render(routeId) {
     const container = el('div', { class: 'page' });
+    this.container = container;
     if (this.view === 'list') {
       container.classList.add('operations-list-page');
     }
@@ -4774,17 +4815,17 @@ const Workflow = {
             WorkflowData.ensure(),
             this.ensureRetainerTemplates(),
             this._loadGroundWorkers(),
+            this.loadCounts(),
           ]);
           await WorkflowData.loadPendingApprovals();
 
           if (routeId !== App._routeId) return;
 
+          this._tempTaskMap = buildTaskMap();
           Workflow._refreshCounts();
-          const freshTabNav = this.renderTabNav();
-          if (tabNav.parentNode) {
-            tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-            tabNav = freshTabNav;
-          }
+          this.updateTabNav();
+          const freshTabNav = this.container?.querySelector('.module-tab-nav');
+          if (freshTabNav) tabNav = freshTabNav;
 
           if (this.view === 'list') {
             contentContainer.innerHTML = '';
@@ -4967,6 +5008,15 @@ const Workflow = {
 
   updateStickyOffsets() {
     App.updateStickyOffsets();
+  },
+
+  updateTabNav() {
+    if (!this.container) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
   },
 
   renderTabNav() {
