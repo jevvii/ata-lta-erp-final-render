@@ -488,7 +488,7 @@ const Disbursement = {
       this._detailCache[id] = normalized;
       return normalized;
     } catch (err) {
-      console.error('Failed to load disbursement', id, err);
+      if (!isAbortError(err)) console.error('Failed to load disbursement', id, err);
       return null;
     }
   },
@@ -4807,5 +4807,9 @@ const Disbursement = {
 
     container.appendChild(grid);
     return container;
+  },
+
+  cleanup() {
+    this.container = null;
   }
 };

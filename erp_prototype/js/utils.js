@@ -2381,7 +2381,7 @@ function buildFormBreadcrumb({ baseLabel, baseHash, currentText, actions = [], v
   baseLink.addEventListener('click', () => { location.hash = baseHash; });
   h1.appendChild(baseLink);
   h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
-  h1.appendChild(document.createTextNode(currentText));
+  h1.appendChild(document.createTextNode(currentText || ''));
   titleBar.appendChild(h1);
 
   if (actions.length > 0 || viewSwitcher) {
@@ -2576,7 +2576,7 @@ function buildFormViewSwitcher({
   }
 
   function outsideClick(e) {
-    if (!wrapper.contains(e.target)) closeMenu();
+    if (!wrapper.isConnected || !wrapper.contains(e.target)) closeMenu();
   }
 
   toggleBtn.addEventListener('click', (e) => {
@@ -2628,6 +2628,9 @@ function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, m
     const route = newTabRoute || fullPageRoute;
     if (route) {
       if (effectiveMode === PaneMode.FULL_PAGE) {
+        if (window.SidePaneInstance && typeof window.SidePaneInstance.close === 'function') {
+          window.SidePaneInstance.close({ silent: true });
+        }
         const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
         if (appRef && typeof appRef.handleRoute === 'function') {
           if (location.hash !== route) {

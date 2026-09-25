@@ -2086,6 +2086,7 @@ const Workflow = {
   },
 
   cleanup() {
+    this.container = null;
     if (this._jiraToolbarClickListener) {
       document.removeEventListener('click', this._jiraToolbarClickListener);
       this._jiraToolbarClickListener = null;

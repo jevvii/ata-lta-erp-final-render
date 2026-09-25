@@ -7859,6 +7859,10 @@ const Billing = {
     card.appendChild(el("div", { class: "kpi-value", text: value }));
     return card;
   },
+
+  cleanup() {
+    this.container = null;
+  }
 };
 
 window.Billing = Billing;

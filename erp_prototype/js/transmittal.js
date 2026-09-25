@@ -679,6 +679,7 @@ const Transmittal = {
         if (trans) this._replaceInCache(id, trans);
         return trans;
       } catch (e) {
+        if (isAbortError(e)) return null;
         return null;
       }
     }
@@ -692,6 +693,7 @@ const Transmittal = {
           return trans;
         }
       } catch (e) {
+        if (isAbortError(e)) return null;
         // not found in this entity; continue
       }
     }
@@ -4142,5 +4144,9 @@ const Transmittal = {
         }] : [])
       ]
     });
+  },
+
+  cleanup() {
+    this.container = null;
   }
 };

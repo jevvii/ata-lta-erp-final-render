@@ -557,22 +557,38 @@ const Clients = {
     // Full-page form route (#clients/form/new or #clients/form/:id) renders inline
     // with its own breadcrumb header and right-aligned Save/Cancel actions.
     if (this.editingId) {
+      if (Auth.user?.role !== 'Admin') {
+        this.editingId = null;
+        if (typeof showToast === 'function') {
+          showToast('Access Denied', 'Only admin accounts can create or edit clients.', 'error');
+        } else if (typeof Workflow !== 'undefined' && typeof Workflow.showMessage === 'function') {
+          Workflow.showMessage('Access Denied', 'Only admin accounts can create or edit clients.', 'danger');
+        }
+        location.hash = '#clients';
+        return container;
+      }
       const isNew = this.editingId === 'new';
       let client = !isNew ? (ClientsData.getClientById(this.editingId) || window.apiClient?.clientCache?.getById?.(this.editingId)) : null;
       if (!isNew && !client) {
         try {
           const res = await window.apiClient.clients.get(this.editingId, { includeArchived: 'true' });
-          client = this.normalizeClient(res.data);
+          client = this.normalizeClient(res?.data);
         } catch (e) {
           if (isAbortError(e)) {
             return container;
           }
           console.error('Failed to load client for form', e);
-          if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+          if (typeof showToast === 'function') showToast('Error', 'Client not found or could not be loaded.', 'error');
           this.editingId = null;
           location.hash = '#clients';
           return container;
         }
+      }
+      if (!isNew && !client) {
+        if (typeof showToast === 'function') showToast('Error', 'Client not found or could not be loaded.', 'error');
+        this.editingId = null;
+        location.hash = '#clients';
+        return container;
       }
       const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${this.editingId}`;
 
@@ -1428,12 +1444,20 @@ const Clients = {
     if (!isNew && !client) {
       try {
         const res = await window.apiClient.clients.get(clientId, { includeArchived: 'true' });
-        client = this.normalizeClient(res.data);
+        client = this.normalizeClient(res?.data);
       } catch (e) {
-        if (!isAbortError(e)) {
-          console.error('Failed to load client form', e);
-          if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+        if (isAbortError(e)) {
+          this.editingId = null;
+          return;
         }
+        console.error('Failed to load client form', e);
+        if (typeof showToast === 'function') showToast('Error', 'Client not found or could not be loaded.', 'error');
+        this.editingId = null;
+        this.showList();
+        return;
+      }
+      if (!client) {
+        if (typeof showToast === 'function') showToast('Error', 'Client not found or could not be loaded.', 'error');
         this.editingId = null;
         this.showList();
         return;
@@ -2466,7 +2490,7 @@ const Clients = {
     }
 
     if (verificationErrors.length > 0 && typeof showToast === 'function') {
-      showToast(`${verificationErrors.length} record(s) could not be verified and were skipped.`, 'warning');
+      showToast('Verification Incomplete', `${verificationErrors.length} record(s) could not be verified and were skipped.`, 'warning');
     }
 
     const label = eligible.length === 1 ? 'this client' : `these ${eligible.length} clients`;
@@ -3071,5 +3095,9 @@ const Clients = {
       lines.push(row);
     }
     return lines;
+  },
+
+  cleanup() {
+    this.container = null;
   }
 };
