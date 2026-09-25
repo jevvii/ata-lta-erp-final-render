@@ -1683,14 +1683,17 @@ const PaneMode = {
 const VALID_PANE_MODES = Object.values(PaneMode);
 
 function getPaneDefault(viewContext) {
+  if (viewContext) {
+    try {
+      const stored = localStorage.getItem(`erp_pane_default_${viewContext}`);
+      if (VALID_PANE_MODES.includes(stored)) return stored;
+    } catch (e) {}
+  }
+
   const userPref = typeof Auth !== 'undefined' && Auth.user?.preferences?.defaultFormView;
   if (VALID_PANE_MODES.includes(userPref)) return userPref;
 
-  if (!viewContext) return null;
-  try {
-    const stored = localStorage.getItem(`erp_pane_default_${viewContext}`);
-    return VALID_PANE_MODES.includes(stored) ? stored : null;
-  } catch (e) { return null; }
+  return null;
 }
 
 function setPaneDefault(viewContext, mode) {
@@ -3973,6 +3976,7 @@ const ArchivePage = {
     const hasBulkActions = Array.isArray(bulkActions) || typeof bulkActions === 'function';
     const selectedIds = new Set();
     const rowCheckboxes = [];
+    const selectAllCheckboxes = [];
     let bulkBar = null, bulkCount = null, bulkActionsContainer = null, bulkClose = null;
 
     if (hasBulkActions) {
@@ -4015,7 +4019,15 @@ const ArchivePage = {
     if (bulkClose) {
       bulkClose.addEventListener('click', () => {
         selectedIds.clear();
-        rowCheckboxes.forEach(cb => { cb.checked = false; });
+        rowCheckboxes.forEach(cb => {
+          cb.checked = false;
+          const r = cb.closest('.approval-item');
+          if (r) r.classList.remove('selected');
+        });
+        selectAllCheckboxes.forEach(sc => {
+          sc.checked = false;
+          sc.indeterminate = false;
+        });
         updateBulkBar();
       });
     }
@@ -4064,7 +4076,8 @@ const ArchivePage = {
       if (items.length === 0) return;
       if (selected !== 'all' && selected !== cat.key) return;
       const slicedCat = { ...cat, items };
-      wrapper.appendChild(this.renderCategoryCard(slicedCat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
+      const cardHasBulk = hasBulkActions && cat.selectable !== false && cat.key !== 'rejected';
+      wrapper.appendChild(this.renderCategoryCard(slicedCat, cardHasBulk, selectedIds, rowCheckboxes, updateBulkBar, selectAllCheckboxes));
     });
 
     if (pagination) {
@@ -4159,7 +4172,7 @@ const ArchivePage = {
     return wrap;
   },
 
-  renderCategoryCard(category, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar) {
+  renderCategoryCard(category, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar, selectAllCheckboxes = []) {
     const card = el('div', { class: 'approval-category-card' });
 
     const header = el('div', { class: 'approval-category-header' });
@@ -4171,18 +4184,34 @@ const ArchivePage = {
 
     let selectAllCheckbox = null;
     if (hasBulkActions) {
+      const selectAllWrap = el('label', {
+        class: 'archive-select-all-wrap',
+        title: 'Select all',
+        style: 'display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8125rem; color: var(--color-text-muted); font-weight: 500;'
+      });
       selectAllCheckbox = el('input', {
         type: 'checkbox',
         class: 'archive-category-select-all',
         title: 'Select all'
       });
-      header.appendChild(selectAllCheckbox);
+      selectAllCheckboxes.push(selectAllCheckbox);
+      selectAllWrap.appendChild(selectAllCheckbox);
+      selectAllWrap.appendChild(document.createTextNode('Select all'));
+      header.appendChild(selectAllWrap);
     }
 
     card.appendChild(header);
 
     const list = el('div', { class: 'approval-items-list' });
     const categoryCheckboxes = [];
+
+    const syncSelectAll = () => {
+      if (!selectAllCheckbox) return;
+      const allChecked = categoryCheckboxes.length > 0 && categoryCheckboxes.every(c => c.checked);
+      const someChecked = categoryCheckboxes.some(c => c.checked);
+      selectAllCheckbox.checked = allChecked;
+      selectAllCheckbox.indeterminate = someChecked && !allChecked;
+    };
 
     category.items.forEach((item, idx) => {
       const row = category.renderItem(item, idx, hasBulkActions);
@@ -4191,9 +4220,19 @@ const ArchivePage = {
         if (chk) {
           categoryCheckboxes.push(chk);
           rowCheckboxes.push(chk);
+          if (selectedIds.has(chk.dataset.id)) {
+            chk.checked = true;
+            row.classList.add('selected');
+          }
           chk.addEventListener('change', () => {
-            if (chk.checked) selectedIds.add(chk.dataset.id);
-            else selectedIds.delete(chk.dataset.id);
+            if (chk.checked) {
+              selectedIds.add(chk.dataset.id);
+              row.classList.add('selected');
+            } else {
+              selectedIds.delete(chk.dataset.id);
+              row.classList.remove('selected');
+            }
+            syncSelectAll();
             updateBulkBar();
           });
         }
@@ -4205,11 +4244,19 @@ const ArchivePage = {
       selectAllCheckbox.addEventListener('change', () => {
         categoryCheckboxes.forEach(chk => {
           chk.checked = selectAllCheckbox.checked;
-          if (chk.checked) selectedIds.add(chk.dataset.id);
-          else selectedIds.delete(chk.dataset.id);
+          const rowEl = chk.closest('.approval-item');
+          if (chk.checked) {
+            selectedIds.add(chk.dataset.id);
+            if (rowEl) rowEl.classList.add('selected');
+          } else {
+            selectedIds.delete(chk.dataset.id);
+            if (rowEl) rowEl.classList.remove('selected');
+          }
         });
+        syncSelectAll();
         updateBulkBar();
       });
+      syncSelectAll();
     }
 
     card.appendChild(list);
