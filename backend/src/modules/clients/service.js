@@ -503,7 +503,7 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
   }
 
   if (existing.tin) {
-    const { data: duplicateActive } = await supabaseAdmin
+    const { data: duplicates, error: checkError } = await supabaseAdmin
       .from('clients')
       .select('id, name')
       .eq('entity_id', entityId)
@@ -511,9 +511,18 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
       .is('deleted_at', null)
       .neq('status', 'Archived')
       .neq('id', id)
-      .maybeSingle();
+      .limit(1);
 
-    if (duplicateActive) {
+    if (checkError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to verify client uniqueness',
+      });
+    }
+
+    if (duplicates && duplicates.length > 0) {
+      const duplicateActive = duplicates[0];
       throw new AppError({
         statusCode: 409,
         title: 'Conflict',

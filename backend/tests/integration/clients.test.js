@@ -307,5 +307,27 @@ describe('/v1/clients', () => {
 
     expect(conflictRes.body.code).toBe('DUPLICATE_TIN');
     expect(conflictRes.body.detail).toContain('777-888-999-00001');
+
+    // 7. Insert an additional active client with the same TIN directly into mock (simulating dirty legacy data)
+    mockTables.clients.set('client-extra-dup', {
+      id: 'client-extra-dup',
+      name: 'Client 2 Duplicate',
+      entity_id: 'ent-ata',
+      entity_code: 'ATA',
+      tin: '777-888-999-00001',
+      status: 'Active',
+      deleted_at: null,
+      version: 1,
+    });
+
+    // Unarchive client 1 must still return 409 Conflict with DUPLICATE_TIN (not fail or throw PGRST116)
+    const multiDupRes = await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/unarchive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(409);
+
+    expect(multiDupRes.body.code).toBe('DUPLICATE_TIN');
+    expect(multiDupRes.body.detail).toContain('777-888-999-00001');
   });
 });
