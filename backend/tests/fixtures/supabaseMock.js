@@ -168,6 +168,18 @@ const tableQuery = (table) => {
   };
 
   const parseOrPart = (part) => {
+    const notIsM = part.match(/^([^.]+)\.not\.is\.null$/);
+    if (notIsM) {
+      return { column: notIsM[1], value: null, op: 'not', innerOp: 'is' };
+    }
+    const isM = part.match(/^([^.]+)\.is\.null$/);
+    if (isM) {
+      return { column: isM[1], value: null, op: 'is' };
+    }
+    const notM = part.match(/^([^.]+)\.not\.([^.]+)\.%?(.+)%?$/);
+    if (notM) {
+      return { column: notM[1], value: notM[3], op: 'not', innerOp: notM[2] };
+    }
     const m = part.match(/^([^.]+)\.([^.]+)\.%?(.+)%?$/);
     if (!m) return null;
     return { column: m[1], value: m[3], op: m[2] };

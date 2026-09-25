@@ -159,7 +159,7 @@ const listClients = async ({
   if (isArchived) {
     query = query.or('status.eq.Archived,deleted_at.not.is.null');
   } else {
-    query = query.is('deleted_at', null);
+    query = query.is('deleted_at', null).neq('status', 'Archived');
   }
 
   if (entityId && entityId !== 'ALL') {
@@ -515,7 +515,8 @@ const getClientCounts = async ({ entityId }) => {
   let activeQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .neq('status', 'Archived');
 
   let archivedQuery = supabaseAdmin
     .from('clients')
