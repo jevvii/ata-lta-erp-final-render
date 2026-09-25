@@ -242,4 +242,92 @@ describe('/v1/clients', () => {
 
     expect(listArchivedRes.body.data.some((c) => c.id === legacyArchivedId)).toBe(true);
   });
+
+  it('unarchives a client successfully and returns 409 if active client with same TIN exists', async () => {
+    const admin = registerUser({
+      email: 'admin-unarchive@ata-lta.ph',
+      name: 'Admin Unarchive',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    // 1. Create client 1 and archive it
+    const client1 = await request(app)
+      .post('/v1/clients')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validClient, name: 'Client 1', tin: '777-888-999-00001' })
+      .expect(201);
+
+    await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/archive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    // 2. Unarchive client 1 when no active client has that TIN -> succeeds
+    const unarchiveRes = await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/unarchive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(unarchiveRes.body.data.status).toBe('Active');
+
+    // 3. Unarchive again -> idempotent, returns Active client
+    const idempotentRes = await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/unarchive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(idempotentRes.body.data.status).toBe('Active');
+
+    // 4. Archive client 1 again
+    await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/archive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    // 5. Create client 2 with the same TIN (allowed because client 1 is archived)
+    await request(app)
+      .post('/v1/clients')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validClient, name: 'Client 2', tin: '777-888-999-00001' })
+      .expect(201);
+
+    // 6. Try to unarchive client 1 -> 409 Conflict with DUPLICATE_TIN
+    const conflictRes = await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/unarchive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(409);
+
+    expect(conflictRes.body.code).toBe('DUPLICATE_TIN');
+    expect(conflictRes.body.detail).toContain('777-888-999-00001');
+
+    // 7. Insert an additional active client with the same TIN directly into mock (simulating dirty legacy data)
+    mockTables.clients.set('client-extra-dup', {
+      id: 'client-extra-dup',
+      name: 'Client 2 Duplicate',
+      entity_id: 'ent-ata',
+      entity_code: 'ATA',
+      tin: '777-888-999-00001',
+      status: 'Active',
+      deleted_at: null,
+      version: 1,
+    });
+
+    // Unarchive client 1 must still return 409 Conflict with DUPLICATE_TIN (not fail or throw PGRST116)
+    const multiDupRes = await request(app)
+      .post(`/v1/clients/${client1.body.data.id}/unarchive`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(409);
+
+    expect(multiDupRes.body.code).toBe('DUPLICATE_TIN');
+    expect(multiDupRes.body.detail).toContain('777-888-999-00001');
+  });
 });
