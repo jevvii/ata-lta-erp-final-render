@@ -86,6 +86,16 @@ function resolveEntity(options = {}) {
             if (op?.entity_id) {
               resolvedUUID = op.entity_id;
               resolvedCode = await resolveEntityCode(op.entity_id);
+            } else {
+              const { data: cl } = await supabaseAdmin
+                .from('clients')
+                .select('entity_id')
+                .eq('id', req.params.id)
+                .maybeSingle();
+              if (cl?.entity_id) {
+                resolvedUUID = cl.entity_id;
+                resolvedCode = await resolveEntityCode(cl.entity_id);
+              }
             }
           }
         }

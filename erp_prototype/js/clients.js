@@ -2438,6 +2438,7 @@ const Clients = {
             title: 'Restoring Clients',
             message: `Please wait while ${eligible.length} client(s) are being restored...`,
             apiCall: async () => {
+              const failureReasons = [];
               for (const c of eligible) {
                 try {
                   const res = await window.apiClient.clients.unarchive(c.id);
@@ -2451,6 +2452,7 @@ const Clients = {
                 } catch (e) {
                   console.error('Failed to restore client', c.id, e);
                   failCount++;
+                  failureReasons.push(`${c.name || 'Client'}: ${e.message || 'Restore failed'}`);
                 }
               }
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
@@ -2458,14 +2460,18 @@ const Clients = {
               await this.loadCounts(true);
               this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
-                return { error: { message: `${failCount} client(s) could not be restored.` } };
+                return { error: { message: `${failCount} client(s) could not be restored.\n\n${failureReasons.join('\n')}` } };
               }
-              return { data: { successCount, failCount } };
+              return { data: { successCount, failCount, failureReasons } };
             },
             successTitle: 'Restored',
-            successMessage: failCount > 0
-              ? `${successCount} client(s) restored, ${failCount} failed.`
-              : `${eligible.length} client(s) restored to Active Clients.`,
+            successMessage: (res) => {
+              if (failCount > 0) {
+                const details = res?.data?.failureReasons?.length ? '\n\n' + res.data.failureReasons.join('\n') : '';
+                return `${successCount} client(s) restored, ${failCount} failed.${details}`;
+              }
+              return `${eligible.length} client(s) restored to Active Clients.`;
+            },
             errorTitle: 'Restore Failed',
             onAfterConfirm: async () => {
               App.updateSidebarNotifications().catch(() => {});

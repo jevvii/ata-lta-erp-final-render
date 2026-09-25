@@ -433,6 +433,14 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
   const { data: updatedRows, error } = await query.select();
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `A client with TIN ${data.tin || existing.tin} already exists in this entity`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -490,6 +498,31 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Client not found' });
   }
 
+  if (existing.status === 'Active' && !existing.deletedAt) {
+    return existing;
+  }
+
+  if (existing.tin) {
+    const { data: duplicateActive } = await supabaseAdmin
+      .from('clients')
+      .select('id, name')
+      .eq('entity_id', entityId)
+      .eq('tin', existing.tin)
+      .is('deleted_at', null)
+      .neq('status', 'Archived')
+      .neq('id', id)
+      .maybeSingle();
+
+    if (duplicateActive) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot restore client: an active client (${duplicateActive.name}) with TIN ${existing.tin} already exists in this entity.`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabaseAdmin
     .from('clients')
@@ -498,6 +531,14 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
     .eq('entity_id', entityId);
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot restore client: an active client with TIN ${existing.tin} already exists in this entity.`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
