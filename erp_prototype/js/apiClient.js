@@ -719,7 +719,14 @@
       ),
       invalidateCounts: () => invalidateCountCache('clients.counts'),
       create: (data) => post('/clients', data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
-      get: (id) => get(`/clients/${id}`),
+      get: (id, query = {}) => {
+        const qs = new URLSearchParams();
+        if (typeof query === 'object' && query !== null) {
+          Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        }
+        const q = qs.toString();
+        return get(`/clients/${id}${q ? '?' + q : ''}`);
+      },
       update: (id, data) => put(`/clients/${id}`, data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
       archive: (id) => post(`/clients/${id}/archive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),
       unarchive: (id) => post(`/clients/${id}/unarchive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),

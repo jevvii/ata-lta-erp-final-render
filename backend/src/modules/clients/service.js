@@ -520,7 +520,7 @@ const getClientCounts = async ({ entityId }) => {
   let archivedQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .eq('status', 'Archived');
+    .or('status.eq.Archived,deleted_at.not.is.null');
 
   if (entityId && entityId !== 'ALL') {
     activeQuery = activeQuery.eq('entity_id', entityId);

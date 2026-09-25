@@ -293,15 +293,23 @@ const Clients = {
   },
 
   _refreshCounts() {
+    const entity = this._getActiveEntity();
     if (!ClientsData.hasData()) {
-      this._counts = null;
-      this._countsEntity = null;
-      this._countsFromApi = false;
+      if (!this._countsFromApi) {
+        this._counts = null;
+        this._countsEntity = null;
+        this._countsFromApi = false;
+      }
       return;
     }
-    this._counts = this._recalcCounts();
-    this._countsEntity = this._getActiveEntity();
-    this._countsFromApi = false;
+    const local = this._recalcCounts();
+    if (this._counts && this._countsEntity === entity && this._countsFromApi) {
+      this._counts.activeCount = local.activeCount;
+    } else {
+      this._counts = local;
+      this._countsEntity = entity;
+      this._countsFromApi = false;
+    }
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -497,7 +505,7 @@ const Clients = {
       let client = null;
       if (!isNew) {
         try {
-          const res = await window.apiClient.clients.get(this.editingId);
+          const res = await window.apiClient.clients.get(this.editingId, { includeArchived: 'true' });
           client = res.data;
         } catch (e) {
           if (!isAbortError(e)) {
@@ -529,24 +537,38 @@ const Clients = {
         }
       });
 
+      const isArchived = client?.status === 'Archived' || client?.archived;
+      const actions = isArchived ? [
+        ...(Auth.user?.role === 'Admin' ? [{
+          text: 'Restore Client',
+          class: 'btn btn-primary btn-sm',
+          onClick: () => { this.unarchiveClient(client.id, client); }
+        }] : []),
+        {
+          text: 'Back to Archive',
+          class: 'btn btn-secondary btn-sm',
+          onClick: () => { location.hash = '#clients?tab=archived'; }
+        }
+      ] : [
+        {
+          text: isNew ? 'Save Client' : 'Save Changes',
+          class: 'btn btn-primary btn-sm',
+          type: 'submit',
+          form: 'client-form'
+        },
+        {
+          text: 'Cancel',
+          class: 'btn btn-secondary btn-sm',
+          onClick: () => { this.showList(); }
+        }
+      ];
+
       container.appendChild(buildFormBreadcrumb({
         baseLabel: 'Clients',
-        baseHash: '#clients',
+        baseHash: isArchived ? '#clients?tab=archived' : '#clients',
         currentText: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
         viewSwitcher,
-        actions: [
-          {
-            text: isNew ? 'Save Client' : 'Save Changes',
-            class: 'btn btn-primary btn-sm',
-            type: 'submit',
-            form: 'client-form'
-          },
-          {
-            text: 'Cancel',
-            class: 'btn btn-secondary btn-sm',
-            onClick: () => { this.showList(); }
-          }
-        ]
+        actions
       }));
       container.appendChild(await this.renderForm(el('div'), this.editingId, client, true));
       setTimeout(() => this.updateStickyOffsets(), 0);
@@ -620,6 +642,7 @@ const Clients = {
       try {
         await ClientsData.ensure();
         await this._loadRejectedArchiveCounts();
+        await this.loadCounts(true);
 
         if (routeId !== App._routeId) return;
 
@@ -690,9 +713,33 @@ const Clients = {
       if (!isAbortError(e)) console.error('Failed to get client counts', e);
       const clients = ClientsData.getAllClients();
       const activeCount = clients.filter(c => c.status !== 'Archived').length;
-      const archivedCount = clients.filter(c => c.status === 'Archived').length;
+      const archivedCount = (this._archivedClients || []).length || clients.filter(c => c.status === 'Archived').length;
       return { activeCount, archivedCount };
     }
+  },
+
+  async loadCounts(force = false) {
+    const entity = this._getActiveEntity();
+    if (!force && this._counts && this._countsEntity === entity && this._countsFromApi) {
+      return this._counts;
+    }
+    try {
+      const counts = await this.getClientCounts();
+      this._counts = {
+        activeCount: counts.activeCount || 0,
+        archivedCount: counts.archivedCount || 0
+      };
+      this._countsEntity = entity;
+      this._countsFromApi = true;
+    } catch (err) {
+      if (!isAbortError(err)) console.error('Failed to load client counts', err);
+      if (!this._counts) {
+        this._counts = this._recalcCounts();
+        this._countsEntity = entity;
+        this._countsFromApi = false;
+      }
+    }
+    return this._counts;
   },
 
   async _loadRejectedArchiveCounts() {
@@ -1313,7 +1360,7 @@ const Clients = {
     let client = null;
     if (!isNew) {
       try {
-        const res = await window.apiClient.clients.get(clientId);
+        const res = await window.apiClient.clients.get(clientId, { includeArchived: 'true' });
         client = this.normalizeClient(res.data);
       } catch (e) {
         if (!isAbortError(e)) {
@@ -1330,6 +1377,22 @@ const Clients = {
     const formContainer = el('div', { class: 'form-container' });
     await this.renderForm(formContainer, this.editingId, client);
 
+    const isArchived = client?.status === 'Archived' || client?.archived;
+    const actions = isArchived ? [
+      ...(Auth.user?.role === 'Admin' ? [{
+        text: 'Restore Client',
+        class: 'btn btn-primary',
+        onClick: () => {
+          closeFormPanelAndRoute('#clients?tab=archived');
+          this.unarchiveClient(clientId, client);
+        }
+      }] : []),
+      { text: 'Close', class: 'btn btn-secondary', onClick: () => { closeFormPanelAndRoute('#clients?tab=archived'); this.showList(); }, testId: 'client-cancel' }
+    ] : [
+      { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
+      { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
+    ];
+
     openFormPanel({
       icon: '🏢',
       title: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
@@ -1339,10 +1402,7 @@ const Clients = {
       viewContext: 'client-form',
       fullPageRoute,
       newTabRoute: fullPageRoute,
-      actions: [
-        { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
-        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
-      ]
+      actions
     });
   },
 
@@ -1350,7 +1410,7 @@ const Clients = {
     let client = clientOrNull;
     if (!client && clientId && clientId !== 'new') {
       try {
-        const res = await window.apiClient.clients.get(clientId);
+        const res = await window.apiClient.clients.get(clientId, { includeArchived: 'true' });
         client = this.normalizeClient(res.data);
       } catch (e) {
         if (!isAbortError(e)) console.error('Failed to load client form', e);
@@ -1397,16 +1457,49 @@ const Clients = {
     }
     this.clearNode(container);
 
+    const isArchived = client && (client.status === 'Archived' || client.archived);
+    if (isArchived) {
+      const banner = el('div', {
+        class: 'alert alert-info',
+        style: 'margin-bottom: var(--spacing-md); display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); padding: 12px 16px; border-radius: 8px;'
+      });
+      const bannerText = el('div', {
+        style: 'display: flex; align-items: center; gap: 8px;',
+        html: '<span>ℹ️</span><span><strong>Archived Client:</strong> This client is archived. Restore the client to make edits or create new work requests.</span>'
+      });
+      banner.appendChild(bannerText);
+      container.appendChild(banner);
+    }
+
     // Inline action bar for embedded/list views. Full-page forms render their own
     // Save/Cancel actions in the breadcrumb, so suppress this internal header.
     if (!hideHeader) {
       const headerBar = el('div', { class: 'form-header-bar' });
       const headerActions = el('div', { class: 'form-actions-top' });
-      const saveBtnTop = el('button', { type: 'submit', form: 'client-form', class: 'btn btn-primary', text: client ? 'Save Changes' : 'Save Client' });
-      headerActions.appendChild(saveBtnTop);
-      const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
-      cancelBtn.addEventListener('click', () => this.showList());
-      headerActions.appendChild(cancelBtn);
+      if (isArchived) {
+        if (Auth.user?.role === 'Admin') {
+          const restoreBtn = el('button', {
+            type: 'button',
+            class: 'btn btn-primary',
+            text: 'Restore Client',
+            onClick: () => { this.unarchiveClient(client.id, client); }
+          });
+          headerActions.appendChild(restoreBtn);
+        }
+        const backBtn = el('button', {
+          type: 'button',
+          class: 'btn btn-secondary',
+          text: 'Back to Archive',
+          onClick: () => { location.hash = '#clients?tab=archived'; }
+        });
+        headerActions.appendChild(backBtn);
+      } else {
+        const saveBtnTop = el('button', { type: 'submit', form: 'client-form', class: 'btn btn-primary', text: client ? 'Save Changes' : 'Save Client' });
+        headerActions.appendChild(saveBtnTop);
+        const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+        cancelBtn.addEventListener('click', () => this.showList());
+        headerActions.appendChild(cancelBtn);
+      }
       headerBar.appendChild(headerActions);
       container.appendChild(headerBar);
     }
@@ -1567,8 +1660,15 @@ const Clients = {
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (isArchived) return;
       this.submitForm(form);
     });
+
+    if (isArchived) {
+      form.querySelectorAll('input, select, textarea, button').forEach(elem => {
+        elem.disabled = true;
+      });
+    }
 
     container.appendChild(form);
     return container;
@@ -1979,6 +2079,8 @@ const Clients = {
               if (res && res.data) {
                 const normalized = this.normalizeClient(res.data);
                 ClientsData.replaceClientById(clientId, normalized);
+                if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+                await this.loadCounts(true);
                 this._refreshCounts();
               }
             },
@@ -2106,6 +2208,8 @@ const Clients = {
                   failCount++;
                 }
               }
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              await this.loadCounts(true);
               this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} client(s) could not be archived.` } };
@@ -2190,10 +2294,20 @@ const Clients = {
     );
   },
 
-  async unarchiveClient(id) {
+  async unarchiveClient(id, clientObj = null) {
     await ClientsData.ensure();
-    const client = ClientsData.getClientById(id);
-    if (!client || (client.status !== 'Archived' && !client.archived)) return;
+    let client = clientObj ||
+      this._archivedMap?.get(id) ||
+      (this._archivedClients || []).find(c => c.id === id) ||
+      ClientsData.getClientById(id);
+
+    if (!client) {
+      try {
+        const res = await window.apiClient.clients.get(id, { includeArchived: 'true' });
+        if (res && res.data) client = this.normalizeClient(res.data);
+      } catch (e) {}
+    }
+    if (!client) return;
 
     Workflow.showConfirm('Restore Client',
       `Are you sure you want to restore client "${client.name || '(untitled)'}"?`,
@@ -2210,14 +2324,18 @@ const Clients = {
               if (res && res.data) {
                 const normalized = this.normalizeClient(res.data);
                 ClientsData.replaceClientById(id, normalized);
-                this._refreshCounts();
               }
-            },
-            onAfterConfirm: async () => {
+              if (this._archivedMap) this._archivedMap.delete(id);
+              if (this._archivedClients) this._archivedClients = this._archivedClients.filter(ac => ac.id !== id);
               if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
               if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              await this.loadCounts(true);
+              this._refreshCounts();
+            },
+            onAfterConfirm: async () => {
               App.updateSidebarNotifications().catch(() => {});
               if (this.editingId === id) {
+                this.editingId = null;
                 location.hash = '#clients';
                 return;
               }
@@ -2237,9 +2355,15 @@ const Clients = {
   async bulkUnarchiveClients(clientIds) {
     if (!clientIds || clientIds.length === 0) return;
     await ClientsData.ensure();
+    const findClient = (id) => {
+      return this._archivedMap?.get(id) ||
+        (this._archivedClients || []).find(c => c.id === id) ||
+        ClientsData.getClientById(id) ||
+        { id, status: 'Archived', name: 'client' };
+    };
     const eligible = (clientIds || [])
-      .map(id => ClientsData.getClientById(id))
-      .filter(c => c && (c.status === 'Archived' || c.archived));
+      .map(id => findClient(id))
+      .filter(c => c && (c.status === 'Archived' || c.archived || this._archivedMap?.has(c.id) || !ClientsData.getClientById(c.id)));
 
     if (eligible.length === 0) {
       Workflow.showMessage('No eligible records', 'No archived clients selected.', 'info');
@@ -2264,12 +2388,17 @@ const Clients = {
                     const normalized = this.normalizeClient(res.data);
                     ClientsData.replaceClientById(c.id, normalized);
                   }
+                  if (this._archivedMap) this._archivedMap.delete(c.id);
+                  if (this._archivedClients) this._archivedClients = this._archivedClients.filter(ac => ac.id !== c.id);
                   successCount++;
                 } catch (e) {
                   console.error('Failed to restore client', c.id, e);
                   failCount++;
                 }
               }
+              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
+              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
+              await this.loadCounts(true);
               this._refreshCounts();
               if (failCount > 0 && successCount === 0) {
                 return { error: { message: `${failCount} client(s) could not be restored.` } };
@@ -2282,11 +2411,10 @@ const Clients = {
               : `${eligible.length} client(s) restored to Active Clients.`,
             errorTitle: 'Restore Failed',
             onAfterConfirm: async () => {
-              if (window.apiClient?.clientCache?.invalidate) window.apiClient.clientCache.invalidate();
-              if (window.apiClient?.clients?.invalidateCounts) window.apiClient.clients.invalidateCounts();
               App.updateSidebarNotifications().catch(() => {});
               const restoredIds = new Set(eligible.map(c => c.id));
               if (this.editingId && restoredIds.has(this.editingId)) {
+                this.editingId = null;
                 location.hash = '#clients';
                 return;
               }
@@ -2299,7 +2427,7 @@ const Clients = {
           });
         });
       },
-      'success'
+      'warning'
     );
   },
 
@@ -2338,6 +2466,8 @@ const Clients = {
       if (!cMap.has(c.id)) cMap.set(c.id, c);
     });
     archived = Array.from(cMap.values());
+    this._archivedClients = archived;
+    this._archivedMap = cMap;
 
     let rejectedClientChanges = [];
     let rejectedClientRequests = [];
@@ -2385,7 +2515,7 @@ const Clients = {
             label: 'Restore',
             icon: ArchivePage.icons.restore,
             className: 'primary',
-            onClick: () => self.unarchiveClient(c.id)
+            onClick: () => self.unarchiveClient(c.id, c)
           }] : [])
         ]
       };

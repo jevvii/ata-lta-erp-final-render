@@ -123,10 +123,12 @@ const create = async (req, res, next) => {
 const getById = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
+    const includeArchived = req.query.includeArchived === 'true' || req.query.includeArchived === true;
     const client = await clientsService.getClientById({
       id: req.params.id,
       entityId,
       allowCrossEntity: !entityId,
+      includeArchived,
     });
 
     if (!client) {

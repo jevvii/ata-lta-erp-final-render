@@ -158,6 +158,15 @@ describe('/v1/clients', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(404);
 
+    const archivedRes = await request(app)
+      .get(`/v1/clients/${created.body.data.id}?includeArchived=true`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(archivedRes.body.data.id).toBe(created.body.data.id);
+    expect(archivedRes.body.data.status).toBe('Archived');
+
     const audit = Array.from(mockTables.audit_logs.values());
     expect(audit.some((a) => a.action === 'client.archived')).toBe(true);
   });
