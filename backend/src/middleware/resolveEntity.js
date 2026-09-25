@@ -42,11 +42,18 @@ function resolveEntity(options = {}) {
         // 2. Detect from clientId
         const clientId = req.body?.clientId || req.body?.client_id;
         if (!resolvedCode && clientId) {
-          const { data: client } = await supabaseAdmin
+          const { data: client, error: clientErr } = await supabaseAdmin
             .from('clients')
             .select('entity_id')
             .eq('id', clientId)
             .maybeSingle();
+          if (clientErr) {
+            throw new AppError({
+              statusCode: 500,
+              title: 'Database Error',
+              detail: 'Unable to resolve entity for client',
+            });
+          }
           if (client?.entity_id) {
             resolvedUUID = client.entity_id;
             resolvedCode = await resolveEntityCode(client.entity_id);
@@ -56,42 +63,70 @@ function resolveEntity(options = {}) {
         // 3. Detect from workRequestId
         const wrId = req.body?.workRequestId || req.body?.work_request_id || req.body?.linkedWorkRequestId || req.body?.linked_work_request_id || req.params?.wrId;
         if (!resolvedCode && wrId) {
-          const { data: wr } = await supabaseAdmin
+          const { data: wr, error: wrErr } = await supabaseAdmin
             .from('work_requests')
             .select('entity_id')
             .eq('id', wrId)
             .maybeSingle();
+          if (wrErr) {
+            throw new AppError({
+              statusCode: 500,
+              title: 'Database Error',
+              detail: 'Unable to resolve entity for work request',
+            });
+          }
           if (wr?.entity_id) {
             resolvedUUID = wr.entity_id;
             resolvedCode = await resolveEntityCode(wr.entity_id);
           }
         }
 
-        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id)
+        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id, /clients/:id)
         if (!resolvedCode && req.params?.id) {
-          const { data: wr } = await supabaseAdmin
+          const { data: wr, error: wrParamErr } = await supabaseAdmin
             .from('work_requests')
             .select('entity_id')
             .eq('id', req.params.id)
             .maybeSingle();
+          if (wrParamErr) {
+            throw new AppError({
+              statusCode: 500,
+              title: 'Database Error',
+              detail: 'Unable to resolve entity for work request',
+            });
+          }
           if (wr?.entity_id) {
             resolvedUUID = wr.entity_id;
             resolvedCode = await resolveEntityCode(wr.entity_id);
           } else {
-            const { data: op } = await supabaseAdmin
+            const { data: op, error: opParamErr } = await supabaseAdmin
               .from('operations_requests')
               .select('entity_id')
               .eq('id', req.params.id)
               .maybeSingle();
+            if (opParamErr) {
+              throw new AppError({
+                statusCode: 500,
+                title: 'Database Error',
+                detail: 'Unable to resolve entity for operations request',
+              });
+            }
             if (op?.entity_id) {
               resolvedUUID = op.entity_id;
               resolvedCode = await resolveEntityCode(op.entity_id);
             } else {
-              const { data: cl } = await supabaseAdmin
+              const { data: cl, error: clParamErr } = await supabaseAdmin
                 .from('clients')
                 .select('entity_id')
                 .eq('id', req.params.id)
                 .maybeSingle();
+              if (clParamErr) {
+                throw new AppError({
+                  statusCode: 500,
+                  title: 'Database Error',
+                  detail: 'Unable to resolve entity for client',
+                });
+              }
               if (cl?.entity_id) {
                 resolvedUUID = cl.entity_id;
                 resolvedCode = await resolveEntityCode(cl.entity_id);
