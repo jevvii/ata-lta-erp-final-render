@@ -321,6 +321,17 @@ const Clients = {
 
   _refreshCounts() {
     const entity = this._getActiveEntity();
+    if (!this._counts || this._countsEntity !== entity || !this._countsFromApi) {
+      const cached = window.apiClient?.peekCachedCount?.('clients.counts', entity);
+      if (cached) {
+        this._counts = {
+          activeCount: cached.active ?? 0,
+          archivedCount: cached.archived ?? 0
+        };
+        this._countsEntity = entity;
+        this._countsFromApi = true;
+      }
+    }
     const hasData = ClientsData.hasData() || (Array.isArray(window.apiClient?.clientCache?._clients) && window.apiClient.clientCache._clients.length > 0);
     if (!hasData) {
       if (!this._countsFromApi) {
@@ -822,7 +833,7 @@ const Clients = {
   },
 
   updateTabNav() {
-    if (!this.container) return;
+    if (!this.container || !this.container.isConnected) return;
     const currentTabNav = this.container.querySelector('.module-tab-nav');
     if (currentTabNav && currentTabNav.parentNode) {
       const freshTabNav = this.renderTabNav();

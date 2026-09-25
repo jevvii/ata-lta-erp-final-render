@@ -458,6 +458,15 @@
       inFlight.clear();
     },
 
+    peekCachedCount(prefix, entityId) {
+      const key = `${prefix}:${entityId || getActiveEntity() || 'none'}`;
+      const entry = countCache.get(key);
+      if (entry && (Date.now() - entry.ts < COUNT_TTL_MS)) {
+        return entry.value?.data || entry.value;
+      }
+      return null;
+    },
+
     auth: {
       signin: (credentials) => post('/auth/signin', credentials),
     },

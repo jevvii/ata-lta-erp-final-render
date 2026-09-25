@@ -216,6 +216,8 @@ const App = {
       window.apiClient.operationsRequests.counts(entity),
       window.apiClient.invoices.counts(entity),
       window.apiClient.transmittals.counts(entity),
+      window.apiClient?.clients?.counts ? window.apiClient.clients.counts(entity) : Promise.resolve(null),
+      window.apiClient?.workRequests?.counts ? window.apiClient.workRequests.counts(entity) : Promise.resolve(null),
     ]);
     const disbCounts = disbResult.status === 'fulfilled' ? disbResult.value : null;
     const opsCounts = opsResult.status === 'fulfilled' ? opsResult.value : null;

@@ -529,6 +529,17 @@ const Disbursement = {
 
   _refreshCounts() {
     const entity = Auth.activeEntity;
+    if (!this._counts || this._countsEntity !== entity) {
+      const cached = window.apiClient?.peekCachedCount?.('disbursements.counts', entity);
+      if (cached) {
+        this._counts = {
+          active: cached.active ?? 0,
+          archived: cached.archived ?? 0,
+          rejected: cached.rejected ?? 0
+        };
+        this._countsEntity = entity;
+      }
+    }
     if (!this.hasData()) {
       if (!this._counts || this._countsEntity !== entity) {
         this._counts = null;
@@ -1214,7 +1225,7 @@ const Disbursement = {
   },
 
   updateTabNav() {
-    if (!this.container) return;
+    if (!this.container || !this.container.isConnected) return;
     const currentTabNav = this.container.querySelector('.module-tab-nav');
     if (currentTabNav && currentTabNav.parentNode) {
       const freshTabNav = this.renderTabNav();

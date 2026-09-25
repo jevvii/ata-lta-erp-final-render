@@ -494,6 +494,18 @@ const Billing = {
 
   _refreshCounts() {
     const entity = Auth.activeEntity;
+    if (!this._counts || this._countsEntity !== entity) {
+      const cachedCounts = window.apiClient?.peekCachedCount?.('invoices.counts', entity);
+      if (cachedCounts) {
+        this._counts = {
+          active: cachedCounts.active ?? 0,
+          archived: cachedCounts.archived ?? 0,
+          rejected: cachedCounts.rejected ?? 0,
+          templates: cachedCounts.templates ?? 0,
+        };
+        this._countsEntity = entity;
+      }
+    }
     const hasListCache =
       Array.isArray(this._listCache) && this._listCacheEntity === entity;
     const cached = hasListCache ? this._listCache : [];
@@ -1148,7 +1160,7 @@ const Billing = {
   },
 
   updateTabNav() {
-    if (!this.container) return;
+    if (!this.container || !this.container.isConnected) return;
     const currentTabNav = this.container.querySelector('.module-tab-nav');
     if (currentTabNav && currentTabNav.parentNode) {
       const freshTabNav = this.renderTabNav();

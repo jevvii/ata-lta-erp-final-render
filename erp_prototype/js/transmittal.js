@@ -245,9 +245,20 @@ const Transmittal = {
   },
 
   _refreshCounts() {
+    const entity = this._getActiveEntity();
+    if (!this._counts || this._countsEntity !== entity) {
+      const cached = window.apiClient?.peekCachedCount?.('transmittals.counts', entity);
+      if (cached) {
+        this._counts = {
+          active: cached.active ?? 0,
+          archived: cached.archived ?? 0
+        };
+        this._countsEntity = entity;
+      }
+    }
     const hasData = this.hasData() || (Array.isArray(window.apiClient?.transmittalCache?._transmittals) && window.apiClient.transmittalCache._transmittals.length > 0);
     if (!hasData) {
-      if (!this._counts || this._countsEntity !== this._getActiveEntity()) {
+      if (!this._counts || this._countsEntity !== entity) {
         this._counts = null;
         this._countsEntity = null;
       }
@@ -955,7 +966,7 @@ const Transmittal = {
   },
 
   updateTabNav() {
-    if (!this.container) return;
+    if (!this.container || !this.container.isConnected) return;
     const currentTabNav = this.container.querySelector('.module-tab-nav');
     if (currentTabNav && currentTabNav.parentNode) {
       const freshTabNav = this.renderTabNav();

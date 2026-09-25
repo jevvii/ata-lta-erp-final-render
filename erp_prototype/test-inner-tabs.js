@@ -50,13 +50,13 @@ async function getTabCounts(page) {
   });
 }
 
-async function waitForTabCounts(page, expectedLabels, timeout = 10000) {
+async function waitForTabCounts(page, expectedLabels, predicate = null, timeout = 10000) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const counts = await getTabCounts(page);
     if (counts) {
       const allFound = expectedLabels.every(label => counts[label] !== undefined && counts[label].count !== null);
-      if (allFound) return counts;
+      if (allFound && (!predicate || predicate(counts))) return counts;
     }
     await page.waitForTimeout(200);
   }
@@ -101,7 +101,7 @@ async function runTests() {
     await page.waitForSelector('.module-tab-nav', { timeout: 10000 });
     
     // Initial visit check:
-    let clientCounts = await waitForTabCounts(page, ['Active Clients', 'Archive']);
+    let clientCounts = await waitForTabCounts(page, ['Active Clients', 'Archive'], c => c['Active Clients']?.count === 9 && c['Archive']?.count === 5);
     const activeClientsCount = clientCounts['Active Clients']?.count;
     const archiveClientsCount = clientCounts['Archive']?.count;
     
@@ -122,9 +122,9 @@ async function runTests() {
     record('Clients', 'Inner transition: Counts preserved returning to Active Clients (9, 5)', clientCounts['Active Clients']?.count === 9 && clientCounts['Archive']?.count === 5, `Found: ${JSON.stringify(clientCounts)}`);
 
     // Hard refresh on deep link #clients?tab=archived:
-    await page.goto(`${BASE_URL}/#clients?tab=archived`, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE_URL}/#clients?tab=archived`);
     await page.waitForSelector('.module-tab-nav', { timeout: 10000 });
-    clientCounts = await waitForTabCounts(page, ['Active Clients', 'Archive']);
+    clientCounts = await waitForTabCounts(page, ['Active Clients', 'Archive'], c => c['Active Clients']?.count === 9 && c['Archive']?.count === 5);
     record('Clients', 'Hard refresh at #clients?tab=archived retains accurate counts (9, 5)', clientCounts['Active Clients']?.count === 9 && clientCounts['Archive']?.count === 5, `Found: ${JSON.stringify(clientCounts)}`);
 
     // ─── 2. OPERATIONS MODULE ────────────────────────────
@@ -132,7 +132,7 @@ async function runTests() {
     await page.click('a[data-module="operations"]');
     await page.waitForSelector('.module-tab-nav', { timeout: 10000 });
 
-    let opCounts = await waitForTabCounts(page, ['Work Requests', 'Retainer Templates', 'Archive']);
+    let opCounts = await waitForTabCounts(page, ['Work Requests', 'Retainer Templates', 'Archive'], c => c['Work Requests']?.count === 5);
     const wrCount = opCounts['Work Requests']?.count;
     const rtCount = opCounts['Retainer Templates']?.count;
     const opArchiveCount = opCounts['Archive']?.count;
@@ -160,9 +160,9 @@ async function runTests() {
     record('Operations', 'Inner transition back to Work Requests preserves counts (5, 0, 0)', opCounts['Work Requests']?.count === 5 && opCounts['Retainer Templates']?.count === 0 && opCounts['Archive']?.count === 0, `Found: ${JSON.stringify(opCounts)}`);
 
     // Hard refresh on deep link #operations?tab=archive:
-    await page.goto(`${BASE_URL}/#operations?tab=archive`, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE_URL}/#operations?tab=archive`);
     await page.waitForSelector('.module-tab-nav', { timeout: 10000 });
-    opCounts = await waitForTabCounts(page, ['Work Requests', 'Retainer Templates', 'Archive']);
+    opCounts = await waitForTabCounts(page, ['Work Requests', 'Retainer Templates', 'Archive'], c => c['Work Requests']?.count === 5);
     record('Operations', 'Hard refresh at #operations?tab=archive retains accurate counts (5, 0, 0)', opCounts['Work Requests']?.count === 5 && opCounts['Retainer Templates']?.count === 0 && opCounts['Archive']?.count === 0, `Found: ${JSON.stringify(opCounts)}`);
 
     // ─── 3. BILLING MODULE ───────────────────────────────

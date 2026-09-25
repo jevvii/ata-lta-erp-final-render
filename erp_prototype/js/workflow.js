@@ -1444,16 +1444,27 @@ const Workflow = {
   },
 
   _refreshCounts() {
+    const entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    if (!this._counts || this._countsEntity !== entity) {
+      const cached = window.apiClient?.peekCachedCount?.('workRequests.counts', entity);
+      if (cached) {
+        this._counts = {
+          active: cached.active ?? 0,
+          archived: cached.archived ?? 0
+        };
+        this._countsEntity = entity;
+      }
+    }
     const hasData = WorkflowData.hasData() || (Array.isArray(window.apiClient?.workRequestCache?._workRequests) && window.apiClient.workRequestCache._workRequests.length > 0);
     if (!hasData) {
-      if (!this._counts || this._countsEntity !== Auth.activeEntity) {
+      if (!this._counts || this._countsEntity !== entity) {
         this._counts = null;
         this._countsEntity = null;
       }
       return;
     }
     const local = this._recalcCounts();
-    if (this._counts && this._countsEntity === Auth.activeEntity) {
+    if (this._counts && this._countsEntity === entity) {
       this._counts.active = local.active;
       if (local.archived > 0 || this._counts.archived === undefined) {
         this._counts.archived = local.archived;
@@ -1463,7 +1474,7 @@ const Workflow = {
         active: local.active,
         archived: (this._counts && this._counts.archived !== undefined) ? this._counts.archived : local.archived
       };
-      this._countsEntity = Auth.activeEntity;
+      this._countsEntity = entity;
     }
     this.updateTabNav();
   },
@@ -5023,7 +5034,7 @@ const Workflow = {
   },
 
   updateTabNav() {
-    if (!this.container) return;
+    if (!this.container || !this.container.isConnected) return;
     const currentTabNav = this.container.querySelector('.module-tab-nav');
     if (currentTabNav && currentTabNav.parentNode) {
       const freshTabNav = this.renderTabNav();
