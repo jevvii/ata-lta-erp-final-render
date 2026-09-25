@@ -368,7 +368,12 @@
       if (!isAbortError(err)) {
         console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
       }
-      return fallback;
+      if (fallback !== undefined) {
+        return typeof fallback === 'object' && fallback !== null
+          ? { ...fallback, _fallback: true, _error: err }
+          : fallback;
+      }
+      throw err;
     });
   };
 
@@ -724,8 +729,7 @@
       },
       counts: (entityId) => cachedCount(
         `clients.counts:${entityId || getActiveEntity() || 'none'}`,
-        () => get(countUrl('/clients/counts', entityId)),
-        { data: { active: 0, archived: 0 } }
+        () => get(countUrl('/clients/counts', entityId))
       ),
       invalidateCounts: () => invalidateCountCache('clients.counts'),
       create: (data) => post('/clients', data).then((res) => { invalidateCountCache('clients.counts'); return res; }),

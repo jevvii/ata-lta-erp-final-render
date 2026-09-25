@@ -733,6 +733,9 @@ const Clients = {
   async getClientCounts() {
     try {
       const res = await window.apiClient.clients.counts(Auth.activeEntity);
+      if (res?._fallback || res?.error) {
+        throw new Error(res?.error?.message || 'Count fetch returned fallback');
+      }
       const data = res?.data || res || {};
       return {
         activeCount: data.active ?? data.activeCount ?? 0,
