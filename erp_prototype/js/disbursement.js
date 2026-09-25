@@ -135,12 +135,14 @@ const Disbursement = {
         this._templates = filtered;
       }
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     } catch (e) {
       if (!isAbortError(e)) console.error('Failed to load disbursement templates', e);
       if (loadGen !== this._templatesGeneration) return this._templates || [];
       if (!Array.isArray(this._templates)) this._templates = [];
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     }
   },
@@ -486,7 +488,7 @@ const Disbursement = {
       this._detailCache[id] = normalized;
       return normalized;
     } catch (err) {
-      console.error('Failed to load disbursement', id, err);
+      if (!isAbortError(err)) console.error('Failed to load disbursement', id, err);
       return null;
     }
   },
@@ -526,11 +528,39 @@ const Disbursement = {
   },
 
   _refreshCounts() {
+    const entity = Auth.activeEntity;
+    if (!this._counts || this._countsEntity !== entity) {
+      const cached = window.apiClient?.peekCachedCount?.('disbursements.counts', entity);
+      if (cached) {
+        this._counts = {
+          active: cached.active ?? 0,
+          archived: cached.archived ?? 0,
+          rejected: cached.rejected ?? 0
+        };
+        this._countsEntity = entity;
+      }
+    }
     if (!this.hasData()) {
-      this._counts = null;
+      if (!this._counts || this._countsEntity !== entity) {
+        this._counts = null;
+        this._countsEntity = null;
+      }
       return;
     }
-    this._counts = this._recalcCounts();
+    const local = this._recalcCounts();
+    if (this._counts && this._countsEntity === entity) {
+      this._counts.active = local.active;
+      if (local.archived > 0 || this._counts.archived === undefined) {
+        this._counts.archived = local.archived;
+      }
+    } else {
+      this._counts = {
+        active: local.active,
+        archived: (this._counts && this._counts.archived !== undefined) ? this._counts.archived : local.archived
+      };
+      this._countsEntity = entity;
+    }
+    this.updateTabNav();
   },
 
   _invalidateDashboardCache() {
@@ -900,6 +930,7 @@ const Disbursement = {
       if (!isAbortError(e)) console.error('Failed to load rejected disbursement requests', e);
     }
     this._rejectedArchiveCounts = { changes, requests, total: changes + requests };
+    this.updateTabNav();
     return this._rejectedArchiveCounts;
   },
 
@@ -907,14 +938,23 @@ const Disbursement = {
    * Fetch badge counts from the API and cache them on the module.
    * The backend sums across entities when Auth.activeEntity is 'ALL'.
    */
-  async loadCounts() {
+  async loadCounts(force = false) {
+    const entity = (typeof Auth !== 'undefined' && Auth.activeEntity) || null;
+    if (!force && this._counts && this._countsEntity === entity) {
+      return this._counts;
+    }
     try {
       const res = await window.apiClient.disbursements.counts();
       this._counts = res?.data || { active: 0, archived: 0, rejected: 0 };
+      this._countsEntity = entity;
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to load disbursement counts', err);
-      this._counts = { active: 0, archived: 0, rejected: 0 };
+      if (!this._counts) {
+        this._counts = { active: 0, archived: 0, rejected: 0 };
+        this._countsEntity = entity;
+      }
     }
+    this.updateTabNav();
     return this._counts;
   },
 
@@ -934,6 +974,7 @@ const Disbursement = {
 
   async render(routeId) {
     const container = el('div', { class: 'page' });
+    this.container = container;
 
     if (this.view === 'detail' && this.detailId) {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
@@ -1125,18 +1166,19 @@ const Disbursement = {
 
       (async () => {
         try {
-          await this.ensure();
-          await this.ensureTemplates();
-          await this._loadRejectedArchiveCounts();
+          await Promise.all([
+            this.ensure(),
+            this.ensureTemplates(),
+            this.loadCounts(true),
+            this._loadRejectedArchiveCounts(),
+          ]);
 
           if (routeId !== App._routeId) return;
 
           this._refreshCounts();
-          const freshTabNav = this.renderTabNav();
-          if (tabNav.parentNode) {
-            tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-            tabNav = freshTabNav;
-          }
+          this.updateTabNav();
+          const freshTabNav = this.container?.querySelector('.module-tab-nav');
+          if (freshTabNav) tabNav = freshTabNav;
 
           if (this.view === 'list') {
             contentContainer.innerHTML = '';
@@ -1182,6 +1224,15 @@ const Disbursement = {
     App.updateStickyOffsets();
   },
 
+  updateTabNav() {
+    if (!this.container || !this.container.isConnected) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
+  },
+
   renderTabNav() {
     const entity = Auth.activeEntity;
     const entMatch = ent => {
@@ -1190,10 +1241,15 @@ const Disbursement = {
       return uEnt === entity.toUpperCase();
     };
 
-    // Derive active/archive badges from the cached _items for the current entity.
-    const cachedItems = (this._items || []).filter(d => this._entityMatches(d, entity));
-    const dbCount = cachedItems.filter(d => this._activeBadgeFilter(d)).length;
-    const archiveDbCount = cachedItems.filter(d => this._archiveBadgeFilter(d)).length;
+    // Derive active/archive badges from the cached _items for the current entity, or fallback to API counts.
+    const hasData = this.hasData();
+    const cachedItems = hasData ? (this._items || []).filter(d => this._entityMatches(d, entity)) : [];
+    const dbCount = hasData
+      ? cachedItems.filter(d => this._activeBadgeFilter(d)).length
+      : ((this._counts && this._countsEntity === entity) ? (this._counts.active || 0) : 0);
+    const archiveDbCount = hasData
+      ? cachedItems.filter(d => this._archiveBadgeFilter(d)).length
+      : ((this._counts && this._countsEntity === entity) ? (this._counts.archived || 0) : 0);
     const rejectedOpsCount = this._rejectedArchiveCounts?.total || 0;
     const archiveCount = archiveDbCount + rejectedOpsCount;
 
@@ -2187,7 +2243,10 @@ const Disbursement = {
   // Expense Filing Form
   // ============================================================
   async renderForm(opts = {}) {
-    const { hideHeader = false, existing = null } = opts;
+    let { hideHeader = false, existing = null } = opts;
+    if (!existing && this.detailId) {
+      existing = await this.loadDisbursement(this.detailId);
+    }
     await Promise.all([
       window.apiClient.userCache.ensure(),
       window.apiClient.clientCache.ensure(),
@@ -2337,6 +2396,7 @@ const Disbursement = {
     const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
     const formWrs = window.apiClient.workRequestCache.getActiveByEntity(entity);
+    const activeWrIds = new Set(formWrs.map(w => w.id));
     const existingWr = existing?.linkedWorkRequestId ? (this.getWorkRequest(existing) || window.apiClient.workRequestCache.getById(existing.linkedWorkRequestId)) : null;
     if (existingWr && !activeWrIds.has(existingWr.id)) {
       const client = window.apiClient.clientCache.getById(existingWr.clientId);
@@ -4747,5 +4807,9 @@ const Disbursement = {
 
     container.appendChild(grid);
     return container;
+  },
+
+  cleanup() {
+    this.container = null;
   }
 };

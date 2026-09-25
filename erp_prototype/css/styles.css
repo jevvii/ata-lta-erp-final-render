@@ -2834,6 +2834,13 @@ tbody tr:hover {
 .approval-item:focus-within {
   background: var(--color-bg-light);
 }
+.approval-item.selected {
+  background: color-mix(in oklab, var(--color-primary), transparent 94%);
+}
+.approval-item.selected:hover,
+.approval-item.selected:focus-within {
+  background: color-mix(in oklab, var(--color-primary), transparent 90%);
+}
 .approval-item-icon {
   flex-shrink: 0;
   width: 34px;
@@ -2932,6 +2939,12 @@ tbody tr:hover {
 .approval-item:focus-within .approval-item-actions {
   opacity: 1;
   visibility: visible;
+}
+@media (hover: none) {
+  .approval-item-actions {
+    opacity: 1;
+    visibility: visible;
+  }
 }
 .approval-item-actions .btn {
   padding: 5px 10px;
@@ -5072,7 +5085,13 @@ tbody tr:hover {
   border: 1px solid #e2e8f0;
   border-radius: var(--radius-md);
   margin-bottom: var(--spacing-lg);
-  overflow: hidden;
+  overflow: visible;
+}
+
+.task-group-v2 > :last-child,
+.task-group-v2 > .task-row:last-child {
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
 }
 
 .task-group-header {
@@ -6641,6 +6660,26 @@ tbody tr:hover {
 
 .mdp-day.mdp-selected:hover {
   background: var(--color-primary-dark);
+}
+
+.mdp-day:disabled,
+.mdp-day.mdp-disabled {
+  opacity: 0.3 !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
+  color: var(--color-text-muted, #94a3b8) !important;
+}
+
+.mdp-day:disabled:hover,
+.mdp-day.mdp-disabled:hover {
+  background: none !important;
+}
+
+.mdp-year-btn:disabled,
+.mdp-year-btn.mdp-year-disabled {
+  opacity: 0.3 !important;
+  cursor: not-allowed !important;
+  pointer-events: none !important;
 }
 
 /* --- Year Panel --- */
@@ -8254,9 +8293,43 @@ tbody tr:hover {
   animation: searchDropFadeIn 0.15s ease-out;
 }
 
+.searchable-dropdown.drop-up .searchable-dropdown-listbox {
+  top: auto;
+  bottom: calc(100% + 4px);
+  animation: searchDropFadeInUp 0.15s ease-out;
+}
+
 @keyframes searchDropFadeIn {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes searchDropFadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.task-group-v2:has(.has-open-dropdown),
+.task-group-v2.has-open-dropdown,
+.task-list:has(.has-open-dropdown),
+.task-list.has-open-dropdown {
+  z-index: 1005;
+  position: relative;
+}
+
+.task-row:has(.searchable-dropdown.open),
+.task-row.has-open-dropdown {
+  z-index: 1005;
+  position: relative;
+}
+
+.searchable-dropdown.open {
+  z-index: 1006;
+  position: relative;
+}
+
+.searchable-dropdown.open .searchable-dropdown-listbox {
+  z-index: 1007;
 }
 
 .searchable-dropdown-item {
@@ -10417,6 +10490,7 @@ tbody tr:hover {
   background: var(--surface);
   border-color: var(--border);
   border-radius: var(--radius-md);
+  overflow: visible;
 }
 .project-detail-v2 .task-group-header {
   background: var(--bg);
@@ -19149,6 +19223,16 @@ body.entity-consolidated .topbar {
   background: var(--color-surface, #fff);
   color: var(--color-primary);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+.entity-pill-toggle.is-disabled,
+.entity-pill-toggle[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.entity-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 .entity-pill-toggle-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: var(--spacing-sm, 12px); }
 .entity-pill-toggle-wrap .entity-pill-toggle-label {

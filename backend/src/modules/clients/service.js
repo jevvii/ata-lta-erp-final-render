@@ -159,7 +159,7 @@ const listClients = async ({
   if (isArchived) {
     query = query.or('status.eq.Archived,deleted_at.not.is.null');
   } else {
-    query = query.is('deleted_at', null);
+    query = query.is('deleted_at', null).neq('status', 'Archived');
   }
 
   if (entityId && entityId !== 'ALL') {
@@ -433,6 +433,14 @@ const updateClient = async ({ id, entityId, data, updatedBy }) => {
   const { data: updatedRows, error } = await query.select();
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `A client with TIN ${data.tin || existing.tin} already exists in this entity`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -490,6 +498,40 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Client not found' });
   }
 
+  if (existing.status === 'Active' && !existing.deletedAt) {
+    return existing;
+  }
+
+  if (existing.tin) {
+    const { data: duplicates, error: checkError } = await supabaseAdmin
+      .from('clients')
+      .select('id, name')
+      .eq('entity_id', entityId)
+      .eq('tin', existing.tin)
+      .is('deleted_at', null)
+      .neq('status', 'Archived')
+      .neq('id', id)
+      .limit(1);
+
+    if (checkError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to verify client uniqueness',
+      });
+    }
+
+    if (duplicates && duplicates.length > 0) {
+      const duplicateActive = duplicates[0];
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot restore client: an active client (${duplicateActive.name}) with TIN ${existing.tin} already exists in this entity.`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
+  }
+
   const now = new Date().toISOString();
   const { error } = await supabaseAdmin
     .from('clients')
@@ -498,6 +540,14 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
     .eq('entity_id', entityId);
 
   if (error) {
+    if (error.code === '23505') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot restore client: an active client with TIN ${existing.tin} already exists in this entity.`,
+        code: 'DUPLICATE_TIN',
+      });
+    }
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
@@ -515,24 +565,33 @@ const getClientCounts = async ({ entityId }) => {
   let activeQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .neq('status', 'Archived');
 
   let archivedQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .eq('status', 'Archived');
+    .or('status.eq.Archived,deleted_at.not.is.null');
 
   if (entityId && entityId !== 'ALL') {
     activeQuery = activeQuery.eq('entity_id', entityId);
     archivedQuery = archivedQuery.eq('entity_id', entityId);
   }
 
-  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+  const [activeResult, archivedResult] = await Promise.all([
     activeQuery,
     archivedQuery,
   ]);
 
-  return { active: activeCount || 0, archived: archivedCount || 0 };
+  if (activeResult?.error || archivedResult?.error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to get client counts',
+    });
+  }
+
+  return { active: activeResult?.count || 0, archived: archivedResult?.count || 0 };
 };
 
 /**

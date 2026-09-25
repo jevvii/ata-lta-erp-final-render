@@ -206,6 +206,8 @@ const Billing = {
       }
       this._listCacheEntity = entity;
       if (freshFetch) this._needsFreshFetch = false;
+      this._refreshCounts();
+      this.updateTabNav();
     } catch (e) {
       if (!isAbortError(e)) console.error("Failed to load invoices", e);
     }
@@ -487,31 +489,48 @@ const Billing = {
       0,
       (this._counts.archived || 0) + archivedDelta,
     );
+    this.updateTabNav();
   },
 
   _refreshCounts() {
     const entity = Auth.activeEntity;
-    const cached =
-      Array.isArray(this._listCache) && this._listCacheEntity === entity
-        ? this._listCache
-        : [];
+    if (!this._counts || this._countsEntity !== entity) {
+      const cachedCounts = window.apiClient?.peekCachedCount?.('invoices.counts', entity);
+      if (cachedCounts) {
+        this._counts = {
+          active: cachedCounts.active ?? 0,
+          archived: cachedCounts.archived ?? 0,
+          rejected: cachedCounts.rejected ?? 0,
+          templates: cachedCounts.templates ?? 0,
+        };
+        this._countsEntity = entity;
+      }
+    }
+    const hasListCache =
+      Array.isArray(this._listCache) && this._listCacheEntity === entity;
+    const cached = hasListCache ? this._listCache : [];
+    const hasTemplates =
+      Array.isArray(this._templates) && this._templatesEntity === entity;
     const templateCount = (this._templates || []).filter((t) =>
       this._entityMatches(t.entity, entity),
     ).length;
+    const prevCounts =
+      this._counts && this._countsEntity === entity ? this._counts : null;
     this._counts = {
-      active: cached.filter((inv) => this._isActiveInvoice(inv, entity)).length,
-      archived: cached.filter((inv) => this._isArchiveInvoice(inv, entity))
-        .length,
+      active: hasListCache
+        ? cached.filter((inv) => this._isActiveInvoice(inv, entity)).length
+        : (prevCounts ? prevCounts.active || 0 : 0),
+      archived: hasListCache
+        ? cached.filter((inv) => this._isArchiveInvoice(inv, entity)).length
+        : (prevCounts ? prevCounts.archived || 0 : 0),
       rejected:
-        this._counts && this._countsEntity === entity
-          ? this._counts.rejected || 0
+        prevCounts
+          ? prevCounts.rejected || 0
           : 0,
       templates:
-        this._templatesEntity === entity
+        hasTemplates
           ? templateCount
-          : this._counts && this._countsEntity === entity
-            ? this._counts.templates || 0
-            : 0,
+          : (prevCounts ? prevCounts.templates || 0 : 0),
     };
     this._countsEntity = entity;
   },
@@ -715,6 +734,7 @@ const Billing = {
       this._counts = { active: 0, archived: 0, rejected: 0, templates: 0 };
       this._countsEntity = entity;
     }
+    this.updateTabNav();
     return this._counts;
   },
 
@@ -781,12 +801,14 @@ const Billing = {
       templates: this._counts?.templates || 0,
     };
     this._countsEntity = entity;
-    if (changed) App.handleRoute();
+    this.updateTabNav();
+    if (changed && !this.container) App.handleRoute();
     return rejected;
   },
 
   async render(routeId) {
     const container = el("div", { class: "page" });
+    this.container = container;
     if (!this._isEntityFresh()) this.invalidateCache();
 
     if (this.view === "detail" && this.detailId) {
@@ -910,8 +932,33 @@ const Billing = {
       }
 
       container.classList.add("billing-tab-page");
-      const isNew = !this.detailId;
-      const inv = isNew ? null : this.getInvoiceById(this.detailId);
+      const isNew = !this.detailId || this.detailId === "new";
+      let inv = isNew ? null : this.getInvoiceById(this.detailId);
+      let loadFailed = false;
+      if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+        try {
+          const res = await window.apiClient.invoices.get(this.detailId);
+          if (res?.data) {
+            inv = this.normalizeInvoice(res.data);
+            this._detailCache[this.detailId] = inv;
+          } else {
+            loadFailed = true;
+          }
+        } catch (e) {
+          if (isAbortError(e)) return container;
+          console.error("Failed to load invoice for editing", e);
+          loadFailed = true;
+        }
+      }
+      if (!isNew && (!inv || loadFailed)) {
+        if (typeof showToast === "function") {
+          showToast("Error", "The requested invoice could not be loaded.", "error");
+        }
+        this.view = "list";
+        this.detailId = null;
+        location.hash = "#billing";
+        return container;
+      }
       const fullPageRoute = isNew
         ? "#billing/form/new"
         : `#billing/form/${this.detailId}`;
@@ -1051,19 +1098,19 @@ const Billing = {
 
       (async () => {
         try {
-          await this.ensure();
-          await this.ensureTemplates();
-          await this.loadCounts();
-          await this.loadRejectedCount();
+          await Promise.all([
+            this.ensure(),
+            this.ensureTemplates(),
+            this.loadCounts(true),
+            this.loadRejectedCount(),
+          ]);
 
           if (routeId !== App._routeId) return;
 
           this._refreshCounts();
-          const freshTabNav = this.renderTabNav();
-          if (tabNav.parentNode) {
-            tabNav.parentNode.replaceChild(freshTabNav, tabNav);
-            tabNav = freshTabNav;
-          }
+          this.updateTabNav();
+          const freshTabNav = this.container?.querySelector('.module-tab-nav');
+          if (freshTabNav) tabNav = freshTabNav;
 
           if (this.view === "list") {
             contentContainer.innerHTML = "";
@@ -1090,7 +1137,8 @@ const Billing = {
 
     if (this.view === "form") {
       await this._loadPrefilledOpReq();
-      container.appendChild(await this.renderForm(this.detailId));
+      const formEl = await this.renderForm(this.detailId);
+      if (formEl) container.appendChild(formEl);
     } else if (this.view === "templateForm") {
       const template = !this.templateEditingId
         ? null
@@ -1110,6 +1158,15 @@ const Billing = {
 
   updateStickyOffsets() {
     App.updateStickyOffsets();
+  },
+
+  updateTabNav() {
+    if (!this.container || !this.container.isConnected) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
   },
 
   renderTabNav() {
@@ -1134,9 +1191,11 @@ const Billing = {
       ? cacheArchiveCount
       : this._counts?.archived || 0;
     const archiveCount = archiveDbCount + (this._counts?.rejected || 0);
-    const templateCount = (this._templates || []).filter((t) =>
-      this._entityMatches(t.entity, entity),
-    ).length;
+    const hasTemplates =
+      Array.isArray(this._templates) && this._templatesEntity === entity;
+    const templateCount = hasTemplates
+      ? (this._templates || []).filter((t) => this._entityMatches(t.entity, entity)).length
+      : (this._counts?.templates || 0);
 
     const isLimitedView =
       Auth.user?.departments?.includes("Operations") ||
@@ -1595,12 +1654,14 @@ const Billing = {
         this._templates = filtered;
       }
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     } catch (e) {
       if (!isAbortError(e)) console.error("Failed to load billing templates", e);
       if (loadGen !== this._templatesGeneration) return this._templates || [];
       if (!Array.isArray(this._templates)) this._templates = [];
       this._templatesEntity = entity;
+      this.updateTabNav();
       return this._templates;
     }
   },
@@ -3175,7 +3236,34 @@ const Billing = {
 
     const entity = Auth.activeEntity;
     const activeId = invoiceId || this.detailId;
-    const inv = activeId ? this.getInvoiceById(activeId) : null;
+    const isNew = !activeId || activeId === "new";
+    let inv = isNew ? null : this.getInvoiceById(activeId);
+    let loadFailed = false;
+    if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+      try {
+        const res = await window.apiClient.invoices.get(activeId);
+        if (res?.data) {
+          inv = this.normalizeInvoice(res.data);
+          this._detailCache[activeId] = inv;
+        } else {
+          loadFailed = true;
+        }
+      } catch (e) {
+        if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+        loadFailed = true;
+      }
+    }
+    if (!isNew && (!inv || loadFailed)) {
+      if (typeof showToast === "function") {
+        showToast("Error", "The requested invoice could not be loaded.", "error");
+      }
+      this.detailId = null;
+      if (this.view === "form") {
+        this.view = "list";
+        location.hash = "#billing";
+      }
+      return null;
+    }
     const opReq = this._prefilledOpReq || null;
     const prefill =
       this.pendingPrefill ||
@@ -3407,6 +3495,9 @@ const Billing = {
             if (numInput) numInput.value = n;
           })
           .catch(() => {});
+        if (typeof dueDateInput !== 'undefined' && dueDateInput && !dueDateInput.value && (wr?.dueDate || wr?.due_date)) {
+          dueDateInput.value = String(wr.dueDate || wr.due_date).slice(0, 10);
+        }
       }
     });
 
@@ -3438,28 +3529,37 @@ const Billing = {
         type: "date",
         name: "issueDate",
         class: "notion-prop-input",
-        value: inv ? inv.issueDate : new Date().toISOString().slice(0, 10),
+        value: inv ? (inv.issueDate || inv.issue_date || new Date().toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10),
         required: true,
       }),
     );
     propsGrid.appendChild(issueDateProp);
 
     // Due Date
+    const defaultInvoiceDue = () => {
+      if (inv) return (inv.dueDate || inv.due_date ? String(inv.dueDate || inv.due_date).slice(0, 10) : "");
+      if (prefill?.dueDate) return String(prefill.dueDate).slice(0, 10);
+      const prefillWr = prefill?.workRequestId && window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(prefill.workRequestId) : null;
+      if (prefillWr?.dueDate || prefillWr?.due_date) return String(prefillWr.dueDate || prefillWr.due_date).slice(0, 10);
+      const d = new Date();
+      d.setDate(d.getDate() + 30);
+      return d.toISOString().slice(0, 10);
+    };
+
     const dueDateProp = el("div", { class: "notion-prop" });
     dueDateProp.appendChild(
       el("label", {
         html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date',
       }),
     );
-    dueDateProp.appendChild(
-      el("input", {
-        type: "date",
-        name: "dueDate",
-        class: "notion-prop-input",
-        value: inv ? inv.dueDate : "",
-        required: true,
-      }),
-    );
+    const dueDateInput = el("input", {
+      type: "date",
+      name: "dueDate",
+      class: "notion-prop-input",
+      value: defaultInvoiceDue(),
+      required: true,
+    });
+    dueDateProp.appendChild(dueDateInput);
     propsGrid.appendChild(dueDateProp);
 
     // Invoice Number (auto)
@@ -4034,8 +4134,34 @@ const Billing = {
   async showForm(invoiceId = null, mode = null) {
     this.detailId = invoiceId;
     await this._loadPrefilledOpReq();
-    const isNew = !invoiceId;
-    const inv = isNew ? null : this.getInvoiceById(invoiceId);
+    const isNew = !invoiceId || invoiceId === "new";
+    let inv = isNew ? null : this.getInvoiceById(invoiceId);
+    let loadFailed = false;
+    if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
+      try {
+        const res = await window.apiClient.invoices.get(invoiceId);
+        if (res?.data) {
+          inv = this.normalizeInvoice(res.data);
+          this._detailCache[invoiceId] = inv;
+        } else {
+          loadFailed = true;
+        }
+      } catch (e) {
+        if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+        loadFailed = true;
+      }
+    }
+    if (!isNew && (!inv || loadFailed)) {
+      if (typeof showToast === "function") {
+        showToast("Error", "The requested invoice could not be loaded.", "error");
+      }
+      this.detailId = null;
+      return;
+    }
+
+    const formContent = await this.renderForm(invoiceId);
+    if (!formContent) return;
+
     const fullPageRoute = isNew
       ? "#billing/form/new"
       : `#billing/form/${invoiceId}`;
@@ -4047,7 +4173,7 @@ const Billing = {
       title: isNew
         ? "Create Sales Invoice"
         : `Edit Invoice ${inv?.invoiceNumber || ""}`.trim(),
-      formContent: await this.renderForm(invoiceId),
+      formContent,
       formId: "invoice-form",
       mode,
       viewContext: "invoice-form",
@@ -7733,6 +7859,10 @@ const Billing = {
     card.appendChild(el("div", { class: "kpi-value", text: value }));
     return card;
   },
+
+  cleanup() {
+    this.container = null;
+  }
 };
 
 window.Billing = Billing;

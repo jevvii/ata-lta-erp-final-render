@@ -389,16 +389,25 @@ function setButtonLoading(btn, label = 'Saving…') {
 function buildEntityPillToggle(opts = {}) {
   const entities = (opts.entities && opts.entities.length ? opts.entities : ['ATA', 'LTA']);
   let current = entities.includes(opts.value) ? opts.value : entities[0];
-  const root = el('div', { class: 'entity-pill-toggle', role: 'radiogroup', 'aria-label': 'Target entity' });
+  let isDisabled = !!opts.disabled;
+  const root = el('div', { class: 'entity-pill-toggle' + (isDisabled ? ' is-disabled' : ''), role: 'radiogroup', 'aria-label': 'Target entity' });
+  if (isDisabled) {
+    root.setAttribute('aria-disabled', 'true');
+    root.setAttribute('title', "Entity locked to selected client's entity");
+  }
   entities.forEach(ent => {
     const pill = el('button', {
       type: 'button',
       class: 'entity-pill' + (ent === current ? ' active' : ''),
       text: ent === 'ATA' ? 'ATA Accounting' : (ent === 'LTA' ? 'LTA Accounting' : ent)
     });
+    if (isDisabled) {
+      pill.disabled = true;
+      pill.setAttribute('tabindex', '-1');
+    }
     pill.setAttribute('aria-pressed', ent === current ? 'true' : 'false');
     pill.addEventListener('click', () => {
-      if (current === ent) return;
+      if (isDisabled || current === ent) return;
       current = ent;
       root.querySelectorAll('.entity-pill').forEach(p => {
         const isActive = p === pill;
@@ -409,7 +418,43 @@ function buildEntityPillToggle(opts = {}) {
     });
     root.appendChild(pill);
   });
-  return { el: root, getValue: () => current };
+  return {
+    el: root,
+    getValue: () => current,
+    setValue: (val) => {
+      if (!val || !entities.includes(val)) return;
+      current = val;
+      const pills = root.querySelectorAll('.entity-pill');
+      entities.forEach((ent, idx) => {
+        const p = pills[idx];
+        if (p) {
+          const isActive = ent === val;
+          p.classList.toggle('active', isActive);
+          p.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        }
+      });
+      if (typeof opts.onChange === 'function') opts.onChange(val);
+    },
+    setDisabled: (disabled) => {
+      isDisabled = !!disabled;
+      root.classList.toggle('is-disabled', isDisabled);
+      root.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
+      if (isDisabled) {
+        root.setAttribute('title', "Entity locked to selected client's entity");
+      } else {
+        root.removeAttribute('title');
+      }
+      const pills = root.querySelectorAll('.entity-pill');
+      pills.forEach(p => {
+        p.disabled = isDisabled;
+        if (isDisabled) {
+          p.setAttribute('tabindex', '-1');
+        } else {
+          p.removeAttribute('tabindex');
+        }
+      });
+    }
+  };
 }
 
 /* ── Dirty-form guard + session draft caching ─────────────────────────── */
@@ -492,8 +537,16 @@ function attachPaneFormGuard(form, opts = {}) {
     baseline: JSON.stringify(_serializeFormState(form)),
     dirty: !!restoredDraft,
     saveTimer: null,
+    lastFocusedField: null,
   };
   pane._formGuard = state;
+
+  const onFocusIn = (e) => {
+    if (e.target && form.contains(e.target) && typeof e.target.focus === 'function') {
+      state.lastFocusedField = e.target;
+    }
+  };
+  form.addEventListener('focusin', onFocusIn);
 
   const onMutate = (e) => {
     if (e.target && e.target.name && (e.target.type === 'file' || e.target.type === 'password')) return;
@@ -519,6 +572,7 @@ function attachPaneFormGuard(form, opts = {}) {
   const detach = () => {
     form.removeEventListener('input', onMutate);
     form.removeEventListener('change', onMutate);
+    form.removeEventListener('focusin', onFocusIn);
     clearTimeout(state.saveTimer);
     if (pane._formGuard === state) pane._formGuard = null;
   };
@@ -543,6 +597,7 @@ window.markPaneFormClean = markPaneFormClean;
 /** Show a lightweight bottom-sheet prompt asking to discard unsaved changes. */
 function showDiscardChangesPrompt({ onDiscard, onKeep }) {
   document.querySelectorAll('.discard-guard-overlay').forEach(o => o.remove());
+  const previousFocus = document.activeElement;
   const overlay = el('div', { class: 'discard-guard-overlay' });
   const sheet = el('div', { class: 'discard-guard-sheet', role: 'alertdialog', 'aria-modal': 'true' });
   sheet.appendChild(el('div', { class: 'discard-guard-title', text: 'Unsaved changes' }));
@@ -550,13 +605,75 @@ function showDiscardChangesPrompt({ onDiscard, onKeep }) {
   const actions = el('div', { class: 'discard-guard-actions' });
   const keepBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Keep editing' });
   const discardBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Discard changes' });
-  keepBtn.addEventListener('click', () => { overlay.remove(); if (onKeep) onKeep(); });
-  discardBtn.addEventListener('click', () => { overlay.remove(); if (onDiscard) onDiscard(); });
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    document.removeEventListener('keydown', onKeyDown, true);
+    overlay.remove();
+  };
+
+  const handleKeep = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    }
+    cleanup();
+    const targetField = (window.SidePaneInstance?._formGuard?.lastFocusedField && document.body.contains(window.SidePaneInstance._formGuard.lastFocusedField))
+      ? window.SidePaneInstance._formGuard.lastFocusedField
+      : (previousFocus && typeof previousFocus.focus === 'function' && document.body.contains(previousFocus) && previousFocus !== document.body ? previousFocus : null);
+
+    if (targetField && typeof targetField.focus === 'function') {
+      try {
+        targetField.focus();
+        if (typeof targetField.setSelectionRange === 'function' && (targetField.type === 'text' || targetField.type === 'search' || targetField.tagName === 'TEXTAREA')) {
+          const len = targetField.value ? targetField.value.length : 0;
+          targetField.setSelectionRange(len, len);
+        }
+      } catch (err) {}
+    } else if (window.SidePaneInstance?.pane) {
+      const firstInput = window.SidePaneInstance.pane.querySelector('input:not([type="hidden"]), textarea, select');
+      if (firstInput && typeof firstInput.focus === 'function') {
+        try { firstInput.focus(); } catch (err) {}
+      }
+    }
+    if (onKeep) onKeep();
+  };
+
+  const handleDiscard = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+    }
+    cleanup();
+    if (onDiscard) onDiscard();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      handleKeep(e);
+    }
+  };
+
+  keepBtn.addEventListener('click', handleKeep);
+  discardBtn.addEventListener('click', handleDiscard);
   actions.appendChild(keepBtn);
   actions.appendChild(discardBtn);
   sheet.appendChild(actions);
   overlay.appendChild(sheet);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); if (onKeep) onKeep(); } });
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      handleKeep(e);
+    }
+  });
+
+  document.addEventListener('keydown', onKeyDown, true);
   document.body.appendChild(overlay);
   try { keepBtn.focus(); } catch (e) {}
 }
@@ -581,6 +698,11 @@ function el(tag, attrs = {}, children = []) {
     if (k === 'text') node.textContent = v;
     else if (k === 'html') node.innerHTML = v; // only for static HTML in plan
     else if (k === 'disabled') node.disabled = !!v;
+    else if (k === 'checked') node.checked = !!v;
+    else if (k === 'value') {
+      node.value = v;
+      node.setAttribute(k, v);
+    }
     else node.setAttribute(k, v);
   }
   children.forEach(c => {
@@ -1053,10 +1175,11 @@ function _ensureSearchableDropdownDocListener() {
   });
 }
 
-function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null }) {
+function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null, allowClear = true }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
   if (maxWidth) wrapper.style.maxWidth = maxWidth;
+  const canClear = allowClear !== false;
 
   let iconHtml = '';
   if (placeholder.includes('Client')) {
@@ -1092,7 +1215,9 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   listbox.className = 'searchable-dropdown-listbox';
 
   wrapper.appendChild(input);
-  wrapper.appendChild(clearBtn);
+  if (canClear) {
+    wrapper.appendChild(clearBtn);
+  }
   wrapper.appendChild(arrow);
   wrapper.appendChild(listbox);
 
@@ -1150,7 +1275,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     selectedText = text;
     input.value = val ? text : '';
     input.title = input.value || placeholder || '';
-    clearBtn.style.display = val ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = val ? 'flex' : 'none';
     if (changed) {
       wrapper.dispatchEvent(new Event('change', { bubbles: true }));
       wrapper.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1162,22 +1287,77 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = true;
     highlightIdx = -1;
     wrapper.classList.add('open');
+    const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
+    if (parentRow) parentRow.classList.add('has-open-dropdown');
+    const parentGroup = wrapper.closest('.task-group-v2');
+    if (parentGroup) parentGroup.classList.add('has-open-dropdown');
     _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
+    // Check if listbox would clip at bottom of viewport or nearest container
+    requestAnimationFrame(() => {
+      if (!isOpen) return;
+      const rect = wrapper.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+
+      // Calculate true space above taking into account sticky toolbars/headers
+      let headerBottom = 0;
+      const stickyElements = document.querySelectorAll(
+        '.task-view-toolbar, .project-detail-v2 .task-view-toolbar, .table-header, .app-header, .topbar, .project-detail-title-bar'
+      );
+      stickyElements.forEach(el => {
+        const hRect = el.getBoundingClientRect();
+        if (hRect.bottom > 0 && hRect.bottom < rect.top) {
+          headerBottom = Math.max(headerBottom, hRect.bottom);
+        }
+      });
+      const spaceAbove = Math.max(0, rect.top - headerBottom);
+
+      // Only check parents that actually clip overflow
+      let scrollParent = wrapper.parentElement;
+      let parentSpaceBelow = spaceBelow;
+      while (scrollParent && scrollParent !== document.body) {
+        const style = window.getComputedStyle(scrollParent);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'hidden') {
+          const parentRect = scrollParent.getBoundingClientRect();
+          parentSpaceBelow = parentRect.bottom - rect.bottom;
+          break;
+        }
+        scrollParent = scrollParent.parentElement;
+      }
+
+      // Drop up only if not enough room below AND plenty of room above without hitting toolbar
+      const shouldDropUp = spaceBelow < 200 && parentSpaceBelow < 200 && spaceAbove >= 200 && spaceAbove > spaceBelow;
+
+      if (shouldDropUp) {
+        wrapper.classList.add('drop-up');
+        listbox.style.maxHeight = Math.min(240, spaceAbove - 12) + 'px';
+      } else {
+        wrapper.classList.remove('drop-up');
+        listbox.style.maxHeight = Math.min(240, Math.max(120, spaceBelow - 12)) + 'px';
+      }
+    });
   }
 
   function close() {
     if (!isOpen) return;
     isOpen = false;
     wrapper.classList.remove('open');
+    wrapper.classList.remove('drop-up');
+    listbox.style.maxHeight = '';
+    const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
+    if (parentRow) parentRow.classList.remove('has-open-dropdown');
+    const parentGroup = wrapper.closest('.task-group-v2, .task-list');
+    if (parentGroup) parentGroup.classList.remove('has-open-dropdown');
     _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {
       selectedValue = input.value.trim();
       selectedText = selectedValue;
+    } else if (!canClear && !input.value.trim() && selectedValue) {
+      input.value = selectedText;
     }
     input.value = selectedValue ? selectedText : '';
-    clearBtn.style.display = input.value ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = input.value ? 'flex' : 'none';
   }
 
   const dropdownRef = { wrapper, close };
@@ -1198,7 +1378,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     highlightIdx = -1;
     if (!isOpen) open();
     renderList(input.value);
-    clearBtn.style.display = input.value ? 'flex' : 'none';
+    if (canClear) clearBtn.style.display = input.value ? 'flex' : 'none';
     wrapper.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
@@ -1216,6 +1396,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
       if (items[highlightIdx]) items[highlightIdx].scrollIntoView({ block: 'nearest' });
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (!isOpen) { open(); return; }
       highlightIdx = Math.max(highlightIdx - 1, 0);
       items.forEach((el, i) => el.classList.toggle('highlighted', i === highlightIdx));
       if (items[highlightIdx]) items[highlightIdx].scrollIntoView({ block: 'nearest' });
@@ -1232,12 +1413,14 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     }
   });
 
-  on(clearBtn, 'mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    selectOption('', '');
-    close();
-  });
+  if (canClear) {
+    on(clearBtn, 'mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selectOption('', '');
+      close();
+    });
+  }
 
   on(arrow, 'mousedown', (e) => {
     e.preventDefault();
@@ -1500,14 +1683,17 @@ const PaneMode = {
 const VALID_PANE_MODES = Object.values(PaneMode);
 
 function getPaneDefault(viewContext) {
+  if (viewContext) {
+    try {
+      const stored = localStorage.getItem(`erp_pane_default_${viewContext}`);
+      if (VALID_PANE_MODES.includes(stored)) return stored;
+    } catch (e) {}
+  }
+
   const userPref = typeof Auth !== 'undefined' && Auth.user?.preferences?.defaultFormView;
   if (VALID_PANE_MODES.includes(userPref)) return userPref;
 
-  if (!viewContext) return null;
-  try {
-    const stored = localStorage.getItem(`erp_pane_default_${viewContext}`);
-    return VALID_PANE_MODES.includes(stored) ? stored : null;
-  } catch (e) { return null; }
+  return null;
 }
 
 function setPaneDefault(viewContext, mode) {
@@ -1596,7 +1782,7 @@ class SidePane {
 
     document.addEventListener('keydown', (e) => {
       if (!this.isOpen()) return;
-      if (document.querySelector('.document-preview-overlay, .modal-overlay, .modal')) return;
+      if (document.querySelector('.document-preview-overlay, .modal-overlay, .modal, .discard-guard-overlay')) return;
       if (e.key === 'Escape') {
         if (this.viewMenu && this.viewMenu.classList.contains('open')) {
           this.hideViewMenu();
@@ -1614,6 +1800,7 @@ class SidePane {
         this._ignoreNextClick = false;
         return;
       }
+      if (document.querySelector('.discard-guard-overlay')) return;
       const path = e.composedPath ? e.composedPath() : this.composedPathPolyfill(e.target);
       const isPreviewClick = path.some(el => el && el.classList && (
         el.classList.contains('document-preview-overlay') ||
@@ -1622,6 +1809,13 @@ class SidePane {
         el.classList.contains('document-preview-viewer')
       ));
       if (isPreviewClick) return;
+
+      const isDiscardGuardClick = path.some(el => el && el.classList && (
+        el.classList.contains('discard-guard-overlay') ||
+        el.classList.contains('discard-guard-sheet') ||
+        el.closest?.('.discard-guard-overlay')
+      ));
+      if (isDiscardGuardClick) return;
 
       const clickedInsidePane = path.some(el => el === this.pane || el === this.viewMenu);
       const clickedTrigger = path.some(el => {
@@ -1643,7 +1837,9 @@ class SidePane {
                el.classList.contains('sidebar-collapse-btn') ||
                el.classList.contains('notion-embed-popover') ||
                el.classList.contains('document-preview-overlay') ||
-               el.classList.contains('document-preview-pane');
+               el.classList.contains('document-preview-pane') ||
+               el.classList.contains('discard-guard-overlay') ||
+               el.classList.contains('discard-guard-sheet');
       });
       if (!clickedInsidePane && !clickedTrigger) this.close();
     });
@@ -1991,9 +2187,16 @@ class SidePane {
       // Keep the override around long enough for the asynchronous hashchange
       // event that follows location.hash assignment to also see it.
       this._forceMode = PaneMode.FULL_PAGE;
-      location.hash = this.fullPageRoute;
       const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
-      if (appRef && typeof appRef.handleRoute === 'function') appRef.handleRoute();
+      if (appRef && typeof appRef.handleRoute === 'function') {
+        if (location.hash !== this.fullPageRoute) {
+          appRef._suppressHashChange = true;
+          location.hash = this.fullPageRoute;
+        }
+        appRef.handleRoute();
+      } else {
+        location.hash = this.fullPageRoute;
+      }
       setTimeout(() => { this._forceMode = null; }, 500);
     } else {
       console.warn('SidePane: full-page requested but no route or onExpand provided.');
@@ -2085,7 +2288,7 @@ class SidePane {
   }
 
   close(opts = {}) {
-    if (!this.isOpen()) return;
+    if (!this.isOpen()) return true;
 
     // Dirty-form guard: intercept dismissal when the pane hosts a form with
     // unsaved changes. Silent closes (mode switches) and forced closes
@@ -2097,9 +2300,17 @@ class SidePane {
             try { sessionStorage.removeItem(this._formGuard.draftKey); } catch (e) {}
           }
           this.close({ ...opts, force: true });
+          if (typeof opts.onDiscardConfirmed === 'function') {
+            try { opts.onDiscardConfirmed(); } catch (e) { console.error('onDiscardConfirmed error:', e); }
+          }
         },
+        onKeep: () => {
+          if (typeof opts.onKeepEditing === 'function') {
+            try { opts.onKeepEditing(); } catch (e) { console.error('onKeepEditing error:', e); }
+          }
+        }
       });
-      return;
+      return false;
     }
     if (this._formGuard) {
       const guard = this._formGuard;
@@ -2130,6 +2341,7 @@ class SidePane {
       this.onCloseCallback = null;
       cb();
     }
+    return true;
   }
 }
 
@@ -2169,7 +2381,7 @@ function buildFormBreadcrumb({ baseLabel, baseHash, currentText, actions = [], v
   baseLink.addEventListener('click', () => { location.hash = baseHash; });
   h1.appendChild(baseLink);
   h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
-  h1.appendChild(document.createTextNode(currentText));
+  h1.appendChild(document.createTextNode(currentText || ''));
   titleBar.appendChild(h1);
 
   if (actions.length > 0 || viewSwitcher) {
@@ -2364,7 +2576,7 @@ function buildFormViewSwitcher({
   }
 
   function outsideClick(e) {
-    if (!wrapper.contains(e.target)) closeMenu();
+    if (!wrapper.isConnected || !wrapper.contains(e.target)) closeMenu();
   }
 
   toggleBtn.addEventListener('click', (e) => {
@@ -2405,16 +2617,30 @@ function buildFormViewSwitcher({
  * @param {string} [opts.fullPageRoute] - hash route for full-page / new-tab, e.g. '#clients/form/new'
  * @param {string} [opts.newTabRoute] - optional override for new-tab URL
  */
-function openFormPanel({ icon, title, formContent, formId, actions, mode, viewContext, fullPageRoute, newTabRoute, draftKey, restoreDraft }) {
+function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, mode, viewContext, fullPageRoute, newTabRoute, draftKey, restoreDraft }) {
   const context = viewContext || (formId ? formId.replace(/-form$/, '') : 'form');
 
-  if (mode === PaneMode.FULL_PAGE || mode === PaneMode.NEW_TAB) {
+  const effectiveMode = mode || (window.SidePaneInstance && typeof window.SidePaneInstance.resolveMode === 'function'
+    ? window.SidePaneInstance.resolveMode({ mode, viewContext: context })
+    : PaneMode.SIDE_PEEK);
+
+  if (effectiveMode === PaneMode.FULL_PAGE || effectiveMode === PaneMode.NEW_TAB) {
     const route = newTabRoute || fullPageRoute;
     if (route) {
-      if (mode === PaneMode.FULL_PAGE) {
-        location.hash = route;
+      if (effectiveMode === PaneMode.FULL_PAGE) {
+        if (window.SidePaneInstance && typeof window.SidePaneInstance.close === 'function') {
+          window.SidePaneInstance.close({ silent: true });
+        }
         const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
-        if (appRef && typeof appRef.handleRoute === 'function') appRef.handleRoute();
+        if (appRef && typeof appRef.handleRoute === 'function') {
+          if (location.hash !== route) {
+            appRef._suppressHashChange = true;
+            location.hash = route;
+          }
+          appRef.handleRoute();
+        } else {
+          location.hash = route;
+        }
       } else {
         window.open(location.origin + location.pathname + route, '_blank', 'noopener,noreferrer');
       }
@@ -2462,9 +2688,9 @@ function openFormPanel({ icon, title, formContent, formId, actions, mode, viewCo
 
   if (window.SidePaneInstance && typeof window.SidePaneInstance.open === 'function') {
     window.SidePaneInstance.open({
-      title,
+      title: title || ariaLabel,
       content: wrapper,
-      mode,
+      mode: effectiveMode,
       viewContext: context,
       fullPageRoute,
       newTabRoute
@@ -2915,7 +3141,21 @@ async function closeFormPanelAndRoute(hash, messageConfig) {
     try { window.SidePaneInstance._formGuard.markClean?.(); } catch (e) { /* ignore */ }
   }
   if (window.SidePaneInstance && typeof window.SidePaneInstance.close === 'function') {
-    window.SidePaneInstance.close();
+    const closed = window.SidePaneInstance.close({
+      onDiscardConfirmed: async () => {
+        const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
+        if (appRef && typeof appRef.handleRoute === 'function') {
+          if (hash && location.hash !== hash) {
+            appRef._suppressHashChange = true;
+            location.hash = hash;
+          }
+          await appRef.handleRoute();
+        }
+      }
+    });
+    if (closed === false) {
+      return false;
+    }
   }
 
   if (messageConfig) {
@@ -3757,6 +3997,7 @@ const ArchivePage = {
     const hasBulkActions = Array.isArray(bulkActions) || typeof bulkActions === 'function';
     const selectedIds = new Set();
     const rowCheckboxes = [];
+    const selectAllCheckboxes = [];
     let bulkBar = null, bulkCount = null, bulkActionsContainer = null, bulkClose = null;
 
     if (hasBulkActions) {
@@ -3799,7 +4040,15 @@ const ArchivePage = {
     if (bulkClose) {
       bulkClose.addEventListener('click', () => {
         selectedIds.clear();
-        rowCheckboxes.forEach(cb => { cb.checked = false; });
+        rowCheckboxes.forEach(cb => {
+          cb.checked = false;
+          const r = cb.closest('.approval-item');
+          if (r) r.classList.remove('selected');
+        });
+        selectAllCheckboxes.forEach(sc => {
+          sc.checked = false;
+          sc.indeterminate = false;
+        });
         updateBulkBar();
       });
     }
@@ -3848,7 +4097,8 @@ const ArchivePage = {
       if (items.length === 0) return;
       if (selected !== 'all' && selected !== cat.key) return;
       const slicedCat = { ...cat, items };
-      wrapper.appendChild(this.renderCategoryCard(slicedCat, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar));
+      const cardHasBulk = hasBulkActions && cat.selectable !== false && cat.key !== 'rejected';
+      wrapper.appendChild(this.renderCategoryCard(slicedCat, cardHasBulk, selectedIds, rowCheckboxes, updateBulkBar, selectAllCheckboxes));
     });
 
     if (pagination) {
@@ -3943,7 +4193,7 @@ const ArchivePage = {
     return wrap;
   },
 
-  renderCategoryCard(category, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar) {
+  renderCategoryCard(category, hasBulkActions, selectedIds, rowCheckboxes, updateBulkBar, selectAllCheckboxes = []) {
     const card = el('div', { class: 'approval-category-card' });
 
     const header = el('div', { class: 'approval-category-header' });
@@ -3955,18 +4205,34 @@ const ArchivePage = {
 
     let selectAllCheckbox = null;
     if (hasBulkActions) {
+      const selectAllWrap = el('label', {
+        class: 'archive-select-all-wrap',
+        title: 'Select all',
+        style: 'display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.8125rem; color: var(--color-text-muted); font-weight: 500;'
+      });
       selectAllCheckbox = el('input', {
         type: 'checkbox',
         class: 'archive-category-select-all',
         title: 'Select all'
       });
-      header.appendChild(selectAllCheckbox);
+      selectAllCheckboxes.push(selectAllCheckbox);
+      selectAllWrap.appendChild(selectAllCheckbox);
+      selectAllWrap.appendChild(document.createTextNode('Select all'));
+      header.appendChild(selectAllWrap);
     }
 
     card.appendChild(header);
 
     const list = el('div', { class: 'approval-items-list' });
     const categoryCheckboxes = [];
+
+    const syncSelectAll = () => {
+      if (!selectAllCheckbox) return;
+      const allChecked = categoryCheckboxes.length > 0 && categoryCheckboxes.every(c => c.checked);
+      const someChecked = categoryCheckboxes.some(c => c.checked);
+      selectAllCheckbox.checked = allChecked;
+      selectAllCheckbox.indeterminate = someChecked && !allChecked;
+    };
 
     category.items.forEach((item, idx) => {
       const row = category.renderItem(item, idx, hasBulkActions);
@@ -3975,9 +4241,19 @@ const ArchivePage = {
         if (chk) {
           categoryCheckboxes.push(chk);
           rowCheckboxes.push(chk);
+          if (selectedIds.has(chk.dataset.id)) {
+            chk.checked = true;
+            row.classList.add('selected');
+          }
           chk.addEventListener('change', () => {
-            if (chk.checked) selectedIds.add(chk.dataset.id);
-            else selectedIds.delete(chk.dataset.id);
+            if (chk.checked) {
+              selectedIds.add(chk.dataset.id);
+              row.classList.add('selected');
+            } else {
+              selectedIds.delete(chk.dataset.id);
+              row.classList.remove('selected');
+            }
+            syncSelectAll();
             updateBulkBar();
           });
         }
@@ -3989,11 +4265,19 @@ const ArchivePage = {
       selectAllCheckbox.addEventListener('change', () => {
         categoryCheckboxes.forEach(chk => {
           chk.checked = selectAllCheckbox.checked;
-          if (chk.checked) selectedIds.add(chk.dataset.id);
-          else selectedIds.delete(chk.dataset.id);
+          const rowEl = chk.closest('.approval-item');
+          if (chk.checked) {
+            selectedIds.add(chk.dataset.id);
+            if (rowEl) rowEl.classList.add('selected');
+          } else {
+            selectedIds.delete(chk.dataset.id);
+            if (rowEl) rowEl.classList.remove('selected');
+          }
         });
+        syncSelectAll();
         updateBulkBar();
       });
+      syncSelectAll();
     }
 
     card.appendChild(list);

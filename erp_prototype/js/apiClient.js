@@ -368,7 +368,12 @@
       if (!isAbortError(err)) {
         console.error(`[apiClient] count fetch failed for ${cacheKey}`, err);
       }
-      return fallback;
+      if (fallback !== undefined) {
+        return typeof fallback === 'object' && fallback !== null
+          ? { ...fallback, _fallback: true, _error: err }
+          : fallback;
+      }
+      throw err;
     });
   };
 
@@ -451,6 +456,15 @@
         }
       }
       inFlight.clear();
+    },
+
+    peekCachedCount(prefix, entityId) {
+      const key = `${prefix}:${entityId || getActiveEntity() || 'none'}`;
+      const entry = countCache.get(key);
+      if (entry && (Date.now() - entry.ts < COUNT_TTL_MS)) {
+        return entry.value?.data || entry.value;
+      }
+      return null;
     },
 
     auth: {
@@ -554,14 +568,41 @@
       },
       _normalize(client) {
         if (!client) return client;
+        const archived = Boolean(
+          client.status === 'Archived' ||
+          client.archived === true ||
+          client.deletedAt ||
+          client.deleted_at
+        );
         return {
           ...client,
-          relatedCompanies: (client.relatedCompanies || []).map(rc => ({
-            clientId: rc.relatedClientId || rc.clientId,
-            relationType: rc.relationship || rc.relationType,
-            relationship: rc.relationship || rc.relationType,
-            id: rc.id
-          }))
+          status: archived ? 'Archived' : (client.status || 'Active'),
+          archived,
+          deletedAt: client.deletedAt || client.deleted_at || null,
+          deleted_at: client.deleted_at || client.deletedAt || null,
+          tradeName: client.tradeName || client.trade_name || '',
+          rdoCode: client.rdoCode || client.rdo_code || '',
+          contactUserId: client.contactUserId || client.contact_user_id || null,
+          contactPerson: client.contactPerson || client.contact_person || '',
+          retainer: client.retainer ?? client.isRetainer ?? false,
+          retainerFee: client.retainerFee != null ? client.retainerFee : (client.retainer_fee != null ? client.retainer_fee : null),
+          contactDetails: (client.contactDetails || client.contact_details || []).map(cd => ({
+            id: cd.id,
+            type: cd.type,
+            value: cd.value,
+            label: cd.label || null
+          })),
+          relatedCompanies: (client.relatedCompanies || client.related_companies || []).map(rc => {
+            const targetId = rc.relatedClientId || rc.related_client_id || rc.clientId;
+            const rel = rc.relationship || rc.relationType || rc.relation_type || '';
+            return {
+              id: rc.id,
+              clientId: targetId,
+              relatedClientId: targetId,
+              relationType: rel,
+              relationship: rel
+            };
+          })
         };
       },
       getById(id) {
@@ -697,12 +738,18 @@
       },
       counts: (entityId) => cachedCount(
         `clients.counts:${entityId || getActiveEntity() || 'none'}`,
-        () => get(countUrl('/clients/counts', entityId)),
-        { data: { active: 0, archived: 0 } }
+        () => get(countUrl('/clients/counts', entityId))
       ),
       invalidateCounts: () => invalidateCountCache('clients.counts'),
       create: (data) => post('/clients', data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
-      get: (id) => get(`/clients/${id}`),
+      get: (id, query = {}) => {
+        const qs = new URLSearchParams();
+        if (typeof query === 'object' && query !== null) {
+          Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
+        }
+        const q = qs.toString();
+        return get(`/clients/${id}${q ? '?' + q : ''}`);
+      },
       update: (id, data) => put(`/clients/${id}`, data).then((res) => { invalidateCountCache('clients.counts'); return res; }),
       archive: (id) => post(`/clients/${id}/archive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),
       unarchive: (id) => post(`/clients/${id}/unarchive`).then((res) => { invalidateCountCache('clients.counts'); return res; }),

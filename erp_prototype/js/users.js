@@ -19,6 +19,7 @@ const Users = {
   _skipFetchGeneration: 0,
   _activeSkipGeneration: 0,
   _usersLoaded: false,
+  _usersPromise: null,
 
   /**
    * Detect client-generated optimistic ids so they are never sent to the backend.
@@ -677,6 +678,7 @@ const Users = {
       const [auditRes, myRequests] = await Promise.all([
         canManageUsers ? window.apiClient.admin.auditCount() : Promise.resolve({ data: { total: 0 } }),
         this.countMyRequests(),
+        canManageUsers ? this.loadUsers({ silent: true }) : Promise.resolve(),
       ]);
       this._counts.audit = auditRes?.data?.total || 0;
       this._counts.myRequests = myRequests || 0;
@@ -832,7 +834,7 @@ const Users = {
 
             let newSec = null;
             if (this.view === 'users' && canManageUsers) {
-              newSec = this.renderUsersSection();
+              newSec = await this.renderUsersSection();
             } else if (this.view === 'audit' && canManageUsers) {
               newSec = await this.renderAuditSection();
             } else if (this.view === 'pending' && (canManageUsers || isManager || hasAccounting)) {
@@ -876,7 +878,7 @@ const Users = {
 
     if (isUserFullPage) {
       const isNew = this.editingId === 'new';
-      const user = isNew ? null : this.users.find(u => u.id === this.editingId);
+      const user = isNew ? null : ((this.users || []).find(u => u.id === this.editingId) || (window.apiClient?.userCache?._users || []).find(u => u.id === this.editingId));
       const fullPageRoute = isNew ? '#admin/users/form/new' : `#admin/users/form/${this.editingId}`;
 
       const viewSwitcher = buildFormViewSwitcher({
@@ -1145,7 +1147,7 @@ const Users = {
  
         let newSec = null;
         if (this.view === 'users' && canManageUsers) {
-          newSec = this.renderUsersSection();
+          newSec = await this.renderUsersSection();
         } else if (this.view === 'audit' && canManageUsers) {
           newSec = await this.renderAuditSection();
         } else if (this.view === 'pending' && (canManageUsers || isManager || hasAccounting)) {
@@ -1177,6 +1179,15 @@ const Users = {
     return container;
   },
 
+  updateTabNav() {
+    if (!this.container) return;
+    const currentTabNav = this.container.querySelector('.module-tab-nav');
+    if (currentTabNav && currentTabNav.parentNode) {
+      const freshTabNav = this.renderTabNav();
+      currentTabNav.parentNode.replaceChild(freshTabNav, currentTabNav);
+    }
+  },
+
   renderTabNav() {
     const canManageUsers = Auth.user?.role === 'Admin';
 
@@ -1188,8 +1199,12 @@ const Users = {
     };
 
     if (canManageUsers) {
-      const userCount = (this.users || []).length;
-      const auditCount = this._counts.audit;
+      const userCount = Array.isArray(this.users) && this._usersLoaded
+        ? this.users.length
+        : (Array.isArray(window.apiClient?.userCache?._users) && window.apiClient.userCache._users.length > 0
+          ? window.apiClient.userCache._users.length
+          : (this.users || []).length);
+      const auditCount = this._counts.audit || 0;
       const pendingCount = (() => {
         if (typeof this.getPendingCategories !== 'function') return 0;
         const categories = this.getPendingCategories();
@@ -1600,6 +1615,11 @@ const Users = {
       addProp('Recipient & Delivery', document.createTextNode(r.recipientDetails || '—'));
     }
 
+    const reqDueDate = r.dueDate || r.due_date;
+    if (reqDueDate) {
+      addProp('Due Date', document.createTextNode(typeof formatDate === 'function' ? formatDate(reqDueDate) : String(reqDueDate).slice(0, 10)));
+    }
+
     wrapper.appendChild(grid);
 
     // Documents list for Transmittal
@@ -1747,23 +1767,32 @@ const Users = {
   // ============================================================
   users: [],
 
-  async loadUsers() {
-    if (this._usersLoaded) return;
-    try {
-      const res = await window.apiClient.admin.listUsers();
-      this.users = res.data || [];
-      this._usersLoaded = true;
-    } catch (e) {
-      this.users = [];
-      this._usersLoaded = false;
-      if (!isAbortError(e)) {
-        Workflow.showMessage('Users', 'Unable to load users from the server.', 'error');
+  async loadUsers(options = {}) {
+    if (this._usersLoaded) return this.users;
+    if (this._usersPromise) return this._usersPromise;
+    this._usersPromise = (async () => {
+      try {
+        const res = await window.apiClient.admin.listUsers();
+        this.users = res.data || [];
+        this._usersLoaded = true;
+        return this.users;
+      } catch (e) {
+        this.users = [];
+        this._usersLoaded = false;
+        if (!isAbortError(e) && !options.silent) {
+          Workflow.showMessage('Users', 'Unable to load users from the server.', 'error');
+        }
+        return this.users;
+      } finally {
+        this._usersPromise = null;
       }
-    }
+    })();
+    return this._usersPromise;
   },
 
   invalidateCache() {
     this._usersLoaded = false;
+    this._usersPromise = null;
     this._skipFetchGeneration = 0;
     this._activeSkipGeneration = 0;
     this._pendingPreloadTs = 0;
@@ -1786,13 +1815,13 @@ const Users = {
     return cacheAge < 15 * 1000 && Array.isArray(this._cachedMyPending);
   },
 
-  renderUsersSection() {
+  async renderUsersSection() {
     const wrapper = el('div', { class: 'page-content-section' });
 
     // List container (forms open in the shared side-peek panel, not inline)
     const listContainer = el('div', { class: 'list-container' });
     wrapper.appendChild(listContainer);
-    this.renderUserList(listContainer);
+    await this.renderUserList(listContainer);
 
     return wrapper;
   },
@@ -1807,6 +1836,7 @@ const Users = {
     const shouldSkip = this._activeSkipGeneration > 0 && this._activeSkipGeneration === this._skipFetchGeneration;
     if (!shouldSkip) {
       await this.loadUsers();
+      this.updateTabNav();
     }
     const users = this.users;
     const isAdmin = Auth.user.role === 'Admin';
@@ -2416,7 +2446,7 @@ const Users = {
       return;
     }
     this.editingId = userId || 'new';
-    const user = userId ? this.users.find(u => u.id === userId) : null;
+    const user = userId ? (((this.users || []).find(u => u.id === userId)) || (window.apiClient?.userCache?._users || []).find(u => u.id === userId)) : null;
     const form = this.renderUserFormContent(user);
 
     const fullPageRoute = userId ? `#admin/users/form/${userId}` : '#admin/users/form/new';
@@ -6241,8 +6271,8 @@ const Users = {
       });
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, priorityVal));
 
-      const dueVal = proposed.dueDate
-        ? el('span', { text: formatDate(proposed.dueDate) })
+      const dueVal = (proposed.dueDate || proposed.due_date)
+        ? el('span', { text: formatDate(proposed.dueDate || proposed.due_date) })
         : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' });
       propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, dueVal));
 
@@ -6268,6 +6298,9 @@ const Users = {
       const priority = proposed.priority || 'Normal';
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, el('span', { class: 'badge badge-info', text: priority })));
 
+      const wrDue = proposed.dueDate || proposed.due_date;
+      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, wrDue ? el('span', { text: formatDate(wrDue) }) : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' })));
+
       const assigneeName = proposed.assigneeName || proposed.assignee_name;
       const assignee = await resolveUser(proposed.assigneeId, assigneeName);
       propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, makeUserNode(assignee, proposed.assigneeId, assigneeName)));
@@ -6285,8 +6318,9 @@ const Users = {
         propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask ? linkedTask.title : proposed.linkedTaskId })));
       }
 
-      propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate) })));
-      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(proposed.dueDate) })));
+      propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate || proposed.issue_date) })));
+      const invDue = proposed.dueDate || proposed.due_date;
+      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, invDue ? el('span', { text: formatDate(invDue) }) : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' })));
       propertyGrid.appendChild(createPropertyRow('Total amount', Icons.amount, el('span', { text: formatPHP(proposed.total), style: 'font-weight: 700;' })));
 
       if (proposed.status) {
@@ -6342,6 +6376,11 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
       propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
       propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
+
+      const disbDue = proposed.dueDate || proposed.due_date;
+      if (disbDue) {
+        propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(disbDue) })));
+      }
 
       if (proposed.description || proposed.purpose || proposed.notes) {
         propertyGrid.appendChild(createPropertyRow('Purpose / Notes', Icons.document, el('span', { text: proposed.description || proposed.purpose || proposed.notes })));
