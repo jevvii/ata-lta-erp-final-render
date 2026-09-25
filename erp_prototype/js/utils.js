@@ -389,16 +389,25 @@ function setButtonLoading(btn, label = 'Saving…') {
 function buildEntityPillToggle(opts = {}) {
   const entities = (opts.entities && opts.entities.length ? opts.entities : ['ATA', 'LTA']);
   let current = entities.includes(opts.value) ? opts.value : entities[0];
-  const root = el('div', { class: 'entity-pill-toggle', role: 'radiogroup', 'aria-label': 'Target entity' });
+  let isDisabled = !!opts.disabled;
+  const root = el('div', { class: 'entity-pill-toggle' + (isDisabled ? ' is-disabled' : ''), role: 'radiogroup', 'aria-label': 'Target entity' });
+  if (isDisabled) {
+    root.setAttribute('aria-disabled', 'true');
+    root.setAttribute('title', "Entity locked to selected client's entity");
+  }
   entities.forEach(ent => {
     const pill = el('button', {
       type: 'button',
       class: 'entity-pill' + (ent === current ? ' active' : ''),
       text: ent === 'ATA' ? 'ATA Accounting' : (ent === 'LTA' ? 'LTA Accounting' : ent)
     });
+    if (isDisabled) {
+      pill.disabled = true;
+      pill.setAttribute('tabindex', '-1');
+    }
     pill.setAttribute('aria-pressed', ent === current ? 'true' : 'false');
     pill.addEventListener('click', () => {
-      if (current === ent) return;
+      if (isDisabled || current === ent) return;
       current = ent;
       root.querySelectorAll('.entity-pill').forEach(p => {
         const isActive = p === pill;
@@ -425,6 +434,25 @@ function buildEntityPillToggle(opts = {}) {
         }
       });
       if (typeof opts.onChange === 'function') opts.onChange(val);
+    },
+    setDisabled: (disabled) => {
+      isDisabled = !!disabled;
+      root.classList.toggle('is-disabled', isDisabled);
+      root.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
+      if (isDisabled) {
+        root.setAttribute('title', "Entity locked to selected client's entity");
+      } else {
+        root.removeAttribute('title');
+      }
+      const pills = root.querySelectorAll('.entity-pill');
+      pills.forEach(p => {
+        p.disabled = isDisabled;
+        if (isDisabled) {
+          p.setAttribute('tabindex', '-1');
+        } else {
+          p.removeAttribute('tabindex');
+        }
+      });
     }
   };
 }
@@ -1261,6 +1289,8 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     wrapper.classList.add('open');
     const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
     if (parentRow) parentRow.classList.add('has-open-dropdown');
+    const parentGroup = wrapper.closest('.task-group-v2');
+    if (parentGroup) parentGroup.classList.add('has-open-dropdown');
     _searchableDropdowns.add(dropdownRef);
     renderList(selectedValue ? '' : input.value);
     // Check if listbox would clip at bottom of viewport or nearest container
@@ -1268,17 +1298,42 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
       if (!isOpen) return;
       const rect = wrapper.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
-      const spaceAbove = rect.top;
-      const scrollParent = wrapper.closest('.task-group-v2, .task-list, [style*="overflow"]');
+
+      // Calculate true space above taking into account sticky toolbars/headers
+      let headerBottom = 0;
+      const stickyElements = document.querySelectorAll(
+        '.task-view-toolbar, .project-detail-v2 .task-view-toolbar, .table-header, .app-header, .topbar, .project-detail-title-bar'
+      );
+      stickyElements.forEach(el => {
+        const hRect = el.getBoundingClientRect();
+        if (hRect.bottom > 0 && hRect.bottom < rect.top) {
+          headerBottom = Math.max(headerBottom, hRect.bottom);
+        }
+      });
+      const spaceAbove = Math.max(0, rect.top - headerBottom);
+
+      // Only check parents that actually clip overflow
+      let scrollParent = wrapper.parentElement;
       let parentSpaceBelow = spaceBelow;
-      if (scrollParent) {
-        const parentRect = scrollParent.getBoundingClientRect();
-        parentSpaceBelow = parentRect.bottom - rect.bottom;
+      while (scrollParent && scrollParent !== document.body) {
+        const style = window.getComputedStyle(scrollParent);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflowY === 'hidden') {
+          const parentRect = scrollParent.getBoundingClientRect();
+          parentSpaceBelow = parentRect.bottom - rect.bottom;
+          break;
+        }
+        scrollParent = scrollParent.parentElement;
       }
-      if ((spaceBelow < 250 || parentSpaceBelow < 220) && spaceAbove > 180) {
+
+      // Drop up only if not enough room below AND plenty of room above without hitting toolbar
+      const shouldDropUp = spaceBelow < 200 && parentSpaceBelow < 200 && spaceAbove >= 200 && spaceAbove > spaceBelow;
+
+      if (shouldDropUp) {
         wrapper.classList.add('drop-up');
+        listbox.style.maxHeight = Math.min(240, spaceAbove - 12) + 'px';
       } else {
         wrapper.classList.remove('drop-up');
+        listbox.style.maxHeight = Math.min(240, Math.max(120, spaceBelow - 12)) + 'px';
       }
     });
   }
@@ -1288,8 +1343,11 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     isOpen = false;
     wrapper.classList.remove('open');
     wrapper.classList.remove('drop-up');
+    listbox.style.maxHeight = '';
     const parentRow = wrapper.closest('.task-row, .wr-task-row, .notion-line-item-row');
     if (parentRow) parentRow.classList.remove('has-open-dropdown');
+    const parentGroup = wrapper.closest('.task-group-v2, .task-list');
+    if (parentGroup) parentGroup.classList.remove('has-open-dropdown');
     _searchableDropdowns.delete(dropdownRef);
     // Restore display text
     if (allowFreeText && !selectedValue && input.value.trim()) {

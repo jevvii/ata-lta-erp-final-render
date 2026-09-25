@@ -122,10 +122,36 @@ const MaterialDatePicker = (() => {
   }
 
   function openPicker(input, displayEl) {
-    // Parse current value or use today
+    // Parse min and max date constraints from input attributes
+    const minAttr = input.getAttribute('min') || input.min;
+    const maxAttr = input.getAttribute('max') || input.max;
+    const minDate = minAttr ? parseDate(minAttr) : null;
+    const maxDate = maxAttr ? parseDate(maxAttr) : null;
+    if (minDate) minDate.setHours(0, 0, 0, 0);
+    if (maxDate) maxDate.setHours(23, 59, 59, 999);
+
+    const isDateDisabled = (dateObj) => {
+      if (!dateObj) return false;
+      const t = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+      if (minDate) {
+        const minCheck = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate());
+        if (t < minCheck) return true;
+      }
+      if (maxDate) {
+        const maxCheck = new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate());
+        if (t > maxCheck) return true;
+      }
+      return false;
+    };
+
+    // Parse current value or use today (clamped to min/max if needed)
     const currentVal = parseDate(input.value);
     let viewDate = currentVal ? new Date(currentVal) : new Date();
-    let selectedDate = currentVal ? new Date(currentVal) : null;
+    let selectedDate = (currentVal && !isDateDisabled(currentVal)) ? new Date(currentVal) : null;
+    if (isDateDisabled(viewDate)) {
+      if (minDate && viewDate < minDate) viewDate = new Date(minDate);
+      else if (maxDate && viewDate > maxDate) viewDate = new Date(maxDate);
+    }
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     let yearSelectMode = false;
@@ -289,6 +315,13 @@ const MaterialDatePicker = (() => {
         cell.textContent = d;
 
         const cellDate = new Date(year, month, d);
+        const disabled = isDateDisabled(cellDate);
+        if (disabled) {
+          cell.disabled = true;
+          cell.classList.add('mdp-disabled');
+          cell.setAttribute('aria-disabled', 'true');
+        }
+
         const isToday = cellDate.getFullYear() === today.getFullYear() &&
           cellDate.getMonth() === today.getMonth() &&
           cellDate.getDate() === today.getDate();
@@ -300,13 +333,15 @@ const MaterialDatePicker = (() => {
         if (isSelected) cell.classList.add('mdp-selected');
         else if (isToday) cell.classList.add('mdp-today');
 
-        cell.addEventListener('click', () => {
-          selectedDate = new Date(year, month, d);
-          headerDate.textContent = formatHeader(selectedDate);
-          manualInput.value = String(selectedDate.getMonth() + 1).padStart(2, '0') + '/' +
-            String(selectedDate.getDate()).padStart(2, '0') + '/' + selectedDate.getFullYear();
-          renderCalendar();
-        });
+        if (!disabled) {
+          cell.addEventListener('click', () => {
+            selectedDate = new Date(year, month, d);
+            headerDate.textContent = formatHeader(selectedDate);
+            manualInput.value = String(selectedDate.getMonth() + 1).padStart(2, '0') + '/' +
+              String(selectedDate.getDate()).padStart(2, '0') + '/' + selectedDate.getFullYear();
+            renderCalendar();
+          });
+        }
 
         grid.appendChild(cell);
       }
@@ -330,12 +365,19 @@ const MaterialDatePicker = (() => {
         btn.type = 'button';
         btn.className = 'mdp-year-btn';
         btn.textContent = y;
+        const yearDisabled = (minDate && y < minDate.getFullYear()) || (maxDate && y > maxDate.getFullYear());
+        if (yearDisabled) {
+          btn.disabled = true;
+          btn.classList.add('mdp-year-disabled');
+        }
         if (y === currentYear) btn.classList.add('mdp-year-active');
 
-        btn.addEventListener('click', () => {
-          viewDate.setFullYear(y);
-          renderCalendar();
-        });
+        if (!yearDisabled) {
+          btn.addEventListener('click', () => {
+            viewDate.setFullYear(y);
+            renderCalendar();
+          });
+        }
 
         yearPanel.appendChild(btn);
       }
@@ -386,7 +428,7 @@ const MaterialDatePicker = (() => {
           const y = parseInt(parts[2], 10);
           if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2099) {
             const parsed = new Date(y, m - 1, d);
-            if (!isNaN(parsed)) {
+            if (!isNaN(parsed) && !isDateDisabled(parsed)) {
               selectedDate = parsed;
               viewDate = new Date(parsed);
               headerDate.textContent = formatHeader(selectedDate);
@@ -429,7 +471,7 @@ const MaterialDatePicker = (() => {
     });
 
     okBtn.addEventListener('click', () => {
-      if (selectedDate) {
+      if (selectedDate && !isDateDisabled(selectedDate)) {
         const val = toDateStr(selectedDate);
         input.value = val;
         input.dispatchEvent(new Event('input', { bubbles: true }));

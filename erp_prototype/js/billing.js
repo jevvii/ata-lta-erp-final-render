@@ -3459,6 +3459,9 @@ const Billing = {
             if (numInput) numInput.value = n;
           })
           .catch(() => {});
+        if (typeof dueDateInput !== 'undefined' && dueDateInput && !dueDateInput.value && (wr?.dueDate || wr?.due_date)) {
+          dueDateInput.value = String(wr.dueDate || wr.due_date).slice(0, 10);
+        }
       }
     });
 
@@ -3490,28 +3493,37 @@ const Billing = {
         type: "date",
         name: "issueDate",
         class: "notion-prop-input",
-        value: inv ? inv.issueDate : new Date().toISOString().slice(0, 10),
+        value: inv ? (inv.issueDate || inv.issue_date || new Date().toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10),
         required: true,
       }),
     );
     propsGrid.appendChild(issueDateProp);
 
     // Due Date
+    const defaultInvoiceDue = () => {
+      if (inv) return (inv.dueDate || inv.due_date ? String(inv.dueDate || inv.due_date).slice(0, 10) : "");
+      if (prefill?.dueDate) return String(prefill.dueDate).slice(0, 10);
+      const prefillWr = prefill?.workRequestId && window.apiClient?.workRequestCache?.getById ? window.apiClient.workRequestCache.getById(prefill.workRequestId) : null;
+      if (prefillWr?.dueDate || prefillWr?.due_date) return String(prefillWr.dueDate || prefillWr.due_date).slice(0, 10);
+      const d = new Date();
+      d.setDate(d.getDate() + 30);
+      return d.toISOString().slice(0, 10);
+    };
+
     const dueDateProp = el("div", { class: "notion-prop" });
     dueDateProp.appendChild(
       el("label", {
         html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date',
       }),
     );
-    dueDateProp.appendChild(
-      el("input", {
-        type: "date",
-        name: "dueDate",
-        class: "notion-prop-input",
-        value: inv ? inv.dueDate : "",
-        required: true,
-      }),
-    );
+    const dueDateInput = el("input", {
+      type: "date",
+      name: "dueDate",
+      class: "notion-prop-input",
+      value: defaultInvoiceDue(),
+      required: true,
+    });
+    dueDateProp.appendChild(dueDateInput);
     propsGrid.appendChild(dueDateProp);
 
     // Invoice Number (auto)

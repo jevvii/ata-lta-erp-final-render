@@ -1600,6 +1600,11 @@ const Users = {
       addProp('Recipient & Delivery', document.createTextNode(r.recipientDetails || '—'));
     }
 
+    const reqDueDate = r.dueDate || r.due_date;
+    if (reqDueDate) {
+      addProp('Due Date', document.createTextNode(typeof formatDate === 'function' ? formatDate(reqDueDate) : String(reqDueDate).slice(0, 10)));
+    }
+
     wrapper.appendChild(grid);
 
     // Documents list for Transmittal
@@ -6241,8 +6246,8 @@ const Users = {
       });
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, priorityVal));
 
-      const dueVal = proposed.dueDate
-        ? el('span', { text: formatDate(proposed.dueDate) })
+      const dueVal = (proposed.dueDate || proposed.due_date)
+        ? el('span', { text: formatDate(proposed.dueDate || proposed.due_date) })
         : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' });
       propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, dueVal));
 
@@ -6268,6 +6273,9 @@ const Users = {
       const priority = proposed.priority || 'Normal';
       propertyGrid.appendChild(createPropertyRow('Priority', Icons.priority, el('span', { class: 'badge badge-info', text: priority })));
 
+      const wrDue = proposed.dueDate || proposed.due_date;
+      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, wrDue ? el('span', { text: formatDate(wrDue) }) : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' })));
+
       const assigneeName = proposed.assigneeName || proposed.assignee_name;
       const assignee = await resolveUser(proposed.assigneeId, assigneeName);
       propertyGrid.appendChild(createPropertyRow('Assignee', Icons.assignee, makeUserNode(assignee, proposed.assigneeId, assigneeName)));
@@ -6285,8 +6293,9 @@ const Users = {
         propertyGrid.appendChild(createPropertyRow('Linked task', Icons.checklist, el('span', { text: linkedTask ? linkedTask.title : proposed.linkedTaskId })));
       }
 
-      propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate) })));
-      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(proposed.dueDate) })));
+      propertyGrid.appendChild(createPropertyRow('Issue date', Icons.dueDate, el('span', { text: formatDate(proposed.issueDate || proposed.issue_date) })));
+      const invDue = proposed.dueDate || proposed.due_date;
+      propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, invDue ? el('span', { text: formatDate(invDue) }) : el('span', { style: 'font-style: italic; color: var(--color-text-muted);', text: 'Not set' })));
       propertyGrid.appendChild(createPropertyRow('Total amount', Icons.amount, el('span', { text: formatPHP(proposed.total), style: 'font-weight: 700;' })));
 
       if (proposed.status) {
@@ -6342,6 +6351,11 @@ const Users = {
       propertyGrid.appendChild(createPropertyRow('Amount', Icons.amount, el('span', { text: formatPHP(proposed.amount), style: 'font-weight: 700;' })));
       propertyGrid.appendChild(createPropertyRow('Payment method', Icons.document, el('span', { text: proposed.paymentMethod || 'None' })));
       propertyGrid.appendChild(createPropertyRow('Status', Icons.status, el('span', { class: 'badge badge-info', text: proposed.status || 'Draft' })));
+
+      const disbDue = proposed.dueDate || proposed.due_date;
+      if (disbDue) {
+        propertyGrid.appendChild(createPropertyRow('Due date', Icons.dueDate, el('span', { text: formatDate(disbDue) })));
+      }
 
       if (proposed.description || proposed.purpose || proposed.notes) {
         propertyGrid.appendChild(createPropertyRow('Purpose / Notes', Icons.document, el('span', { text: proposed.description || proposed.purpose || proposed.notes })));

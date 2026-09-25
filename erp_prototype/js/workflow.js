@@ -109,8 +109,11 @@ const WorkflowData = {
 
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
+    const dueDate = wr.dueDate || wr.due_date || null;
     return {
       ...wr,
+      dueDate,
+      due_date: dueDate,
       // Backend does not persist these frontend-only fields; supply defaults.
       archived: wr.archived ?? false,
       boardOrder: wr.boardOrder ?? null,
@@ -125,8 +128,11 @@ const WorkflowData = {
 
   normalizeTask(task) {
     if (!task) return task;
+    const dueDate = task.dueDate || task.due_date || null;
     return {
       ...task,
+      dueDate,
+      due_date: dueDate,
       // Preserve frontend-only extensions that the backend strips.
       comments: task.comments || [],
       taskDocuments: (task.taskDocuments || []).map(d => ({
@@ -3334,9 +3340,10 @@ const Workflow = {
 
     const dueDateGroup = el('div', { class: 'form-group' });
     dueDateGroup.appendChild(el('label', { text: 'Due Date' }));
+    const defaultBillingDue = preselectedTask?.dueDate || preselectedTask?.due_date || wr?.dueDate || wr?.due_date || (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })();
     dueDateGroup.appendChild(el('input', {
       type: 'date', name: 'dueDate',
-      value: '', required: true
+      value: String(defaultBillingDue).slice(0, 10), required: true
     }));
     dateRow.appendChild(dueDateGroup);
     form.appendChild(dateRow);
@@ -7836,12 +7843,20 @@ const Workflow = {
 
     const syncClientEntity = () => {
       const selectedClientId = clientSel.value;
-      const selectedClient = (window.apiClient.clientCache._clients || []).find(c => c.id === selectedClientId);
+      const selectedClient = (window.apiClient.clientCache._clients || []).find(c => c.id === selectedClientId)
+        || (window.apiClient?.clientCache?.getById ? window.apiClient.clientCache.getById(selectedClientId) : null);
       if (selectedClient && selectedClient.entity) {
         if (pillToggle && typeof pillToggle.setValue === 'function') {
           pillToggle.setValue(selectedClient.entity);
         }
+        if (pillToggle && typeof pillToggle.setDisabled === 'function') {
+          pillToggle.setDisabled(true);
+        }
         form.dataset.recordEntity = selectedClient.entity;
+      } else {
+        if (pillToggle && typeof pillToggle.setDisabled === 'function') {
+          pillToggle.setDisabled(false);
+        }
       }
     };
     clientSel.addEventListener('change', syncClientEntity);
@@ -7872,7 +7887,13 @@ const Workflow = {
     // Due Date
     const dueGroup = el('div', { class: 'notion-prop' });
     dueGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date' }));
-    dueGroup.appendChild(el('input', { type: 'date', name: 'dueDate', class: 'notion-prop-input', required: true, value: wr ? (wr.dueDate || '') : '' }));
+    dueGroup.appendChild(el('input', {
+      type: 'date',
+      name: 'dueDate',
+      class: 'notion-prop-input',
+      required: true,
+      value: wr ? ((wr.dueDate || wr.due_date) ? String(wr.dueDate || wr.due_date).slice(0, 10) : '') : ''
+    }));
     propsGrid.appendChild(dueGroup);
 
     form.appendChild(propsGrid);
@@ -13637,7 +13658,12 @@ const Workflow = {
     let checklistItems = [];
     let checklistFromTemplate = false;
     const isDraft = wr?.status === 'Draft';
-    const wrDeadline = String(wr?.dueDate || wr?.deadline || '').slice(0, 10);
+    const wrDeadline = String(wr?.dueDate || wr?.due_date || wr?.deadline || '').slice(0, 10);
+    const today = manilaToday();
+    if (wrDeadline && wrDeadline < today) {
+      this.showMessage('Blocked', 'Cannot create tasks for an overdue Work Request. Please update the Work Request due date first.', 'danger');
+      return null;
+    }
 
     // ── Task Title free-form (Topmost) ──
     const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
@@ -13665,14 +13691,17 @@ const Workflow = {
     assigneeGroup.appendChild(assigneeWrapper);
     propsGrid.appendChild(assigneeGroup);
 
-    // Due Date (Required, capped to WR deadline)
+    // Due Date (Required, capped to WR deadline and min today)
     const dueGroup = el('div', { class: 'notion-prop is-required' });
     dueGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date *' + (wrDeadline ? ` <span style="font-size:0.75rem; color:var(--color-text-muted);">(Max: ${wrDeadline})</span>` : '') }));
+    const defaultTaskDue = (wrDeadline && wrDeadline >= today) ? wrDeadline : today;
     const dueInputAttrs = {
       type: 'date',
       name: 'dueDate',
       class: 'notion-prop-input',
-      required: true
+      required: true,
+      min: today,
+      value: defaultTaskDue
     };
     if (wrDeadline) {
       dueInputAttrs.max = wrDeadline;
@@ -14120,6 +14149,11 @@ const Workflow = {
         return;
       }
       const taskDueDate = String(data.dueDate || '').slice(0, 10);
+      if (taskDueDate && taskDueDate < today) {
+        this.showMessage('Invalid Due Date', `Due date cannot be before today (${today}).`, 'danger');
+        dueInput.focus();
+        return;
+      }
       if (wrDeadline && taskDueDate > wrDeadline) {
         this.showMessage('Invalid Due Date', `Due date cannot exceed the Work Request deadline (${wrDeadline}).`, 'danger');
         dueInput.focus();
@@ -14475,7 +14509,12 @@ const Workflow = {
     await renderChecklist();
 
     // Due Date
-    const dueAttrs = { type: 'date', name: 'dueDate', value: task.dueDate ? String(task.dueDate).slice(0, 10) : '' };
+    const existingTaskDue = task.dueDate || task.due_date;
+    const dueAttrs = {
+      type: 'date',
+      name: 'dueDate',
+      value: existingTaskDue ? String(existingTaskDue).slice(0, 10) : (wrDeadline || '')
+    };
     if (wrDeadline) dueAttrs.max = wrDeadline;
     form.appendChild(el('div', { class: 'form-group' }, [
       el('label', { html: 'Due Date' + (wrDeadline ? ` <span style="font-size:0.75rem; color:var(--color-text-muted);">(Max: ${wrDeadline})</span>` : '') }),
