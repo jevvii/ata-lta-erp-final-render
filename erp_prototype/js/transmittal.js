@@ -253,8 +253,19 @@ const Transmittal = {
       }
       return;
     }
-    this._counts = this._recalcCounts();
-    this._countsEntity = this._getActiveEntity();
+    const local = this._recalcCounts();
+    if (this._counts && this._countsEntity === this._getActiveEntity()) {
+      this._counts.active = local.active;
+      if (local.archived > 0 || this._counts.archived === undefined) {
+        this._counts.archived = local.archived;
+      }
+    } else {
+      this._counts = {
+        active: local.active,
+        archived: (this._counts && this._counts.archived !== undefined) ? this._counts.archived : local.archived
+      };
+      this._countsEntity = this._getActiveEntity();
+    }
     this.updateTabNav();
   },
 

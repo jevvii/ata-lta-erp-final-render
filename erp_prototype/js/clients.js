@@ -331,13 +331,19 @@ const Clients = {
       return;
     }
     const local = this._recalcCounts(entity);
-    if (this._counts && this._countsEntity === entity && this._countsFromApi) {
+    if (this._counts && this._countsEntity === entity) {
       this._counts.activeCount = local.activeCount;
+      if (local.archivedCount > 0 || this._counts.archivedCount === undefined) {
+        this._counts.archivedCount = local.archivedCount;
+      }
     } else {
-      this._counts = local;
+      this._counts = {
+        activeCount: local.activeCount,
+        archivedCount: (this._counts && this._counts.archivedCount !== undefined) ? this._counts.archivedCount : local.archivedCount
+      };
       this._countsEntity = entity;
-      this._countsFromApi = false;
     }
+    this.updateTabNav();
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
@@ -678,9 +684,11 @@ const Clients = {
     // Load data asynchronously in the background
     (async () => {
       try {
-        await ClientsData.ensure();
-        await this._loadRejectedArchiveCounts();
-        await this.loadCounts(true);
+        await Promise.all([
+          ClientsData.ensure(),
+          this._loadRejectedArchiveCounts(),
+          this.loadCounts(true),
+        ]);
 
         if (routeId !== App._routeId) return;
 
@@ -769,9 +777,11 @@ const Clients = {
       this._countsFromApi = true;
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to load client counts', err);
-      this._counts = this._recalcCounts();
-      this._countsEntity = entity;
-      this._countsFromApi = false;
+      if (!this._counts) {
+        this._counts = this._recalcCounts();
+        this._countsEntity = entity;
+        this._countsFromApi = false;
+      }
     }
     this.updateTabNav();
     return this._counts;

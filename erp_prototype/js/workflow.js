@@ -1452,8 +1452,20 @@ const Workflow = {
       }
       return;
     }
-    this._counts = this._recalcCounts();
-    this._countsEntity = Auth.activeEntity;
+    const local = this._recalcCounts();
+    if (this._counts && this._countsEntity === Auth.activeEntity) {
+      this._counts.active = local.active;
+      if (local.archived > 0 || this._counts.archived === undefined) {
+        this._counts.archived = local.archived;
+      }
+    } else {
+      this._counts = {
+        active: local.active,
+        archived: (this._counts && this._counts.archived !== undefined) ? this._counts.archived : local.archived
+      };
+      this._countsEntity = Auth.activeEntity;
+    }
+    this.updateTabNav();
   },
 
   _updateCounts(activeDelta = 0, archivedDelta = 0) {
