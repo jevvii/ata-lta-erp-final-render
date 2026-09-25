@@ -170,4 +170,22 @@ describe('/v1/clients', () => {
     const audit = Array.from(mockTables.audit_logs.values());
     expect(audit.some((a) => a.action === 'client.archived')).toBe(true);
   });
+
+  it('returns client counts for the active entity', async () => {
+    const admin = registerUser({
+      email: 'admin-counts@ata-lta.ph',
+      name: 'Admin Counts',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .get('/v1/clients/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data).toHaveProperty('active');
+    expect(res.body.data).toHaveProperty('archived');
+  });
 });

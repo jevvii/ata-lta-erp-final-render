@@ -527,12 +527,20 @@ const getClientCounts = async ({ entityId }) => {
     archivedQuery = archivedQuery.eq('entity_id', entityId);
   }
 
-  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+  const [activeResult, archivedResult] = await Promise.all([
     activeQuery,
     archivedQuery,
   ]);
 
-  return { active: activeCount || 0, archived: archivedCount || 0 };
+  if (activeResult?.error || archivedResult?.error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to get client counts',
+    });
+  }
+
+  return { active: activeResult?.count || 0, archived: archivedResult?.count || 0 };
 };
 
 /**
