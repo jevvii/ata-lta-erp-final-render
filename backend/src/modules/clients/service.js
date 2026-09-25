@@ -159,7 +159,7 @@ const listClients = async ({
   if (isArchived) {
     query = query.or('status.eq.Archived,deleted_at.not.is.null');
   } else {
-    query = query.is('deleted_at', null);
+    query = query.is('deleted_at', null).neq('status', 'Archived');
   }
 
   if (entityId && entityId !== 'ALL') {
@@ -515,24 +515,33 @@ const getClientCounts = async ({ entityId }) => {
   let activeQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .neq('status', 'Archived');
 
   let archivedQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
-    .eq('status', 'Archived');
+    .or('status.eq.Archived,deleted_at.not.is.null');
 
   if (entityId && entityId !== 'ALL') {
     activeQuery = activeQuery.eq('entity_id', entityId);
     archivedQuery = archivedQuery.eq('entity_id', entityId);
   }
 
-  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
+  const [activeResult, archivedResult] = await Promise.all([
     activeQuery,
     archivedQuery,
   ]);
 
-  return { active: activeCount || 0, archived: archivedCount || 0 };
+  if (activeResult?.error || archivedResult?.error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to get client counts',
+    });
+  }
+
+  return { active: activeResult?.count || 0, archived: archivedResult?.count || 0 };
 };
 
 /**

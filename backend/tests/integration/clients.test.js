@@ -158,7 +158,88 @@ describe('/v1/clients', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(404);
 
+    const archivedRes = await request(app)
+      .get(`/v1/clients/${created.body.data.id}?includeArchived=true`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(archivedRes.body.data.id).toBe(created.body.data.id);
+    expect(archivedRes.body.data.status).toBe('Archived');
+
     const audit = Array.from(mockTables.audit_logs.values());
     expect(audit.some((a) => a.action === 'client.archived')).toBe(true);
+  });
+
+  it('returns client counts for the active entity', async () => {
+    const admin = registerUser({
+      email: 'admin-counts@ata-lta.ph',
+      name: 'Admin Counts',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .get('/v1/clients/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(res.body.data).toHaveProperty('active');
+    expect(res.body.data).toHaveProperty('archived');
+  });
+
+  it('correctly partitions archived clients with null deleted_at into archived counts and lists', async () => {
+    const admin = registerUser({
+      email: 'admin-partition@ata-lta.ph',
+      name: 'Admin Partition',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const activeClientRes = await request(app)
+      .post('/v1/clients')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ ...validClient, name: 'Active Client 1', tin: '111-222-333-00001' })
+      .expect(201);
+
+    // Insert a legacy record into mockTables directly: status 'Archived' with deleted_at null
+    const legacyArchivedId = 'legacy-archived-1';
+    mockTables.clients.set(legacyArchivedId, {
+      id: legacyArchivedId,
+      name: 'Legacy Archived Client',
+      entity_id: 'ent-ata',
+      entity_code: 'ATA',
+      status: 'Archived',
+      deleted_at: null,
+      version: 1,
+    });
+
+    const countsRes = await request(app)
+      .get('/v1/clients/counts')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(countsRes.body.data.active).toBe(1);
+    expect(countsRes.body.data.archived).toBe(1);
+
+    const listActiveRes = await request(app)
+      .get('/v1/clients')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(listActiveRes.body.data.some((c) => c.id === legacyArchivedId)).toBe(false);
+    expect(listActiveRes.body.data.some((c) => c.id === activeClientRes.body.data.id)).toBe(true);
+
+    const listArchivedRes = await request(app)
+      .get('/v1/clients?status=Archived')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    expect(listArchivedRes.body.data.some((c) => c.id === legacyArchivedId)).toBe(true);
   });
 });

@@ -2933,6 +2933,12 @@ tbody tr:hover {
   opacity: 1;
   visibility: visible;
 }
+@media (hover: none) {
+  .approval-item-actions {
+    opacity: 1;
+    visibility: visible;
+  }
+}
 .approval-item-actions .btn {
   padding: 5px 10px;
   border-radius: 12px;
