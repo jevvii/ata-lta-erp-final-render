@@ -711,10 +711,7 @@ const Clients = {
       };
     } catch (e) {
       if (!isAbortError(e)) console.error('Failed to get client counts', e);
-      const clients = ClientsData.getAllClients();
-      const activeCount = clients.filter(c => c.status !== 'Archived').length;
-      const archivedCount = (this._archivedClients || []).length || clients.filter(c => c.status === 'Archived').length;
-      return { activeCount, archivedCount };
+      throw e;
     }
   },
 
@@ -733,11 +730,11 @@ const Clients = {
       this._countsFromApi = true;
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to load client counts', err);
-      if (!this._counts) {
+      if (!this._counts || this._countsEntity !== entity) {
         this._counts = this._recalcCounts();
         this._countsEntity = entity;
-        this._countsFromApi = false;
       }
+      this._countsFromApi = false;
     }
     return this._counts;
   },
@@ -2307,7 +2304,8 @@ const Clients = {
         if (res && res.data) client = this.normalizeClient(res.data);
       } catch (e) {}
     }
-    if (!client) return;
+    const isArchived = (c) => Boolean(c && (c.status === 'Archived' || c.archived || c.deleted_at));
+    if (!isArchived(client)) return;
 
     Workflow.showConfirm('Restore Client',
       `Are you sure you want to restore client "${client.name || '(untitled)'}"?`,
@@ -2355,15 +2353,23 @@ const Clients = {
   async bulkUnarchiveClients(clientIds) {
     if (!clientIds || clientIds.length === 0) return;
     await ClientsData.ensure();
-    const findClient = (id) => {
-      return this._archivedMap?.get(id) ||
+    const isArchived = (c) => Boolean(c && (c.status === 'Archived' || c.archived || c.deleted_at));
+
+    const candidates = await Promise.all((clientIds || []).map(async (id) => {
+      let client = this._archivedMap?.get(id) ||
         (this._archivedClients || []).find(c => c.id === id) ||
-        ClientsData.getClientById(id) ||
-        { id, status: 'Archived', name: 'client' };
-    };
-    const eligible = (clientIds || [])
-      .map(id => findClient(id))
-      .filter(c => c && (c.status === 'Archived' || c.archived || this._archivedMap?.has(c.id) || !ClientsData.getClientById(c.id)));
+        ClientsData.getClientById(id);
+
+      if (!client) {
+        try {
+          const res = await window.apiClient.clients.get(id, { includeArchived: 'true' });
+          if (res && res.data) client = this.normalizeClient(res.data);
+        } catch (e) {}
+      }
+      return client;
+    }));
+
+    const eligible = candidates.filter(isArchived);
 
     if (eligible.length === 0) {
       Workflow.showMessage('No eligible records', 'No archived clients selected.', 'info');
