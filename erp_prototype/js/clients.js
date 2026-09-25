@@ -759,10 +759,8 @@ const Clients = {
       this._countsFromApi = true;
     } catch (err) {
       if (!isAbortError(err)) console.error('Failed to load client counts', err);
-      if (!this._counts || this._countsEntity !== entity) {
-        this._counts = this._recalcCounts();
-        this._countsEntity = entity;
-      }
+      this._counts = this._recalcCounts();
+      this._countsEntity = entity;
       this._countsFromApi = false;
     }
     return this._counts;
@@ -2331,9 +2329,18 @@ const Clients = {
       try {
         const res = await window.apiClient.clients.get(id, { includeArchived: 'true' });
         if (res && res.data) client = this.normalizeClient(res.data);
-      } catch (e) {}
+      } catch (e) {
+        if (!isAbortError(e)) {
+          console.error('Failed to verify client for restore', e);
+          Workflow.showMessage('Verification Failed', e.message || 'Unable to retrieve client record from server.', 'danger');
+        }
+        return;
+      }
     }
-    if (!this.isArchived(client)) return;
+    if (!this.isArchived(client)) {
+      Workflow.showMessage('Not Eligible', 'The selected record is not an archived client.', 'info');
+      return;
+    }
 
     Workflow.showConfirm('Restore Client',
       `Are you sure you want to restore client "${client.name || '(untitled)'}"?`,
@@ -2382,6 +2389,7 @@ const Clients = {
     if (!clientIds || clientIds.length === 0) return;
     await ClientsData.ensure();
 
+    const verificationErrors = [];
     const candidates = await Promise.all((clientIds || []).map(async (id) => {
       let client = this._archivedMap?.get(id) ||
         (this._archivedClients || []).find(c => c.id === id) ||
@@ -2391,7 +2399,12 @@ const Clients = {
         try {
           const res = await window.apiClient.clients.get(id, { includeArchived: 'true' });
           if (res && res.data) client = this.normalizeClient(res.data);
-        } catch (e) {}
+        } catch (e) {
+          if (!isAbortError(e)) {
+            console.error('Failed to verify client for bulk restore', id, e);
+            verificationErrors.push({ id, error: e });
+          }
+        }
       }
       return client;
     }));
@@ -2399,8 +2412,16 @@ const Clients = {
     const eligible = candidates.filter(c => this.isArchived(c));
 
     if (eligible.length === 0) {
-      Workflow.showMessage('No eligible records', 'No archived clients selected.', 'info');
+      if (verificationErrors.length > 0) {
+        Workflow.showMessage('Verification Failed', `Unable to verify ${verificationErrors.length} selected client record(s) due to server or network error. Please try again.`, 'danger');
+      } else {
+        Workflow.showMessage('No eligible records', 'No archived clients selected.', 'info');
+      }
       return;
+    }
+
+    if (verificationErrors.length > 0 && typeof showToast === 'function') {
+      showToast(`${verificationErrors.length} record(s) could not be verified and were skipped.`, 'warning');
     }
 
     const label = eligible.length === 1 ? 'this client' : `these ${eligible.length} clients`;
