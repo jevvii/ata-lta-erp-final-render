@@ -945,7 +945,8 @@ const Billing = {
             loadFailed = true;
           }
         } catch (e) {
-          if (!isAbortError(e)) console.error("Failed to load invoice for editing", e);
+          if (isAbortError(e)) return container;
+          console.error("Failed to load invoice for editing", e);
           loadFailed = true;
         }
       }

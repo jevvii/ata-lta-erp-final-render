@@ -558,16 +558,17 @@ const Clients = {
     // with its own breadcrumb header and right-aligned Save/Cancel actions.
     if (this.editingId) {
       const isNew = this.editingId === 'new';
-      let client = null;
-      if (!isNew) {
+      let client = !isNew ? (ClientsData.getClientById(this.editingId) || window.apiClient?.clientCache?.getById?.(this.editingId)) : null;
+      if (!isNew && !client) {
         try {
           const res = await window.apiClient.clients.get(this.editingId, { includeArchived: 'true' });
           client = this.normalizeClient(res.data);
         } catch (e) {
-          if (!isAbortError(e)) {
-            console.error('Failed to load client for form', e);
-            if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
+          if (isAbortError(e)) {
+            return container;
           }
+          console.error('Failed to load client for form', e);
+          if (typeof showToast === 'function') showToast('Client not found or could not be loaded.', 'error');
           this.editingId = null;
           location.hash = '#clients';
           return container;
@@ -1423,8 +1424,8 @@ const Clients = {
     }
     this.editingId = clientId || 'new';
     const isNew = this.editingId === 'new';
-    let client = null;
-    if (!isNew) {
+    let client = !isNew ? (ClientsData.getClientById(this.editingId) || window.apiClient?.clientCache?.getById?.(this.editingId)) : null;
+    if (!isNew && !client) {
       try {
         const res = await window.apiClient.clients.get(clientId, { includeArchived: 'true' });
         client = this.normalizeClient(res.data);
@@ -1461,7 +1462,8 @@ const Clients = {
 
     openFormPanel({
       icon: '🏢',
-      title: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
+      title: isNew ? 'Add Client' : null,
+      ariaLabel: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
       formContent: formContainer,
       formId: 'client-form',
       mode,

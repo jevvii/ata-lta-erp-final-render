@@ -2187,9 +2187,16 @@ class SidePane {
       // Keep the override around long enough for the asynchronous hashchange
       // event that follows location.hash assignment to also see it.
       this._forceMode = PaneMode.FULL_PAGE;
-      location.hash = this.fullPageRoute;
       const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
-      if (appRef && typeof appRef.handleRoute === 'function') appRef.handleRoute();
+      if (appRef && typeof appRef.handleRoute === 'function') {
+        if (location.hash !== this.fullPageRoute) {
+          appRef._suppressHashChange = true;
+          location.hash = this.fullPageRoute;
+        }
+        appRef.handleRoute();
+      } else {
+        location.hash = this.fullPageRoute;
+      }
       setTimeout(() => { this._forceMode = null; }, 500);
     } else {
       console.warn('SidePane: full-page requested but no route or onExpand provided.');
@@ -2610,16 +2617,27 @@ function buildFormViewSwitcher({
  * @param {string} [opts.fullPageRoute] - hash route for full-page / new-tab, e.g. '#clients/form/new'
  * @param {string} [opts.newTabRoute] - optional override for new-tab URL
  */
-function openFormPanel({ icon, title, formContent, formId, actions, mode, viewContext, fullPageRoute, newTabRoute, draftKey, restoreDraft }) {
+function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, mode, viewContext, fullPageRoute, newTabRoute, draftKey, restoreDraft }) {
   const context = viewContext || (formId ? formId.replace(/-form$/, '') : 'form');
 
-  if (mode === PaneMode.FULL_PAGE || mode === PaneMode.NEW_TAB) {
+  const effectiveMode = mode || (window.SidePaneInstance && typeof window.SidePaneInstance.resolveMode === 'function'
+    ? window.SidePaneInstance.resolveMode({ mode, viewContext: context })
+    : PaneMode.SIDE_PEEK);
+
+  if (effectiveMode === PaneMode.FULL_PAGE || effectiveMode === PaneMode.NEW_TAB) {
     const route = newTabRoute || fullPageRoute;
     if (route) {
-      if (mode === PaneMode.FULL_PAGE) {
-        location.hash = route;
+      if (effectiveMode === PaneMode.FULL_PAGE) {
         const appRef = (typeof window !== 'undefined' && window.App) || (typeof App !== 'undefined' ? App : null);
-        if (appRef && typeof appRef.handleRoute === 'function') appRef.handleRoute();
+        if (appRef && typeof appRef.handleRoute === 'function') {
+          if (location.hash !== route) {
+            appRef._suppressHashChange = true;
+            location.hash = route;
+          }
+          appRef.handleRoute();
+        } else {
+          location.hash = route;
+        }
       } else {
         window.open(location.origin + location.pathname + route, '_blank', 'noopener,noreferrer');
       }
@@ -2667,9 +2685,9 @@ function openFormPanel({ icon, title, formContent, formId, actions, mode, viewCo
 
   if (window.SidePaneInstance && typeof window.SidePaneInstance.open === 'function') {
     window.SidePaneInstance.open({
-      title,
+      title: title || ariaLabel,
       content: wrapper,
-      mode,
+      mode: effectiveMode,
       viewContext: context,
       fullPageRoute,
       newTabRoute
