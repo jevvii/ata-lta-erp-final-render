@@ -32,6 +32,7 @@ const mockTables = {
   disbursement_templates: new Map(),
   retainer_templates: new Map(),
   ground_workers: new Map(),
+  standard_task_templates: new Map(),
   idempotency_keys: new Map(),
   status_history: new Map(),
   document_sequences: new Map(),

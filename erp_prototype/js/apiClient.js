@@ -820,6 +820,11 @@
       createTemplate: (data) => post('/work-requests/templates', data),
       updateTemplate: (id, data) => put(`/work-requests/templates/${id}`, data),
       deleteTemplate: (id) => del(`/work-requests/templates/${id}`),
+      listTaskTemplates: () => get('/work-requests/task-templates'),
+      createTaskTemplate: (data) => post('/work-requests/task-templates', data),
+      updateTaskTemplate: (id, data) => put(`/work-requests/task-templates/${id}`, data),
+      deleteTaskTemplate: (id) => del(`/work-requests/task-templates/${id}`),
+      resetTaskTemplates: () => post('/work-requests/task-templates/reset-defaults', {}),
       listGroundWorkers: (query = {}) => {
         const qs = new URLSearchParams();
         Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.append(k, v); });
@@ -994,6 +999,11 @@
       createTemplate: (data) => post('/work-requests/templates', data),
       updateTemplate: (id, data) => put(`/work-requests/templates/${id}`, data),
       deleteTemplate: (id) => del(`/work-requests/templates/${id}`),
+      listTaskTemplates: () => get('/work-requests/task-templates'),
+      createTaskTemplate: (data) => post('/work-requests/task-templates', data),
+      updateTaskTemplate: (id, data) => put(`/work-requests/task-templates/${id}`, data),
+      deleteTaskTemplate: (id) => del(`/work-requests/task-templates/${id}`),
+      resetTaskTemplates: () => post('/work-requests/task-templates/reset-defaults', {}),
     },
 
     groundWorkers: {

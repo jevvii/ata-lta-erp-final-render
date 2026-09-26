@@ -1665,6 +1665,7 @@ const Workflow = {
   },
   detailWrId: null,
   templateEditingId: null,
+  taskTemplateEditingId: null,
   selectedTaskId: null,
   expandedTaskIds: new Set(),
   lastRenderedWrId: null,
@@ -1674,6 +1675,9 @@ const Workflow = {
   _retainerTemplatesEntity: null,
   _retainerTemplatesGeneration: 0,
   _retainerTemplatesBackgroundPromise: null,
+  _taskTemplates: null,
+  _taskTemplatesLoaded: false,
+  _taskTemplatesPromise: null,
   _groundWorkers: null,
   _groundWorkersPromise: null,
 
@@ -2102,16 +2106,131 @@ const Workflow = {
   },
 
   standardTaskTemplates: [
-    { title: 'Gathering requirements and preparing documents for preprocessing', defaultChecklist: [{ text: 'SEC Certificate', category: 'document' }, { text: 'Articles of Incorporation', category: 'document' }, { text: "Mayor's Permit", category: 'document' }, { text: 'BIR Form 1901/1903', category: 'document' }] },
-    { title: 'Gather requirements and prepare documents needed for processing', defaultChecklist: [{ text: 'SEC Certificate', category: 'document' }, { text: "Mayor's Permit", category: 'document' }, { text: 'BIR Form 1901/1903', category: 'document' }, { text: 'Articles of Incorporation', category: 'document' }], coAssignees: ['Employee 1', 'Employee 2', 'Employee 3'] },
-    { title: 'Creation of ORUS account', defaultChecklist: [] },
-    { title: 'Registration of Books of Accounts', defaultChecklist: [] },
-    { title: 'Application and Received of Authority to Print', defaultChecklist: [] },
-    { title: 'Pickup of Sales/Service Invoice', defaultChecklist: [] },
-    { title: 'Billing', requiredLinkType: 'billing', defaultChecklist: [] },
-    { title: 'Disbursement', requiredLinkType: 'disbursement', defaultChecklist: [] },
-    { title: 'Transmittal', requiredLinkType: 'transmittal', defaultChecklist: [] }
+    {
+      id: '00000000-0000-0000-0000-000000000001',
+      title: 'Gathering requirements and preparing documents for preprocessing',
+      requiredLinkType: null,
+      defaultChecklist: [
+        { id: '00000000-0000-0000-0000-000000000011', text: 'SEC Certificate', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000012', text: 'Articles of Incorporation', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000013', text: "Mayor's Permit", category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000014', text: 'BIR Form 1901/1903', category: 'document' },
+      ],
+      coAssignees: [],
+      sortOrder: 1,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000002',
+      title: 'Gather requirements and prepare documents needed for processing',
+      requiredLinkType: null,
+      defaultChecklist: [
+        { id: '00000000-0000-0000-0000-000000000021', text: 'SEC Certificate', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000022', text: "Mayor's Permit", category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000023', text: 'BIR Form 1901/1903', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000024', text: 'Articles of Incorporation', category: 'document' },
+      ],
+      coAssignees: ['Employee 1', 'Employee 2', 'Employee 3'],
+      sortOrder: 2,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000003',
+      title: 'Creation of ORUS account',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 3,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000004',
+      title: 'Registration of Books of Accounts',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 4,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000005',
+      title: 'Application and Received of Authority to Print',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 5,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000006',
+      title: 'Pickup of Sales/Service Invoice',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 6,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000007',
+      title: 'Billing',
+      requiredLinkType: 'billing',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 7,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000008',
+      title: 'Disbursement',
+      requiredLinkType: 'disbursement',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 8,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000009',
+      title: 'Transmittal',
+      requiredLinkType: 'transmittal',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 9,
+      isSystemDefault: true,
+    },
   ],
+
+  async ensureStandardTaskTemplates(force = false) {
+    if (this._taskTemplatesLoaded && !force && this._taskTemplates) return this._taskTemplates;
+    if (this._taskTemplatesPromise && !force) return this._taskTemplatesPromise;
+    this._taskTemplatesPromise = this.loadStandardTaskTemplates().finally(() => {
+      this._taskTemplatesPromise = null;
+    });
+    return this._taskTemplatesPromise;
+  },
+
+  async loadStandardTaskTemplates() {
+    try {
+      const res = await window.apiClient.operations.listTaskTemplates();
+      if (res && Array.isArray(res.data) && res.data.length > 0) {
+        this._taskTemplates = res.data;
+        this.standardTaskTemplates = res.data;
+        this._taskTemplatesLoaded = true;
+        return this._taskTemplates;
+      }
+    } catch (err) {
+      console.warn('Failed to load standard task templates from server, using fallback', err);
+    }
+    if (!this._taskTemplates || this._taskTemplates.length === 0) {
+      this._taskTemplates = this.standardTaskTemplates.slice();
+    }
+    this._taskTemplatesLoaded = true;
+    return this._taskTemplates;
+  },
+
+  _getStandardTaskTemplateById(id) {
+    if (!id) return null;
+    return (this._taskTemplates || this.standardTaskTemplates || []).find(t => String(t.id) === String(id)) || null;
+  },
 
   /**
    * Builds a typable employee assignee dropdown like the filter tray.
@@ -4810,7 +4929,7 @@ const Workflow = {
       return container;
     }
 
-    if (this.view === 'list' || this.view === 'templates' || this.view === 'archive') {
+    if (this.view === 'list' || this.view === 'templates' || this.view === 'task-templates' || this.view === 'archive') {
       container.classList.add('operations-tab-page');
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Operations' }));
@@ -4838,6 +4957,7 @@ const Workflow = {
           await Promise.all([
             WorkflowData.ensure(),
             this.ensureRetainerTemplates(),
+            this.ensureStandardTaskTemplates(),
             this._loadGroundWorkers(),
             this.loadCounts(),
           ]);
@@ -4857,6 +4977,15 @@ const Workflow = {
           } else if (this.view === 'templates') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderTemplates());
+          } else if (this.view === 'task-templates') {
+            if (Auth.user?.role !== 'Admin') {
+              this.view = 'list';
+              location.hash = '#operations';
+              Utils.showToast('Access denied: Admin role required for task templates', 'error');
+              return;
+            }
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await this.renderTaskTemplatesTab());
           } else if (this.view === 'archive') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderArchive());
@@ -4953,6 +5082,46 @@ const Workflow = {
           { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#operations'; } }
         ]
       }));
+    } else if (this.view === 'taskTemplateForm') {
+      if (Auth.user?.role !== 'Admin') {
+        this.view = 'list';
+        location.hash = '#operations';
+        Utils.showToast('Access denied: Admin role required for task templates', 'error');
+        return el('div');
+      }
+      container.classList.add('operations-tab-page');
+      const isNew = !this.taskTemplateEditingId;
+      const template = isNew ? null : this._getStandardTaskTemplateById(this.taskTemplateEditingId);
+      const fullPageRoute = isNew ? '#operations/taskTemplateForm/new' : `#operations/taskTemplateForm/${this.taskTemplateEditingId}`;
+      const viewSwitcher = buildFormViewSwitcher({
+        currentMode: PaneMode.FULL_PAGE,
+        viewContext: 'task-template-form',
+        onSidePeek: async () => {
+          const templateEditingId = this.taskTemplateEditingId;
+          await closeFormPanelAndRoute('#operations?tab=task-templates');
+          this.taskTemplateEditingId = templateEditingId;
+          await this.openTaskTemplateForm(PaneMode.SIDE_PEEK);
+        },
+        onCenterPeek: async () => {
+          const templateEditingId = this.taskTemplateEditingId;
+          await closeFormPanelAndRoute('#operations?tab=task-templates');
+          this.taskTemplateEditingId = templateEditingId;
+          await this.openTaskTemplateForm(PaneMode.CENTER_PEEK);
+        },
+        onNewTab: () => {
+          window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
+        }
+      });
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Task Templates',
+        baseHash: '#operations?tab=task-templates',
+        currentText: isNew ? 'New Task Template' : (template?.title || 'Edit Task Template'),
+        viewSwitcher,
+        actions: [
+          { text: 'Save Template', class: 'btn btn-primary btn-sm', type: 'submit', form: 'task-template-form' },
+          { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#operations?tab=task-templates'; } }
+        ]
+      }));
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       container.classList.add('operations-tab-page');
       const wr = WorkflowData.getWorkRequestById(this.addTaskWrId);
@@ -4990,6 +5159,8 @@ const Workflow = {
       container.appendChild(await this.renderForm());
     } else if (this.view === 'templateForm') {
       container.appendChild(await this.renderTemplateForm({ hideHeader: true }));
+    } else if (this.view === 'taskTemplateForm') {
+      container.appendChild(await this.renderTaskTemplateForm({ hideHeader: true }));
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       const form = await this.renderAddTaskForm(this.addTaskWrId, { hideHeader: true });
       if (form) {
@@ -5093,11 +5264,29 @@ const Workflow = {
       tabs.push({ key: 'templates', label: 'Retainer Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount });
     }
 
+    if (Auth.user?.role === 'Admin') {
+      const taskTemplateCount = (this._taskTemplates || this.standardTaskTemplates || []).length;
+      tabs.push({
+        key: 'task-templates',
+        label: 'Task Templates',
+        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="m9 14 2 2 4-4"/></svg>',
+        count: taskTemplateCount
+      });
+    }
+
     tabs.push({ key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount });
 
     const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
       this.view = key;
-      App.handleRoute();
+      if (key === 'task-templates') {
+        window.location.hash = '#operations?tab=task-templates';
+      } else if (key === 'templates') {
+        window.location.hash = '#operations?tab=templates';
+      } else if (key === 'archive') {
+        window.location.hash = '#operations?tab=archive';
+      } else {
+        window.location.hash = '#operations';
+      }
     });
 
     if (Auth.can('workflow:edit')) {
@@ -13729,6 +13918,7 @@ const Workflow = {
     }
 
     // Standard Task Template state
+    await this.ensureStandardTaskTemplates();
     let checklistItems = [];
     let checklistFromTemplate = false;
     const isDraft = wr?.status === 'Draft';
@@ -13800,8 +13990,9 @@ const Workflow = {
     templateGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg> Standard Task Template' }));
     const templateSel = el('select', { name: 'template', class: 'notion-prop-select' });
     templateSel.appendChild(el('option', { value: '', text: '— Custom —' }));
-    this.standardTaskTemplates.forEach((tmpl, idx) => {
-      templateSel.appendChild(el('option', { value: String(idx), text: tmpl.title }));
+    const taskTemplates = this._taskTemplates || this.standardTaskTemplates || [];
+    taskTemplates.forEach((tmpl, idx) => {
+      templateSel.appendChild(el('option', { value: String(tmpl.id || idx), text: tmpl.title }));
     });
     templateGroup.appendChild(templateSel);
     propsGrid.appendChild(templateGroup);
@@ -14091,16 +14282,17 @@ const Workflow = {
     });
 
     templateSel.addEventListener('change', async () => {
-      const idx = parseInt(templateSel.value, 10);
-      if (!isNaN(idx) && this.standardTaskTemplates[idx]) {
-        const tmpl = this.standardTaskTemplates[idx];
+      const val = templateSel.value;
+      const templates = this._taskTemplates || this.standardTaskTemplates || [];
+      const tmpl = !val ? null : (templates.find(t => String(t.id) === String(val)) || templates[parseInt(val, 10)]);
+      if (tmpl) {
         titleInput.value = tmpl.title;
         if (tmpl.requiredLinkType) {
           reqLinkSel.value = tmpl.requiredLinkType;
         } else {
           reqLinkSel.value = '';
         }
-        checklistItems = tmpl.defaultChecklist.map(item => {
+        checklistItems = (tmpl.defaultChecklist || []).map(item => {
           const isObj = typeof item === 'object' && item && item.text;
           return this.createChecklistItemData({
             text: isObj ? item.text : item,
@@ -14405,6 +14597,33 @@ const Workflow = {
       actions: [
         { text: 'Save Template', class: 'btn btn-primary', type: 'submit', form: 'template-form' },
         { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations') }
+      ]
+    });
+  },
+
+  /**
+   * Opens the Standard Task Template form in a shared panel, supporting all 4 view modes.
+   */
+  async openTaskTemplateForm(mode = null) {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required for task templates', 'error');
+      return;
+    }
+    const isNew = !this.taskTemplateEditingId;
+    const template = isNew ? null : this._getStandardTaskTemplateById(this.taskTemplateEditingId);
+    const fullPageRoute = isNew ? '#operations/taskTemplateForm/new' : `#operations/taskTemplateForm/${this.taskTemplateEditingId}`;
+    openFormPanel({
+      icon: '📋',
+      title: ' ',
+      formContent: await this.renderTaskTemplateForm({ hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null }),
+      formId: 'task-template-form',
+      mode,
+      viewContext: 'task-template-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: 'Save Template', class: 'btn btn-primary', type: 'submit', form: 'task-template-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations?tab=task-templates') }
       ]
     });
   },
@@ -15477,6 +15696,381 @@ const Workflow = {
       closeFormPanelAndRoute('#operations');
     } else {
       App.handleRoute();
+    }
+  },
+
+  // ============================================================
+  // Standard Task Templates (Admin Only)
+  // ============================================================
+
+  async renderTaskTemplatesTab() {
+    if (Auth.user?.role !== 'Admin') {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    await this.ensureStandardTaskTemplates();
+    const templates = this._taskTemplates || this.standardTaskTemplates || [];
+
+    const wrapper = el('div', { class: 'page-content-section' });
+
+    const backlogItems = templates.map((t) => {
+      const linkTypeLabel = t.requiredLinkType
+        ? (t.requiredLinkType === 'billing' ? 'Billing' : t.requiredLinkType === 'disbursement' ? 'Disbursement' : t.requiredLinkType === 'transmittal' ? 'Transmittal' : t.requiredLinkType)
+        : 'None';
+      const checklistCount = (t.defaultChecklist || []).length;
+      const coAssigneeCount = (t.coAssignees || []).length;
+
+      const tags = [
+        { text: linkTypeLabel !== 'None' ? `Link: ${linkTypeLabel}` : 'No Link Required', type: linkTypeLabel !== 'None' ? 'entity' : 'muted' },
+        { text: `${checklistCount} ${checklistCount === 1 ? 'item' : 'items'}`, type: 'points', title: 'Default checklist items' },
+      ];
+      if (coAssigneeCount > 0) {
+        tags.push({ text: `${coAssigneeCount} co-assignee${coAssigneeCount === 1 ? '' : 's'}`, type: 'user', title: (t.coAssignees || []).join(', ') });
+      }
+
+      return {
+        id: t.id,
+        name: t.title,
+        iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="m9 14 2 2 4-4"/></svg>',
+        tags
+      };
+    });
+
+    const backlog = JiraBacklogList.render({
+      title: 'Standard Task Templates',
+      subtitle: 'reusable task templates with predefined checklists, linked record requirements, and co-assignees',
+      items: backlogItems,
+      emptyText: 'No standard task templates found',
+      rowIdPrefix: 'STT',
+      selectable: false,
+      countLabel: 'template',
+      headerActions: [
+        {
+          text: 'Reset to Defaults',
+          className: 'btn btn-secondary btn-sm',
+          onClick: () => {
+            this.showConfirm(
+              'Reset Standard Task Templates',
+              'Are you sure you want to reset all standard task templates to system defaults? Any custom templates or modifications will be restored to the baseline set.',
+              () => {
+                this.resetStandardTaskTemplates();
+              },
+              'danger'
+            );
+          }
+        },
+        {
+          text: '+ Create Template',
+          className: 'btn btn-primary btn-sm',
+          onClick: async () => {
+            this.taskTemplateEditingId = null;
+            await this.openTaskTemplateForm();
+          }
+        }
+      ],
+      rowActions: (item) => [
+        {
+          text: 'Edit',
+          className: 'btn btn-secondary btn-xs',
+          onClick: async () => {
+            this.taskTemplateEditingId = item.id;
+            await this.openTaskTemplateForm();
+          }
+        },
+        {
+          text: 'Delete',
+          className: 'btn btn-danger btn-xs',
+          onClick: () => {
+            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, () => {
+              this.deleteTaskTemplate(item.id);
+            }, 'danger');
+          }
+        }
+      ]
+    });
+
+    wrapper.appendChild(backlog);
+    return wrapper;
+  },
+
+  async renderTaskTemplateForm(opts = {}) {
+    if (Auth.user?.role !== 'Admin') {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    await Promise.all([
+      this.ensureStandardTaskTemplates(),
+      this._loadGroundWorkers()
+    ]);
+
+    const template = this.taskTemplateEditingId ? this._getStandardTaskTemplateById(this.taskTemplateEditingId) : null;
+    const isNew = !template;
+
+    const container = el('div', { class: 'template-form-container notion-form' });
+    if (!opts.hideHeader) {
+      const header = el('div', { class: 'notion-form-header', style: 'margin-bottom: 20px;' });
+      header.appendChild(el('div', { class: 'notion-form-icon', text: '📋', style: 'font-size: 28px; margin-bottom: 8px;' }));
+      header.appendChild(el('h2', { class: 'notion-form-title', text: isNew ? 'New Task Template' : (template.title || 'Edit Task Template') }));
+      container.appendChild(header);
+    }
+
+    const form = el('form', { id: 'task-template-form', class: 'form-stacked' });
+
+    // Title
+    const titleGroup = el('div', { class: 'form-group' });
+    titleGroup.appendChild(el('label', { text: 'Template Title *' }));
+    const titleInput = el('input', {
+      type: 'text',
+      name: 'title',
+      required: true,
+      class: 'form-control',
+      placeholder: 'e.g. Audit Report Preparation',
+      value: template?.title || ''
+    });
+    titleGroup.appendChild(titleInput);
+    form.appendChild(titleGroup);
+
+    // Required Linked Record
+    const linkGroup = el('div', { class: 'form-group' });
+    linkGroup.appendChild(el('label', { text: 'Required Linked Record' }));
+    const linkSel = el('select', { name: 'requiredLinkType', class: 'form-control' });
+    linkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    linkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    linkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    linkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    if (template?.requiredLinkType) linkSel.value = template.requiredLinkType;
+    linkGroup.appendChild(linkSel);
+    form.appendChild(linkGroup);
+
+    // Co-assignees
+    let coAssignees = [...(template?.coAssignees || [])];
+    const coAssigneeGroup = el('div', { class: 'form-group' });
+    coAssigneeGroup.appendChild(el('label', { text: 'Default Co-assignees' }));
+    const coAssigneeChips = el('div', { class: 'co-assignee-chips', style: 'display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;' });
+    
+    const renderChips = () => {
+      coAssigneeChips.innerHTML = '';
+      coAssignees.forEach((name, idx) => {
+        const chip = el('span', { class: 'co-assignee-chip badge badge-primary', style: 'display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; font-size: 12px;' });
+        chip.appendChild(el('span', { text: name }));
+        const removeBtn = el('span', { text: '×', style: 'cursor: pointer; font-weight: bold; margin-left: 4px;' });
+        removeBtn.addEventListener('click', () => {
+          coAssignees.splice(idx, 1);
+          renderChips();
+        });
+        chip.appendChild(removeBtn);
+        coAssigneeChips.appendChild(chip);
+      });
+    };
+    renderChips();
+
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
+      placeholder: 'Add co-assignee...',
+      className: 'form-control',
+      onSelect: (name) => {
+        if (name && !coAssignees.includes(name)) {
+          coAssignees.push(name);
+          renderChips();
+        }
+      }
+    });
+
+    coAssigneeGroup.appendChild(coAssigneeChips);
+    coAssigneeGroup.appendChild(coAssigneeDropdown);
+    form.appendChild(coAssigneeGroup);
+
+    // Default Checklist Items
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Default Checklist Items', style: 'margin-top: 24px; margin-bottom: 8px;' }));
+    const checklistHint = el('p', { class: 'text-muted text-sm', text: 'Items automatically generated when this template is picked during task creation.', style: 'margin-bottom: 12px; color: var(--color-text-muted); font-size: 13px;' });
+    form.appendChild(checklistHint);
+
+    const checklistList = el('div', { id: 'template-checklist-rows', style: 'display: flex; flex-direction: column; gap: 8px;' });
+
+    const addChecklistRow = (itemData = null) => {
+      const row = el('div', { class: 'checklist-row', style: 'display: flex; align-items: center; gap: 8px; padding: 6px; background: var(--color-bg-secondary, #f8f9fa); border-radius: 6px;' });
+
+      const textInput = el('input', {
+        type: 'text',
+        class: 'checklist-item-text form-control',
+        placeholder: 'Checklist item description...',
+        value: typeof itemData === 'object' && itemData ? (itemData.text || '') : (itemData || ''),
+        style: 'flex: 2;'
+      });
+
+      const catSel = el('select', { class: 'checklist-item-category form-control', style: 'flex: 1;' });
+      catSel.appendChild(el('option', { value: '', text: 'Sub-task' }));
+      catSel.appendChild(el('option', { value: 'document', text: 'Document' }));
+      if (typeof itemData === 'object' && itemData?.category === 'document') catSel.value = 'document';
+
+      const periodInput = el('input', {
+        type: 'text',
+        class: 'checklist-item-period form-control',
+        placeholder: 'Period / Year (optional)',
+        value: typeof itemData === 'object' && itemData ? (itemData.periodYear || '') : '',
+        style: 'flex: 1;'
+      });
+
+      const delBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-danger btn-xs',
+        text: '✕',
+        title: 'Remove item',
+        style: 'padding: 4px 8px; line-height: 1;'
+      });
+      delBtn.addEventListener('click', () => row.remove());
+
+      row.appendChild(textInput);
+      row.appendChild(catSel);
+      row.appendChild(periodInput);
+      row.appendChild(delBtn);
+      checklistList.appendChild(row);
+    };
+
+    if (template && Array.isArray(template.defaultChecklist) && template.defaultChecklist.length > 0) {
+      template.defaultChecklist.forEach(item => addChecklistRow(item));
+    }
+
+    const addChecklistBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-secondary btn-sm',
+      text: '+ Add Checklist Item',
+      style: 'margin-top: 10px; align-self: flex-start;'
+    });
+    addChecklistBtn.addEventListener('click', () => addChecklistRow());
+
+    form.appendChild(checklistList);
+    form.appendChild(addChecklistBtn);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await this.submitTaskTemplateForm(form, checklistList, coAssignees);
+    });
+
+    container.appendChild(form);
+    return container;
+  },
+
+  async submitTaskTemplateForm(form, checklistList, coAssignees) {
+    const title = form.querySelector('input[name="title"]')?.value?.trim();
+    if (!title) {
+      Utils.showToast('Please provide a template title', 'error');
+      return;
+    }
+    const requiredLinkType = form.querySelector('select[name="requiredLinkType"]')?.value || null;
+
+    const checklistRows = checklistList.querySelectorAll('.checklist-row');
+    const defaultChecklist = [];
+    checklistRows.forEach(row => {
+      const text = row.querySelector('.checklist-item-text')?.value?.trim();
+      if (text) {
+        const category = row.querySelector('.checklist-item-category')?.value || null;
+        const periodYear = row.querySelector('.checklist-item-period')?.value?.trim() || null;
+        defaultChecklist.push({ text, category: category || null, periodYear: periodYear || null });
+      }
+    });
+
+    const payload = {
+      title,
+      requiredLinkType,
+      defaultChecklist,
+      coAssignees: (coAssignees || []).filter(Boolean),
+    };
+
+    const isEdit = !!this.taskTemplateEditingId;
+    try {
+      if (isEdit) {
+        const updated = await window.apiClient.operations.updateTaskTemplate(this.taskTemplateEditingId, payload);
+        const updatedRow = updated?.data || { id: this.taskTemplateEditingId, ...payload };
+        if (!this._taskTemplates) this._taskTemplates = [];
+        const idx = this._taskTemplates.findIndex(t => String(t.id) === String(this.taskTemplateEditingId));
+        if (idx !== -1) {
+          this._taskTemplates[idx] = updatedRow;
+        } else {
+          this._taskTemplates.push(updatedRow);
+        }
+        this.standardTaskTemplates = this._taskTemplates;
+        Utils.showToast('Task template updated successfully', 'success');
+      } else {
+        const created = await window.apiClient.operations.createTaskTemplate(payload);
+        const createdRow = created?.data || payload;
+        if (!this._taskTemplates) this._taskTemplates = [];
+        this._taskTemplates.push(createdRow);
+        this.standardTaskTemplates = this._taskTemplates;
+        Utils.showToast('Task template created successfully', 'success');
+      }
+
+      this.taskTemplateEditingId = null;
+      Workflow._refreshCounts();
+      this.updateTabNav();
+
+      if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+        closeFormPanelAndRoute('#operations?tab=task-templates');
+      } else {
+        location.hash = '#operations?tab=task-templates';
+      }
+    } catch (err) {
+      console.error('Failed to save task template', err);
+      Utils.showToast(err.message || 'Failed to save task template', 'error');
+    }
+  },
+
+  async deleteTaskTemplate(id) {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required', 'error');
+      return;
+    }
+    try {
+      await window.apiClient.operations.deleteTaskTemplate(id);
+      this._taskTemplates = (this._taskTemplates || this.standardTaskTemplates || []).filter(t => String(t.id) !== String(id));
+      this.standardTaskTemplates = this._taskTemplates;
+      Utils.showToast('Standard task template deleted', 'success');
+      Workflow._refreshCounts();
+      this.updateTabNav();
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        } else {
+          App.handleRoute();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete task template', err);
+      Utils.showToast(err.message || 'Failed to delete task template', 'error');
+    }
+  },
+
+  async resetStandardTaskTemplates() {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required', 'error');
+      return;
+    }
+    try {
+      const res = await window.apiClient.operations.resetTaskTemplates();
+      if (res && res.data) {
+        this._taskTemplates = res.data;
+        this.standardTaskTemplates = res.data;
+      }
+      Utils.showToast('Standard task templates reset to defaults', 'success');
+      Workflow._refreshCounts();
+      this.updateTabNav();
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        } else {
+          App.handleRoute();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to reset task templates', err);
+      Utils.showToast(err.message || 'Failed to reset task templates', 'error');
     }
   },
 

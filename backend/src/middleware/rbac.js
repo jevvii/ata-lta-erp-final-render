@@ -53,4 +53,28 @@ const requirePermission = (actionOrActions) => {
   };
 };
 
-module.exports = { requirePermission, computePermissions };
+const requireAdmin = (req, res, next) => {
+  try {
+    if (!req.user) {
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required',
+      });
+    }
+
+    if (req.user.role !== 'Admin') {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'Admin access required',
+      });
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { requirePermission, computePermissions, requireAdmin };

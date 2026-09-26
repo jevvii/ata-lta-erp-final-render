@@ -277,6 +277,7 @@ app.use('/v1/me', require('./modules/me/routes'));
 app.use('/v1/clients', clientsRouter);
 app.use('/v1/documents', documentsRouter);
 app.use('/v1/work-requests', operationsRouter);
+app.use('/v1/operations', operationsRouter);
 app.use('/v1/tasks', tasksRouter);
 app.use('/v1/invoices', billingRouter);
 app.use('/v1/disbursements', disbursementsRouter);

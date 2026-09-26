@@ -557,7 +557,7 @@ const App = {
         const executeNav = () => {
           // Reset module view to 'list' when clicking a nav link directly
           const moduleViewMap = {
-            '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; },
+            '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; Workflow.templateEditingId = null; Workflow.taskTemplateEditingId = null; },
             '#billing': () => { if (typeof Billing !== 'undefined') { Billing.view = 'list'; Billing.detailId = null; } },
             '#disbursement': () => { if (typeof Disbursement !== 'undefined') { Disbursement.view = 'list'; Disbursement.detailId = null; } },
             '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } },
@@ -724,7 +724,7 @@ const App = {
     }
 
     // Clear editingPendingId when leaving form routes
-    const hasFormInHash = rawHash.includes('/form/') || rawHash.includes('/templateForm/');
+    const hasFormInHash = rawHash.includes('/form/') || rawHash.includes('/templateForm/') || rawHash.includes('/taskTemplateForm/');
     if (!hasFormInHash && typeof PendingChanges !== 'undefined') {
       PendingChanges.editingPendingId = null;
     }
@@ -763,6 +763,7 @@ const App = {
     if (baseHash === '#operations') {
       const qParams = new URLSearchParams(parts[1] || '');
       Workflow.targetTaskId = qParams.get('taskId') || null;
+      const tabParam = qParams.get('tab');
       if (pathParts[1] === 'detail' && pathParts[2]) {
         Workflow.view = 'detail';
         Workflow.detailWrId = pathParts[2];
@@ -772,14 +773,36 @@ const App = {
       } else if (pathParts[1] === 'templateForm') {
         Workflow.view = 'templateForm';
         Workflow.templateEditingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (pathParts[1] === 'taskTemplateForm') {
+        if (Auth.user?.role !== 'Admin') {
+          Workflow.view = 'list';
+          location.hash = '#operations';
+          Utils.showToast('Access denied: Admin role required for task templates', 'error');
+        } else {
+          Workflow.view = 'taskTemplateForm';
+          Workflow.taskTemplateEditingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+        }
       } else if (pathParts[1] === 'addTask' && pathParts[2]) {
         Workflow.view = 'addTask';
         Workflow.addTaskWrId = pathParts[2];
-      } else if (!Workflow.view || Workflow.view === 'detail' || Workflow.view === 'form' || Workflow.view === 'templateForm' || Workflow.view === 'addTask') {
+      } else if (tabParam === 'task-templates') {
+        if (Auth.user?.role !== 'Admin') {
+          Workflow.view = 'list';
+          location.hash = '#operations';
+          Utils.showToast('Access denied: Admin role required for task templates', 'error');
+        } else {
+          Workflow.view = 'task-templates';
+        }
+      } else if (tabParam === 'templates') {
+        Workflow.view = 'templates';
+      } else if (tabParam === 'archive') {
+        Workflow.view = 'archive';
+      } else if (!Workflow.view || Workflow.view === 'detail' || Workflow.view === 'form' || Workflow.view === 'templateForm' || Workflow.view === 'taskTemplateForm' || Workflow.view === 'addTask') {
         Workflow.view = 'list';
         Workflow.detailWrId = null;
         Workflow.editingId = null;
         Workflow.templateEditingId = null;
+        Workflow.taskTemplateEditingId = null;
         Workflow.addTaskWrId = null;
       }
     } else if (baseHash === '#billing') {
