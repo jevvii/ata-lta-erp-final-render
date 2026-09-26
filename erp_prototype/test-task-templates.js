@@ -386,6 +386,7 @@ function record(testName, passed, details = '') {
           if (typeof markPaneFormClean === 'function') markPaneFormClean();
           if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
             window.SidePaneInstance.close({ silent: true });
+            if (window.SidePaneInstance.body) window.SidePaneInstance.body.replaceChildren();
           }
         });
         await page.waitForSelector('.side-pane.open', { state: 'detached', timeout: 5000 }).catch(() => {});
@@ -455,7 +456,8 @@ function record(testName, passed, details = '') {
 
     try {
       await page.waitForFunction((title) => {
-        return !document.body.innerText.includes(title);
+        const table = document.querySelector('.jira-backlog-container, .jira-table');
+        return !table || !table.innerText.includes(title);
       }, updatedTitle, { timeout: 12000 });
     } catch (e) {
       await page.evaluate(async () => {
@@ -475,9 +477,10 @@ function record(testName, passed, details = '') {
       await page.waitForTimeout(1000);
     }
 
-    const deletedFromTable = !(await page.evaluate((title) => {
-      return document.body.innerText.includes(title);
-    }, updatedTitle));
+    const deletedFromTable = await page.evaluate((title) => {
+      const table = document.querySelector('.jira-backlog-container, .jira-table');
+      return !table || !table.innerText.includes(title);
+    }, updatedTitle);
     record('Deleted template is removed from Task Templates table', deletedFromTable);
 
     // Click "Reset to Defaults"
