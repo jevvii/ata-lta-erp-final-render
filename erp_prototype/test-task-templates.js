@@ -61,14 +61,14 @@ function record(testName, passed, details = '') {
     await staffPage.evaluate(() => { window.location.hash = '#operations?tab=task-templates'; });
     await staffPage.waitForTimeout(1000);
     const staffUrl = staffPage.url();
-    const staffBlockedTab = !staffUrl.includes('tab=task-templates') || (await staffPage.evaluate(() => window.Workflow.view !== 'task-templates'));
+    const staffBlockedTab = !staffUrl.includes('tab=task-templates') || (await staffPage.evaluate(() => (typeof Workflow !== 'undefined' ? Workflow.view : null) !== 'task-templates'));
     record('Non-admin deep-link to #operations?tab=task-templates is blocked/redirected', staffBlockedTab, `URL: ${staffUrl}`);
 
     // Attempt direct deep-link to #operations/taskTemplateForm/new
     console.log('Testing non-admin deep-link to #operations/taskTemplateForm/new...');
     await staffPage.evaluate(() => { window.location.hash = '#operations/taskTemplateForm/new'; });
     await staffPage.waitForTimeout(1000);
-    const staffFormBlocked = (await staffPage.evaluate(() => window.Workflow.view !== 'taskTemplateForm'));
+    const staffFormBlocked = (await staffPage.evaluate(() => (typeof Workflow !== 'undefined' ? Workflow.view : null) !== 'taskTemplateForm'));
     record('Non-admin deep-link to #operations/taskTemplateForm/new is blocked', staffFormBlocked);
 
     await staffContext.close();
@@ -157,13 +157,15 @@ function record(testName, passed, details = '') {
 
       // Switch from Full Page to Center Peek
       console.log('Testing switch from Full Page to Center Peek...');
-      const centerPeekBtn = await page.$('.form-view-switcher button[title*="Center" i], .form-view-switcher button[aria-label*="Center" i]');
-      if (centerPeekBtn) {
-        await centerPeekBtn.click();
+      const switcherBtn = await page.$('.form-view-switcher-btn');
+      if (switcherBtn) {
+        await switcherBtn.click();
+        await page.waitForSelector('.side-pane-view-menu-item[data-mode="center-peek"]', { timeout: 5000 });
+        await page.click('.side-pane-view-menu-item[data-mode="center-peek"]');
         await page.waitForSelector('.side-pane.open.center-peek', { timeout: 10000 });
         record('Switcher transitions form to Center Peek mode', await page.isVisible('.side-pane.open.center-peek'));
       } else {
-        record('Center Peek button in view switcher', false, 'Button not found');
+        record('Center Peek button in view switcher', false, 'Switcher toggle button not found');
       }
     } else {
       record('Side pane expand button found', false);
@@ -210,7 +212,7 @@ function record(testName, passed, details = '') {
     const updatedTitle = testTitle + ' [UPDATED]';
     await page.evaluate((title) => {
       // Find row containing title
-      const rows = document.querySelectorAll('.jira-backlog-item, tr');
+      const rows = document.querySelectorAll('.jira-backlog-row, .jira-backlog-item, tr');
       for (const row of rows) {
         if (row.innerText.includes(title)) {
           const editBtn = Array.from(row.querySelectorAll('button')).find(b => b.textContent.trim() === 'Edit');
@@ -239,32 +241,51 @@ function record(testName, passed, details = '') {
     // PART 5: Work Request "+ Add Task" Integration
     // ══════════════════════════════════════════════════════════════
     console.log('\n--- PART 5: Work Request "+ Add Task" Dynamic Integration ---');
-    // Navigate to Work Requests tab
-    await page.evaluate(() => {
-      const link = Array.from(document.querySelectorAll('.module-tab-nav .module-tab-link')).find(l => l.textContent.includes('Work Requests'));
-      if (link) link.click();
-    });
-    await page.waitForSelector('.jira-table tbody tr.jira-row, .jira-backlog-item', { timeout: 15000 });
-    await page.waitForTimeout(500);
-
-    // Open first work request detail
-    const openedDetail = await page.evaluate(() => {
-      const row = document.querySelector('.jira-table tbody tr.jira-row, .jira-backlog-item');
-      if (row) {
-        const link = row.querySelector('a, .jira-cell-title');
-        if (link) { link.click(); return true; }
-        row.click();
-        return true;
+    // Ensure a test work request exists so we can test the "+ Add Task" modal
+    let testWrId = null;
+    let isCreatedTempWr = false;
+    const wrInfo = await page.evaluate(async () => {
+      try {
+        const wrsRes = await window.apiClient.workRequests.list();
+        const existing = (wrsRes?.data || [])[0];
+        if (existing && existing.id) {
+          return { id: existing.id, created: false };
+        }
+        // Need to create one
+        const clientsRes = await window.apiClient.clients.list();
+        const client = (clientsRes?.data || [])[0];
+        if (!client) {
+          console.warn('No clients found to create test work request');
+          return null;
+        }
+        const created = await window.apiClient.workRequests.create({
+          title: 'E2E Staging Test WR ' + Date.now(),
+          clientId: client.id,
+          entity: client.entity || 'ATA',
+          status: 'In Progress'
+        });
+        return { id: created?.data?.id, created: true };
+      } catch (err) {
+        console.error('Failed to ensure work request:', err);
+        return null;
       }
-      return false;
     });
 
-    if (openedDetail) {
+    if (wrInfo && wrInfo.id) {
+      testWrId = wrInfo.id;
+      isCreatedTempWr = wrInfo.created;
+
+      // Navigate to detail view
+      await page.evaluate((id) => {
+        window.location.hash = `#operations/detail/${id}`;
+      }, testWrId);
+      await page.waitForSelector('#add-task-btn, .detail-view, .operations-detail-view, button', { timeout: 15000 });
       await page.waitForTimeout(1000);
+
       // Look for "+ Add Task" button
       const clickedAddTask = await page.evaluate(() => {
         const btns = Array.from(document.querySelectorAll('button'));
-        const btn = btns.find(b => b.textContent.includes('Add Task'));
+        const btn = btns.find(b => b.textContent.includes('Add Task') || b.textContent.includes('Add First Task'));
         if (btn) { btn.click(); return true; }
         return false;
       });
@@ -307,6 +328,19 @@ function record(testName, passed, details = '') {
       } else {
         record('Work Request "+ Add Task" button clicked', false, 'Button not found on detail view');
       }
+
+      // If temporary WR was created, clean it up
+      if (isCreatedTempWr) {
+        await page.evaluate(async (id) => {
+          try {
+            await window.apiClient.workRequests.remove(id);
+          } catch (e) {
+            console.warn('Failed to cleanup temp WR:', e);
+          }
+        }, testWrId);
+      }
+    } else {
+      record('Work request detail available for "+ Add Task" verification', false, 'Could not find or create a test work request');
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -321,7 +355,7 @@ function record(testName, passed, details = '') {
     // Delete the updated test template
     console.log('Deleting test template:', updatedTitle);
     await page.evaluate((title) => {
-      const rows = document.querySelectorAll('.jira-backlog-item, tr');
+      const rows = document.querySelectorAll('.jira-backlog-row, .jira-backlog-item, tr');
       for (const row of rows) {
         if (row.innerText.includes(title)) {
           const delBtn = Array.from(row.querySelectorAll('button')).find(b => b.textContent.trim() === 'Delete');
@@ -361,7 +395,7 @@ function record(testName, passed, details = '') {
     await page.waitForTimeout(2000);
 
     const defaultCount = await page.evaluate(() => {
-      const items = document.querySelectorAll('.jira-backlog-item');
+      const items = document.querySelectorAll('.jira-backlog-row, .jira-backlog-item');
       return items.length;
     });
     record('Reset to defaults restores 9 system baseline templates', defaultCount >= 9, `Template count: ${defaultCount}`);

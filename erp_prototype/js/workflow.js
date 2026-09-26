@@ -16008,9 +16008,17 @@ const Workflow = {
       this.updateTabNav();
 
       if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
-        closeFormPanelAndRoute('#operations?tab=task-templates');
+        await closeFormPanelAndRoute('#operations?tab=task-templates');
       } else {
         location.hash = '#operations?tab=task-templates';
+      }
+
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        }
       }
     } catch (err) {
       console.error('Failed to save task template', err);
