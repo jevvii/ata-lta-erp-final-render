@@ -79,6 +79,13 @@ function record(testName, passed, details = '') {
     console.log('\n--- PART 2: Admin Access & Task Templates Tab ---');
     const adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await adminContext.newPage();
+    page.on('console', msg => {
+      const type = msg.type();
+      if (type === 'error' || type === 'warn' || msg.text().includes('template') || msg.text().includes('task') || msg.text().includes('save')) {
+        console.log(`[PAGE ${type}]: ${msg.text()}`);
+      }
+    });
+    page.on('pageerror', err => console.log('[PAGE ERROR]:', err));
 
     console.log('Logging in as Admin:', ADMIN_EMAIL);
     await page.goto(BASE_URL);
@@ -162,8 +169,8 @@ function record(testName, passed, details = '') {
         await switcherBtn.click();
         await page.waitForSelector('.side-pane-view-menu-item[data-mode="center-peek"]', { timeout: 5000 });
         await page.click('.side-pane-view-menu-item[data-mode="center-peek"]');
-        await page.waitForSelector('.side-pane.open.center-peek', { timeout: 10000 });
-        record('Switcher transitions form to Center Peek mode', await page.isVisible('.side-pane.open.center-peek'));
+        await page.waitForSelector('.side-pane.open.side-pane--center-peek', { timeout: 10000 });
+        record('Switcher transitions form to Center Peek mode', await page.isVisible('.side-pane.open.side-pane--center-peek'));
       } else {
         record('Center Peek button in view switcher', false, 'Switcher toggle button not found');
       }
@@ -196,10 +203,15 @@ function record(testName, passed, details = '') {
     // Submit form
     console.log('Submitting new template:', testTitle);
     await page.evaluate(() => {
-      const form = document.querySelector('#task-template-form');
-      if (form) form.requestSubmit();
+      const saveBtn = Array.from(document.querySelectorAll('.side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
+      if (saveBtn) {
+        saveBtn.click();
+      } else {
+        const form = document.querySelector('#task-template-form');
+        if (form) form.requestSubmit();
+      }
     });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2000);
 
     // Verify new template appears in templates list
     const foundNew = await page.evaluate((title) => {
@@ -227,10 +239,15 @@ function record(testName, passed, details = '') {
 
     // Save changes
     await page.evaluate(() => {
-      const form = document.querySelector('#task-template-form');
-      if (form) form.requestSubmit();
+      const saveBtn = Array.from(document.querySelectorAll('.side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
+      if (saveBtn) {
+        saveBtn.click();
+      } else {
+        const form = document.querySelector('#task-template-form');
+        if (form) form.requestSubmit();
+      }
     });
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(2000);
 
     const foundUpdated = await page.evaluate((title) => {
       return document.body.innerText.includes(title);
@@ -279,12 +296,12 @@ function record(testName, passed, details = '') {
       await page.evaluate((id) => {
         window.location.hash = `#operations/detail/${id}`;
       }, testWrId);
-      await page.waitForSelector('#add-task-btn, .detail-view, .operations-detail-view, button', { timeout: 15000 });
+      await page.waitForSelector('#content button', { timeout: 15000 });
       await page.waitForTimeout(1000);
 
       // Look for "+ Add Task" button
       const clickedAddTask = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
+        const btns = Array.from(document.querySelectorAll('#content button'));
         const btn = btns.find(b => b.textContent.includes('Add Task') || b.textContent.includes('Add First Task'));
         if (btn) { btn.click(); return true; }
         return false;
