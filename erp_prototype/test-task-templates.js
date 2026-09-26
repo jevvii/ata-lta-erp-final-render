@@ -351,8 +351,9 @@ function record(testName, passed, details = '') {
       } catch (e) {}
 
       if (addTaskBtn) {
-        record('Work Request "+ Add Task" button clicked', true);
+        await page.waitForSelector('.modal-overlay', { state: 'detached', timeout: 5000 }).catch(() => {});
         await addTaskBtn.click();
+        record('Work Request "+ Add Task" button clicked', true);
         await page.waitForSelector('#add-task-form, select[name="template"]', { timeout: 10000 });
         await page.waitForTimeout(500);
 

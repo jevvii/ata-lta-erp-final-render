@@ -2721,15 +2721,11 @@ function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, m
  * @param {string} [type='success']
  */
 function showToast(title, message, type = 'success') {
-  if (typeof Workflow !== 'undefined' && typeof Workflow.showMessage === 'function') {
-    Workflow.showMessage(title, message, type);
-    return;
-  }
-
   let container = document.getElementById('utils-toast-container');
   if (!container) {
     container = document.createElement('div');
     container.id = 'utils-toast-container';
+    container.className = 'utils-toast-container';
     document.body.appendChild(container);
   }
 
