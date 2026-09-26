@@ -16007,8 +16007,13 @@ const Workflow = {
       Workflow._refreshCounts();
       this.updateTabNav();
 
+      markPaneFormClean();
       if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
-        await closeFormPanelAndRoute('#operations?tab=task-templates');
+        await closeFormPanelAndRoute('#operations?tab=task-templates', {
+          title: isEdit ? 'Template Updated' : 'Template Created',
+          message: isEdit ? 'Task template updated successfully' : 'Task template created successfully',
+          type: 'success'
+        });
       } else {
         location.hash = '#operations?tab=task-templates';
       }

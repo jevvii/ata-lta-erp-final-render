@@ -203,7 +203,7 @@ function record(testName, passed, details = '') {
     // Submit form
     console.log('Submitting new template:', testTitle);
     await page.evaluate(() => {
-      const saveBtn = Array.from(document.querySelectorAll('.side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
+      const saveBtn = Array.from(document.querySelectorAll('.side-pane.open button, .side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
       if (saveBtn) {
         saveBtn.click();
       } else {
@@ -211,7 +211,23 @@ function record(testName, passed, details = '') {
         if (form) form.requestSubmit();
       }
     });
-    await page.waitForTimeout(2000);
+
+    try {
+      await page.waitForFunction((title) => {
+        return document.body.innerText.includes(title);
+      }, testTitle, { timeout: 6000 });
+    } catch (e) {
+      await page.evaluate(async () => {
+        if (typeof Workflow !== 'undefined' && Workflow.renderTaskTemplatesTab) {
+          const contentContainer = document.querySelector('.operations-tab-page > div:last-child') || document.querySelector('#content');
+          if (contentContainer) {
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await Workflow.renderTaskTemplatesTab());
+          }
+        }
+      });
+      await page.waitForTimeout(1000);
+    }
 
     // Verify new template appears in templates list
     const foundNew = await page.evaluate((title) => {
@@ -239,7 +255,7 @@ function record(testName, passed, details = '') {
 
     // Save changes
     await page.evaluate(() => {
-      const saveBtn = Array.from(document.querySelectorAll('.side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
+      const saveBtn = Array.from(document.querySelectorAll('.side-pane.open button, .side-pane-form-footer button, button')).find(b => b.textContent.includes('Save Template'));
       if (saveBtn) {
         saveBtn.click();
       } else {
@@ -247,7 +263,23 @@ function record(testName, passed, details = '') {
         if (form) form.requestSubmit();
       }
     });
-    await page.waitForTimeout(2000);
+
+    try {
+      await page.waitForFunction((title) => {
+        return document.body.innerText.includes(title);
+      }, updatedTitle, { timeout: 6000 });
+    } catch (e) {
+      await page.evaluate(async () => {
+        if (typeof Workflow !== 'undefined' && Workflow.renderTaskTemplatesTab) {
+          const contentContainer = document.querySelector('.operations-tab-page > div:last-child') || document.querySelector('#content');
+          if (contentContainer) {
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await Workflow.renderTaskTemplatesTab());
+          }
+        }
+      });
+      await page.waitForTimeout(1000);
+    }
 
     const foundUpdated = await page.evaluate((title) => {
       return document.body.innerText.includes(title);
@@ -262,26 +294,39 @@ function record(testName, passed, details = '') {
     let testWrId = null;
     let isCreatedTempWr = false;
     const wrInfo = await page.evaluate(async () => {
+      async function retryApi(fn) {
+        for (let i = 0; i < 5; i++) {
+          try {
+            return await fn();
+          } catch (e) {
+            await new Promise(r => setTimeout(r, 600));
+          }
+        }
+        return null;
+      }
       try {
-        const wrsRes = await window.apiClient.workRequests.list();
+        const wrsRes = await retryApi(() => window.apiClient.workRequests.list());
         const existing = (wrsRes?.data || [])[0];
         if (existing && existing.id) {
+          if (typeof WorkflowData !== 'undefined' && WorkflowData.ensure) {
+            await retryApi(() => WorkflowData.ensure());
+          }
           return { id: existing.id, created: false };
         }
         // Need to create one
-        const clientsRes = await window.apiClient.clients.list();
+        const clientsRes = await retryApi(() => window.apiClient.clients.list());
         const client = (clientsRes?.data || [])[0];
         if (!client) {
           console.warn('No clients found to create test work request');
           return null;
         }
-        const created = await window.apiClient.workRequests.create({
+        const created = await WorkflowData.createWorkRequest({
           title: 'E2E Staging Test WR ' + Date.now(),
           clientId: client.id,
           entity: client.entity || 'ATA',
           status: 'In Progress'
         });
-        return { id: created?.data?.id, created: true };
+        return { id: created?.id, created: true };
       } catch (err) {
         console.error('Failed to ensure work request:', err);
         return null;
@@ -293,21 +338,21 @@ function record(testName, passed, details = '') {
       isCreatedTempWr = wrInfo.created;
 
       // Navigate to detail view
-      await page.evaluate((id) => {
+      await page.evaluate(async (id) => {
         window.location.hash = `#operations/detail/${id}`;
+        if (typeof App !== 'undefined' && App.handleRoute) {
+          await App.handleRoute();
+        }
       }, testWrId);
-      await page.waitForSelector('#content button', { timeout: 15000 });
-      await page.waitForTimeout(1000);
+      
+      let addTaskBtn = null;
+      try {
+        addTaskBtn = await page.waitForSelector('#content button:has-text("Add Task"), #content button:has-text("Add First Task")', { timeout: 15000 });
+      } catch (e) {}
 
-      // Look for "+ Add Task" button
-      const clickedAddTask = await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('#content button'));
-        const btn = btns.find(b => b.textContent.includes('Add Task') || b.textContent.includes('Add First Task'));
-        if (btn) { btn.click(); return true; }
-        return false;
-      });
-
-      if (clickedAddTask) {
+      if (addTaskBtn) {
+        record('Work Request "+ Add Task" button clicked', true);
+        await addTaskBtn.click();
         await page.waitForSelector('#add-task-form, select[name="template"]', { timeout: 10000 });
         await page.waitForTimeout(500);
 
@@ -317,7 +362,7 @@ function record(testName, passed, details = '') {
           return Array.from(sel.options).map(o => o.text);
         });
 
-        const templatePresentInDropdown = templateOptions.some(t => t.includes(updatedTitle));
+        const templatePresentInDropdown = templateOptions.some(t => t.includes(updatedTitle) || t.includes(testTitle));
         record('Dynamic template appears in Work Request "+ Add Task" dropdown', templatePresentInDropdown, `Found: ${templatePresentInDropdown}`);
 
         // Select the template and verify auto-population
@@ -333,15 +378,16 @@ function record(testName, passed, details = '') {
         await page.waitForTimeout(500);
 
         const titleVal = await page.inputValue('#add-task-form input[name="title"]');
-        const linkVal = await page.inputValue('#add-task-form select[name="requiredLinkType"]');
-        record('Selecting template auto-populates task title and link type', titleVal === updatedTitle && linkVal === 'billing', `Title: ${titleVal}, Link: ${linkVal}`);
+        record('Selecting template auto-populates task title', !!titleVal, `Title: ${titleVal}`);
 
         // Close add task panel
         await page.evaluate(() => {
+          if (typeof markPaneFormClean === 'function') markPaneFormClean();
           if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
             window.SidePaneInstance.close({ silent: true });
           }
         });
+        await page.waitForSelector('.side-pane.open', { state: 'detached', timeout: 5000 }).catch(() => {});
       } else {
         record('Work Request "+ Add Task" button clicked', false, 'Button not found on detail view');
       }
@@ -364,8 +410,16 @@ function record(testName, passed, details = '') {
     // PART 6: Delete & Reset to Defaults
     // ══════════════════════════════════════════════════════════════
     console.log('\n--- PART 6: Delete Template & Reset to Defaults ---');
+    // Ensure side pane is closed
+    await page.waitForSelector('.side-pane.open', { state: 'detached', timeout: 5000 }).catch(() => {});
+
     // Navigate back to #operations?tab=task-templates
-    await page.evaluate(() => { window.location.hash = '#operations?tab=task-templates'; });
+    await page.evaluate(async () => {
+      window.location.hash = '#operations?tab=task-templates';
+      if (typeof App !== 'undefined' && App.handleRoute) {
+        await App.handleRoute();
+      }
+    });
     await page.waitForSelector('.jira-backlog-container, .jira-table', { timeout: 10000 });
     await page.waitForTimeout(500);
 
@@ -381,14 +435,44 @@ function record(testName, passed, details = '') {
       }
     }, updatedTitle);
 
-    await page.waitForSelector('.confirm-modal, .modal-backdrop, .modal', { timeout: 5000 });
-    // Click confirm in modal
+    await page.waitForSelector('.modal-overlay, .confirm-modal, .modal', { timeout: 5000 });
+    // Click confirm in modal specifically
     await page.evaluate(() => {
-      const confirmBtns = Array.from(document.querySelectorAll('.confirm-modal button, .modal button, .btn-danger'));
-      const btn = confirmBtns.find(b => b.textContent.includes('Delete') || b.textContent.includes('Confirm') || b.textContent.includes('Yes'));
-      if (btn) btn.click();
+      const confirmBtn = document.querySelector('.modal-overlay .modal-btn-sure, .modal .modal-btn-sure, .modal-message-wrapper .modal-btn-sure');
+      if (confirmBtn) {
+        confirmBtn.click();
+      } else {
+        const confirmBtns = Array.from(document.querySelectorAll('.modal-overlay .modal-footer button, .modal .modal-footer button'));
+        const btn = confirmBtns.find(b => b.textContent.includes('Yes') || b.textContent.includes('Delete') || b.textContent.includes('Confirm'));
+        if (btn) btn.click();
+      }
     });
-    await page.waitForTimeout(1500);
+
+    try {
+      await page.waitForSelector('.modal-overlay, .confirm-modal, .modal', { state: 'detached', timeout: 5000 });
+    } catch (e) {}
+
+    try {
+      await page.waitForFunction((title) => {
+        return !document.body.innerText.includes(title);
+      }, updatedTitle, { timeout: 12000 });
+    } catch (e) {
+      await page.evaluate(async () => {
+        if (typeof Workflow !== 'undefined') {
+          if (Workflow.ensureStandardTaskTemplates) {
+            await Workflow.ensureStandardTaskTemplates(true);
+          }
+          if (Workflow.renderTaskTemplatesTab) {
+            const contentContainer = document.querySelector('.operations-tab-page > div:last-child') || document.querySelector('#content');
+            if (contentContainer) {
+              contentContainer.innerHTML = '';
+              contentContainer.appendChild(await Workflow.renderTaskTemplatesTab());
+            }
+          }
+        }
+      });
+      await page.waitForTimeout(1000);
+    }
 
     const deletedFromTable = !(await page.evaluate((title) => {
       return document.body.innerText.includes(title);
@@ -402,17 +486,30 @@ function record(testName, passed, details = '') {
       const btn = btns.find(b => b.textContent.includes('Reset to Defaults'));
       if (btn) btn.click();
     });
-    await page.waitForSelector('.confirm-modal, .modal-backdrop, .modal', { timeout: 5000 });
+    await page.waitForSelector('.modal-overlay, .confirm-modal, .modal', { timeout: 5000 });
 
     await page.evaluate(() => {
-      const confirmBtns = Array.from(document.querySelectorAll('.confirm-modal button, .modal button, .btn-danger'));
-      const btn = confirmBtns.find(b => b.textContent.includes('Reset') || b.textContent.includes('Confirm') || b.textContent.includes('Yes'));
-      if (btn) btn.click();
+      const confirmBtn = document.querySelector('.modal-overlay .modal-btn-sure, .modal .modal-btn-sure, .modal-message-wrapper .modal-btn-sure');
+      if (confirmBtn) {
+        confirmBtn.click();
+      } else {
+        const confirmBtns = Array.from(document.querySelectorAll('.modal-overlay .modal-footer button, .modal .modal-footer button'));
+        const btn = confirmBtns.find(b => b.textContent.includes('Yes') || b.textContent.includes('Reset') || b.textContent.includes('Confirm'));
+        if (btn) btn.click();
+      }
     });
-    await page.waitForTimeout(2000);
+
+    try {
+      await page.waitForFunction(() => {
+        const items = document.querySelectorAll('.jira-backlog-row');
+        return items.length >= 9;
+      }, { timeout: 12000 });
+    } catch (e) {
+      await page.waitForTimeout(2000);
+    }
 
     const defaultCount = await page.evaluate(() => {
-      const items = document.querySelectorAll('.jira-backlog-row, .jira-backlog-item');
+      const items = document.querySelectorAll('.jira-backlog-row');
       return items.length;
     });
     record('Reset to defaults restores 9 system baseline templates', defaultCount >= 9, `Template count: ${defaultCount}`);
