@@ -2730,6 +2730,13 @@ function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, m
  * @param {string} [type='success']
  */
 function showToast(title, message, type = 'success') {
+  if (arguments.length === 2 && ['success', 'error', 'warning', 'info', 'danger'].includes(message)) {
+    type = message === 'danger' ? 'error' : message;
+    message = title;
+    title = type.charAt(0).toUpperCase() + type.slice(1);
+  }
+  if (type === 'danger') type = 'error';
+
   let container = document.getElementById('utils-toast-container');
   if (!container) {
     container = document.createElement('div');

@@ -8576,7 +8576,10 @@ const Workflow = {
     }
 
     const titleIn = el('input', { type: 'text', placeholder: 'Task title', class: 'task-title-input', value: taskData?.title || '' });
-    titleIn.addEventListener('input', () => this.updatePredecessorOptions(container));
+    titleIn.addEventListener('input', () => {
+      titleIn.classList.remove('input-error');
+      this.updatePredecessorOptions(container);
+    });
     row.appendChild(titleIn);
 
     // Ground worker assignee — typable dropdown like the filter tray
@@ -8586,7 +8589,12 @@ const Workflow = {
       placeholder: 'Employee *',
       className: 'task-assignee-groundworker',
       allowedNames: allowedNames || null,
-      onChange: () => {} // value is read at submit time
+      onChange: () => {
+        gwDropdown.querySelector('input')?.classList.remove('input-error');
+      } // value is read at submit time
+    });
+    gwDropdown.querySelector('input')?.addEventListener('input', () => {
+      gwDropdown.querySelector('input')?.classList.remove('input-error');
     });
 
     const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
@@ -8678,26 +8686,51 @@ const Workflow = {
 
   updatePredecessorOptions(container) {
     const rows = Array.from(container.querySelectorAll('.wr-task-row'));
-    const tasks = rows.map((row, idx) => ({
-      key: row.dataset.taskKey,
-      label: row.querySelector('.task-title-input').value.trim() || `Task ${idx + 1}`
-    }));
+    // Only task containers with a non-empty title are valid tasks
+    const validTasks = rows
+      .map((row, idx) => ({
+        key: row.dataset.taskKey,
+        label: row.querySelector('.task-title-input')?.value?.trim() || '',
+        idx,
+        row
+      }))
+      .filter(t => t.label.length > 0);
 
-    rows.forEach((row, idx) => {
+    const validKeysSet = new Set(validTasks.map(t => t.key));
+
+    rows.forEach((row, rowIdx) => {
       const predWrapper = row.querySelector('.task-pred');
       if (!predWrapper) return;
       const predBtn = predWrapper.querySelector('.multi-select-btn');
       const predMenu = predWrapper.querySelector('.multi-select-menu');
       if (!predBtn || !predMenu) return;
 
-      const currentKeys = (row.dataset.predKeys || '').split(',').filter(Boolean);
+      // Available tasks to depend on: all valid tasks EXCEPT this row itself
+      const availableTasks = validTasks.filter(t => t.key !== row.dataset.taskKey);
+      // Valid tasks that appear earlier in the DOM before this row
+      const precedingValidTasks = validTasks.filter(t => t.idx < rowIdx && t.key !== row.dataset.taskKey);
+
+      // Clean up stale selected keys that no longer exist among valid tasks
+      let currentKeys = (row.dataset.predKeys || '').split(',').map(s => s.trim()).filter(Boolean);
+      const hadStar = currentKeys.includes('*');
+
+      if (hadStar && precedingValidTasks.length === 0) {
+        currentKeys = currentKeys.filter(k => k !== '*');
+      }
+
+      currentKeys = currentKeys.filter(k => k === '*' || (validKeysSet.has(k) && k !== row.dataset.taskKey));
+
       predMenu.innerHTML = '';
 
       const updateSelection = () => {
-        // Auto-check All Tasks (*) if all individual tasks are checked
+        // Auto-check All Tasks (*) if all preceding tasks are checked (and there are >= 1)
         const allCheckbox = predMenu.querySelector('.multi-select-option input[value="*"]');
         const individualCheckboxes = Array.from(predMenu.querySelectorAll('.multi-select-option input')).filter(input => input.value !== '*');
-        if (allCheckbox && !allCheckbox.checked && individualCheckboxes.length > 0 && individualCheckboxes.every(cb => cb.checked)) {
+
+        const precedingCheckboxes = individualCheckboxes.filter(input => {
+          return precedingValidTasks.some(pt => pt.key === input.value);
+        });
+        if (allCheckbox && !allCheckbox.checked && precedingCheckboxes.length > 1 && precedingCheckboxes.every(cb => cb.checked)) {
           allCheckbox.checked = true;
         }
 
@@ -8708,30 +8741,53 @@ const Workflow = {
           row.dataset.predKeys = '*';
           predBtn.textContent = 'All Tasks (*)';
           predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
-            if (input.value !== '*') input.checked = true;
+            if (input.value !== '*') {
+              if (precedingValidTasks.some(pt => pt.key === input.value)) {
+                input.checked = true;
+              }
+            }
           });
         } else if (selectedKeys.length > 0) {
           row.dataset.predKeys = selectedKeys.join(',');
           const selectedLabels = selectedKeys.map(k => {
-            const t = tasks.find(tsk => tsk.key === k);
-            return t ? t.label : 'Task';
-          });
-          predBtn.textContent = selectedLabels.join(', ');
+            const t = validTasks.find(tsk => tsk.key === k);
+            return t ? t.label : '';
+          }).filter(Boolean);
+          predBtn.textContent = selectedLabels.length > 0 ? selectedLabels.join(', ') : '— No dependency —';
         } else {
           row.dataset.predKeys = '';
           predBtn.textContent = '— No dependency —';
         }
       };
 
-      // 1. Add "All Tasks (*)"
-      if (idx > 0) {
+      if (availableTasks.length === 0) {
+        row.dataset.predKeys = '';
+        predBtn.textContent = '— No dependency —';
+        const emptyNotice = el('div', {
+          class: 'multi-select-empty',
+          text: 'No named tasks available'
+        });
+        emptyNotice.style.padding = '8px 12px';
+        emptyNotice.style.color = 'var(--text-muted, #888)';
+        emptyNotice.style.fontSize = '12px';
+        emptyNotice.style.fontStyle = 'italic';
+        predMenu.appendChild(emptyNotice);
+        return;
+      }
+
+      // 1. Add "All Tasks (*)" if there are preceding valid tasks
+      if (precedingValidTasks.length > 0) {
         const optionEl = el('label', { class: 'multi-select-option' });
         const checkbox = el('input', { type: 'checkbox', value: '*' });
         if (currentKeys.includes('*')) checkbox.checked = true;
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) {
             predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
-              if (input !== checkbox) input.checked = true;
+              if (input !== checkbox) {
+                if (precedingValidTasks.some(pt => pt.key === input.value)) {
+                  input.checked = true;
+                }
+              }
             });
           } else {
             predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
@@ -8745,14 +8801,12 @@ const Workflow = {
         predMenu.appendChild(optionEl);
       }
 
-      // 2. Add individual tasks
-      tasks.forEach((task, tIdx) => {
-        if (task.key === row.dataset.taskKey) return;
-
+      // 2. Add individual named tasks
+      availableTasks.forEach(task => {
         const optionEl = el('label', { class: 'multi-select-option' });
         const checkbox = el('input', { type: 'checkbox', value: task.key });
-        
-        const isPrevious = tIdx < idx;
+
+        const isPrevious = precedingValidTasks.some(pt => pt.key === task.key);
         const shouldBeChecked = currentKeys.includes(task.key) || (currentKeys.includes('*') && isPrevious);
         if (shouldBeChecked) checkbox.checked = true;
 
@@ -8779,6 +8833,7 @@ const Workflow = {
     const taskRows = form.querySelectorAll('.task-row');
     let hasError = false;
     let firstErrorInput = null;
+    let errorMessage = '';
 
     taskRows.forEach(row => {
       const titleInput = row.querySelector('.task-title-input');
@@ -8787,23 +8842,42 @@ const Workflow = {
       const gwInput = gwAutocomplete?.querySelector('input');
       const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
       const groundWorkerId = gwAutocomplete?.value || null;
+      const hasAssignee = !!(groundWorkerName || groundWorkerId);
+      const hasOtherData = (row._coAssignees && row._coAssignees.length > 0) || (row.dataset.predKeys && row.dataset.predKeys.length > 0);
 
       if (title) {
-        if (!groundWorkerName && !groundWorkerId) {
+        if (!hasAssignee) {
           hasError = true;
           gwInput?.classList.add('input-error');
-          if (!firstErrorInput) firstErrorInput = gwInput;
+          if (!firstErrorInput) {
+            firstErrorInput = gwInput;
+            errorMessage = 'Please assign an employee to each task.';
+          }
         } else {
           gwInput?.classList.remove('input-error');
         }
+        titleInput?.classList.remove('input-error');
       } else {
-        gwInput?.classList.remove('input-error');
+        // No title provided
+        if (hasAssignee || hasOtherData) {
+          hasError = true;
+          titleInput?.classList.add('input-error');
+          if (!firstErrorInput) {
+            firstErrorInput = titleInput;
+            errorMessage = 'Please provide a title for each task.';
+          }
+        } else {
+          titleInput?.classList.remove('input-error');
+          gwInput?.classList.remove('input-error');
+        }
       }
     });
 
     if (hasError) {
-      if (typeof this.showMessage === 'function') {
-        this.showMessage('Missing Assignee', 'Please assign an employee to each task.', 'danger');
+      if (typeof Utils !== 'undefined' && typeof Utils.showToast === 'function') {
+        Utils.showToast('Validation Error', errorMessage, 'error');
+      } else if (typeof showToast === 'function') {
+        showToast('Validation Error', errorMessage, 'error');
       }
       firstErrorInput?.focus();
       return false;
