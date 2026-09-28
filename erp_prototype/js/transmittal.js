@@ -1947,7 +1947,7 @@ const Transmittal = {
 
   async showForm(txId = null, mode = null) {
     this.detailId = txId;
-    const isNew = !txId;
+    const isNew = !txId || txId === 'new';
     let existing = null;
     if (!isNew) {
       try {
@@ -1956,6 +1956,9 @@ const Transmittal = {
       } catch (e) {
         if (!isAbortError(e)) console.error('Failed to load transmittal form', e);
       }
+    }
+    if (!existing && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      existing = this.normalizeTransmittal ? this.normalizeTransmittal(PendingChanges.draftData) : { ...PendingChanges.draftData };
     }
     const fullPageRoute = isNew ? '#transmittal/form/new' : `#transmittal/form/${txId}`;
 
@@ -1969,8 +1972,26 @@ const Transmittal = {
       fullPageRoute,
       newTabRoute: fullPageRoute,
       actions: [
-        { text: isNew ? 'Create Transmittal' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'transmittal-form' },
-        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#transmittal') }
+        { 
+          text: (typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId)
+            ? 'Save & Resubmit'
+            : (isNew ? 'Create Transmittal' : 'Save Changes'), 
+          class: 'btn btn-primary', 
+          type: 'submit', 
+          form: 'transmittal-form' 
+        },
+        { 
+          text: 'Cancel', 
+          class: 'btn btn-secondary', 
+          onClick: () => {
+            if (typeof PendingChanges !== 'undefined') {
+              PendingChanges.editingPendingId = null;
+              PendingChanges.draftData = null;
+              PendingChanges.preserveEditingId = false;
+            }
+            closeFormPanelAndRoute('#transmittal');
+          }
+        }
       ]
     });
   },
@@ -1981,15 +2002,18 @@ const Transmittal = {
   async renderForm(opts = {}) {
     const { hideHeader = false } = opts;
     const entity = Auth.activeEntity;
-    const isNew = !this.detailId;
+    const isNew = !this.detailId || this.detailId === 'new';
     let existing = null;
-    if (this.detailId) {
+    if (this.detailId && this.detailId !== 'new') {
       try {
         const res = await window.apiClient.transmittals.get(this.detailId);
         existing = this.normalizeTransmittal(res.data);
       } catch (e) {
         if (!isAbortError(e)) console.error('Failed to load transmittal form', e);
       }
+    }
+    if (!existing && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      existing = this.normalizeTransmittal ? this.normalizeTransmittal(PendingChanges.draftData) : { ...PendingChanges.draftData };
     }
 
     await Promise.all([

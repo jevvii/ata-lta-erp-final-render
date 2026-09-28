@@ -15599,9 +15599,32 @@ html.loading-active #loading-screen:not(.hidden) {
   accent-color: var(--color-primary);
 }
 
+.jira-backlog-header-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--color-primary);
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
 .jira-backlog-row:hover .jira-backlog-row-checkbox,
-.jira-backlog-row-checkbox:checked {
+.jira-backlog-row-checkbox:checked,
+.jira-backlog-row-checkbox:focus-visible {
   opacity: 1;
+}
+
+.jira-backlog-container.has-selection .jira-backlog-row-checkbox {
+  opacity: 0.6;
+}
+
+.jira-backlog-container.has-selection .jira-backlog-row:hover .jira-backlog-row-checkbox,
+.jira-backlog-container.has-selection .jira-backlog-row-checkbox:checked {
+  opacity: 1;
+}
+
+.jira-backlog-bulk-bar.hidden {
+  display: none !important;
 }
 
 .jira-backlog-row-icon {
@@ -15619,6 +15642,7 @@ html.loading-active #loading-screen:not(.hidden) {
   margin-right: 12px;
   width: 75px;
   flex-shrink: 0;
+  text-align: left;
 }
 
 .jira-backlog-row-title {
@@ -15627,6 +15651,8 @@ html.loading-active #loading-screen:not(.hidden) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+  min-width: 0;
 }
 
 .jira-backlog-row-tags {
@@ -16158,6 +16184,11 @@ html.loading-active #loading-screen:not(.hidden) {
 
 /* Empty checkbox spacer used when selectable=false to preserve column alignment. */
 .jira-backlog-row-checkbox-wrap--spacer {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+.jira-backlog-row--columns .jira-backlog-row-checkbox-wrap--spacer {
   width: 100%;
 }
 
@@ -16502,6 +16533,33 @@ html.loading-active #loading-screen:not(.hidden) {
   background: rgba(37, 99, 235, 0.15);
   color: #60a5fa;
   border-color: rgba(37, 99, 235, 0.3);
+}
+
+[data-theme="dark"] .jira-backlog-tag-muted {
+  background: var(--color-bg-muted);
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+[data-theme="dark"] .jira-backlog-tag-entity {
+  background: rgba(212, 184, 255, 0.14);
+  color: var(--color-primary, #d4b8ff);
+  border-color: rgba(212, 184, 255, 0.28);
+}
+
+[data-theme="dark"] .jira-backlog-tag-user {
+  background: rgba(37, 99, 235, 0.15);
+  color: #93c5fd;
+  border-color: rgba(147, 197, 253, 0.3);
+}
+
+[data-theme="dark"] .jira-backlog-row.selected {
+  background: rgba(212, 184, 255, 0.12) !important;
+}
+
+[data-theme="dark"] .jira-backlog-row:hover .jira-backlog-row-actions,
+[data-theme="dark"] .jira-backlog-row.selected .jira-backlog-row-actions {
+  background: var(--color-bg-muted, #2f2f2f) !important;
 }
 
 /* Audit / activity action tags */
@@ -16976,6 +17034,42 @@ html.loading-active #loading-screen:not(.hidden) {
 .jira-backlog-tag-amount {
   min-width: 120px;
   justify-content: flex-end;
+}
+
+/* ── Task Template Backlog Column Alignment ──────────── */
+.jira-backlog-tag-link-req {
+  width: 140px;
+  min-width: 140px;
+  max-width: 140px;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.jira-backlog-tag-coassignees {
+  width: 125px;
+  min-width: 125px;
+  max-width: 125px;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.jira-backlog-tag-items-count {
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.jira-backlog-tag--placeholder {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  border-color: transparent !important;
+  background: transparent !important;
 }
 
 /* ── Floating Bulk Action Bar ──────────── */
@@ -19339,3 +19433,223 @@ body.entity-consolidated .topbar {
 [data-theme="dark"] .consolidated-banner { background: linear-gradient(90deg, rgba(37, 99, 235, 0.18), rgba(16, 185, 129, 0.18)); }
 [data-theme="dark"] .entity-pill-toggle { background: rgba(148, 163, 184, 0.12); }
 [data-theme="dark"] .entity-pill.active { background: var(--color-surface, #1f1f1f); color: #93c5fd; }
+
+/* ── Task Template Form, Checklist & View Modes (Theme-Aware) ── */
+.template-form-container {
+  color: var(--color-text);
+}
+
+.template-form-container .form-group label {
+  color: var(--color-text);
+  font-weight: 500;
+  margin-bottom: 6px;
+  font-size: 0.875rem;
+}
+
+#task-template-form input[type="text"].form-control,
+#task-template-form select.form-control {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: var(--radius-sm, 8px);
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+[data-theme="dark"] #task-template-form input[type="text"].form-control,
+[data-theme="dark"] #task-template-form select.form-control {
+  background-color: var(--color-bg) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text) !important;
+}
+
+[data-theme="dark"] #task-template-form input[type="text"].form-control:focus,
+[data-theme="dark"] #task-template-form select.form-control:focus {
+  background-color: var(--color-surface) !important;
+  border-color: var(--color-primary) !important;
+}
+
+.template-form-container .notion-section-heading {
+  color: var(--color-text);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.template-checklist-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.checklist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--color-bg-light);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+
+[data-theme="dark"] .checklist-row {
+  background: var(--color-bg-muted) !important;
+  border-color: var(--color-border) !important;
+}
+
+#task-template-form .checklist-row .form-control,
+.checklist-row .form-control {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+[data-theme="dark"] #task-template-form .checklist-row .form-control,
+[data-theme="dark"] .checklist-row .form-control {
+  background-color: var(--color-bg) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text) !important;
+}
+
+[data-theme="dark"] #task-template-form .checklist-row .form-control:focus,
+[data-theme="dark"] .checklist-row .form-control:focus {
+  background-color: var(--color-surface) !important;
+  border-color: var(--color-primary) !important;
+}
+
+.checklist-row .checklist-item-text {
+  flex: 2 1 0 !important;
+  min-width: 0 !important;
+}
+
+.checklist-row .checklist-item-category {
+  flex: 1.1 1 0 !important;
+  min-width: 0 !important;
+}
+
+.checklist-row .checklist-item-period {
+  flex: 1.1 1 0 !important;
+  min-width: 0 !important;
+}
+
+.checklist-item-del-btn {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  max-width: 24px;
+  max-height: 24px;
+  padding: 0 !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50% !important;
+  flex-shrink: 0 !important;
+  font-size: 11px !important;
+  line-height: 1 !important;
+  border: none !important;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.checklist-item-del-btn:hover {
+  opacity: 0.85;
+  transform: scale(1.05);
+}
+
+.template-form-container .co-assignee-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--color-primary);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+[data-theme="dark"] .template-form-container .co-assignee-chip {
+  background: rgba(212, 184, 255, 0.15) !important;
+  color: var(--color-primary, #d4b8ff) !important;
+  border-color: rgba(212, 184, 255, 0.3) !important;
+}
+
+.operations-tab-page > .template-form-container {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 12px);
+  padding: 24px;
+  box-shadow: var(--shadow-card);
+  margin-top: 16px;
+}
+
+[data-theme="dark"] .operations-tab-page > .template-form-container {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+/* Work Request Project Team (Manager + Team Members) */
+.required-asterisk {
+  color: var(--color-danger, #ef4444);
+  font-weight: bold;
+  margin-left: 2px;
+}
+
+.wr-manager-prop,
+.wr-team-members-prop {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wr-team-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.wr-team-chips:empty {
+  display: none;
+}
+
+.wr-team-chips .co-assignee-chip {
+  background: var(--color-primary-light, #eff6ff);
+  color: var(--color-primary, #2563eb);
+  border: 1px solid var(--color-primary-border, #bfdbfe);
+  border-radius: var(--radius-pill, 9999px);
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+[data-theme="dark"] .wr-team-chips .co-assignee-chip {
+  background: rgba(99, 102, 241, 0.15) !important;
+  color: var(--color-primary, #a5b4fc) !important;
+  border-color: rgba(99, 102, 241, 0.3) !important;
+}
+
+.wr-team-chips .co-assignee-chip-remove {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0 2px;
+  color: var(--color-primary, #3b82f6);
+}
+
+.wr-team-chips .co-assignee-chip-remove:hover {
+  color: var(--color-danger, #ef4444);
+}

@@ -3238,6 +3238,9 @@ const Billing = {
     const activeId = invoiceId || this.detailId;
     const isNew = !activeId || activeId === "new";
     let inv = isNew ? null : this.getInvoiceById(activeId);
+    if (!inv && typeof PendingChanges !== "undefined" && PendingChanges.draftData) {
+      inv = this.normalizeInvoice(PendingChanges.draftData);
+    }
     let loadFailed = false;
     if (!isNew && (!inv || !inv.lineItems || inv.lineItems.length === 0)) {
       try {
@@ -4181,7 +4184,9 @@ const Billing = {
       newTabRoute: fullPageRoute,
       actions: [
         {
-          text: isNew ? "Save Invoice" : "Save Changes",
+          text: (typeof PendingChanges !== "undefined" && PendingChanges.editingPendingId)
+            ? "Save & Resubmit"
+            : (isNew ? "Save Invoice" : "Save Changes"),
           class: "btn btn-primary",
           type: "submit",
           form: "invoice-form",
@@ -4189,7 +4194,14 @@ const Billing = {
         {
           text: "Cancel",
           class: "btn btn-secondary",
-          onClick: () => closeFormPanelAndRoute("#billing"),
+          onClick: () => {
+            if (typeof PendingChanges !== "undefined") {
+              PendingChanges.editingPendingId = null;
+              PendingChanges.draftData = null;
+              PendingChanges.preserveEditingId = false;
+            }
+            closeFormPanelAndRoute("#billing");
+          },
         },
       ],
     });

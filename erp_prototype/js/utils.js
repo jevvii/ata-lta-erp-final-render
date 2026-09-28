@@ -1175,11 +1175,12 @@ function _ensureSearchableDropdownDocListener() {
   });
 }
 
-function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null, allowClear = true }) {
+function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeText = false, addNewLabel = null, allowClear = true, emptyText = 'No results' }) {
   const wrapper = document.createElement('div');
   wrapper.className = 'searchable-dropdown';
   if (maxWidth) wrapper.style.maxWidth = maxWidth;
   const canClear = allowClear !== false;
+  let currentEmptyText = emptyText;
 
   let iconHtml = '';
   if (placeholder.includes('Client')) {
@@ -1232,7 +1233,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     const filtered = options.filter(o => !query || o.text.toLowerCase().includes(query));
 
     const trimmedFilter = (filter || '').trim();
-    if (trimmedFilter) {
+    if (trimmedFilter && allowFreeText) {
       const hasExactMatch = options.some(o => o.text.toLowerCase() === trimmedFilter.toLowerCase());
       if (!hasExactMatch) {
         const label = addNewLabel ? addNewLabel(trimmedFilter) : trimmedFilter;
@@ -1243,7 +1244,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
     if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'searchable-dropdown-empty';
-      empty.textContent = 'No results';
+      empty.textContent = currentEmptyText;
       listbox.appendChild(empty);
       return;
     }
@@ -1430,6 +1431,7 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
 
   // Expose .value as getter/setter for drop-in compatibility with <select>
   Object.defineProperty(wrapper, 'value', {
+    configurable: true,
     get() { return selectedValue; },
     set(val) {
       if (val === '' || val == null) {
@@ -1458,6 +1460,9 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
       }
       input.title = input.value || placeholder || '';
       clearBtn.style.display = val ? 'flex' : 'none';
+      if (typeof wrapper.onValueChange === 'function') {
+        wrapper.onValueChange(val);
+      }
     }
   });
 
@@ -1468,6 +1473,24 @@ function createSearchableDropdown({ placeholder, options, maxWidth, allowFreeTex
   Object.defineProperty(wrapper, 'selectedText', {
     get() { return selectedText; }
   });
+
+  Object.defineProperty(wrapper, 'options', {
+    get() { return options; }
+  });
+
+  wrapper.setOptions = (newOptions) => {
+    options = Array.isArray(newOptions) ? [...newOptions] : [];
+    if (isOpen) renderList(selectedValue ? '' : input.value);
+  };
+
+  wrapper.setEmptyText = (text) => {
+    currentEmptyText = text || 'No results';
+    if (isOpen) renderList(selectedValue ? '' : input.value);
+  };
+
+  wrapper.setAllowFreeText = (val) => {
+    allowFreeText = !!val;
+  };
 
   wrapper.destroy = () => {
     close();
@@ -2721,15 +2744,18 @@ function openFormPanel({ icon, title, ariaLabel, formContent, formId, actions, m
  * @param {string} [type='success']
  */
 function showToast(title, message, type = 'success') {
-  if (typeof Workflow !== 'undefined' && typeof Workflow.showMessage === 'function') {
-    Workflow.showMessage(title, message, type);
-    return;
+  if (arguments.length === 2 && ['success', 'error', 'warning', 'info', 'danger'].includes(message)) {
+    type = message === 'danger' ? 'error' : message;
+    message = title;
+    title = type.charAt(0).toUpperCase() + type.slice(1);
   }
+  if (type === 'danger') type = 'error';
 
   let container = document.getElementById('utils-toast-container');
   if (!container) {
     container = document.createElement('div');
     container.id = 'utils-toast-container';
+    container.className = 'utils-toast-container';
     document.body.appendChild(container);
   }
 
@@ -4417,6 +4443,8 @@ const JiraBacklogList = {
       ? el('input', {
           type: 'checkbox',
           class: 'jira-backlog-header-checkbox',
+          title: 'Select all',
+          'aria-label': 'Select all',
           style: 'margin-right: 8px; cursor: pointer; accent-color: var(--color-primary); width: 14px; height: 14px;'
         })
       : null;
@@ -4553,6 +4581,10 @@ const JiraBacklogList = {
         }
       });
 
+      if (container) {
+        container.classList.toggle('has-selection', selectedIds.length > 0);
+      }
+
       if (bulkBar) {
         const actionsList = typeof currentBulkActions === 'function' ? currentBulkActions(selectedIds) : currentBulkActions;
         const finalActions = actionsList || [];
@@ -4624,11 +4656,12 @@ const JiraBacklogList = {
 
       // Checkbox container (shows on hover, stays visible when checked)
       if (showCheckboxes) {
-        const checkboxWrap = el('div', { class: 'jira-backlog-row-checkbox-wrap' });
+        const checkboxWrap = el('div', { class: 'jira-backlog-row-checkbox-wrap', title: 'Select item' });
         const chk = el('input', {
           type: 'checkbox',
           class: 'jira-backlog-row-checkbox',
-          'data-id': item.id
+          'data-id': item.id,
+          'aria-label': `Select ${item.name || 'item'}`
         });
         checkBoxes.push(chk);
 
@@ -4644,8 +4677,8 @@ const JiraBacklogList = {
         });
         checkboxWrap.appendChild(chk);
         row.appendChild(checkboxWrap);
-      } else {
-        // Keep alignment by reserving the checkbox lead column when hidden.
+      } else if (hasColumns) {
+        // Keep alignment by reserving the checkbox lead column when hidden in column mode.
         const checkboxSpacer = el('div', { class: 'jira-backlog-row-checkbox-wrap jira-backlog-row-checkbox-wrap--spacer' });
         row.appendChild(checkboxSpacer);
       }
@@ -4698,6 +4731,8 @@ const JiraBacklogList = {
         let iconHtml = '';
         if (tag.type === 'client') {
           iconHtml = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align: middle;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+        } else if (tag.type === 'user') {
+          iconHtml = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align: middle;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
         } else if (tag.type === 'schedule') {
           iconHtml = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right:4px; vertical-align: middle;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
         } else if (tag.type === 'category') {
@@ -4711,6 +4746,10 @@ const JiraBacklogList = {
         let textVal = tag.text;
         if (typeof textVal === 'string' && tag.type === 'amount' && textVal.startsWith('₱')) {
           textVal = textVal.substring(1).trim();
+        }
+
+        if (!textVal && !tag.node) {
+          iconHtml = '';
         }
 
         if (tag.node || isNode(tag.text)) {

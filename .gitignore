@@ -25,3 +25,5 @@ erp_prototype/.build-tmp/
 *.gz
 *.br
 .playwright-mcp/
+__pycache__/
+*.pyc

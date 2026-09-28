@@ -9,10 +9,41 @@ const { operationsController } = require('./controller');
 const { auth } = require('../../middleware/auth');
 const { entityScope } = require('../../middleware/entityScope');
 const { resolveEntity } = require('../../middleware/resolveEntity');
-const { requirePermission } = require('../../middleware/rbac');
+const { requirePermission, requireAdmin } = require('../../middleware/rbac');
 const { audit } = require('../../middleware/audit');
 
 router.use(auth, entityScope);
+
+// --- Standard Task Templates (Admin CRUD, workflow:view to read) ---
+router.get(
+  '/task-templates',
+  requirePermission('workflow:view'),
+  operationsController.listStandardTaskTemplates
+);
+router.post(
+  '/task-templates/reset-defaults',
+  requireAdmin,
+  audit('task-template.reset', { table: 'standard_task_templates' }),
+  operationsController.resetStandardTaskTemplates
+);
+router.post(
+  '/task-templates',
+  requireAdmin,
+  audit('task-template.created', { table: 'standard_task_templates' }),
+  operationsController.createStandardTaskTemplate
+);
+router.put(
+  '/task-templates/:templateId',
+  requireAdmin,
+  audit('task-template.updated', { table: 'standard_task_templates' }),
+  operationsController.updateStandardTaskTemplate
+);
+router.delete(
+  '/task-templates/:templateId',
+  requireAdmin,
+  audit('task-template.deleted', { table: 'standard_task_templates' }),
+  operationsController.deleteStandardTaskTemplate
+);
 
 // --- Retainer Templates (must come before /:id routes) ---
 router.get(

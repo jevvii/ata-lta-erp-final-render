@@ -291,21 +291,20 @@ const Auth = {
   canViewWr(wr) {
     if (!this.user) return false;
     if (this.user.role === 'Admin') return true;
-    // Managerial users (Management department or legacy Manager role) are
-    // back-office: the backend serves them every work request (isBackOffice),
-    // so the frontend must not bounce their detail views to the list.
-    if (this.isManagerial()) return !!wr;
-    // Staff-level users can see work requests they are assigned to, requested, or via tasks.
     if (!wr) return false;
-    if (wr.assignedTo === this.user.id || wr.requestedBy === this.user.id || wr.submittedBy === this.user.id) return true;
+    // Check if user is directly on the WR (Manager/Lead assignee, Team Member/co-assignee, requester, submitter)
+    if (wr.assignedTo === this.user.id || wr.assigned_to === this.user.id) return true;
+    if (wr.requestedBy === this.user.id || wr.requested_by === this.user.id || wr.submittedBy === this.user.id || wr.submitted_by === this.user.id) return true;
+    const wrCoAssignees = Array.isArray(wr.coAssignees) ? wr.coAssignees : (Array.isArray(wr.co_assignees) ? wr.co_assignees : []);
+    if (wrCoAssignees.some(n => n === this.user.name || n === this.user.id)) return true;
     
     // Check tasks from the cached work request (workRequestCache always includes tasks).
     const tasks = wr.tasks || [];
     const isAssigned = tasks.some(t => {
       if (t.assigneeId === this.user.id || t.assignedTo === this.user.id) return true;
       if (t.assigneeName && t.assigneeName === this.user.name) return true;
-      if ((t.coAssignees || []).includes(this.user.name)) return true;
-      return (t.checklist || []).some(item => item.assigneeName && item.assigneeName === this.user.name);
+      if ((t.coAssignees || []).some(n => n === this.user.name || n === this.user.id)) return true;
+      return (t.checklist || []).some(item => (item.assigneeName && item.assigneeName === this.user.name) || (item.assigneeId && item.assigneeId === this.user.id));
     });
     return isAssigned;
   },
@@ -317,15 +316,18 @@ const Auth = {
   canViewWrWithTasks(wr, taskMap) {
     if (!this.user) return false;
     if (this.user.role === 'Admin') return true;
-    if (this.isManagerial()) return !!wr;
     if (!wr) return false;
-    if (wr.assignedTo === this.user.id || wr.requestedBy === this.user.id || wr.submittedBy === this.user.id) return true;
-    const tasks = wr.isPendingApproval ? (wr.tasks || []) : (taskMap[wr.id] || []);
+    if (wr.assignedTo === this.user.id || wr.assigned_to === this.user.id) return true;
+    if (wr.requestedBy === this.user.id || wr.requested_by === this.user.id || wr.submittedBy === this.user.id || wr.submitted_by === this.user.id) return true;
+    const wrCoAssignees = Array.isArray(wr.coAssignees) ? wr.coAssignees : (Array.isArray(wr.co_assignees) ? wr.co_assignees : []);
+    if (wrCoAssignees.some(n => n === this.user.name || n === this.user.id)) return true;
+
+    const tasks = wr.isPendingApproval ? (wr.tasks || []) : (taskMap ? (taskMap[wr.id] || wr.tasks || []) : (wr.tasks || []));
     return tasks.some(t => {
       if (t.assigneeId === this.user.id || t.assignedTo === this.user.id) return true;
       if (t.assigneeName && t.assigneeName === this.user.name) return true;
-      if ((t.coAssignees || []).includes(this.user.name)) return true;
-      return (t.checklist || []).some(item => item.assigneeName && item.assigneeName === this.user.name);
+      if ((t.coAssignees || []).some(n => n === this.user.name || n === this.user.id)) return true;
+      return (t.checklist || []).some(item => (item.assigneeName && item.assigneeName === this.user.name) || (item.assigneeId && item.assigneeId === this.user.id));
     });
   },
 

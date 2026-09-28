@@ -16,12 +16,7 @@ const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
 // work requests they are not directly involved in (assignee / requester).
 const isBackOfficeUser = (user) => {
   if (!user) return false;
-  const depts = user.departments || [];
-  return (
-    user.role === 'Admin' ||
-    user.role === 'Manager' ||
-    depts.includes('Management')
-  );
+  return user.role === 'Admin';
 };
 
 // Mirror of the disbursements module's list gate for calendar disbursements.

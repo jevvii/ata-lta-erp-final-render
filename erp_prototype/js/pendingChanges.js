@@ -15,6 +15,8 @@
 
 const PendingChanges = {
   editingPendingId: null,
+  draftData: null,
+  preserveEditingId: false,
 
   /**
    * Normalize a pending-approval record from the API to the shape the UI expects.
@@ -30,7 +32,7 @@ const PendingChanges = {
       submittedBy: pc.submittedBy || pc.submitted_by,
       reviewedBy: pc.reviewedBy || pc.reviewed_by,
       reviewedAt: pc.reviewedAt || pc.reviewed_at,
-      rejectionReason: pc.rejectionReason || pc.rejection_reason
+      rejectionReason: pc.rejectionReason || pc.rejection_reason || pc.proposedData?.rejectionReason || pc.proposedData?.rejection_reason || null
     };
   },
 
@@ -77,6 +79,8 @@ const PendingChanges = {
     if (this.editingPendingId) {
       const pendingId = this.editingPendingId;
       this.editingPendingId = null;
+      this.draftData = null;
+      this.preserveEditingId = false;
       // Server-side pending changes are immutable; resubmit as a new pending
       // record and treat the old one as withdrawn.
       const existing = await this.getById(pendingId);

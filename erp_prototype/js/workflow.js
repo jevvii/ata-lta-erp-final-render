@@ -110,10 +110,18 @@ const WorkflowData = {
   normalizeWorkRequest(wr) {
     if (!wr) return wr;
     const dueDate = wr.dueDate || wr.due_date || null;
+    const assignedTo = wr.assignedTo || wr.assigned_to || null;
+    const coAssignees = Array.isArray(wr.coAssignees)
+      ? wr.coAssignees
+      : (Array.isArray(wr.co_assignees) ? wr.co_assignees : []);
     return {
       ...wr,
       dueDate,
       due_date: dueDate,
+      assignedTo,
+      assigned_to: assignedTo,
+      coAssignees,
+      co_assignees: coAssignees,
       // Backend does not persist these frontend-only fields; supply defaults.
       archived: wr.archived ?? false,
       boardOrder: wr.boardOrder ?? null,
@@ -1665,6 +1673,7 @@ const Workflow = {
   },
   detailWrId: null,
   templateEditingId: null,
+  taskTemplateEditingId: null,
   selectedTaskId: null,
   expandedTaskIds: new Set(),
   lastRenderedWrId: null,
@@ -1674,6 +1683,9 @@ const Workflow = {
   _retainerTemplatesEntity: null,
   _retainerTemplatesGeneration: 0,
   _retainerTemplatesBackgroundPromise: null,
+  _taskTemplates: null,
+  _taskTemplatesLoaded: false,
+  _taskTemplatesPromise: null,
   _groundWorkers: null,
   _groundWorkersPromise: null,
 
@@ -2102,16 +2114,131 @@ const Workflow = {
   },
 
   standardTaskTemplates: [
-    { title: 'Gathering requirements and preparing documents for preprocessing', defaultChecklist: [{ text: 'SEC Certificate', category: 'document' }, { text: 'Articles of Incorporation', category: 'document' }, { text: "Mayor's Permit", category: 'document' }, { text: 'BIR Form 1901/1903', category: 'document' }] },
-    { title: 'Gather requirements and prepare documents needed for processing', defaultChecklist: [{ text: 'SEC Certificate', category: 'document' }, { text: "Mayor's Permit", category: 'document' }, { text: 'BIR Form 1901/1903', category: 'document' }, { text: 'Articles of Incorporation', category: 'document' }], coAssignees: ['Employee 1', 'Employee 2', 'Employee 3'] },
-    { title: 'Creation of ORUS account', defaultChecklist: [] },
-    { title: 'Registration of Books of Accounts', defaultChecklist: [] },
-    { title: 'Application and Received of Authority to Print', defaultChecklist: [] },
-    { title: 'Pickup of Sales/Service Invoice', defaultChecklist: [] },
-    { title: 'Billing', requiredLinkType: 'billing', defaultChecklist: [] },
-    { title: 'Disbursement', requiredLinkType: 'disbursement', defaultChecklist: [] },
-    { title: 'Transmittal', requiredLinkType: 'transmittal', defaultChecklist: [] }
+    {
+      id: '00000000-0000-0000-0000-000000000001',
+      title: 'Gathering requirements and preparing documents for preprocessing',
+      requiredLinkType: null,
+      defaultChecklist: [
+        { id: '00000000-0000-0000-0000-000000000011', text: 'SEC Certificate', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000012', text: 'Articles of Incorporation', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000013', text: "Mayor's Permit", category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000014', text: 'BIR Form 1901/1903', category: 'document' },
+      ],
+      coAssignees: [],
+      sortOrder: 1,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000002',
+      title: 'Gather requirements and prepare documents needed for processing',
+      requiredLinkType: null,
+      defaultChecklist: [
+        { id: '00000000-0000-0000-0000-000000000021', text: 'SEC Certificate', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000022', text: "Mayor's Permit", category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000023', text: 'BIR Form 1901/1903', category: 'document' },
+        { id: '00000000-0000-0000-0000-000000000024', text: 'Articles of Incorporation', category: 'document' },
+      ],
+      coAssignees: ['Employee 1', 'Employee 2', 'Employee 3'],
+      sortOrder: 2,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000003',
+      title: 'Creation of ORUS account',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 3,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000004',
+      title: 'Registration of Books of Accounts',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 4,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000005',
+      title: 'Application and Received of Authority to Print',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 5,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000006',
+      title: 'Pickup of Sales/Service Invoice',
+      requiredLinkType: null,
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 6,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000007',
+      title: 'Billing',
+      requiredLinkType: 'billing',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 7,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000008',
+      title: 'Disbursement',
+      requiredLinkType: 'disbursement',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 8,
+      isSystemDefault: true,
+    },
+    {
+      id: '00000000-0000-0000-0000-000000000009',
+      title: 'Transmittal',
+      requiredLinkType: 'transmittal',
+      defaultChecklist: [],
+      coAssignees: [],
+      sortOrder: 9,
+      isSystemDefault: true,
+    },
   ],
+
+  async ensureStandardTaskTemplates(force = false) {
+    if (this._taskTemplatesLoaded && !force && this._taskTemplates) return this._taskTemplates;
+    if (this._taskTemplatesPromise && !force) return this._taskTemplatesPromise;
+    this._taskTemplatesPromise = this.loadStandardTaskTemplates().finally(() => {
+      this._taskTemplatesPromise = null;
+    });
+    return this._taskTemplatesPromise;
+  },
+
+  async loadStandardTaskTemplates() {
+    try {
+      const res = await window.apiClient.operations.listTaskTemplates();
+      if (res && Array.isArray(res.data) && res.data.length > 0) {
+        this._taskTemplates = res.data;
+        this.standardTaskTemplates = res.data;
+        this._taskTemplatesLoaded = true;
+        return this._taskTemplates;
+      }
+    } catch (err) {
+      console.warn('Failed to load standard task templates from server, using fallback', err);
+    }
+    if (!this._taskTemplates || this._taskTemplates.length === 0) {
+      this._taskTemplates = this.standardTaskTemplates.slice();
+    }
+    this._taskTemplatesLoaded = true;
+    return this._taskTemplates;
+  },
+
+  _getStandardTaskTemplateById(id) {
+    if (!id) return null;
+    return (this._taskTemplates || this.standardTaskTemplates || []).find(t => String(t.id) === String(id)) || null;
+  },
 
   /**
    * Builds a typable employee assignee dropdown like the filter tray.
@@ -2168,24 +2295,60 @@ const Workflow = {
    * "Add employee: X" option and auto-registers it on selection/Enter/blur.
    * Returns the dropdown wrapper. `onChange` receives { assigneeId, assigneeName }.
    */
-  async createGroundWorkerDropdown({ selectedGroundWorkerName, selectedAssigneeId, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [], allowClear = true } = {}) {
+  async createGroundWorkerDropdown({ selectedGroundWorkerName, selectedAssigneeId, onChange, placeholder = 'Employee...', maxWidth, className, priorityNames = [], allowClear = true, allowedNames = null, roleFilter = null } = {}) {
     await Promise.all([
       window.apiClient.userCache.ensure(),
       this._loadGroundWorkers()
     ]);
 
+    let currentAllowedNames = allowedNames;
+
     const buildOptions = () => {
       const systemUsers = (window.apiClient.userCache._users || []) || [];
       const groundWorkers = this._groundWorkers || [];
-      const systemUserNames = systemUsers.map(u => u.name).filter(Boolean);
+      const isRestricted = Array.isArray(currentAllowedNames);
+      const allowedLower = isRestricted
+        ? new Set(currentAllowedNames.map(n => String(n).trim().toLowerCase()).filter(Boolean))
+        : null;
+      const allowedIdSet = isRestricted
+        ? new Set(currentAllowedNames.filter(Boolean))
+        : null;
+
+      const isAllowed = (id, name) => {
+        if (!isRestricted) return true;
+        if (id && allowedIdSet.has(id)) return true;
+        if (name && allowedLower.has(name.toLowerCase())) return true;
+        return false;
+      };
+
+      // Identify manager and admin names for filtering
+      const managerNamesLower = new Set(
+        systemUsers.filter(u => (u.role || '').toLowerCase() === 'manager').map(u => (u.name || '').trim().toLowerCase())
+      );
+      const adminNamesLower = new Set(
+        systemUsers.filter(u => (u.role || '').toLowerCase() === 'admin').map(u => (u.name || '').trim().toLowerCase())
+      );
+
+      // Filter system users based on roleFilter
+      let eligibleSystemUsers = systemUsers;
+      if (roleFilter === 'Manager') {
+        eligibleSystemUsers = systemUsers.filter(u => (u.role || '').toLowerCase() === 'manager');
+      } else if (roleFilter === 'nonManagerNonAdmin') {
+        eligibleSystemUsers = systemUsers.filter(u => {
+          const r = (u.role || '').toLowerCase();
+          return r !== 'manager' && r !== 'admin';
+        });
+      }
+
+      const systemUserNames = eligibleSystemUsers.map(u => u.name).filter(Boolean);
       const prioritySet = new Set([...(priorityNames || []), ...systemUserNames].filter(Boolean));
 
       const addedNames = new Set();
       const options = [];
 
-      // Priority 1: System users allowed access to the site (created via admin)
-      const sortedSystemUsers = [...systemUsers]
-        .filter(u => u.name)
+      // Priority 1: Eligible system users
+      const sortedSystemUsers = [...eligibleSystemUsers]
+        .filter(u => u.name && isAllowed(u.id, u.name))
         .sort((a, b) => a.name.localeCompare(b.name));
       sortedSystemUsers.forEach(u => {
         const lowerName = u.name.toLowerCase();
@@ -2195,37 +2358,90 @@ const Workflow = {
         }
       });
 
-      // Priority 2: Other priority names not in system users
-      const otherPriorityNames = Array.from(prioritySet)
-        .filter(name => !addedNames.has(name.toLowerCase()))
-        .sort((a, b) => a.localeCompare(b));
-      otherPriorityNames.forEach(name => {
-        const gw = groundWorkers.find(g => g.name.toLowerCase() === name.toLowerCase());
-        options.push({ value: gw ? gw.id : name, text: name });
-        addedNames.add(name.toLowerCase());
-      });
+      if (isRestricted) {
+        // If restricted, also add any allowed names that might not be in systemUsers
+        Array.from(allowedLower).forEach(lower => {
+          if (!addedNames.has(lower)) {
+            const orig = currentAllowedNames.find(n => String(n).trim().toLowerCase() === lower);
+            const gw = groundWorkers.find(g => g.name.toLowerCase() === lower);
+            options.push({ value: gw ? gw.id : (orig || lower), text: orig || lower });
+            addedNames.add(lower);
+          }
+        });
+      } else if (roleFilter === 'Manager') {
+        // Under Manager dropdown: only show Manager (not including admin or other employees/ground workers)
+      } else {
+        const filterExcludedRoles = (name) => {
+          if (roleFilter === 'nonManagerNonAdmin') {
+            const lower = (name || '').trim().toLowerCase();
+            if (managerNamesLower.has(lower) || adminNamesLower.has(lower)) return false;
+            for (const mgrName of managerNamesLower) {
+              if (mgrName.includes(lower) || lower.includes(mgrName)) return false;
+            }
+            for (const admName of adminNamesLower) {
+              if (admName.includes(lower) || lower.includes(admName)) return false;
+            }
+          }
+          return true;
+        };
 
-      // Priority 3: Other ground workers
-      const otherGws = groundWorkers
-        .filter(gw => !addedNames.has(gw.name.toLowerCase()))
-        .sort((a, b) => a.name.localeCompare(b.name));
-      otherGws.forEach(gw => {
-        options.push({ value: gw.id, text: gw.name });
-        addedNames.add(gw.name.toLowerCase());
-      });
+        // Priority 2: Other priority names not in system users
+        const otherPriorityNames = Array.from(prioritySet)
+          .filter(name => filterExcludedRoles(name) && !addedNames.has(name.toLowerCase()))
+          .sort((a, b) => a.localeCompare(b));
+        otherPriorityNames.forEach(name => {
+          const gw = groundWorkers.find(g => g.name.toLowerCase() === name.toLowerCase());
+          options.push({ value: gw ? gw.id : name, text: name });
+          addedNames.add(name.toLowerCase());
+        });
+
+        // Priority 3: Other ground workers
+        const otherGws = groundWorkers
+          .filter(gw => filterExcludedRoles(gw.name) && !addedNames.has(gw.name.toLowerCase()))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        otherGws.forEach(gw => {
+          options.push({ value: gw.id, text: gw.name });
+          addedNames.add(gw.name.toLowerCase());
+        });
+      }
 
       return options;
     };
 
+    const isRestricted = Array.isArray(currentAllowedNames) || roleFilter === 'Manager' || roleFilter === 'nonManagerNonAdmin';
+    const hasTeam = Array.isArray(currentAllowedNames) && currentAllowedNames.length > 0;
+    const initialEmptyText = Array.isArray(currentAllowedNames)
+      ? (hasTeam ? 'No matching team members' : 'Please assign Manager or Team Members first')
+      : 'No results';
     const dropdown = createSearchableDropdown({
       placeholder,
       options: buildOptions(),
-      allowFreeText: true,
+      allowFreeText: !isRestricted,
       maxWidth,
       allowClear,
-      addNewLabel: (text) => `Add employee: ${text}`
+      addNewLabel: isRestricted ? null : ((text) => `Add employee: ${text}`),
+      emptyText: initialEmptyText
     });
-    if (className) dropdown.classList.add(className);
+    if (className) {
+      className.split(/\s+/).filter(Boolean).forEach(cls => dropdown.classList.add(cls));
+    }
+
+    dropdown.updateAllowedNames = (newAllowedNames) => {
+      currentAllowedNames = newAllowedNames;
+      const restricted = Array.isArray(currentAllowedNames) || roleFilter === 'Manager' || roleFilter === 'nonManagerNonAdmin';
+      if (typeof dropdown.setAllowFreeText === 'function') {
+        dropdown.setAllowFreeText(!restricted);
+      }
+      if (typeof dropdown.setOptions === 'function') {
+        dropdown.setOptions(buildOptions());
+      }
+      if (typeof dropdown.setEmptyText === 'function') {
+        const hasMembers = Array.isArray(currentAllowedNames) && currentAllowedNames.length > 0;
+        dropdown.setEmptyText(Array.isArray(currentAllowedNames)
+          ? (hasMembers ? 'No matching team members' : 'Please assign Manager or Team Members first')
+          : 'No results');
+      }
+    };
 
     let lastAppliedName = (selectedGroundWorkerName || '').trim();
 
@@ -2263,6 +2479,10 @@ const Workflow = {
 
       lastAppliedName = name;
       onChange({ assigneeId: resolvedId, assigneeName: name || null });
+    };
+
+    dropdown.onValueChange = (val) => {
+      if (!val) lastAppliedName = '';
     };
 
     // Set initial value
@@ -2333,6 +2553,31 @@ const Workflow = {
     };
 
     return dropdown;
+  },
+
+  /**
+   * Returns the list of allowed assignee names for tasks belonging to a Work Request.
+   * If the Work Request has a Project Team defined (Manager + Team Members), only those
+   * names are allowed. For legacy Work Requests without team members defined, returns null
+   * which falls back to all active employees.
+   */
+  getWrAllowedNames(wr) {
+    if (!wr) return null;
+    const names = [];
+    const mgrId = wr.assignedTo || wr.assigned_to;
+    if (mgrId) {
+      const u = window.apiClient?.userCache?.getById?.(mgrId);
+      const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(mgrId) : null;
+      const mgrName = u?.name || gw?.name || (typeof mgrId === 'string' && !mgrId.includes('-') ? mgrId : null);
+      if (mgrName) names.push(mgrName);
+    }
+    const cos = wr.coAssignees || wr.co_assignees || [];
+    cos.forEach(ca => {
+      const u = window.apiClient?.userCache?.getById?.(ca);
+      const name = u?.name || ca;
+      if (name && !names.includes(name)) names.push(name);
+    });
+    return names.length > 0 ? names : null;
   },
 
   // ============================================================
@@ -3332,6 +3577,93 @@ const Workflow = {
       overlay.remove();
       if (onConfirm) onConfirm();
     });
+  },
+
+  /**
+   * Displays a unified ERP rejection modal with a multiline reason textarea.
+   * Merges confirmation and reason input into a single clean step.
+   */
+  showRejectionModal({
+    title = 'Confirm Rejection',
+    message = 'Are you sure you want to reject this item?',
+    placeholder = 'Enter rejection reason...',
+    required = true,
+    confirmText = 'Reject',
+    cancelText = 'Cancel',
+    onConfirm,
+    onCancel = null
+  } = {}) {
+    const wrapper = el('div', { class: 'modal-message-wrapper type-danger' });
+
+    const icon = el('div', { class: 'modal-icon-v2', html: SignalIcons.danger });
+    wrapper.appendChild(icon);
+
+    wrapper.appendChild(el('p', { text: message, class: 'modal-text' }));
+
+    const formGroup = el('div', {
+      class: 'form-group',
+      style: 'width: 100%; max-width: 420px; text-align: left; margin-top: 14px;'
+    });
+    formGroup.appendChild(el('label', {
+      text: required ? 'Rejection Reason *' : 'Rejection Reason (Optional)',
+      style: 'font-weight: 600; font-size: 0.875rem; margin-bottom: 6px; display: block; color: var(--color-text);'
+    }));
+
+    const textarea = el('textarea', {
+      class: 'form-control',
+      rows: '3',
+      placeholder,
+      style: 'width: 100%; resize: vertical; box-sizing: border-box; padding: 10px 12px; font-size: 0.875rem;'
+    });
+    formGroup.appendChild(textarea);
+
+    const errorMsg = el('div', {
+      class: 'text-danger',
+      style: 'display: none; font-size: 0.8125rem; margin-top: 6px; color: var(--color-danger, #ef4444); font-weight: 500;',
+      text: 'Please enter a rejection reason before confirming.'
+    });
+    formGroup.appendChild(errorMsg);
+    wrapper.appendChild(formGroup);
+
+    const footer = el('div', { class: 'modal-footer', style: 'margin-top: 16px;' });
+    const confirmBtn = el('button', {
+      class: 'btn modal-btn-sure btn-danger',
+      text: confirmText
+    });
+    const cancelBtn = el('button', { class: 'btn modal-btn-cancel btn-secondary', text: cancelText });
+
+    footer.appendChild(confirmBtn);
+    footer.appendChild(cancelBtn);
+    wrapper.appendChild(footer);
+
+    const overlay = this.showModal(title, wrapper, onCancel);
+
+    cancelBtn.addEventListener('click', () => {
+      overlay.remove();
+      if (onCancel) onCancel();
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      const reason = textarea.value.trim();
+      if (required && !reason) {
+        errorMsg.style.display = 'block';
+        textarea.focus();
+        return;
+      }
+      errorMsg.style.display = 'none';
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Rejecting...';
+      overlay.remove();
+      if (onConfirm) await onConfirm(reason);
+    });
+
+    textarea.addEventListener('input', () => {
+      if (textarea.value.trim()) {
+        errorMsg.style.display = 'none';
+      }
+    });
+
+    setTimeout(() => textarea.focus(), 60);
   },
 
   /**
@@ -4810,7 +5142,7 @@ const Workflow = {
       return container;
     }
 
-    if (this.view === 'list' || this.view === 'templates' || this.view === 'archive') {
+    if (this.view === 'list' || this.view === 'templates' || this.view === 'task-templates' || this.view === 'archive') {
       container.classList.add('operations-tab-page');
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       titleBar.appendChild(el('h1', { text: 'Operations' }));
@@ -4838,6 +5170,7 @@ const Workflow = {
           await Promise.all([
             WorkflowData.ensure(),
             this.ensureRetainerTemplates(),
+            this.ensureStandardTaskTemplates(),
             this._loadGroundWorkers(),
             this.loadCounts(),
           ]);
@@ -4857,6 +5190,15 @@ const Workflow = {
           } else if (this.view === 'templates') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderTemplates());
+          } else if (this.view === 'task-templates') {
+            if (Auth.user?.role !== 'Admin') {
+              this.view = 'list';
+              location.hash = '#operations';
+              Utils.showToast('Access denied: Admin role required for task templates', 'error');
+              return;
+            }
+            contentContainer.innerHTML = '';
+            contentContainer.appendChild(await this.renderTaskTemplatesTab());
           } else if (this.view === 'archive') {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderArchive());
@@ -4953,6 +5295,46 @@ const Workflow = {
           { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#operations'; } }
         ]
       }));
+    } else if (this.view === 'taskTemplateForm') {
+      if (Auth.user?.role !== 'Admin') {
+        this.view = 'list';
+        location.hash = '#operations';
+        Utils.showToast('Access denied: Admin role required for task templates', 'error');
+        return el('div');
+      }
+      container.classList.add('operations-tab-page');
+      const isNew = !this.taskTemplateEditingId;
+      const template = isNew ? null : this._getStandardTaskTemplateById(this.taskTemplateEditingId);
+      const fullPageRoute = isNew ? '#operations/taskTemplateForm/new' : `#operations/taskTemplateForm/${this.taskTemplateEditingId}`;
+      const viewSwitcher = buildFormViewSwitcher({
+        currentMode: PaneMode.FULL_PAGE,
+        viewContext: 'task-template-form',
+        onSidePeek: async () => {
+          const templateEditingId = this.taskTemplateEditingId;
+          await closeFormPanelAndRoute('#operations?tab=task-templates');
+          this.taskTemplateEditingId = templateEditingId;
+          await this.openTaskTemplateForm(PaneMode.SIDE_PEEK);
+        },
+        onCenterPeek: async () => {
+          const templateEditingId = this.taskTemplateEditingId;
+          await closeFormPanelAndRoute('#operations?tab=task-templates');
+          this.taskTemplateEditingId = templateEditingId;
+          await this.openTaskTemplateForm(PaneMode.CENTER_PEEK);
+        },
+        onNewTab: () => {
+          window.open(location.origin + location.pathname + fullPageRoute, '_blank', 'noopener,noreferrer');
+        }
+      });
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Task Templates',
+        baseHash: '#operations?tab=task-templates',
+        currentText: isNew ? 'New Task Template' : (template?.title || 'Edit Task Template'),
+        viewSwitcher,
+        actions: [
+          { text: 'Save Template', class: 'btn btn-primary btn-sm', type: 'submit', form: 'task-template-form' },
+          { text: 'Cancel', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#operations?tab=task-templates'; } }
+        ]
+      }));
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       container.classList.add('operations-tab-page');
       const wr = WorkflowData.getWorkRequestById(this.addTaskWrId);
@@ -4990,6 +5372,8 @@ const Workflow = {
       container.appendChild(await this.renderForm());
     } else if (this.view === 'templateForm') {
       container.appendChild(await this.renderTemplateForm({ hideHeader: true }));
+    } else if (this.view === 'taskTemplateForm') {
+      container.appendChild(await this.renderTaskTemplateForm({ hideHeader: true }));
     } else if (this.view === 'addTask' && this.addTaskWrId) {
       const form = await this.renderAddTaskForm(this.addTaskWrId, { hideHeader: true });
       if (form) {
@@ -5093,11 +5477,29 @@ const Workflow = {
       tabs.push({ key: 'templates', label: 'Retainer Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount });
     }
 
+    if (Auth.user?.role === 'Admin') {
+      const taskTemplateCount = (this._taskTemplates || this.standardTaskTemplates || []).length;
+      tabs.push({
+        key: 'task-templates',
+        label: 'Task Templates',
+        icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="m9 14 2 2 4-4"/></svg>',
+        count: taskTemplateCount
+      });
+    }
+
     tabs.push({ key: 'archive', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archiveCount });
 
     const tabNav = renderModuleTabNav(tabs, this.view, (key) => {
       this.view = key;
-      App.handleRoute();
+      if (key === 'task-templates') {
+        window.location.hash = '#operations?tab=task-templates';
+      } else if (key === 'templates') {
+        window.location.hash = '#operations?tab=templates';
+      } else if (key === 'archive') {
+        window.location.hash = '#operations?tab=archive';
+      } else {
+        window.location.hash = '#operations';
+      }
     });
 
     if (Auth.can('workflow:edit')) {
@@ -6942,6 +7344,7 @@ const Workflow = {
         selectedAssigneeId: task.assigneeId || task.assignedTo || null,
         placeholder: 'Assign primary employee...',
         className: 'side-pane-primary-assignee-dropdown',
+        allowedNames: this.getWrAllowedNames(wr),
         onChange: ({ assigneeId, assigneeName }) => {
           WorkflowData.updateTask(task.id, {
             assigneeId: assigneeId || null,
@@ -7153,6 +7556,7 @@ const Workflow = {
                   placeholder: 'Assign...',
                   className: 'checklist-assignee-dropdown',
                   priorityNames: getTaskAllAssigneeNames(task),
+                  allowedNames: this.getWrAllowedNames(wr),
                   onChange: ({ assigneeId, assigneeName }) => {
                     item.assigneeName = assigneeName || null;
                     item.assigneeId = assigneeId || null;
@@ -7857,7 +8261,10 @@ const Workflow = {
     this._wrFormAbortController = new AbortController();
 
     const entity = Auth.activeEntity;
-    const wr = this.editingId ? WorkflowData.getWorkRequestById(this.editingId) : null;
+    let wr = this.editingId ? WorkflowData.getWorkRequestById(this.editingId) : null;
+    if (!wr && !this.editingId && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      wr = { ...PendingChanges.draftData };
+    }
     if (this.editingId && (!wr || !Auth.canViewWr(wr))) {
       this.view = 'list';
       App.handleRoute();
@@ -7969,6 +8376,142 @@ const Workflow = {
       value: wr ? ((wr.dueDate || wr.due_date) ? String(wr.dueDate || wr.due_date).slice(0, 10) : '') : ''
     }));
     propsGrid.appendChild(dueGroup);
+
+    // ── Project Team: Manager (Required) + Team Members (Required) ──
+    const initialManagerId = wr ? (wr.assignedTo || wr.assigned_to || null) : null;
+    let initialManagerName = '';
+    if (initialManagerId) {
+      const u = window.apiClient?.userCache?.getById?.(initialManagerId);
+      const gw = typeof this._getGroundWorkerById === 'function' ? this._getGroundWorkerById(initialManagerId) : null;
+      initialManagerName = u?.name || gw?.name || (typeof initialManagerId === 'string' && !initialManagerId.includes('-') ? initialManagerId : '');
+    }
+
+    let wrTeamMembers = Array.isArray(wr?.coAssignees)
+      ? [...wr.coAssignees]
+      : (Array.isArray(wr?.co_assignees) ? [...wr.co_assignees] : []);
+
+    // Manager (Assignee)
+    const managerGroup = el('div', { class: 'notion-prop is-required wr-manager-prop' });
+    managerGroup.appendChild(el('label', {
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Manager'
+    }));
+    const managerDropdown = await this.createGroundWorkerDropdown({
+      placeholder: 'Select Manager *',
+      className: 'notion-prop-dropdown wr-manager-dropdown',
+      selectedGroundWorkerName: initialManagerName,
+      selectedAssigneeId: initialManagerId,
+      roleFilter: 'Manager',
+      allowClear: false,
+      onChange: () => {
+        syncTaskRowOptions();
+      }
+    });
+    managerGroup.appendChild(managerDropdown);
+    propsGrid.appendChild(managerGroup);
+
+    // Team Members (Co-assignees)
+    const teamMembersGroup = el('div', { class: 'notion-prop is-required wr-team-members-prop' });
+    teamMembersGroup.appendChild(el('label', {
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Team Members'
+    }));
+    const teamChipsWrap = el('div', { class: 'co-assignee-chips wr-team-chips', style: 'margin-bottom: 6px;' });
+    const renderTeamChips = () => {
+      teamChipsWrap.innerHTML = '';
+      wrTeamMembers.forEach((name, idx) => {
+        const chip = el('span', { class: 'co-assignee-chip', text: name });
+        const removeBtn = el('span', { class: 'co-assignee-chip-remove', text: '×' });
+        removeBtn.addEventListener('click', () => {
+          wrTeamMembers.splice(idx, 1);
+          renderTeamChips();
+          syncTaskRowOptions();
+        });
+        chip.appendChild(removeBtn);
+        teamChipsWrap.appendChild(chip);
+      });
+    };
+    renderTeamChips();
+
+    const teamMemberDropdown = await this.createGroundWorkerDropdown({
+      placeholder: '+ Add Team Member *',
+      className: 'wr-team-member-dropdown',
+      roleFilter: 'nonManagerNonAdmin',
+      onChange: ({ assigneeName }) => {
+        const name = assigneeName?.trim();
+        if (!name) return;
+        const currentMgr = (managerDropdown.searchText || '').trim();
+        if (name === currentMgr) {
+          teamMemberDropdown.value = '';
+          return;
+        }
+        if (!wrTeamMembers.includes(name)) {
+          wrTeamMembers.push(name);
+          renderTeamChips();
+          syncTaskRowOptions();
+        }
+        teamMemberDropdown.value = '';
+      }
+    });
+    teamMembersGroup.appendChild(teamChipsWrap);
+    teamMembersGroup.appendChild(teamMemberDropdown);
+    propsGrid.appendChild(teamMembersGroup);
+
+    const getFormTeamNames = () => {
+      const names = [];
+      const mgr = (managerDropdown.searchText || '').trim();
+      if (mgr) names.push(mgr);
+      wrTeamMembers.forEach(n => {
+        if (n && !names.includes(n)) names.push(n);
+      });
+      return names;
+    };
+
+    const syncTaskRowOptions = () => {
+      const allowed = getFormTeamNames();
+      const allowedLower = new Set(allowed.map(n => String(n).trim().toLowerCase()).filter(Boolean));
+      const tList = document.getElementById('task-rows') || form.querySelector('#task-rows');
+      if (!tList) return;
+      const rows = tList.querySelectorAll('.task-row, .wr-task-row');
+      rows.forEach(row => {
+        const gwDd = row.querySelector('.task-assignee-groundworker');
+        if (gwDd && typeof gwDd.updateAllowedNames === 'function') {
+          gwDd.updateAllowedNames(allowed);
+          const currentText = (gwDd.searchText || '').trim().toLowerCase();
+          if (currentText && !allowedLower.has(currentText)) {
+            gwDd.value = '';
+          }
+        }
+        const coDd = row.querySelector('.inline-coassignee-dropdown');
+        if (coDd && typeof coDd.updateAllowedNames === 'function') {
+          coDd.updateAllowedNames(allowed);
+        }
+        if (Array.isArray(row._coAssignees) && row._coAssignees.length > 0) {
+          const prevLen = row._coAssignees.length;
+          row._coAssignees = row._coAssignees.filter(n => allowedLower.has(String(n).trim().toLowerCase()));
+          if (row._coAssignees.length !== prevLen && typeof row._renderCoChips === 'function') {
+            row._renderCoChips();
+          }
+        }
+      });
+    };
+
+    form._projectTeam = {
+      getManager: () => ({
+        id: managerDropdown.value || null,
+        name: (managerDropdown.searchText || '').trim()
+      }),
+      getTeamMembers: () => [...wrTeamMembers],
+      getTeamNames: () => getFormTeamNames(),
+      focusManager: () => {
+        const inp = managerDropdown.querySelector('input');
+        inp?.classList.add('input-error');
+        inp?.focus();
+      },
+      focusTeamMembers: () => {
+        const inp = teamMemberDropdown.querySelector('input');
+        inp?.classList.add('input-error');
+        inp?.focus();
+      }
+    };
 
     form.appendChild(propsGrid);
 
@@ -8150,12 +8693,20 @@ const Workflow = {
    *        This checklist is temporarily held on the row element as `row._checklist` until the form is submitted,
    *        at which point it is mapped to the final task record.
    */
-  async addTaskRow(container, taskData, collapseOthers = false, initialChecklist = null) {
+  async addTaskRow(container, taskData, collapseOthers = false, initialChecklist = null, options = {}) {
     if (collapseOthers) {
       container.querySelectorAll('.task-row, .notion-line-item-row, .wr-task-row').forEach(r => r.classList.add('collapsed'));
     }
     const row = el('div', { class: 'notion-line-item-row wr-task-row task-row' });
     row.dataset.taskKey = taskData?.id || generateId('tmp');
+
+    let allowedNames = options?.allowedNames;
+    if (allowedNames === undefined) {
+      const parentForm = container.closest('form');
+      if (parentForm && parentForm._projectTeam && typeof parentForm._projectTeam.getTeamNames === 'function') {
+        allowedNames = parentForm._projectTeam.getTeamNames() || [];
+      }
+    }
 
     const dragHandle = el('div', {
       class: 'notion-line-item-drag',
@@ -8182,7 +8733,10 @@ const Workflow = {
     }
 
     const titleIn = el('input', { type: 'text', placeholder: 'Task title', class: 'task-title-input', value: taskData?.title || '' });
-    titleIn.addEventListener('input', () => this.updatePredecessorOptions(container));
+    titleIn.addEventListener('input', () => {
+      titleIn.classList.remove('input-error');
+      this.updatePredecessorOptions(container);
+    });
     row.appendChild(titleIn);
 
     // Ground worker assignee — typable dropdown like the filter tray
@@ -8191,7 +8745,13 @@ const Workflow = {
       selectedAssigneeId: taskData?.assigneeId || taskData?.assignedTo || null,
       placeholder: 'Employee *',
       className: 'task-assignee-groundworker',
-      onChange: () => {} // value is read at submit time
+      allowedNames: Array.isArray(allowedNames) ? allowedNames : (allowedNames || null),
+      onChange: () => {
+        gwDropdown.querySelector('input')?.classList.remove('input-error');
+      } // value is read at submit time
+    });
+    gwDropdown.querySelector('input')?.addEventListener('input', () => {
+      gwDropdown.querySelector('input')?.classList.remove('input-error');
     });
 
     const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
@@ -8220,10 +8780,12 @@ const Workflow = {
       });
     };
     renderCoChips();
+    row._renderCoChips = renderCoChips;
 
     const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: '+ Co-assignee',
       className: 'inline-coassignee-dropdown',
+      allowedNames: Array.isArray(allowedNames) ? allowedNames : (allowedNames || null),
       onChange: ({ assigneeName }) => {
         const name = assigneeName?.trim();
         if (!name) return;
@@ -8282,26 +8844,51 @@ const Workflow = {
 
   updatePredecessorOptions(container) {
     const rows = Array.from(container.querySelectorAll('.wr-task-row'));
-    const tasks = rows.map((row, idx) => ({
-      key: row.dataset.taskKey,
-      label: row.querySelector('.task-title-input').value.trim() || `Task ${idx + 1}`
-    }));
+    // Only task containers with a non-empty title are valid tasks
+    const validTasks = rows
+      .map((row, idx) => ({
+        key: row.dataset.taskKey,
+        label: row.querySelector('.task-title-input')?.value?.trim() || '',
+        idx,
+        row
+      }))
+      .filter(t => t.label.length > 0);
 
-    rows.forEach((row, idx) => {
+    const validKeysSet = new Set(validTasks.map(t => t.key));
+
+    rows.forEach((row, rowIdx) => {
       const predWrapper = row.querySelector('.task-pred');
       if (!predWrapper) return;
       const predBtn = predWrapper.querySelector('.multi-select-btn');
       const predMenu = predWrapper.querySelector('.multi-select-menu');
       if (!predBtn || !predMenu) return;
 
-      const currentKeys = (row.dataset.predKeys || '').split(',').filter(Boolean);
+      // Available tasks to depend on: all valid tasks EXCEPT this row itself
+      const availableTasks = validTasks.filter(t => t.key !== row.dataset.taskKey);
+      // Valid tasks that appear earlier in the DOM before this row
+      const precedingValidTasks = validTasks.filter(t => t.idx < rowIdx && t.key !== row.dataset.taskKey);
+
+      // Clean up stale selected keys that no longer exist among valid tasks
+      let currentKeys = (row.dataset.predKeys || '').split(',').map(s => s.trim()).filter(Boolean);
+      const hadStar = currentKeys.includes('*');
+
+      if (hadStar && precedingValidTasks.length === 0) {
+        currentKeys = currentKeys.filter(k => k !== '*');
+      }
+
+      currentKeys = currentKeys.filter(k => k === '*' || (validKeysSet.has(k) && k !== row.dataset.taskKey));
+
       predMenu.innerHTML = '';
 
       const updateSelection = () => {
-        // Auto-check All Tasks (*) if all individual tasks are checked
+        // Auto-check All Tasks (*) if all preceding tasks are checked (and there are >= 1)
         const allCheckbox = predMenu.querySelector('.multi-select-option input[value="*"]');
         const individualCheckboxes = Array.from(predMenu.querySelectorAll('.multi-select-option input')).filter(input => input.value !== '*');
-        if (allCheckbox && !allCheckbox.checked && individualCheckboxes.length > 0 && individualCheckboxes.every(cb => cb.checked)) {
+
+        const precedingCheckboxes = individualCheckboxes.filter(input => {
+          return precedingValidTasks.some(pt => pt.key === input.value);
+        });
+        if (allCheckbox && !allCheckbox.checked && precedingCheckboxes.length > 1 && precedingCheckboxes.every(cb => cb.checked)) {
           allCheckbox.checked = true;
         }
 
@@ -8312,30 +8899,53 @@ const Workflow = {
           row.dataset.predKeys = '*';
           predBtn.textContent = 'All Tasks (*)';
           predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
-            if (input.value !== '*') input.checked = true;
+            if (input.value !== '*') {
+              if (precedingValidTasks.some(pt => pt.key === input.value)) {
+                input.checked = true;
+              }
+            }
           });
         } else if (selectedKeys.length > 0) {
           row.dataset.predKeys = selectedKeys.join(',');
           const selectedLabels = selectedKeys.map(k => {
-            const t = tasks.find(tsk => tsk.key === k);
-            return t ? t.label : 'Task';
-          });
-          predBtn.textContent = selectedLabels.join(', ');
+            const t = validTasks.find(tsk => tsk.key === k);
+            return t ? t.label : '';
+          }).filter(Boolean);
+          predBtn.textContent = selectedLabels.length > 0 ? selectedLabels.join(', ') : '— No dependency —';
         } else {
           row.dataset.predKeys = '';
           predBtn.textContent = '— No dependency —';
         }
       };
 
-      // 1. Add "All Tasks (*)"
-      if (idx > 0) {
+      if (availableTasks.length === 0) {
+        row.dataset.predKeys = '';
+        predBtn.textContent = '— No dependency —';
+        const emptyNotice = el('div', {
+          class: 'multi-select-empty',
+          text: 'No named tasks available'
+        });
+        emptyNotice.style.padding = '8px 12px';
+        emptyNotice.style.color = 'var(--text-muted, #888)';
+        emptyNotice.style.fontSize = '12px';
+        emptyNotice.style.fontStyle = 'italic';
+        predMenu.appendChild(emptyNotice);
+        return;
+      }
+
+      // 1. Add "All Tasks (*)" if there are preceding valid tasks
+      if (precedingValidTasks.length > 0) {
         const optionEl = el('label', { class: 'multi-select-option' });
         const checkbox = el('input', { type: 'checkbox', value: '*' });
         if (currentKeys.includes('*')) checkbox.checked = true;
         checkbox.addEventListener('change', () => {
           if (checkbox.checked) {
             predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
-              if (input !== checkbox) input.checked = true;
+              if (input !== checkbox) {
+                if (precedingValidTasks.some(pt => pt.key === input.value)) {
+                  input.checked = true;
+                }
+              }
             });
           } else {
             predMenu.querySelectorAll('.multi-select-option input').forEach(input => {
@@ -8349,14 +8959,12 @@ const Workflow = {
         predMenu.appendChild(optionEl);
       }
 
-      // 2. Add individual tasks
-      tasks.forEach((task, tIdx) => {
-        if (task.key === row.dataset.taskKey) return;
-
+      // 2. Add individual named tasks
+      availableTasks.forEach(task => {
         const optionEl = el('label', { class: 'multi-select-option' });
         const checkbox = el('input', { type: 'checkbox', value: task.key });
-        
-        const isPrevious = tIdx < idx;
+
+        const isPrevious = precedingValidTasks.some(pt => pt.key === task.key);
         const shouldBeChecked = currentKeys.includes(task.key) || (currentKeys.includes('*') && isPrevious);
         if (shouldBeChecked) checkbox.checked = true;
 
@@ -8383,6 +8991,7 @@ const Workflow = {
     const taskRows = form.querySelectorAll('.task-row');
     let hasError = false;
     let firstErrorInput = null;
+    let errorMessage = '';
 
     taskRows.forEach(row => {
       const titleInput = row.querySelector('.task-title-input');
@@ -8391,23 +9000,42 @@ const Workflow = {
       const gwInput = gwAutocomplete?.querySelector('input');
       const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
       const groundWorkerId = gwAutocomplete?.value || null;
+      const hasAssignee = !!(groundWorkerName || groundWorkerId);
+      const hasOtherData = (row._coAssignees && row._coAssignees.length > 0) || (row.dataset.predKeys && row.dataset.predKeys.length > 0);
 
       if (title) {
-        if (!groundWorkerName && !groundWorkerId) {
+        if (!hasAssignee) {
           hasError = true;
           gwInput?.classList.add('input-error');
-          if (!firstErrorInput) firstErrorInput = gwInput;
+          if (!firstErrorInput) {
+            firstErrorInput = gwInput;
+            errorMessage = 'Please assign an employee to each task.';
+          }
         } else {
           gwInput?.classList.remove('input-error');
         }
+        titleInput?.classList.remove('input-error');
       } else {
-        gwInput?.classList.remove('input-error');
+        // No title provided
+        if (hasAssignee || hasOtherData) {
+          hasError = true;
+          titleInput?.classList.add('input-error');
+          if (!firstErrorInput) {
+            firstErrorInput = titleInput;
+            errorMessage = 'Please provide a title for each task.';
+          }
+        } else {
+          titleInput?.classList.remove('input-error');
+          gwInput?.classList.remove('input-error');
+        }
       }
     });
 
     if (hasError) {
-      if (typeof this.showMessage === 'function') {
-        this.showMessage('Missing Assignee', 'Please assign an employee to each task.', 'danger');
+      if (typeof Utils !== 'undefined' && typeof Utils.showToast === 'function') {
+        Utils.showToast('Validation Error', errorMessage, 'error');
+      } else if (typeof showToast === 'function') {
+        showToast('Validation Error', errorMessage, 'error');
       }
       firstErrorInput?.focus();
       return false;
@@ -8487,8 +9115,101 @@ const Workflow = {
       // Temporarily enable disabled fields so FormData picks them up
       const disabledFields = form.querySelectorAll('[disabled]');
       disabledFields.forEach(f => f.disabled = false);
-      if (!validateRequiredFields(form)) { disabledFields.forEach(f => f.disabled = true); return; }
-      if (!this.validateManualAssignees(form)) { disabledFields.forEach(f => f.disabled = true); return; }
+      if (!validateRequiredFields(form)) {
+        disabledFields.forEach(f => f.disabled = true);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+        this._isSubmittingWr = false;
+        return;
+      }
+      if (!this.validateManualAssignees(form)) {
+        disabledFields.forEach(f => f.disabled = true);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+        this._isSubmittingWr = false;
+        return;
+      }
+
+      // Validate Project Team (Manager + Team Members)
+      const mgrData = form._projectTeam ? form._projectTeam.getManager() : null;
+      const teamMembers = form._projectTeam ? form._projectTeam.getTeamMembers() : [];
+
+      if (!mgrData || (!mgrData.id && !mgrData.name)) {
+        this.showMessage('Required Field', 'Please select a Manager for the Project Team.', 'danger');
+        form._projectTeam?.focusManager?.();
+        disabledFields.forEach(f => f.disabled = true);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+        this._isSubmittingWr = false;
+        return;
+      }
+
+      // Ensure selected Manager actually has the Manager role
+      const mgrUser = mgrData.id
+        ? window.apiClient?.userCache?.getById?.(mgrData.id)
+        : (window.apiClient?.userCache?._users || []).find(u => (u.name || '').toLowerCase() === (mgrData.name || '').toLowerCase());
+      if (mgrUser && (mgrUser.role || '').toLowerCase() !== 'manager') {
+        this.showMessage('Invalid Manager', `"${mgrUser.name}" does not have the Manager role. Please select an employee with the Manager role.`, 'danger');
+        form._projectTeam?.focusManager?.();
+        disabledFields.forEach(f => f.disabled = true);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+        this._isSubmittingWr = false;
+        return;
+      }
+
+      if (!teamMembers || teamMembers.length === 0) {
+        this.showMessage('Required Field', 'Please add at least one Team Member to the Project Team.', 'danger');
+        form._projectTeam?.focusTeamMembers?.();
+        disabledFields.forEach(f => f.disabled = true);
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+        this._isSubmittingWr = false;
+        return;
+      }
+
+      // Ensure Team Members do not have the Manager or Admin role
+      for (const memberName of teamMembers) {
+        const memberUser = (window.apiClient?.userCache?._users || []).find(u => (u.name || '').toLowerCase() === (memberName || '').toLowerCase());
+        if (memberUser) {
+          const roleLower = (memberUser.role || '').toLowerCase();
+          if (roleLower === 'manager' || roleLower === 'admin') {
+            this.showMessage('Invalid Team Member', `"${memberUser.name}" has the ${memberUser.role} role and cannot be a team member. Only non-manager and non-admin employees are allowed.`, 'danger');
+            form._projectTeam?.focusTeamMembers?.();
+            disabledFields.forEach(f => f.disabled = true);
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+            this._isSubmittingWr = false;
+            return;
+          }
+        }
+      }
+
+      const allowedTeam = [mgrData.name, ...teamMembers].filter(Boolean);
+      for (const row of form.querySelectorAll('.task-row')) {
+        const title = row.querySelector('.task-title-input')?.value?.trim();
+        if (!title) continue;
+        const gwAutocomplete = row.querySelector('.task-assignee-groundworker');
+        const groundWorkerName = gwAutocomplete?.searchText?.trim() || '';
+        if (groundWorkerName && allowedTeam.length > 0 && !allowedTeam.includes(groundWorkerName)) {
+          this.showMessage('Invalid Task Assignee', `Task "${title}" is assigned to "${groundWorkerName}", who is not in the Project Team.`, 'danger');
+          gwAutocomplete?.querySelector('input')?.focus();
+          disabledFields.forEach(f => f.disabled = true);
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+          this._isSubmittingWr = false;
+          return;
+        }
+        for (const ca of (row._coAssignees || [])) {
+          if (ca && allowedTeam.length > 0 && !allowedTeam.includes(ca)) {
+            this.showMessage('Invalid Task Co-assignee', `Task "${title}" has co-assignee "${ca}", who is not in the Project Team.`, 'danger');
+            disabledFields.forEach(f => f.disabled = true);
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove('loading'); submitBtn.innerHTML = originalBtnHtml; }
+            this._isSubmittingWr = false;
+            return;
+          }
+        }
+      }
+
+      let resolvedMgrId = mgrData.id;
+      if (!resolvedMgrId && mgrData.name) {
+        const res = await this.resolveAssignee(mgrData.name);
+        resolvedMgrId = res.id;
+      }
+
     const data = Object.fromEntries(new FormData(form).entries());
     let entity = Auth.activeEntity;
     if (entity === 'ALL') {
@@ -8506,6 +9227,8 @@ const Workflow = {
       priority: data.priority?.trim() || 'Priority',
       dueDate: data.dueDate || '',
       entity: entity,
+      assignedTo: resolvedMgrId || null,
+      coAssignees: teamMembers.filter(Boolean),
       status: this.editingId ? (WorkflowData.getWorkRequestById(this.editingId)?.status || 'Draft') : 'Draft',
       updatedAt: now
     };
@@ -8854,9 +9577,14 @@ const Workflow = {
     if (clear) clear.style.display = 'none';
   },
 
-  async renderTaskCoAssigneePicker(t, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onChange) {
+  async renderTaskCoAssigneePicker(t, { primaryName = '', className = 'inline-coassignee-dropdown', allowedNames = null } = {}, editable = false, showChips = true, onChange) {
     const wrap = el('div', { class: 'task-coassignee-wrap', style: 'margin-top:4px;' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
+    let resolvedAllowed = allowedNames;
+    if (resolvedAllowed === null && t?.workRequestId) {
+      const wr = WorkflowData.getWorkRequestById(t.workRequestId) || (window.apiClient?.workRequestCache ? window.apiClient.workRequestCache.getById(t.workRequestId) : null);
+      resolvedAllowed = this.getWrAllowedNames(wr);
+    }
 
     const renderChips = () => {
       chipsWrap.innerHTML = '';
@@ -8884,6 +9612,7 @@ const Workflow = {
       const addDropdown = await this.createGroundWorkerDropdown({
         placeholder: '+ Co-assignee',
         className,
+        allowedNames: resolvedAllowed,
         onChange: async ({ assigneeName }) => {
           const name = assigneeName?.trim();
           if (!name) return;
@@ -8904,9 +9633,14 @@ const Workflow = {
     return wrap;
   },
 
-  async renderChecklistCoAssigneePicker(task, item, { primaryName = '', className = 'inline-coassignee-dropdown' } = {}, editable = false, showChips = true, onUpdate) {
+  async renderChecklistCoAssigneePicker(task, item, { primaryName = '', className = 'inline-coassignee-dropdown', allowedNames = null } = {}, editable = false, showChips = true, onUpdate) {
     const wrap = el('div', { class: 'task-coassignee-wrap', style: 'margin-top:4px;' });
     const chipsWrap = el('div', { class: 'co-assignee-chips' });
+    let resolvedAllowed = allowedNames;
+    if (resolvedAllowed === null && task?.workRequestId) {
+      const wr = WorkflowData.getWorkRequestById(task.workRequestId) || (window.apiClient?.workRequestCache ? window.apiClient.workRequestCache.getById(task.workRequestId) : null);
+      resolvedAllowed = this.getWrAllowedNames(wr);
+    }
 
     const renderChips = () => {
       chipsWrap.innerHTML = '';
@@ -8932,6 +9666,7 @@ const Workflow = {
       const addDropdown = await this.createGroundWorkerDropdown({
         placeholder: '+ Co-assignee',
         className,
+        allowedNames: resolvedAllowed,
         onChange: async ({ assigneeName }) => {
           const name = assigneeName?.trim();
           if (!name) return;
@@ -9513,14 +10248,17 @@ const Workflow = {
           });
           const rejectBtn = el('button', { class: 'btn btn-danger btn-xs', text: 'Reject' });
           rejectBtn.addEventListener('click', () => {
-            const reason = prompt('Enter rejection reason (optional):');
-            if (reason !== null) {
-              Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+            Workflow.showRejectionModal({
+              title: 'Confirm Rejection',
+              message: 'Are you sure you want to reject this change?',
+              placeholder: 'Enter rejection reason...',
+              required: true,
+              onConfirm: (reason) => {
                 Workflow.runBlockingArchiveAction({
                   title: 'Rejecting Change',
                   message: `Please wait while the change is being rejected...`,
                   apiCall: async () => {
-                    return await PendingChanges.reject(pc.id, reason || '');
+                    return await PendingChanges.reject(pc.id, reason);
                   },
                   successTitle: 'Rejection Successful',
                   successMessage: 'The change has been rejected.',
@@ -9528,8 +10266,8 @@ const Workflow = {
                     App.handleRoute();
                   }
                 });
-              }, 'danger');
-            }
+              }
+            });
           });
           btnRow.appendChild(approveBtn);
           btnRow.appendChild(rejectBtn);
@@ -9624,12 +10362,18 @@ const Workflow = {
         placeholder: 'Assign to...',
         maxWidth: '180px',
         className: 'bulk-assign-dropdown',
+        allowedNames: this.getWrAllowedNames(wr),
         onChange: () => {}
       });
       assignWrap.appendChild(assignDropdown);
       const assignBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Assign' });
       assignBtn.addEventListener('click', async () => {
         const name = (assignDropdown.searchText || '').trim();
+        const allowed = this.getWrAllowedNames(wr);
+        if (name && allowed && allowed.length > 0 && !allowed.includes(name)) {
+          this.showMessage('Invalid Assignee', `"${name}" is not a member of the Project Team.`, 'danger');
+          return;
+        }
         const res = await this.resolveAssignee(name);
         const selected = sortedTasks.filter(t => container.selectedTaskIds.has(t.id));
         // Bulk assign dropdown is single-select, so only one name can be chosen.
@@ -10291,6 +11035,7 @@ const Workflow = {
             placeholder: 'Employee...',
             className: 'inline-ground-worker-autocomplete',
             allowClear: false,
+            allowedNames: this.getWrAllowedNames(wr),
             onChange: ({ assigneeId, assigneeName }) => {
               if (!assigneeName && !assigneeId) {
                 // Unassigning is invalid - only reassigning is permitted
@@ -10881,6 +11626,7 @@ const Workflow = {
                     placeholder: 'Assign...',
                     className: 'checklist-assignee-dropdown',
                     priorityNames: getTaskAllAssigneeNames(t),
+                    allowedNames: this.getWrAllowedNames(wr),
                     onChange: async ({ assigneeId, assigneeName }) => {
                       item.assigneeName = assigneeName || null;
                       item.assigneeId = assigneeId || null;
@@ -13698,7 +14444,12 @@ const Workflow = {
   },
 
   async renderAddTaskForm(wrId, opts = {}) {
-    const { hideHeader = false } = opts;
+    const { hideHeader = false, draftData = null } = opts;
+    const draft = draftData || (typeof PendingChanges !== 'undefined' ? PendingChanges.draftData : null);
+    const isResubmitting = typeof PendingChanges !== 'undefined' && !!PendingChanges.editingPendingId;
+    if (!wrId && draft) {
+      wrId = draft.workRequestId || draft.work_request_id || wrId;
+    }
     await WorkflowData.loadPendingApprovals();
     let wr = WorkflowData.getWorkRequestById(wrId);
     if (!wr) {
@@ -13719,19 +14470,28 @@ const Workflow = {
     if (!hideHeader) {
       const headerBar = el('div', { class: 'form-header-bar' });
       const topActions = el('div', { class: 'form-actions-top' });
-      const saveBtn = el('button', { type: 'submit', form: 'add-task-form', class: 'btn btn-primary', text: 'Add Task' });
+      const saveBtn = el('button', { type: 'submit', form: 'add-task-form', class: 'btn btn-primary', text: isResubmitting ? 'Save & Resubmit' : 'Add Task' });
       topActions.appendChild(saveBtn);
       const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
-      cancelBtn.addEventListener('click', () => closeFormPanelAndRoute('#operations/detail/' + wrId));
+      cancelBtn.addEventListener('click', () => {
+        if (typeof PendingChanges !== 'undefined') {
+          PendingChanges.editingPendingId = null;
+          PendingChanges.draftData = null;
+          PendingChanges.preserveEditingId = false;
+        }
+        closeFormPanelAndRoute('#operations/detail/' + wrId);
+      });
       topActions.appendChild(cancelBtn);
       headerBar.appendChild(topActions);
       form.appendChild(headerBar);
     }
 
     // Standard Task Template state
-    let checklistItems = [];
+    await this.ensureStandardTaskTemplates();
+    let checklistItems = draft?.checklist ? [...draft.checklist] : [];
     let checklistFromTemplate = false;
     const isDraft = wr?.status === 'Draft';
+    const wrAllowedNames = this.getWrAllowedNames(wr);
     const wrDeadline = String(wr?.dueDate || wr?.due_date || wr?.deadline || '').slice(0, 10);
     const today = manilaToday();
     if (wrDeadline && wrDeadline < today) {
@@ -13744,7 +14504,8 @@ const Workflow = {
     titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Task Title' }));
     const titleInput = el('input', {
       type: 'text', name: 'title', class: 'notion-freeform-input notion-title-input',
-      placeholder: 'New Task', required: true
+      placeholder: 'New Task', required: true,
+      value: draft?.title || ''
     });
     titleSection.appendChild(titleInput);
     form.appendChild(titleSection);
@@ -13758,6 +14519,9 @@ const Workflow = {
     const gwDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Employee *',
       className: 'modal-task-assignee',
+      allowedNames: wrAllowedNames,
+      selectedGroundWorkerName: draft?.assigneeName || '',
+      selectedAssigneeId: draft?.assigneeId || draft?.assignedTo || null,
       onChange: () => {}
     });
     const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
@@ -13769,13 +14533,15 @@ const Workflow = {
     const dueGroup = el('div', { class: 'notion-prop is-required' });
     dueGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date *' + (wrDeadline ? ` <span style="font-size:0.75rem; color:var(--color-text-muted);">(Max: ${wrDeadline})</span>` : '') }));
     const defaultTaskDue = (wrDeadline && wrDeadline >= today) ? wrDeadline : today;
+    const draftDue = draft ? (draft.dueDate || draft.due_date || '') : '';
+    const initialDue = draftDue ? String(draftDue).slice(0, 10) : defaultTaskDue;
     const dueInputAttrs = {
       type: 'date',
       name: 'dueDate',
       class: 'notion-prop-input',
       required: true,
       min: today,
-      value: defaultTaskDue
+      value: initialDue
     };
     if (wrDeadline) {
       dueInputAttrs.max = wrDeadline;
@@ -13791,7 +14557,7 @@ const Workflow = {
     ['Priority', 'Low Priority', 'Urgent'].forEach(p => {
       prioritySel.appendChild(el('option', { value: p, text: p }));
     });
-    prioritySel.value = 'Priority';
+    prioritySel.value = draft?.priority || 'Priority';
     priorityGroup.appendChild(prioritySel);
     propsGrid.appendChild(priorityGroup);
 
@@ -13800,8 +14566,9 @@ const Workflow = {
     templateGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg> Standard Task Template' }));
     const templateSel = el('select', { name: 'template', class: 'notion-prop-select' });
     templateSel.appendChild(el('option', { value: '', text: '— Custom —' }));
-    this.standardTaskTemplates.forEach((tmpl, idx) => {
-      templateSel.appendChild(el('option', { value: String(idx), text: tmpl.title }));
+    const taskTemplates = this._taskTemplates || this.standardTaskTemplates || [];
+    taskTemplates.forEach((tmpl, idx) => {
+      templateSel.appendChild(el('option', { value: String(tmpl.id || idx), text: tmpl.title }));
     });
     templateGroup.appendChild(templateSel);
     propsGrid.appendChild(templateGroup);
@@ -13814,6 +14581,7 @@ const Workflow = {
     reqLinkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
     reqLinkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
     reqLinkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    reqLinkSel.value = draft?.requiredLinkType || draft?.required_link_type || '';
     reqLinkGroup.appendChild(reqLinkSel);
     propsGrid.appendChild(reqLinkGroup);
 
@@ -13838,11 +14606,12 @@ const Workflow = {
     predMenu.addEventListener('click', (e) => e.stopPropagation());
 
     // Co-assignees
-    let coAssignees = [];
+    let coAssignees = draft?.coAssignees ? [...draft.coAssignees] : [];
     const coAssigneeChips = el('div', { class: 'co-assignee-chips' });
     const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Add co-assignee...',
       className: 'modal-co-assignee',
+      allowedNames: wrAllowedNames,
       onChange: ({ assigneeName }) => {
         const name = assigneeName?.trim();
         if (!name) return;
@@ -13876,6 +14645,7 @@ const Workflow = {
         coAssigneeChips.appendChild(chip);
       });
     };
+    renderCoAssigneeChips();
 
     if (isDraft) {
       const coAssigneeGroup = el('div', { class: 'notion-prop' });
@@ -14013,6 +14783,7 @@ const Workflow = {
             placeholder: 'Assign...',
             maxWidth: '140px',
             className: 'modal-checklist-assignee',
+            allowedNames: wrAllowedNames,
             onChange: async ({ assigneeId, assigneeName }) => {
               item.assigneeId = assigneeId || null;
               item.assigneeName = assigneeName || null;
@@ -14024,7 +14795,7 @@ const Workflow = {
           const coAssigneePicker = await this.renderChecklistCoAssigneePicker(
             null, // task is null during task creation
             item,
-            { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown' },
+            { primaryName: item.assigneeName || '', className: 'inline-coassignee-dropdown', allowedNames: wrAllowedNames },
             true, // editable
             true, // showChips
             async () => {
@@ -14090,17 +14861,22 @@ const Workflow = {
       }
     });
 
+    if (checklistItems.length > 0) {
+      await renderChecklist();
+    }
+
     templateSel.addEventListener('change', async () => {
-      const idx = parseInt(templateSel.value, 10);
-      if (!isNaN(idx) && this.standardTaskTemplates[idx]) {
-        const tmpl = this.standardTaskTemplates[idx];
+      const val = templateSel.value;
+      const templates = this._taskTemplates || this.standardTaskTemplates || [];
+      const tmpl = !val ? null : (templates.find(t => String(t.id) === String(val)) || templates[parseInt(val, 10)]);
+      if (tmpl) {
         titleInput.value = tmpl.title;
         if (tmpl.requiredLinkType) {
           reqLinkSel.value = tmpl.requiredLinkType;
         } else {
           reqLinkSel.value = '';
         }
-        checklistItems = tmpl.defaultChecklist.map(item => {
+        checklistItems = (tmpl.defaultChecklist || []).map(item => {
           const isObj = typeof item === 'object' && item && item.text;
           return this.createChecklistItemData({
             text: isObj ? item.text : item,
@@ -14214,6 +14990,22 @@ const Workflow = {
         gwInput?.classList.add('input-error');
         gwInput?.focus();
         return;
+      }
+
+      if (wrAllowedNames && wrAllowedNames.length > 0) {
+        if (groundWorkerName && !wrAllowedNames.includes(groundWorkerName)) {
+          this.showMessage('Invalid Task Assignee', `Assignee "${groundWorkerName}" is not in the Work Request Project Team.`, 'danger');
+          const gwInput = gwDropdown.querySelector('input');
+          gwInput?.classList.add('input-error');
+          gwInput?.focus();
+          return;
+        }
+        for (const ca of coAssignees) {
+          if (ca && !wrAllowedNames.includes(ca)) {
+            this.showMessage('Invalid Task Co-assignee', `Co-assignee "${ca}" is not in the Work Request Project Team.`, 'danger');
+            return;
+          }
+        }
       }
 
       const data = Object.fromEntries(new FormData(form).entries());
@@ -14333,13 +15125,17 @@ const Workflow = {
     return form;
   },
 
-  async showAddTaskPanel(wrId, mode = null) {
-    const form = await this.renderAddTaskForm(wrId, { 
+  async showAddTaskPanel(wrId, mode = null, draftData = null) {
+    const isResubmitting = typeof PendingChanges !== 'undefined' && !!PendingChanges.editingPendingId;
+    const effectiveDraft = draftData || (typeof PendingChanges !== 'undefined' ? PendingChanges.draftData : null);
+    const effectiveWrId = wrId || effectiveDraft?.workRequestId || effectiveDraft?.work_request_id;
+    const form = await this.renderAddTaskForm(effectiveWrId, { 
       hideHeader: mode !== PaneMode.SIDE_PEEK && mode !== null,
-      showChecklist: true
+      showChecklist: true,
+      draftData: effectiveDraft
     });
     if (!form) return;
-    const fullPageRoute = '#operations/addTask/' + wrId;
+    const fullPageRoute = '#operations/addTask/' + effectiveWrId;
     openFormPanel({
       icon: '✅',
       title: null,
@@ -14350,8 +15146,19 @@ const Workflow = {
       fullPageRoute,
       newTabRoute: fullPageRoute,
       actions: [
-        { text: 'Add Task', class: 'btn btn-primary', type: 'submit', form: 'add-task-form' },
-        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations/detail/' + wrId) }
+        { text: isResubmitting ? 'Save & Resubmit' : 'Add Task', class: 'btn btn-primary', type: 'submit', form: 'add-task-form' },
+        { 
+          text: 'Cancel', 
+          class: 'btn btn-secondary', 
+          onClick: () => {
+            if (typeof PendingChanges !== 'undefined') {
+              PendingChanges.editingPendingId = null;
+              PendingChanges.draftData = null;
+              PendingChanges.preserveEditingId = false;
+            }
+            closeFormPanelAndRoute('#operations/detail/' + effectiveWrId);
+          }
+        }
       ]
     });
   },
@@ -14362,7 +15169,11 @@ const Workflow = {
    */
   async openWorkRequestForm(mode = null) {
     const isNew = !this.editingId;
-    const wr = isNew ? null : WorkflowData.getWorkRequestById(this.editingId);
+    let wr = isNew ? null : WorkflowData.getWorkRequestById(this.editingId);
+    if (!wr && isNew && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      wr = { ...PendingChanges.draftData };
+    }
+    const isResubmitting = typeof PendingChanges !== 'undefined' && !!PendingChanges.editingPendingId;
     const fullPageRoute = isNew ? '#operations/form/new' : `#operations/form/${this.editingId}`;
     const formEl = await this.renderForm();
     openFormPanel({
@@ -14379,8 +15190,19 @@ const Workflow = {
       draftKey: 'work-request-' + (this.editingId || 'new'),
       restoreDraft: true,
       actions: [
-        { text: isNew ? 'Submit Request' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'wr-form' },
-        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations') }
+        { text: isResubmitting ? 'Save & Resubmit' : (isNew ? 'Submit Request' : 'Save Changes'), class: 'btn btn-primary', type: 'submit', form: 'wr-form' },
+        { 
+          text: 'Cancel', 
+          class: 'btn btn-secondary', 
+          onClick: () => {
+            if (typeof PendingChanges !== 'undefined') {
+              PendingChanges.editingPendingId = null;
+              PendingChanges.draftData = null;
+              PendingChanges.preserveEditingId = false;
+            }
+            closeFormPanelAndRoute('#operations');
+          }
+        }
       ]
     });
   },
@@ -14409,10 +15231,45 @@ const Workflow = {
     });
   },
 
-  async showEditTaskModal(taskId, onSaved) {
-    const task = WorkflowData.getTaskById(taskId);
+  /**
+   * Opens the Standard Task Template form in a shared panel, supporting all 4 view modes.
+   */
+  async openTaskTemplateForm(mode = null) {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required for task templates', 'error');
+      return;
+    }
+    const isNew = !this.taskTemplateEditingId;
+    const template = isNew ? null : this._getStandardTaskTemplateById(this.taskTemplateEditingId);
+    const fullPageRoute = isNew ? '#operations/taskTemplateForm/new' : `#operations/taskTemplateForm/${this.taskTemplateEditingId}`;
+    openFormPanel({
+      icon: '📋',
+      title: isNew ? 'New Task Template' : (template?.title || 'Edit Task Template'),
+      formContent: await this.renderTaskTemplateForm({ hideHeader: true }),
+      formId: 'task-template-form',
+      mode,
+      viewContext: 'task-template-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: 'Save Template', class: 'btn btn-primary', type: 'submit', form: 'task-template-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#operations?tab=task-templates') }
+      ]
+    });
+  },
+
+  async showEditTaskModal(taskId, onSaved, draftData = null) {
+    const draft = draftData || (typeof PendingChanges !== 'undefined' ? PendingChanges.draftData : null);
+    let task = taskId ? WorkflowData.getTaskById(taskId) : null;
+    if (!task && draft) {
+      task = { ...draft, id: taskId || draft.id || generateId('t') };
+    }
     if (!task) return;
+    if (draft) {
+      task = { ...task, ...draft };
+    }
     const wr = WorkflowData.getWorkRequestById(task.workRequestId);
+    const wrAllowedNames = this.getWrAllowedNames(wr);
     const isDraft = wr?.status === 'Draft';
     const wrDeadline = String(wr?.dueDate || wr?.deadline || '').slice(0, 10);
 
@@ -14433,6 +15290,7 @@ const Workflow = {
       className: 'modal-task-assignee',
       selectedGroundWorkerName: task.assigneeName || '',
       selectedAssigneeId: task.assigneeId || task.assignedTo || null,
+      allowedNames: wrAllowedNames,
       onChange: () => {}
     });
     const assigneeWrapper = el('div', { class: 'task-assignee-wrapper' });
@@ -14448,6 +15306,7 @@ const Workflow = {
     const coAssigneeDropdown = await this.createGroundWorkerDropdown({
       placeholder: 'Add co-assignee...',
       className: 'modal-co-assignee',
+      allowedNames: wrAllowedNames,
       onChange: ({ assigneeName }) => {
         const name = assigneeName?.trim();
         if (!name) return;
@@ -14547,6 +15406,7 @@ const Workflow = {
           placeholder: 'Assign...',
           maxWidth: '140px',
           className: 'modal-checklist-assignee',
+          allowedNames: wrAllowedNames,
           onChange: ({ assigneeId, assigneeName }) => {
             item.assigneeId = assigneeId || null;
             item.assigneeName = assigneeName || null;
@@ -14734,6 +15594,8 @@ const Workflow = {
     const overlay = this.showModal('Edit Task', form, () => {
       if (typeof PendingChanges !== 'undefined') {
         PendingChanges.editingPendingId = null;
+        PendingChanges.draftData = null;
+        PendingChanges.preserveEditingId = false;
       }
     });
     let isSubmitting = false;
@@ -14752,10 +15614,30 @@ const Workflow = {
       try {
         const groundWorkerName = gwDropdown.searchText.trim();
         const groundWorkerId = gwDropdown.value || null;
+
+        if (wrAllowedNames && wrAllowedNames.length > 0) {
+          if (groundWorkerName && !wrAllowedNames.includes(groundWorkerName)) {
+            this.showMessage('Invalid Task Assignee', `Assignee "${groundWorkerName}" is not in the Work Request Project Team.`, 'danger');
+            if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origHtml; }
+            isSubmitting = false;
+            return;
+          }
+          for (const ca of (isDraft ? coAssignees : [])) {
+            if (ca && !wrAllowedNames.includes(ca)) {
+              this.showMessage('Invalid Task Co-assignee', `Co-assignee "${ca}" is not in the Work Request Project Team.`, 'danger');
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origHtml; }
+              isSubmitting = false;
+              return;
+            }
+          }
+        }
+
         const data = Object.fromEntries(new FormData(form).entries());
         const taskDueDate = String(data.dueDate || '').slice(0, 10);
         if (wrDeadline && taskDueDate && taskDueDate > wrDeadline) {
           this.showMessage('Invalid Due Date', `Due date cannot exceed the Work Request deadline (${wrDeadline}).`, 'danger');
+          if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = origHtml; }
+          isSubmitting = false;
           return;
         }
         const allExistingIds = existingTasks.map(t => t.id);
@@ -14770,10 +15652,11 @@ const Workflow = {
         }
 
         const runResult = await this.runBlockingArchiveAction({
-          title: 'Saving Task',
-          message: `Please wait while "${task.title || 'the task'}" is being updated...`,
+          title: isResubmitting ? 'Resubmitting Task' : 'Saving Task',
+          message: `Please wait while "${task.title || 'the task'}" is being ${isResubmitting ? 'resubmitted' : 'updated'}...`,
           apiCall: async () => {
-            await WorkflowData.updateTask(task.id, {
+            const taskPayload = {
+              ...task,
               title: data.title.trim(),
               requiredLinkType: reqLinkSel.value || '',
               assigneeId: res.id,
@@ -14784,14 +15667,29 @@ const Workflow = {
               predecessors: predecessors,
               checklist: checklistItems,
               updatedAt: new Date().toISOString()
-            });
+            };
+
+            if (typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId) {
+              const isNewTask = !task.id || task.id.startsWith('temp_') || !WorkflowData.getTaskById(task.id);
+              const submitResult = await PendingChanges.submit('tasks', taskPayload, isNewTask);
+              if (submitResult && submitResult.approved) {
+                if (isNewTask) {
+                  WorkflowData._addOptimisticTask(taskPayload);
+                } else {
+                  await WorkflowData.updateTask(task.id, taskPayload);
+                }
+              }
+              return { data: submitResult };
+            }
+
+            await WorkflowData.updateTask(task.id, taskPayload);
             const updated = WorkflowData.getTaskById(task.id);
             this._syncTaskToCaches(updated);
             return { data: updated };
           },
-          successTitle: 'Task Saved',
-          successMessage: 'Task has been successfully updated.',
-          errorTitle: 'Failed to Save Task'
+          successTitle: isResubmitting ? 'Task Resubmitted' : 'Task Saved',
+          successMessage: isResubmitting ? 'Task changes have been submitted for review.' : 'Task has been successfully updated.',
+          errorTitle: isResubmitting ? 'Failed to Resubmit Task' : 'Failed to Save Task'
         });
 
         if (runResult.success) {
@@ -15477,6 +16375,453 @@ const Workflow = {
       closeFormPanelAndRoute('#operations');
     } else {
       App.handleRoute();
+    }
+  },
+
+  // ============================================================
+  // Standard Task Templates (Admin Only)
+  // ============================================================
+
+  async renderTaskTemplatesTab() {
+    if (Auth.user?.role !== 'Admin') {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    await this.ensureStandardTaskTemplates();
+    const templates = this._taskTemplates || this.standardTaskTemplates || [];
+
+    const wrapper = el('div', { class: 'page-content-section' });
+
+    const backlogItems = templates.map((t) => {
+      const linkTypeLabel = t.requiredLinkType
+        ? (t.requiredLinkType === 'billing' ? 'Billing' : t.requiredLinkType === 'disbursement' ? 'Disbursement' : t.requiredLinkType === 'transmittal' ? 'Transmittal' : t.requiredLinkType)
+        : 'None';
+      const checklistCount = (t.defaultChecklist || []).length;
+      const coAssigneeCount = (t.coAssignees || []).length;
+
+      const tags = [
+        {
+          text: linkTypeLabel !== 'None' ? `Link: ${linkTypeLabel}` : 'No Link Required',
+          type: linkTypeLabel !== 'None' ? 'entity' : 'muted',
+          className: 'jira-backlog-tag-link-req'
+        },
+        {
+          text: coAssigneeCount > 0 ? `${coAssigneeCount} co-assignee${coAssigneeCount === 1 ? '' : 's'}` : '',
+          type: 'user',
+          className: 'jira-backlog-tag-coassignees' + (coAssigneeCount > 0 ? '' : ' jira-backlog-tag--placeholder'),
+          title: coAssigneeCount > 0 ? (t.coAssignees || []).join(', ') : 'No default co-assignees'
+        },
+        {
+          text: `${checklistCount} ${checklistCount === 1 ? 'item' : 'items'}`,
+          type: 'points',
+          className: 'jira-backlog-tag-items-count',
+          title: 'Default checklist items'
+        }
+      ];
+
+      return {
+        id: t.id,
+        name: t.title,
+        iconHtml: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-primary);"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/><path d="m9 14 2 2 4-4"/></svg>',
+        tags
+      };
+    });
+
+    const backlog = JiraBacklogList.render({
+      title: 'Standard Task Templates',
+      subtitle: 'reusable task templates with predefined checklists, linked record requirements, and co-assignees',
+      items: backlogItems,
+      emptyText: 'No standard task templates found',
+      rowIdPrefix: 'STT',
+      countLabel: 'template',
+      onRowClick: async (item) => {
+        if (Auth.user?.role !== 'Admin') return;
+        this.taskTemplateEditingId = item.id;
+        await this.openTaskTemplateForm();
+      },
+      bulkActions: (selectedIds) => [
+        {
+          text: selectedIds.length === 1 ? 'Delete' : 'Bulk Delete',
+          className: 'btn btn-danger btn-sm',
+          onClick: (ids) => {
+            if (Auth.user?.role !== 'Admin') {
+              Utils.showToast('Access denied: Admin role required for task templates', 'error');
+              return;
+            }
+            const title = ids.length === 1 ? 'Delete Template' : 'Delete Templates';
+            const message = ids.length === 1
+              ? 'Are you sure you want to delete this template?'
+              : `Are you sure you want to delete these ${ids.length} templates?`;
+            this.showConfirm(
+              title,
+              message,
+              async () => {
+                try {
+                  await Promise.all(ids.map(id => window.apiClient.operations.deleteTaskTemplate(id)));
+                  this._taskTemplates = (this._taskTemplates || []).filter(t => !ids.includes(String(t.id)));
+                  this.standardTaskTemplates = this._taskTemplates;
+                  Utils.showToast(`${ids.length} template(s) deleted`, 'success');
+                  Workflow._refreshCounts();
+                  this.updateTabNav();
+                  if (this.view === 'task-templates') {
+                    const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode ||
+                      this.container?.querySelector('.operations-tab-page > div:last-child') ||
+                      document.querySelector('.operations-tab-page > div:last-child');
+                    if (contentContainer) {
+                      contentContainer.innerHTML = '';
+                      contentContainer.appendChild(await this.renderTaskTemplatesTab());
+                    } else {
+                      App.handleRoute();
+                    }
+                  }
+                } catch (err) {
+                  console.error('Failed to bulk delete templates:', err);
+                  Utils.showToast(err.message || 'Failed to delete template(s)', 'error');
+                }
+              },
+              'danger'
+            );
+          }
+        }
+      ],
+      headerActions: [
+        {
+          text: 'Reset to Defaults',
+          className: 'btn btn-secondary btn-sm',
+          onClick: () => {
+            this.showConfirm(
+              'Reset Standard Task Templates',
+              'Are you sure you want to reset all standard task templates to system defaults? Any custom templates or modifications will be restored to the baseline set.',
+              () => {
+                this.resetStandardTaskTemplates();
+              },
+              'danger'
+            );
+          }
+        },
+        {
+          text: '+ Create Template',
+          className: 'btn btn-primary btn-sm',
+          onClick: async () => {
+            this.taskTemplateEditingId = null;
+            await this.openTaskTemplateForm();
+          }
+        }
+      ],
+      rowActions: (item) => [
+        {
+          text: 'Edit',
+          className: 'btn btn-secondary btn-xs',
+          onClick: async () => {
+            this.taskTemplateEditingId = item.id;
+            await this.openTaskTemplateForm();
+          }
+        },
+        {
+          text: 'Delete',
+          className: 'btn btn-danger btn-xs',
+          onClick: () => {
+            this.showConfirm('Delete Template', `Are you sure you want to delete "${item.name}"?`, () => {
+              this.deleteTaskTemplate(item.id);
+            }, 'danger');
+          }
+        }
+      ]
+    });
+
+    wrapper.appendChild(backlog);
+    return wrapper;
+  },
+
+  async renderTaskTemplateForm(opts = {}) {
+    if (Auth.user?.role !== 'Admin') {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    await Promise.all([
+      this.ensureStandardTaskTemplates(),
+      this._loadGroundWorkers()
+    ]);
+
+    const template = this.taskTemplateEditingId ? this._getStandardTaskTemplateById(this.taskTemplateEditingId) : null;
+    const isNew = !template;
+
+    const container = el('div', { class: 'template-form-container notion-form' });
+    if (!opts.hideHeader) {
+      const header = el('div', { class: 'notion-form-header', style: 'margin-bottom: 20px;' });
+      header.appendChild(el('h2', { class: 'notion-form-title', text: isNew ? 'New Task Template' : (template.title || 'Edit Task Template') }));
+      container.appendChild(header);
+    }
+
+    const form = el('form', { id: 'task-template-form', class: 'form-stacked' });
+
+    // Title
+    const titleGroup = el('div', { class: 'form-group' });
+    titleGroup.appendChild(el('label', { text: 'Template Title *' }));
+    const titleInput = el('input', {
+      type: 'text',
+      name: 'title',
+      required: true,
+      class: 'form-control',
+      placeholder: 'e.g. Audit Report Preparation',
+      value: template?.title || ''
+    });
+    titleGroup.appendChild(titleInput);
+    form.appendChild(titleGroup);
+
+    // Required Linked Record
+    const linkGroup = el('div', { class: 'form-group' });
+    linkGroup.appendChild(el('label', { text: 'Required Linked Record' }));
+    const linkSel = el('select', { name: 'requiredLinkType', class: 'form-control' });
+    linkSel.appendChild(el('option', { value: '', text: '— None —' }));
+    linkSel.appendChild(el('option', { value: 'billing', text: 'Service Invoice (Billing)' }));
+    linkSel.appendChild(el('option', { value: 'disbursement', text: 'Expense / Disbursement' }));
+    linkSel.appendChild(el('option', { value: 'transmittal', text: 'Transmittal' }));
+    if (template?.requiredLinkType) linkSel.value = template.requiredLinkType;
+    linkGroup.appendChild(linkSel);
+    form.appendChild(linkGroup);
+
+    // Co-assignees
+    let coAssignees = [...(template?.coAssignees || [])];
+    const coAssigneeGroup = el('div', { class: 'form-group' });
+    coAssigneeGroup.appendChild(el('label', { text: 'Default Co-assignees' }));
+    const coAssigneeChips = el('div', { class: 'co-assignee-chips', style: 'display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px;' });
+    
+    const renderChips = () => {
+      coAssigneeChips.innerHTML = '';
+      coAssignees.forEach((name, idx) => {
+        const chip = el('span', { class: 'co-assignee-chip badge badge-primary', style: 'display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 12px; font-size: 12px;' });
+        chip.appendChild(el('span', { text: name }));
+        const removeBtn = el('span', { text: '×', style: 'cursor: pointer; font-weight: bold; margin-left: 4px;' });
+        removeBtn.addEventListener('click', () => {
+          coAssignees.splice(idx, 1);
+          renderChips();
+        });
+        chip.appendChild(removeBtn);
+        coAssigneeChips.appendChild(chip);
+      });
+    };
+    renderChips();
+
+    const coAssigneeDropdown = await this.createGroundWorkerDropdown({
+      placeholder: 'Add co-assignee...',
+      className: 'form-control',
+      onSelect: (name) => {
+        if (name && !coAssignees.includes(name)) {
+          coAssignees.push(name);
+          renderChips();
+        }
+      }
+    });
+
+    coAssigneeGroup.appendChild(coAssigneeChips);
+    coAssigneeGroup.appendChild(coAssigneeDropdown);
+    form.appendChild(coAssigneeGroup);
+
+    // Default Checklist Items
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Default Checklist Items', style: 'margin-top: 24px; margin-bottom: 8px;' }));
+    const checklistHint = el('p', { class: 'text-muted text-sm', text: 'Items automatically generated when this template is picked during task creation.', style: 'margin-bottom: 12px; color: var(--color-text-muted); font-size: 13px;' });
+    form.appendChild(checklistHint);
+
+    const checklistList = el('div', { id: 'template-checklist-rows', class: 'template-checklist-rows' });
+
+    const addChecklistRow = (itemData = null) => {
+      const row = el('div', { class: 'checklist-row' });
+
+      const textInput = el('input', {
+        type: 'text',
+        class: 'checklist-item-text form-control',
+        placeholder: 'Checklist item description...',
+        value: typeof itemData === 'object' && itemData ? (itemData.text || '') : (itemData || ''),
+        style: 'flex: 2 1 0; min-width: 0;'
+      });
+
+      const catSel = el('select', { class: 'checklist-item-category form-control', style: 'flex: 1.1 1 0; min-width: 0;' });
+      catSel.appendChild(el('option', { value: '', text: 'Sub-task' }));
+      catSel.appendChild(el('option', { value: 'document', text: 'Document' }));
+      if (typeof itemData === 'object' && itemData?.category === 'document') catSel.value = 'document';
+
+      const periodInput = el('input', {
+        type: 'text',
+        class: 'checklist-item-period form-control',
+        placeholder: 'Period / Year (optional)',
+        value: typeof itemData === 'object' && itemData ? (itemData.periodYear || '') : '',
+        style: 'flex: 1.1 1 0; min-width: 0;'
+      });
+
+      const delBtn = el('button', {
+        type: 'button',
+        class: 'btn btn-danger btn-xs checklist-item-del-btn',
+        text: '✕',
+        title: 'Remove item'
+      });
+      delBtn.addEventListener('click', () => row.remove());
+
+      row.appendChild(textInput);
+      row.appendChild(catSel);
+      row.appendChild(periodInput);
+      row.appendChild(delBtn);
+      checklistList.appendChild(row);
+    };
+
+    if (template && Array.isArray(template.defaultChecklist) && template.defaultChecklist.length > 0) {
+      template.defaultChecklist.forEach(item => addChecklistRow(item));
+    }
+
+    const addChecklistBtn = el('button', {
+      type: 'button',
+      class: 'btn btn-secondary btn-sm',
+      text: '+ Add Checklist Item',
+      style: 'margin-top: 10px; align-self: flex-start;'
+    });
+    addChecklistBtn.addEventListener('click', () => addChecklistRow());
+
+    form.appendChild(checklistList);
+    form.appendChild(addChecklistBtn);
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await this.submitTaskTemplateForm(form, checklistList, coAssignees);
+    });
+
+    container.appendChild(form);
+    return container;
+  },
+
+  async submitTaskTemplateForm(form, checklistList, coAssignees) {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required for task templates', 'error');
+      return;
+    }
+    const title = form.querySelector('input[name="title"]')?.value?.trim();
+    if (!title) {
+      Utils.showToast('Please provide a template title', 'error');
+      return;
+    }
+    const requiredLinkType = form.querySelector('select[name="requiredLinkType"]')?.value || null;
+
+    const checklistRows = checklistList.querySelectorAll('.checklist-row');
+    const defaultChecklist = [];
+    checklistRows.forEach(row => {
+      const text = row.querySelector('.checklist-item-text')?.value?.trim();
+      if (text) {
+        const category = row.querySelector('.checklist-item-category')?.value || null;
+        const periodYear = row.querySelector('.checklist-item-period')?.value?.trim() || null;
+        defaultChecklist.push({ text, category: category || null, periodYear: periodYear || null });
+      }
+    });
+
+    const payload = {
+      title,
+      requiredLinkType,
+      defaultChecklist,
+      coAssignees: (coAssignees || []).filter(Boolean),
+    };
+
+    const isEdit = !!this.taskTemplateEditingId;
+    try {
+      if (isEdit) {
+        const updated = await window.apiClient.operations.updateTaskTemplate(this.taskTemplateEditingId, payload);
+        const updatedRow = updated?.data || { id: this.taskTemplateEditingId, ...payload };
+        if (!this._taskTemplates) this._taskTemplates = [];
+        const idx = this._taskTemplates.findIndex(t => String(t.id) === String(this.taskTemplateEditingId));
+        if (idx !== -1) {
+          this._taskTemplates[idx] = updatedRow;
+        } else {
+          this._taskTemplates.push(updatedRow);
+        }
+        this.standardTaskTemplates = this._taskTemplates;
+        Utils.showToast('Task template updated successfully', 'success');
+      } else {
+        const created = await window.apiClient.operations.createTaskTemplate(payload);
+        const createdRow = created?.data || payload;
+        if (!this._taskTemplates) this._taskTemplates = [];
+        this._taskTemplates.push(createdRow);
+        this.standardTaskTemplates = this._taskTemplates;
+        Utils.showToast('Task template created successfully', 'success');
+      }
+
+      this.taskTemplateEditingId = null;
+      Workflow._refreshCounts();
+      this.updateTabNav();
+
+      markPaneFormClean();
+      if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+        await closeFormPanelAndRoute('#operations?tab=task-templates');
+      } else {
+        location.hash = '#operations?tab=task-templates';
+      }
+
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        }
+      }
+    } catch (err) {
+      console.error('Failed to save task template', err);
+      Utils.showToast(err.message || 'Failed to save task template', 'error');
+    }
+  },
+
+  async deleteTaskTemplate(id) {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required', 'error');
+      return;
+    }
+    try {
+      await window.apiClient.operations.deleteTaskTemplate(id);
+      this._taskTemplates = (this._taskTemplates || this.standardTaskTemplates || []).filter(t => String(t.id) !== String(id));
+      this.standardTaskTemplates = this._taskTemplates;
+      Utils.showToast('Standard task template deleted', 'success');
+      Workflow._refreshCounts();
+      this.updateTabNav();
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        } else {
+          App.handleRoute();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete task template', err);
+      Utils.showToast(err.message || 'Failed to delete task template', 'error');
+    }
+  },
+
+  async resetStandardTaskTemplates() {
+    if (Auth.user?.role !== 'Admin') {
+      Utils.showToast('Access denied: Admin role required', 'error');
+      return;
+    }
+    try {
+      const res = await window.apiClient.operations.resetTaskTemplates();
+      if (res && res.data) {
+        this._taskTemplates = res.data;
+        this.standardTaskTemplates = res.data;
+      }
+      Utils.showToast('Standard task templates reset to defaults', 'success');
+      Workflow._refreshCounts();
+      this.updateTabNav();
+      if (this.view === 'task-templates') {
+        const contentContainer = this.container?.querySelector('.page-content-section')?.parentNode || this.container?.querySelector('.operations-tab-page > div:last-child');
+        if (contentContainer) {
+          contentContainer.innerHTML = '';
+          contentContainer.appendChild(await this.renderTaskTemplatesTab());
+        } else {
+          App.handleRoute();
+        }
+      }
+    } catch (err) {
+      console.error('Failed to reset task templates', err);
+      Utils.showToast(err.message || 'Failed to reset task templates', 'error');
     }
   },
 

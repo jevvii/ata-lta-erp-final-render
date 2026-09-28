@@ -68,6 +68,7 @@ const toApiWorkRequest = (row, entityCode) => ({
   archived: row.archived ?? false,
   requestedBy: row.requested_by || null,
   assignedTo: row.assigned_to || null,
+  coAssignees: Array.isArray(row.co_assignees) ? row.co_assignees : (row.coAssignees || []),
   dueDate: row.due_date || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -177,12 +178,7 @@ const toApiTask = (row, { checklist = [], timeLogs = [], taskDocuments = [] } = 
 
 const isBackOffice = (user) => {
   if (!user) return false;
-  const depts = user.departments || [];
-  return (
-    user.role === 'Admin' ||
-    user.role === 'Manager' ||
-    depts.includes('Management')
-  );
+  return user.role === 'Admin';
 };
 
 const resolveAssigneeName = async (assigneeId, assigneeName) => {
@@ -301,11 +297,24 @@ const loadTaskExtras = async (taskIds) => {
 const canViewWorkRequest = (wr, user, taskMap) => {
   if (!user) return false;
   if (user.role === 'Admin') return true;
-  if (isBackOffice(user)) return true;
-  if (wr.submitted_by === user.id || wr.requested_by === user.id || wr.assigned_to === user.id) return true;
-  const tasks = taskMap.get(wr.id) || [];
+  if (
+    wr.submitted_by === user.id ||
+    wr.submittedBy === user.id ||
+    wr.requested_by === user.id ||
+    wr.requestedBy === user.id ||
+    wr.assigned_to === user.id ||
+    wr.assignedTo === user.id
+  ) {
+    return true;
+  }
+  const coAssignees = Array.isArray(wr.co_assignees) ? wr.co_assignees : (wr.coAssignees || []);
+  if (coAssignees.some((ca) => ca === user.id || ca === user.name)) return true;
+  const tasks = taskMap?.get ? (taskMap.get(wr.id) || []) : (wr.tasks || []);
   return tasks.some((t) => {
-    if (t.assignee_id === user.id || t.assignee_name === user.name) return true;
+    if (t.assignee_id === user.id || t.assigneeId === user.id || t.assignee_name === user.name || t.assigneeName === user.name) return true;
+    const taskCo = Array.isArray(t.co_assignees) ? t.co_assignees : (t.coAssignees || []);
+    if (taskCo.some((ca) => ca === user.id || ca === user.name)) return true;
+    if (Array.isArray(t.checklist) && t.checklist.some((item) => item.assignee_name === user.name || item.assigneeName === user.name || item.assignee_id === user.id || item.assigneeId === user.id)) return true;
     return false;
   });
 };
@@ -374,11 +383,7 @@ const listWorkRequests = async ({
   } else {
     const allWrIds = (data || []).map((r) => r.id);
     allTaskMap = await loadTasksForWorkRequests(allWrIds);
-    visibleRows = (data || []).filter((row) => {
-      if (row.submitted_by === user.id || row.requested_by === user.id || row.assigned_to === user.id) return true;
-      const tasks = allTaskMap.get(row.id) || [];
-      return tasks.some((t) => t.assignee_id === user.id || t.assignee_name === user.name);
-    });
+    visibleRows = (data || []).filter((row) => canViewWorkRequest(row, user, allTaskMap));
   }
 
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
@@ -456,6 +461,41 @@ const listWorkRequests = async ({
 // In-flight mutex map to guarantee idempotency against concurrent double-submits
 const inFlightWorkRequests = new Map();
 
+const validateProjectTeamRoles = async ({ assignedTo, coAssignees }) => {
+  if (assignedTo) {
+    const { data: assignedUser } = await supabaseAdmin
+      .from('users')
+      .select('id, name, role')
+      .eq('id', assignedTo)
+      .maybeSingle();
+    if (assignedUser && (assignedUser.role || '').toLowerCase() !== 'manager') {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Invalid Manager',
+        detail: `User "${assignedUser.name}" does not have the Manager role`,
+      });
+    }
+  }
+
+  if (coAssignees && Array.isArray(coAssignees) && coAssignees.length > 0) {
+    const { data: matchedUsers } = await supabaseAdmin
+      .from('users')
+      .select('id, name, role')
+      .in('name', coAssignees);
+    const invalidMember = (matchedUsers || []).find((u) => {
+      const r = (u.role || '').toLowerCase();
+      return r === 'admin' || r === 'manager';
+    });
+    if (invalidMember) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Invalid Team Member',
+        detail: `User "${invalidMember.name}" has the ${invalidMember.role} role and cannot be added as a team member`,
+      });
+    }
+  }
+};
+
 const createWorkRequest = async ({ entityId, data, user }) => {
   const reqBy = data.requestedBy || user?.id;
   const titleClean = (data.title || '').trim();
@@ -467,6 +507,8 @@ const createWorkRequest = async ({ entityId, data, user }) => {
 
   const creationPromise = (async () => {
     try {
+      await validateProjectTeamRoles({ assignedTo: data.assignedTo, coAssignees: data.coAssignees });
+
       // Deduplication guard against rapid double-clicks (within 5 seconds)
       const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString();
       let dupQuery = supabaseAdmin
@@ -498,6 +540,8 @@ const createWorkRequest = async ({ entityId, data, user }) => {
         status: data.status || 'Draft',
         priority: data.priority || 'Normal',
         requested_by: data.requestedBy || user.id,
+        assigned_to: data.assignedTo || null,
+        co_assignees: data.coAssignees || [],
         due_date: data.dueDate || null,
         created_at: now,
         updated_at: now,
@@ -609,6 +653,15 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
   };
 
   if (data.archived !== undefined) updates.archived = data.archived;
+  if (data.assignedTo !== undefined) updates.assigned_to = data.assignedTo;
+  if (data.coAssignees !== undefined) updates.co_assignees = data.coAssignees;
+
+  if (data.assignedTo !== undefined || data.coAssignees !== undefined) {
+    await validateProjectTeamRoles({
+      assignedTo: data.assignedTo !== undefined ? data.assignedTo : existing.assignedTo,
+      coAssignees: data.coAssignees !== undefined ? data.coAssignees : existing.coAssignees,
+    });
+  }
 
   // OCC (Spec 2.2 / R-10): version-guard the update when the client declares
   // the version it read; zero matching rows means a concurrent edit landed
@@ -1400,6 +1453,325 @@ const createGroundWorker = async ({ entityId, userId, data }) => {
   return worker;
 };
 
+// ============================================================
+// Standard Task Templates
+// ============================================================
+
+const DEFAULT_STANDARD_TASK_TEMPLATES = [
+  {
+    id: '00000000-0000-0000-0000-000000000001',
+    title: 'Gathering requirements and preparing documents for preprocessing',
+    requiredLinkType: null,
+    defaultChecklist: [
+      { id: '00000000-0000-0000-0000-000000000011', text: 'SEC Certificate', category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000012', text: 'Articles of Incorporation', category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000013', text: "Mayor's Permit", category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000014', text: 'BIR Form 1901/1903', category: 'document' },
+    ],
+    coAssignees: [],
+    sortOrder: 1,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000002',
+    title: 'Gather requirements and prepare documents needed for processing',
+    requiredLinkType: null,
+    defaultChecklist: [
+      { id: '00000000-0000-0000-0000-000000000021', text: 'SEC Certificate', category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000022', text: "Mayor's Permit", category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000023', text: 'BIR Form 1901/1903', category: 'document' },
+      { id: '00000000-0000-0000-0000-000000000024', text: 'Articles of Incorporation', category: 'document' },
+    ],
+    coAssignees: ['Employee 1', 'Employee 2', 'Employee 3'],
+    sortOrder: 2,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000003',
+    title: 'Creation of ORUS account',
+    requiredLinkType: null,
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 3,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000004',
+    title: 'Registration of Books of Accounts',
+    requiredLinkType: null,
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 4,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000005',
+    title: 'Application and Received of Authority to Print',
+    requiredLinkType: null,
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 5,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000006',
+    title: 'Pickup of Sales/Service Invoice',
+    requiredLinkType: null,
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 6,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000007',
+    title: 'Billing',
+    requiredLinkType: 'billing',
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 7,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000008',
+    title: 'Disbursement',
+    requiredLinkType: 'disbursement',
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 8,
+    isSystemDefault: true,
+  },
+  {
+    id: '00000000-0000-0000-0000-000000000009',
+    title: 'Transmittal',
+    requiredLinkType: 'transmittal',
+    defaultChecklist: [],
+    coAssignees: [],
+    sortOrder: 9,
+    isSystemDefault: true,
+  },
+];
+
+let _standardTaskTemplatesFallback = null;
+
+const initFallbackTemplates = () => {
+  _standardTaskTemplatesFallback = new Map();
+  DEFAULT_STANDARD_TASK_TEMPLATES.forEach((tmpl) => {
+    _standardTaskTemplatesFallback.set(tmpl.id, {
+      ...tmpl,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  });
+};
+
+const normalizeTemplateRow = (row) => ({
+  id: row.id,
+  title: row.title,
+  requiredLinkType: row.required_link_type !== undefined ? row.required_link_type : row.requiredLinkType || null,
+  defaultChecklist: row.default_checklist !== undefined ? row.default_checklist : row.defaultChecklist || [],
+  coAssignees: row.co_assignees !== undefined ? row.co_assignees : row.coAssignees || [],
+  sortOrder: row.sort_order ?? row.sortOrder ?? 0,
+  isSystemDefault: row.is_system_default ?? row.isSystemDefault ?? false,
+  createdAt: row.created_at || row.createdAt,
+  updatedAt: row.updated_at || row.updatedAt,
+});
+
+const listStandardTaskTemplates = async () => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('standard_task_templates')
+      .select('*')
+      .is('deleted_at', null)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      if (!_standardTaskTemplatesFallback) initFallbackTemplates();
+      return Array.from(_standardTaskTemplatesFallback.values()).sort(
+        (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)
+      );
+    }
+
+    if (!data || data.length === 0) {
+      const rows = DEFAULT_STANDARD_TASK_TEMPLATES.map((t) => ({
+        id: t.id,
+        title: t.title,
+        required_link_type: t.requiredLinkType,
+        default_checklist: t.defaultChecklist,
+        co_assignees: t.coAssignees,
+        sort_order: t.sortOrder,
+        is_system_default: true,
+      }));
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from('standard_task_templates')
+        .insert(rows)
+        .select('*');
+
+      if (!insertErr && inserted && inserted.length > 0) {
+        return inserted.map(normalizeTemplateRow);
+      }
+      return DEFAULT_STANDARD_TASK_TEMPLATES;
+    }
+
+    return data.map(normalizeTemplateRow);
+  } catch (err) {
+    if (!_standardTaskTemplatesFallback) initFallbackTemplates();
+    return Array.from(_standardTaskTemplatesFallback.values()).sort(
+      (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)
+    );
+  }
+};
+
+const createStandardTaskTemplate = async ({ userId, data }) => {
+  const row = {
+    title: data.title,
+    required_link_type: data.requiredLinkType || null,
+    default_checklist: data.defaultChecklist || [],
+    co_assignees: data.coAssignees || [],
+    sort_order: data.sortOrder || 0,
+    is_system_default: false,
+    created_by: userId,
+  };
+
+  try {
+    const { data: created, error } = await supabaseAdmin
+      .from('standard_task_templates')
+      .insert(row)
+      .select('*')
+      .single();
+
+    if (!error && created) {
+      return normalizeTemplateRow(created);
+    }
+  } catch (_e) {
+    // Ignore error and fall back to in-memory store
+  }
+
+  if (!_standardTaskTemplatesFallback) initFallbackTemplates();
+  const id = randomUUID();
+  const record = {
+    id,
+    title: data.title,
+    requiredLinkType: data.requiredLinkType || null,
+    defaultChecklist: data.defaultChecklist || [],
+    coAssignees: data.coAssignees || [],
+    sortOrder: data.sortOrder || _standardTaskTemplatesFallback.size + 1,
+    isSystemDefault: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  _standardTaskTemplatesFallback.set(id, record);
+  return record;
+};
+
+const updateStandardTaskTemplate = async ({ id, data }) => {
+  const updates = {
+    updated_at: new Date().toISOString(),
+  };
+  if (data.title !== undefined) updates.title = data.title;
+  if (data.requiredLinkType !== undefined) updates.required_link_type = data.requiredLinkType;
+  if (data.defaultChecklist !== undefined) updates.default_checklist = data.defaultChecklist;
+  if (data.coAssignees !== undefined) updates.co_assignees = data.coAssignees;
+  if (data.sortOrder !== undefined) updates.sort_order = data.sortOrder;
+
+  try {
+    const { data: updated, error } = await supabaseAdmin
+      .from('standard_task_templates')
+      .update(updates)
+      .eq('id', id)
+      .is('deleted_at', null)
+      .select('*')
+      .single();
+
+    if (!error && updated) {
+      return normalizeTemplateRow(updated);
+    }
+  } catch (_e) {
+    // Ignore error and fall back to in-memory store
+  }
+
+  if (!_standardTaskTemplatesFallback) initFallbackTemplates();
+  const existing = _standardTaskTemplatesFallback.get(id);
+  if (!existing) {
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Standard task template not found',
+    });
+  }
+  const updatedRecord = {
+    ...existing,
+    ...(data.title !== undefined ? { title: data.title } : {}),
+    ...(data.requiredLinkType !== undefined ? { requiredLinkType: data.requiredLinkType } : {}),
+    ...(data.defaultChecklist !== undefined ? { defaultChecklist: data.defaultChecklist } : {}),
+    ...(data.coAssignees !== undefined ? { coAssignees: data.coAssignees } : {}),
+    ...(data.sortOrder !== undefined ? { sortOrder: data.sortOrder } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  _standardTaskTemplatesFallback.set(id, updatedRecord);
+  return updatedRecord;
+};
+
+const deleteStandardTaskTemplate = async ({ id }) => {
+  try {
+    const { error } = await supabaseAdmin
+      .from('standard_task_templates')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (!error) return true;
+  } catch (_e) {
+    // Ignore error and fall back to in-memory store
+  }
+
+  if (!_standardTaskTemplatesFallback) initFallbackTemplates();
+  if (!_standardTaskTemplatesFallback.has(id)) {
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Standard task template not found',
+    });
+  }
+  _standardTaskTemplatesFallback.delete(id);
+  return true;
+};
+
+const resetStandardTaskTemplates = async ({ userId }) => {
+  try {
+    await supabaseAdmin
+      .from('standard_task_templates')
+      .update({ deleted_at: new Date().toISOString() })
+      .is('deleted_at', null);
+
+    const rows = DEFAULT_STANDARD_TASK_TEMPLATES.map((t) => ({
+      id: t.id,
+      title: t.title,
+      required_link_type: t.requiredLinkType,
+      default_checklist: t.defaultChecklist,
+      co_assignees: t.coAssignees,
+      sort_order: t.sortOrder,
+      is_system_default: true,
+      created_by: userId,
+    }));
+
+    const { data: inserted, error } = await supabaseAdmin
+      .from('standard_task_templates')
+      .insert(rows)
+      .select('*');
+
+    if (!error && inserted && inserted.length > 0) {
+      return inserted.map(normalizeTemplateRow);
+    }
+  } catch (_e) {
+    // Ignore error and fall back to in-memory store
+  }
+
+  initFallbackTemplates();
+  return Array.from(_standardTaskTemplatesFallback.values()).sort(
+    (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)
+  );
+};
+
 module.exports = {
   listWorkRequests,
   createWorkRequest,
@@ -1424,4 +1796,9 @@ module.exports = {
   listGroundWorkers,
   createGroundWorker,
   addTimeLogs,
+  listStandardTaskTemplates,
+  createStandardTaskTemplate,
+  updateStandardTaskTemplate,
+  deleteStandardTaskTemplate,
+  resetStandardTaskTemplates,
 };

@@ -43,6 +43,11 @@ const createWorkRequestSchema = z.object({
   entity: z.enum(['ATA', 'LTA', 'ALL']).optional(),
   status: z.string().max(50).optional(),
   requestedBy: z.string().uuid().optional(),
+  assignedTo: z.preprocess(
+    (val) => (val === '' || val === undefined ? null : val),
+    z.string().uuid().nullable().optional()
+  ),
+  coAssignees: z.array(z.string()).optional().default([]),
   dueDate: z.string().optional(),
   priority: z.string().max(50).optional(),
 });
@@ -122,6 +127,24 @@ const addTimeLogsSchema = z.object({
   logs: z.array(timeLogSchema),
 });
 
+const standardTaskTemplateSchema = z.object({
+  title: z.string().min(1).max(255),
+  requiredLinkType: z.string().max(50).optional().nullable(),
+  defaultChecklist: z
+    .array(
+      z.object({
+        id: z.string().optional().nullable(),
+        text: z.string().min(1),
+        category: z.string().optional().nullable(),
+        periodYear: z.string().optional().nullable(),
+      })
+    )
+    .optional()
+    .default([]),
+  coAssignees: z.array(z.string()).optional().default([]),
+  sortOrder: z.number().int().optional().nullable(),
+});
+
 module.exports = {
   createWorkRequestSchema,
   updateWorkRequestSchema,
@@ -132,4 +155,5 @@ module.exports = {
   retainerTemplateSchema,
   groundWorkerSchema,
   addTimeLogsSchema,
+  standardTaskTemplateSchema,
 };

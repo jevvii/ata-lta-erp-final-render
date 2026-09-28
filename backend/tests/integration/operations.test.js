@@ -579,4 +579,179 @@ describe('/v1/work-requests', () => {
     expect(getRes.body.data.id).toBe(wr.body.data.id);
     expect(getRes.body.data.title).toBe('Cross Entity WR');
   });
+
+  it('persists assignedTo and coAssignees and restricts Manager visibility to assigned work requests', async () => {
+    const admin = registerUser({
+      email: 'admin-team@ata-lta.ph',
+      name: 'Admin Team',
+      role: 'Admin',
+      entities: ['ATA'],
+    });
+
+    const manager1Id = '44444444-1111-1111-1111-111111111111';
+    const manager1 = registerUser({
+      id: manager1Id,
+      email: 'manager1@ata-lta.ph',
+      name: 'Manager One',
+      role: 'Manager',
+      entities: ['ATA'],
+    });
+
+    const manager2Id = '44444444-2222-2222-2222-222222222222';
+    const manager2 = registerUser({
+      id: manager2Id,
+      email: 'manager2@ata-lta.ph',
+      name: 'Manager Two',
+      role: 'Manager',
+      entities: ['ATA'],
+    });
+
+    const staff1Id = '55555555-1111-1111-1111-111111111111';
+    registerUser({
+      id: staff1Id,
+      email: 'staff1@ata-lta.ph',
+      name: 'Staff One',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    const client = await createClient(admin, 'ATA');
+
+    // 1. Admin creates WR1 with Manager1 as assignedTo and Staff1 as coAssignee
+    const wr1Res = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Project Alpha',
+        clientId: client.id,
+        entity: 'ATA',
+        assignedTo: manager1Id,
+        coAssignees: ['Staff One'],
+      })
+      .expect(201);
+
+    expect(wr1Res.body.data.assignedTo).toBe(manager1Id);
+    expect(wr1Res.body.data.coAssignees).toEqual(['Staff One']);
+
+    // 2. Admin creates WR2 with Manager2 as assignedTo
+    const wr2Res = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Project Beta',
+        clientId: client.id,
+        entity: 'ATA',
+        assignedTo: manager2Id,
+        coAssignees: [],
+      })
+      .expect(201);
+
+    expect(wr2Res.body.data.assignedTo).toBe(manager2Id);
+
+    // 3. Admin sees both WR1 and WR2
+    const adminList = await request(app)
+      .get('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    const adminWrIds = adminList.body.data.map((w) => w.id);
+    expect(adminWrIds).toContain(wr1Res.body.data.id);
+    expect(adminWrIds).toContain(wr2Res.body.data.id);
+
+    // 4. Manager1 only sees WR1 (where they are manager), NOT WR2
+    const mgr1List = await request(app)
+      .get('/v1/work-requests')
+      .set('Authorization', `Bearer ${manager1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    const mgr1WrIds = mgr1List.body.data.map((w) => w.id);
+    expect(mgr1WrIds).toContain(wr1Res.body.data.id);
+    expect(mgr1WrIds).not.toContain(wr2Res.body.data.id);
+
+    // Manager1 can get WR1
+    await request(app)
+      .get(`/v1/work-requests/${wr1Res.body.data.id}`)
+      .set('Authorization', `Bearer ${manager1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    // Manager1 cannot get WR2 (returns 404 since it's filtered out of view)
+    await request(app)
+      .get(`/v1/work-requests/${wr2Res.body.data.id}`)
+      .set('Authorization', `Bearer ${manager1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(404);
+
+    // 5. Manager2 only sees WR2, NOT WR1
+    const mgr2List = await request(app)
+      .get('/v1/work-requests')
+      .set('Authorization', `Bearer ${manager2}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    const mgr2WrIds = mgr2List.body.data.map((w) => w.id);
+    expect(mgr2WrIds).toContain(wr2Res.body.data.id);
+    expect(mgr2WrIds).not.toContain(wr1Res.body.data.id);
+
+    // 6. Admin assigns a task in WR2 to Manager1
+    await request(app)
+      .post(`/v1/work-requests/${wr2Res.body.data.id}/tasks`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Review financials for Beta',
+        assigneeId: manager1Id,
+        assigneeName: 'Manager One',
+      })
+      .expect(201);
+
+    // 7. Manager1 now sees BOTH WR1 and WR2 because they are assigned to a task in WR2!
+    const mgr1ListUpdated = await request(app)
+      .get('/v1/work-requests')
+      .set('Authorization', `Bearer ${manager1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    const mgr1UpdatedIds = mgr1ListUpdated.body.data.map((w) => w.id);
+    expect(mgr1UpdatedIds).toContain(wr1Res.body.data.id);
+    expect(mgr1UpdatedIds).toContain(wr2Res.body.data.id);
+
+    // Manager1 can now get WR2 as well
+    await request(app)
+      .get(`/v1/work-requests/${wr2Res.body.data.id}`)
+      .set('Authorization', `Bearer ${manager1}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+
+    // 8. Role enforcement: assignedTo must have role 'Manager'
+    const invalidMgrRes = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Project Invalid Manager',
+        clientId: client.id,
+        entity: 'ATA',
+        assignedTo: staff1Id, // staff1 has role 'Operations', not 'Manager'
+        coAssignees: [],
+      })
+      .expect(400);
+    expect(invalidMgrRes.body.title).toBe('Invalid Manager');
+
+    // 9. Role enforcement: coAssignees cannot be Manager or Admin
+    const invalidMemberRes = await request(app)
+      .post('/v1/work-requests')
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({
+        title: 'Project Invalid Member',
+        clientId: client.id,
+        entity: 'ATA',
+        assignedTo: manager1Id,
+        coAssignees: ['Manager Two'], // Manager Two has role 'Manager'
+      })
+      .expect(400);
+    expect(invalidMemberRes.body.title).toBe('Invalid Team Member');
+  });
 });
+

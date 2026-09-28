@@ -12,6 +12,7 @@ const {
   retainerTemplateSchema,
   groundWorkerSchema,
   addTimeLogsSchema,
+  standardTaskTemplateSchema,
 } = require('./schema');
 const auditService = require('../../services/auditService');
 const { supabaseAdmin } = require('../../services/supabaseClient');
@@ -512,6 +513,63 @@ const getTask = async (req, res, next) => {
   }
 };
 
+const listStandardTaskTemplates = async (req, res, next) => {
+  try {
+    const data = await operationsService.listStandardTaskTemplates();
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const createStandardTaskTemplate = async (req, res, next) => {
+  try {
+    const payload = validate(standardTaskTemplateSchema, req.body);
+    const template = await operationsService.createStandardTaskTemplate({
+      userId: req.user.id,
+      data: payload,
+    });
+    res.status(201).json({ data: template });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const updateStandardTaskTemplate = async (req, res, next) => {
+  try {
+    const payload = validate(standardTaskTemplateSchema.partial(), req.body);
+    const template = await operationsService.updateStandardTaskTemplate({
+      id: req.params.templateId,
+      data: payload,
+    });
+    res.status(200).json({ data: template });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const deleteStandardTaskTemplate = async (req, res, next) => {
+  try {
+    await operationsService.deleteStandardTaskTemplate({
+      id: req.params.templateId,
+    });
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+};
+
+const resetStandardTaskTemplates = async (req, res, next) => {
+  try {
+    const data = await operationsService.resetStandardTaskTemplates({
+      userId: req.user.id,
+    });
+    res.status(200).json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   operationsController: {
     list,
@@ -536,5 +594,11 @@ module.exports = {
     createGroundWorker,
     addTimeLogs,
     getTask,
+    listStandardTaskTemplates,
+    createStandardTaskTemplate,
+    updateStandardTaskTemplate,
+    deleteStandardTaskTemplate,
+    resetStandardTaskTemplates,
   },
 };
+

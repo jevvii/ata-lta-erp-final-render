@@ -1033,9 +1033,12 @@ const Users = {
                   this.rejectPendingItem({ type: 'operations_request', raw: pc.proposedData });
                   return;
                 }
-                const reason = prompt('Enter rejection reason:');
-                if (reason !== null) {
-                  Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+                Workflow.showRejectionModal({
+                  title: 'Confirm Rejection',
+                  message: `Are you sure you want to reject "${pc.title || 'the change'}"?`,
+                  placeholder: 'Enter rejection reason...',
+                  required: true,
+                  onConfirm: (reason) => {
                     Workflow.runBlockingArchiveAction({
                       title: 'Rejecting Change',
                       message: `Please wait while "${pc.title || 'the change'}" is being rejected...`,
@@ -1051,8 +1054,8 @@ const Users = {
                         location.hash = '#admin';
                       }
                     });
-                  }, 'danger');
-                }
+                  }
+                });
               }
             });
           } else if (isSubmitter && pc.status === 'pending') {
@@ -4780,30 +4783,33 @@ const Users = {
       this.rejectOperationsRequest(item.raw);
       return;
     }
-    const reason = prompt('Enter rejection reason:');
-    if (reason === null) return;
-
-    Workflow.showConfirm('Confirm Rejection', `Are you sure you want to reject ${item.title}?`, () => {
-      Workflow.runBlockingArchiveAction({
-        title: 'Rejecting Change',
-        message: `Please wait while "${item.title}" is being rejected...`,
-        apiCall: async () => {
-          return await PendingChanges.reject(item.id, reason);
-        },
-        successTitle: 'Rejection Successful',
-        successMessage: `"${item.title}" has been rejected.`,
-        onAfterConfirm: async () => {
-          if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
-            window.SidePaneInstance.close({ silent: true });
+    Workflow.showRejectionModal({
+      title: 'Confirm Rejection',
+      message: `Are you sure you want to reject ${item.title}?`,
+      placeholder: 'Enter rejection reason...',
+      required: true,
+      onConfirm: (reason) => {
+        Workflow.runBlockingArchiveAction({
+          title: 'Rejecting Change',
+          message: `Please wait while "${item.title}" is being rejected...`,
+          apiCall: async () => {
+            return await PendingChanges.reject(item.id, reason);
+          },
+          successTitle: 'Rejection Successful',
+          successMessage: `"${item.title}" has been rejected.`,
+          onAfterConfirm: async () => {
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+              window.SidePaneInstance.close({ silent: true });
+            }
+            if (typeof PendingChanges !== 'undefined' && typeof PendingChanges._invalidateAllCaches === 'function') {
+              PendingChanges._invalidateAllCaches();
+            }
+            Users.invalidateMyRequestsCount();
+            App.handleRoute();
           }
-          if (typeof PendingChanges !== 'undefined' && typeof PendingChanges._invalidateAllCaches === 'function') {
-            PendingChanges._invalidateAllCaches();
-          }
-          Users.invalidateMyRequestsCount();
-          App.handleRoute();
-        }
-      });
-    }, 'danger');
+        });
+      }
+    });
   },
 
   async _executeApproveOperationsRequest(norm) {
@@ -4896,38 +4902,42 @@ const Users = {
 
   async rejectOperationsRequest(r) {
     const norm = this._normalizeOperationsRequest(r);
-    const reason = prompt('Enter rejection reason:');
-    if (reason === null) return;
-    Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this request?', () => {
-      Workflow.runBlockingArchiveAction({
-        title: 'Rejecting Request',
-        message: 'Please wait while the request is being rejected...',
-        apiCall: async () => {
-          await window.apiClient.operationsRequests.update(norm.id, {
-            status: 'rejected',
-            rejectionReason: reason,
-            fulfilledBy: Auth.user.id,
-            fulfilledAt: new Date().toISOString()
-          });
-          return true;
-        },
-        successTitle: 'Rejection Successful',
-        successMessage: 'Request has been rejected.',
-        onAfterConfirm: async () => {
-          Users.invalidateMyRequestsCount();
-          if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
-            window.apiClient.operationsRequests.invalidateCounts();
+    Workflow.showRejectionModal({
+      title: 'Confirm Rejection',
+      message: 'Are you sure you want to reject this request?',
+      placeholder: 'Enter rejection reason...',
+      required: true,
+      onConfirm: (reason) => {
+        Workflow.runBlockingArchiveAction({
+          title: 'Rejecting Request',
+          message: 'Please wait while the request is being rejected...',
+          apiCall: async () => {
+            await window.apiClient.operationsRequests.update(norm.id, {
+              status: 'rejected',
+              rejectionReason: reason,
+              fulfilledBy: Auth.user.id,
+              fulfilledAt: new Date().toISOString()
+            });
+            return true;
+          },
+          successTitle: 'Rejection Successful',
+          successMessage: 'Request has been rejected.',
+          onAfterConfirm: async () => {
+            Users.invalidateMyRequestsCount();
+            if (typeof window.apiClient?.operationsRequests?.invalidateCounts === 'function') {
+              window.apiClient.operationsRequests.invalidateCounts();
+            }
+            if (typeof PendingChanges !== 'undefined' && typeof PendingChanges._invalidateAllCaches === 'function') {
+              PendingChanges._invalidateAllCaches();
+            }
+            if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
+              window.SidePaneInstance.close({ silent: true });
+            }
+            App.handleRoute();
           }
-          if (typeof PendingChanges !== 'undefined' && typeof PendingChanges._invalidateAllCaches === 'function') {
-            PendingChanges._invalidateAllCaches();
-          }
-          if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
-            window.SidePaneInstance.close({ silent: true });
-          }
-          App.handleRoute();
-        }
-      });
-    }, 'danger');
+        });
+      }
+    });
   },
 
   approveAll(categoryKey) {
@@ -5475,11 +5485,12 @@ const Users = {
   },
 
   _pendingStatusBadge(status) {
+    const s = (status || '').toLowerCase();
     const map = {
       'pending': 'badge badge-warning',
       'rejected': 'badge badge-danger'
     };
-    return el('span', { class: map[status] || 'badge', text: status.charAt(0).toUpperCase() + status.slice(1) });
+    return el('span', { class: map[s] || 'badge', text: s ? s.charAt(0).toUpperCase() + s.slice(1) : 'Unknown' });
   },
 
   _pendingCategoryLabel(table) {
@@ -5489,7 +5500,8 @@ const Users = {
       transmittals: 'Transmittals',
       clients: 'Clients',
       tasks: 'Tasks',
-      workRequests: 'Work Requests'
+      workRequests: 'Work Requests',
+      workRequestPhaseRouting: 'WR Phase Routing'
     };
     return map[table] || table;
   },
@@ -5518,9 +5530,11 @@ const Users = {
       tdStatus.appendChild(self._pendingStatusBadge(pc.status));
       tr.appendChild(tdStatus);
 
+      const isItemRejected = (pc.status || '').toLowerCase() === 'rejected';
+      const itemReason = pc.rejectionReason || pc.rejection_reason || pc.proposedData?.rejectionReason || pc.proposedData?.rejection_reason || '';
       const tdReason = el('td', { 
-        text: pc.status === 'rejected' ? (pc.rejectionReason || '—') : '—', 
-        style: pc.status === 'rejected' ? 'color:var(--color-danger);font-weight:600;word-break:break-word;' : '' 
+        text: isItemRejected ? (itemReason.trim() || '—') : '—', 
+        style: isItemRejected ? 'color:var(--color-danger);font-weight:600;word-break:break-word;' : '' 
       });
       tr.appendChild(tdReason);
 
@@ -6154,6 +6168,35 @@ const Users = {
     ]);
     reviewCard.appendChild(titleContainer);
 
+    // Rejection Banner if rejected
+    const isDetailRejected = (pc.status || '').toLowerCase() === 'rejected';
+    if (isDetailRejected) {
+      let rejecter = null;
+      if (pc.reviewedBy) {
+        try {
+          rejecter = await resolveUser(pc.reviewedBy);
+        } catch (_) {}
+      }
+      const rawReason = pc.rejectionReason || pc.rejection_reason || pc.proposedData?.rejectionReason || pc.proposedData?.rejection_reason || '';
+      const displayReason = rawReason.trim() ? rawReason.trim() : 'No reason provided by reviewer';
+      const rejectBox = el('div', {
+        class: 'notion-rejection-box',
+        style: 'background: color-mix(in oklab, var(--color-danger, #ef4444) 10%, var(--color-surface, #1e1e1e)); border: 1px solid color-mix(in oklab, var(--color-danger, #ef4444) 40%, var(--color-border, #333)); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 0.875rem;'
+      }, [
+        el('div', { style: 'font-weight: 600; color: var(--color-danger, #ef4444); margin-bottom: 4px; display: flex; align-items: center; gap: 6px;' }, [
+          el('span', { html: (typeof SignalIcons !== 'undefined' && SignalIcons.danger) ? SignalIcons.danger : '✕', style: 'display: inline-flex; width: 16px; height: 16px;' }),
+          'Submission Rejected'
+        ]),
+        el('div', { style: 'margin-top: 4px; word-break: break-word;' }, [
+          el('strong', { text: 'Reason: ' }),
+          el('span', { text: displayReason, style: rawReason.trim() ? '' : 'font-style: italic; color: var(--color-text-muted);' })
+        ]),
+        rejecter ? el('div', { text: `Rejected by: ${rejecter.name}`, style: 'margin-top: 4px; color: var(--color-text-muted); font-size: 0.8125rem;' }) : null,
+        pc.reviewedAt ? el('div', { text: `Rejected at: ${formatDate(pc.reviewedAt)}`, style: 'margin-top: 2px; color: var(--color-text-muted); font-size: 0.8125rem;' }) : null
+      ].filter(Boolean));
+      reviewCard.appendChild(rejectBox);
+    }
+
     // 3. Validation / Warning Banner
     if (pc.table === 'tasks' && (proposed.title && (proposed.title.length <= 2 || proposed.title.toLowerCase() === 's'))) {
       const warningBox = el('div', { class: 'notion-warning-box' }, [
@@ -6596,9 +6639,12 @@ const Users = {
           this.rejectPendingItem({ type: 'operations_request', raw: pc.proposedData });
           return;
         }
-        const reason = prompt('Enter rejection reason:');
-        if (reason !== null) {
-          Workflow.showConfirm('Confirm Rejection', 'Are you sure you want to reject this change?', () => {
+        Workflow.showRejectionModal({
+          title: 'Confirm Rejection',
+          message: `Are you sure you want to reject "${pc.title || 'the change'}"?`,
+          placeholder: 'Enter rejection reason...',
+          required: true,
+          onConfirm: (reason) => {
             Workflow.runBlockingArchiveAction({
               title: 'Rejecting Change',
               message: `Please wait while "${pc.title || 'the change'}" is being rejected...`,
@@ -6611,8 +6657,8 @@ const Users = {
                 handleCloseAndRoute();
               }
             });
-          }, 'danger');
-        }
+          }
+        });
       });
       actions.appendChild(rejectBtn);
     } else if (isSubmitter && pc.status === 'pending') {
@@ -6639,35 +6685,47 @@ const Users = {
         }, 'danger');
       });
       actions.appendChild(withdrawBtn);
-    } else if (isSubmitter && pc.status === 'rejected') {
+    } else if (isSubmitter && isDetailRejected) {
       const editResubmitBtn = el('button', { class: 'btn btn-warning', text: 'Edit & Resubmit' });
       editResubmitBtn.addEventListener('click', () => {
         PendingChanges.editingPendingId = pc.id;
+        PendingChanges.draftData = pc.proposedData;
+        PendingChanges.preserveEditingId = true;
         this.pendingDetailId = null;
         if (window.SidePaneInstance && window.SidePaneInstance.isOpen()) {
           window.SidePaneInstance.close({ silent: true });
         }
 
+        const isNew = !pc.parentRecordId;
+        const targetId = isNew ? 'new' : pc.parentRecordId;
+
         if (pc.table === 'invoices') {
-          location.hash = `#billing/form/${pc.proposedData.id}`;
+          location.hash = `#billing/form/${targetId}`;
         } else if (pc.table === 'disbursements') {
-          location.hash = `#disbursement/form/${pc.proposedData.id}`;
+          location.hash = `#disbursement/form/${targetId}`;
         } else if (pc.table === 'transmittals') {
-          location.hash = `#transmittal/form/${pc.proposedData.id}`;
+          location.hash = `#transmittal/form/${targetId}`;
         } else if (pc.table === 'clients') {
-          location.hash = `#clients/form/${pc.proposedData.id}`;
+          location.hash = `#clients/form/${targetId}`;
         } else if (pc.table === 'workRequests') {
-          location.hash = `#operations/form/${pc.proposedData.id}`;
+          location.hash = `#operations/form/${targetId}`;
         } else if (pc.table === 'tasks') {
-          if (location.hash.includes('/')) {
-            location.hash = location.hash.split('/')[0];
+          const wrId = pc.proposedData?.workRequestId || pc.proposedData?.work_request_id || pc.proposedData?.linkedWorkRequestId || pc.workRequestId;
+          if (isNew) {
+            Workflow.showAddTaskPanel(wrId, null, pc.proposedData);
           } else {
-            App.handleRoute();
+            Workflow.showEditTaskModal(pc.parentRecordId, () => {
+              App.handleRoute();
+            }, pc.proposedData);
           }
-          PendingChanges.editingPendingId = pc.id;
-          Workflow.showEditTaskModal(pc.proposedData.id, () => {
-            App.handleRoute();
-          });
+        } else if (pc.table === 'workRequestPhaseRouting') {
+          const wrId = pc.parentRecordId || pc.proposedData?.id || pc.proposedData?.workRequestId;
+          if (wrId) {
+            location.hash = `#operations/detail/${wrId}`;
+            setTimeout(() => {
+              Workflow.transitionWorkRequest(wrId);
+            }, 100);
+          }
         }
       });
       actions.appendChild(editResubmitBtn);

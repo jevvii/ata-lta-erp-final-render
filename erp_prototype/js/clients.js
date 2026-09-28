@@ -1463,6 +1463,9 @@ const Clients = {
         return;
       }
     }
+    if (!client && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      client = this.normalizeClient ? this.normalizeClient(PendingChanges.draftData) : { ...PendingChanges.draftData };
+    }
     const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;
 
     const formContainer = el('div', { class: 'form-container' });
@@ -1480,8 +1483,28 @@ const Clients = {
       }] : []),
       { text: 'Close', class: 'btn btn-secondary', onClick: () => { closeFormPanelAndRoute('#clients?tab=archived'); }, testId: 'client-cancel' }
     ] : [
-      { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
-      { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
+      { 
+        text: (typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId)
+          ? 'Save & Resubmit'
+          : (isNew ? 'Save Client' : 'Save Changes'), 
+        class: 'btn btn-primary', 
+        type: 'submit', 
+        form: 'client-form', 
+        testId: 'client-save' 
+      },
+      { 
+        text: 'Cancel', 
+        class: 'btn btn-secondary', 
+        onClick: () => {
+          if (typeof PendingChanges !== 'undefined') {
+            PendingChanges.editingPendingId = null;
+            PendingChanges.draftData = null;
+            PendingChanges.preserveEditingId = false;
+          }
+          this.showList();
+        }, 
+        testId: 'client-cancel' 
+      }
     ];
 
     openFormPanel({
@@ -1507,6 +1530,9 @@ const Clients = {
       } catch (e) {
         if (!isAbortError(e)) console.error('Failed to load client form', e);
       }
+    }
+    if (!client && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      client = this.normalizeClient ? this.normalizeClient(PendingChanges.draftData) : { ...PendingChanges.draftData };
     }
     let userCacheEnsured = false;
     let clientCacheEnsured = false;

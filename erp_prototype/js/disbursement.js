@@ -1368,8 +1368,11 @@ const Disbursement = {
 
   async showForm(disbId = null, mode = null) {
     this.detailId = disbId;
-    const isNew = !disbId;
-    const existing = isNew ? null : await this.loadDisbursement(disbId);
+    const isNew = !disbId || disbId === 'new';
+    let existing = isNew ? null : await this.loadDisbursement(disbId);
+    if (!existing && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      existing = { ...PendingChanges.draftData };
+    }
     await this._loadPrefilledOpReq();
     const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${disbId}`;
 
@@ -1383,8 +1386,26 @@ const Disbursement = {
       fullPageRoute,
       newTabRoute: fullPageRoute,
       actions: [
-        { text: isNew ? 'Submit Expense' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'disbursement-form' },
-        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement') }
+        { 
+          text: (typeof PendingChanges !== 'undefined' && PendingChanges.editingPendingId)
+            ? 'Save & Resubmit'
+            : (isNew ? 'Submit Expense' : 'Save Changes'), 
+          class: 'btn btn-primary', 
+          type: 'submit', 
+          form: 'disbursement-form' 
+        },
+        { 
+          text: 'Cancel', 
+          class: 'btn btn-secondary', 
+          onClick: () => {
+            if (typeof PendingChanges !== 'undefined') {
+              PendingChanges.editingPendingId = null;
+              PendingChanges.draftData = null;
+              PendingChanges.preserveEditingId = false;
+            }
+            closeFormPanelAndRoute('#disbursement');
+          }
+        }
       ]
     });
   },
@@ -2244,8 +2265,11 @@ const Disbursement = {
   // ============================================================
   async renderForm(opts = {}) {
     let { hideHeader = false, existing = null } = opts;
-    if (!existing && this.detailId) {
+    if (!existing && this.detailId && this.detailId !== 'new') {
       existing = await this.loadDisbursement(this.detailId);
+    }
+    if (!existing && typeof PendingChanges !== 'undefined' && PendingChanges.draftData) {
+      existing = { ...PendingChanges.draftData };
     }
     await Promise.all([
       window.apiClient.userCache.ensure(),
@@ -3211,16 +3235,20 @@ const Disbursement = {
 
         const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject', style: 'margin-left: 8px;' });
         rejectBtn.addEventListener('click', () => {
-          Workflow.showConfirm('Reject Expense', 'Are you sure you want to reject this request?', async () => {
-            const reason = prompt('Enter rejection reason:');
-            if (!reason) return;
-            try {
-              await this.reject(d.id, reason);
-              App.handleRoute();
-            } catch (e) {
-              // error surfaced by reject()
+          Workflow.showRejectionModal({
+            title: 'Reject Expense',
+            message: 'Are you sure you want to reject this request?',
+            placeholder: 'Enter rejection reason...',
+            required: true,
+            onConfirm: async (reason) => {
+              try {
+                await this.reject(d.id, reason);
+                App.handleRoute();
+              } catch (e) {
+                // error surfaced by reject()
+              }
             }
-          }, 'danger');
+          });
         });
         actions.appendChild(rejectBtn);
         container.appendChild(actions);
