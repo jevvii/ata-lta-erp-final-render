@@ -18,6 +18,7 @@ const DisbursementsPage = lazy(() => import('@/routes/disbursements'));
 const TransmittalsPage = lazy(() => import('@/routes/transmittals'));
 const DocumentsPage = lazy(() => import('@/routes/documents'));
 const ReportsPage = lazy(() => import('@/routes/reports'));
+const ClientsPage = lazy(() => import('@/routes/clients'));
 const AdminPage = lazy(() => import('@/routes/admin'));
 const KitchenSinkPage = lazy(() => import('@/routes/_kitchen-sink'));
 
@@ -156,6 +157,16 @@ export function AppContent() {
               <RouteGuard requiredPermission="reports:view">
                 <Suspense fallback={<RouteLoadingFallback />}>
                   <ReportsPage />
+                </Suspense>
+              </RouteGuard>
+            }
+          />
+          <Route
+            path="/clients"
+            element={
+              <RouteGuard requiredPermission="clients:view">
+                <Suspense fallback={<RouteLoadingFallback />}>
+                  <ClientsPage />
                 </Suspense>
               </RouteGuard>
             }
