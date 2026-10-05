@@ -8,6 +8,7 @@ import {
   FolderOpen,
   BarChart3,
   ShieldCheck,
+  Building2,
   Palette,
 } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
@@ -69,6 +70,12 @@ const NAV_ITEMS: NavItem[] = [
     path: '/admin',
     icon: ShieldCheck,
     permission: 'users:manage',
+  },
+  {
+    name: 'Clients',
+    path: '/clients',
+    icon: Building2,
+    permission: 'clients:view',
   },
 ];
 

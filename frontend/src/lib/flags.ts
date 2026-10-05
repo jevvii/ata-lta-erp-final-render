@@ -13,6 +13,7 @@ export const ENABLED_MODULES = [
   'Admin',
   'Reports',
   'Documents',
+  'Clients',
 ] as const;
 
 export type EnabledModule = (typeof ENABLED_MODULES)[number];
