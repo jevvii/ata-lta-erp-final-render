@@ -359,7 +359,7 @@ export default function OperationsPage() {
                     className="text-xs font-semibold gap-1.5"
                     data-testid="create-template-btn"
                   >
-                    <Plus className="h-4 w-4" /> Create Work Request Template
+                    <Plus className="h-4 w-4" /> Create Template
                   </Button>
                 )}
                 {canUseRetainers && (
@@ -369,7 +369,7 @@ export default function OperationsPage() {
                     size="sm"
                     onClick={() => setIsGenerateModalOpen(true)}
                     className="text-xs gap-1.5"
-                    data-testid="generate-template-btn"
+                    data-testid="tab-generate-template-btn"
                   >
                     <Zap className="h-3.5 w-3.5 text-amber-400" /> Generate from Template
                   </Button>
@@ -377,46 +377,73 @@ export default function OperationsPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {templates.map((tpl) => (
-                <div
-                  key={tpl.id}
-                  className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
-                  data-testid={`template-card-${tpl.id}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <h4 className="font-bold text-xs text-slate-900">{tpl.name}</h4>
-                    <div className="flex items-center gap-1.5">
-                      {canEditRetainers && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingTemplate(tpl);
-                            setIsTemplateModalOpen(true);
-                          }}
-                          className="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline px-1"
-                          data-testid={`edit-template-btn-${tpl.id}`}
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <Badge variant={(tpl.entity || tpl.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact">
-                        {tpl.entity || tpl.entity_id}
+            {templates.length === 0 ? (
+              <div
+                className="rounded-lg border border-dashed border-slate-200 bg-slate-50/50 p-8 text-center text-xs text-slate-500 space-y-2"
+                data-testid="empty-templates-container"
+              >
+                <FileText className="h-8 w-8 mx-auto text-slate-400" />
+                <p className="font-semibold text-slate-700">No retainer templates created yet</p>
+                <p>Create reusable template blueprints to streamline annual or monthly service generations.</p>
+                {canEditRetainers && (
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setEditingTemplate(null);
+                      setIsTemplateModalOpen(true);
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs mt-2"
+                    data-testid="empty-create-template-btn"
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    Create First Template
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="template-cards-grid">
+                {templates.map((tpl) => (
+                  <div
+                    key={tpl.id}
+                    className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
+                    data-testid={`template-card-${tpl.id}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <h4 className="font-bold text-xs text-slate-900">{tpl.name}</h4>
+                      <div className="flex items-center gap-1.5">
+                        {canEditRetainers && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTemplate(tpl);
+                              setIsTemplateModalOpen(true);
+                            }}
+                            className="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline px-1"
+                            data-testid={`edit-template-btn-${tpl.id}`}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        <Badge variant={(tpl.entity || tpl.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact">
+                          {tpl.entity || tpl.entity_id}
+                        </Badge>
+                      </div>
+                    </div>
+                    {tpl.description && (
+                      <p className="text-xs text-slate-600 line-clamp-2">{tpl.description}</p>
+                    )}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-xs text-slate-500">
+                      <span className="capitalize">{tpl.recurrence} recurrence</span>
+                      <Badge variant="secondary" size="compact">
+                        {tpl.defaultPriority || tpl.priority} Priority
                       </Badge>
                     </div>
                   </div>
-                  {tpl.description && (
-                    <p className="text-xs text-slate-600 line-clamp-2">{tpl.description}</p>
-                  )}
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-xs text-slate-500">
-                    <span className="capitalize">{tpl.recurrence} recurrence</span>
-                    <Badge variant="secondary" size="compact">
-                      {tpl.defaultPriority || tpl.priority} Priority
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </TabsContent>
 

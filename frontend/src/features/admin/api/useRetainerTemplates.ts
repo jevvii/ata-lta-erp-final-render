@@ -73,6 +73,7 @@ export async function createRetainerTemplateAction(
       adminKeys.allTemplates(),
       adminKeys.templates(activeEntity),
       ['retainer-templates'],
+      ['operations', 'templates'],
     ],
   });
 }
@@ -100,6 +101,7 @@ export async function updateRetainerTemplateAction(
       adminKeys.templates(activeEntity),
       adminKeys.templateDetail(id),
       ['retainer-templates'],
+      ['operations', 'templates'],
     ],
   });
 }
@@ -124,6 +126,7 @@ export async function deleteRetainerTemplateAction(
       adminKeys.allTemplates(),
       adminKeys.templates(activeEntity),
       ['retainer-templates'],
+      ['operations', 'templates'],
     ],
   });
 }
