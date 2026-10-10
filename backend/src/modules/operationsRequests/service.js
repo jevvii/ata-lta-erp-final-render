@@ -3,6 +3,7 @@
  * Business logic for operations request CRUD and workflow transitions.
  */
 
+const { randomUUID } = require('crypto');
 const { supabaseAdmin } = require('../../services/supabaseClient');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
@@ -599,6 +600,67 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
         } catch (_notifErr) {
           // Notify error never fails business operation
         }
+      }
+    }
+
+    if (existing.type === 'billing' && existing.work_request_id) {
+      try {
+        const { data: existingInvoices } = await supabaseAdmin
+          .from('invoices')
+          .select('id')
+          .eq('work_request_id', existing.work_request_id)
+          .is('deleted_at', null);
+
+        if (!existingInvoices || existingInvoices.length === 0) {
+          let clientId = existing.client_id;
+          if (!clientId && existing.work_request_id) {
+            const { data: wr } = await supabaseAdmin
+              .from('work_requests')
+              .select('client_id')
+              .eq('id', existing.work_request_id)
+              .maybeSingle();
+            clientId = wr?.client_id || null;
+          }
+
+          let inserted = false;
+          let attempts = 0;
+          while (!inserted && attempts < 5) {
+            attempts++;
+            const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+            const timeSuffix = Date.now().toString().slice(-4);
+            const invoiceNum = `INV-${new Date().getFullYear()}-${randomSuffix}-${timeSuffix}`;
+            const nowIso = new Date().toISOString();
+            const today = nowIso.split('T')[0];
+
+            const { error: invErr } = await supabaseAdmin.from('invoices').insert({
+              id: randomUUID(),
+              invoice_number: invoiceNum,
+              client_id: clientId,
+              work_request_id: existing.work_request_id,
+              entity_id: targetEntityId,
+              issue_date: today,
+              due_date: today,
+              status: 'Draft',
+              subtotal: 0,
+              tax_amount: 0,
+              total: 0,
+              amount_paid: 0,
+              balance: 0,
+              notes: `Auto-generated draft upon approval of billing request ${id}`,
+              created_by: userId,
+              created_at: nowIso,
+              updated_at: nowIso,
+            });
+
+            if (!invErr) {
+              inserted = true;
+            } else if (!invErr.message?.includes('unique') && invErr.code !== '23505') {
+              throw invErr;
+            }
+          }
+        }
+      } catch (_invErr) {
+        // Do not block fulfillment if invoice auto-drafting encounters non-fatal schema mismatch
       }
     }
 

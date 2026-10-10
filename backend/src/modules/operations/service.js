@@ -25,11 +25,14 @@ const isValidUUID = (v) =>
   typeof v === 'string' &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
+const isManager = (user) =>
+  user?.role === 'Manager' && user?.role !== 'Admin';
+
 const VALID_TRANSITIONS = {
   Draft: ['Pre-processing', 'In Progress', 'Processing', 'Cancelled'],
   'Pre-processing': ['Processing', 'In Progress', 'For Review', 'Cancelled'],
   'In Progress': ['For Review', 'Completed', 'Processing', 'Cancelled'],
-  Processing: ['Completed', 'Billing', 'Disbursement', 'For Review', 'Cancelled'],
+  Processing: ['Completed', 'Billing', 'For Billing', 'Disbursement', 'For Review', 'Cancelled'],
   'For Review': ['Completed', 'In Progress', 'Processing', 'Cancelled'],
   Completed: ['Draft', 'Processing'],
   Cancelled: ['Draft', 'In Progress'],
@@ -76,6 +79,7 @@ const toApiWorkRequest = (row, entityCode) => ({
   title: row.title,
   description: row.description || null,
   clientId: row.client_id,
+  clientName: row.client_name || row.clients?.name || null,
   status: row.status,
   phase: row.phase || null,
   onHold: row.on_hold ?? false,
@@ -405,7 +409,7 @@ const listWorkRequests = async ({
 
   let query = supabaseAdmin
     .from('work_requests')
-    .select('*')
+    .select('*, clients(name)')
     .is('deleted_at', null)
     .order(sortField, { ascending: sortAsc });
 
@@ -550,12 +554,35 @@ const validateProjectTeamRoles = async ({ assignedTo, coAssignees }) => {
   }
 
   if (coAssignees && Array.isArray(coAssignees) && coAssignees.length > 0) {
-    const { data: matchedUsers } = await supabaseAdmin
-      .from('users')
-      .select('id, name, role')
-      .in('name', coAssignees);
+    const ids = coAssignees.filter(isValidUUID);
+    const names = coAssignees.filter((v) => typeof v === 'string' && !isValidUUID(v));
+    let matchedUsers = [];
+    if (ids.length > 0) {
+      const { data: usersById } = await supabaseAdmin
+        .from('users')
+        .select('id, name, role, user_departments(departments(name))')
+        .in('id', ids);
+      if (usersById) matchedUsers = matchedUsers.concat(usersById);
+    }
+    if (names.length > 0) {
+      const { data: usersByName } = await supabaseAdmin
+        .from('users')
+        .select('id, name, role, user_departments(departments(name))')
+        .in('name', names);
+      if (usersByName) matchedUsers = matchedUsers.concat(usersByName);
+    }
     const invalidMember = (matchedUsers || []).find((u) => {
       const r = (u.role || '').toLowerCase();
+      let depts = [];
+      if (Array.isArray(u.user_departments)) {
+        depts = u.user_departments
+          .map((ud) => String(ud.departments?.name || '').toLowerCase())
+          .filter(Boolean);
+      } else if (Array.isArray(u.departments)) {
+        depts = u.departments.map((d) => String(d).toLowerCase());
+      }
+      const isOps = depts.includes('operations');
+      if (isOps) return false;
       return r === 'admin' || r === 'manager';
     });
     if (invalidMember) {
@@ -1062,10 +1089,8 @@ const createWorkRequestGraph = async ({ entityId, data, user }) => {
       tasks: apiTasks,
     };
 
-    const isManager =
-      user?.role === 'Manager' ||
-      (user?.departments || []).includes('Management');
-    const needsApproval = isManager || Boolean(data.requiresApproval);
+    const userIsManager = isManager(user);
+    const needsApproval = userIsManager || Boolean(data.requiresApproval);
 
     if (needsApproval) {
       try {
@@ -1210,10 +1235,8 @@ const createWorkRequest = async ({ entityId, data, user }) => {
         });
       }
 
-      const isManager =
-        user?.role === 'Manager' ||
-        (user?.departments || []).includes('Management');
-      const needsApproval = isManager || Boolean(data.requiresApproval);
+      const userIsManager = isManager(user);
+      const needsApproval = userIsManager || Boolean(data.requiresApproval);
 
       if (needsApproval) {
         try {
@@ -1290,7 +1313,7 @@ const createWorkRequest = async ({ entityId, data, user }) => {
 const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) => {
   let query = supabaseAdmin
     .from('work_requests')
-    .select('*')
+    .select('*, clients(name)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -1307,7 +1330,7 @@ const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) 
   if (!data && entityId && entityId !== 'ALL') {
     const fallbackRes = await supabaseAdmin
       .from('work_requests')
-      .select('*')
+      .select('*, clients(name)')
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
@@ -1362,6 +1385,27 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Work request not found' });
   }
 
+  if (existing.status === 'Completed') {
+    const isReopen = data.status === 'Draft' || data.status === 'Processing';
+    if (!isReopen) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Completed Work Requests are locked and cannot be modified',
+      });
+    }
+    const mutableFields = ['title', 'description', 'clientId', 'priority', 'dueDate', 'assignedTo', 'coAssignees', 'archived'];
+    const modifiedFields = mutableFields.filter((f) => data[f] !== undefined);
+    if (modifiedFields.length > 0) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: `Cannot modify work request fields (${modifiedFields.join(', ')}) while reopening a Completed request. Reopen status must be submitted independently.`,
+        code: 'COMPLETED_WR_MODIFICATION_DISALLOWED',
+      });
+    }
+  }
+
   if (data.status && data.status !== existing.status) {
     const isAdmin = Boolean(
       user &&
@@ -1393,7 +1437,10 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
 
   if (data.archived !== undefined) updates.archived = data.archived;
   if (data.assignedTo !== undefined) updates.assigned_to = data.assignedTo;
-  if (data.coAssignees !== undefined) updates.co_assignees = data.coAssignees;
+  if (data.coAssignees !== undefined) {
+    const rawCo = Array.isArray(data.coAssignees) ? data.coAssignees : [];
+    updates.co_assignees = rawCo.filter(isValidUUID);
+  }
 
   if (data.assignedTo !== undefined || data.coAssignees !== undefined) {
     await validateProjectTeamRoles({
@@ -1415,6 +1462,15 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
     .update(updates)
     .eq('id', id)
     .is('deleted_at', null);
+
+  if (existing.status !== 'Completed') {
+    // Prevent overwriting a completed request if completed concurrently
+    query = query.neq('status', 'Completed');
+  } else {
+    // If reopening, ensure request is still Completed
+    query = query.eq('status', 'Completed');
+  }
+
   if (expectedVersion !== null) {
     query = query.eq('version', expectedVersion);
   }
@@ -1428,13 +1484,11 @@ const updateWorkRequest = async ({ id, entityId, data, user }) => {
   }
 
   if (!updatedRows || updatedRows.length === 0) {
-    if (expectedVersion !== null) {
-      throw concurrencyConflict();
-    }
     throw new AppError({
-      statusCode: 404,
-      title: 'Not Found',
-      detail: 'Work request not found or not updated',
+      statusCode: 409,
+      title: 'Conflict',
+      detail: 'Work request was modified or completed concurrently. Please reload.',
+      code: 'CONCURRENT_MODIFICATION',
     });
   }
 
@@ -1992,9 +2046,66 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     }
   }
 
-  let assigneeName = data.assigneeName ?? existing.assigneeName;
-  const assigneeId = data.assigneeId ?? existing.assigneeId;
-  if ((!assigneeName || isValidUUID(assigneeName)) && assigneeId) {
+  // Task-level Predecessor Check (Issue 19b, B2.3, B2.4):
+  // Cannot complete a task if any of its declared predecessors are not Completed
+  const candidatePreds =
+    data.predecessors !== undefined
+      ? Array.isArray(data.predecessors)
+        ? data.predecessors
+        : []
+      : Array.isArray(existing.predecessors)
+        ? existing.predecessors
+        : [];
+  const validPredIds = candidatePreds.filter(isValidUUID);
+
+  if (targetStatus === 'Completed' && validPredIds.length > 0) {
+    let predQuery = supabaseAdmin
+      .from('tasks')
+      .select('id, title, status')
+      .in('id', validPredIds)
+      .is('deleted_at', null);
+
+    if (effectiveWrId) {
+      predQuery = predQuery.eq('work_request_id', effectiveWrId);
+    }
+
+    const { data: predTasks, error: predError } = await predQuery;
+    if (predError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: `Failed to verify prerequisite tasks: ${predError.message || predError}`,
+      });
+    }
+
+    const foundIds = new Set((predTasks || []).map((p) => p.id));
+    const missingPredIds = validPredIds.filter((pId) => !foundIds.has(pId));
+    if (missingPredIds.length > 0) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Invalid Dependencies',
+        detail: `Prerequisite task(s) do not exist or belong to another work request: ${missingPredIds.join(', ')}`,
+        code: 'TASK_PREDECESSORS_NOT_FOUND',
+      });
+    }
+
+    const incompletePreds = (predTasks || []).filter((p) => p.status !== 'Completed');
+    if (incompletePreds.length > 0) {
+      const predNames = incompletePreds.map((p) => `"${p.title || p.id}" (${p.status})`).join(', ');
+      throw new AppError({
+        statusCode: 400,
+        title: 'Unfulfilled Dependencies',
+        detail: `Cannot complete task: upstream prerequisite task(s) are incomplete: ${predNames}`,
+        code: 'TASK_PREDECESSORS_INCOMPLETE',
+      });
+    }
+  }
+
+  let assigneeName = data.assigneeName !== undefined ? data.assigneeName : existing.assigneeName;
+  const assigneeId = data.assigneeId !== undefined ? data.assigneeId : existing.assigneeId;
+  if (assigneeId === null) {
+    assigneeName = null;
+  } else if ((!assigneeName || isValidUUID(assigneeName)) && assigneeId) {
     assigneeName = await resolveAssigneeName(assigneeId, assigneeName);
   }
 
@@ -2026,12 +2137,43 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     updates.version = (existing.version || 1) + 1;
   }
 
+  // B2.5: Immediately prior to writing task completion, re-verify prerequisite tasks remain in Completed status
+  if (targetStatus === 'Completed' && validPredIds.length > 0) {
+    let recheckQuery = supabaseAdmin
+      .from('tasks')
+      .select('id, status')
+      .in('id', validPredIds)
+      .is('deleted_at', null);
+    if (effectiveWrId) {
+      recheckQuery = recheckQuery.eq('work_request_id', effectiveWrId);
+    }
+    const { data: recheckTasks, error: recheckError } = await recheckQuery;
+    if (recheckError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: `Failed to verify prerequisite tasks: ${recheckError.message || recheckError}`,
+      });
+    }
+    if (!recheckTasks || recheckTasks.length !== validPredIds.length || recheckTasks.some((t) => t.status !== 'Completed')) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Unfulfilled Dependencies',
+        detail: 'Cannot complete task: upstream prerequisite task(s) are incomplete',
+        code: 'TASK_PREDECESSORS_INCOMPLETE',
+      });
+    }
+  }
+
   let query = supabaseAdmin
     .from('tasks')
     .update(updates)
     .eq('id', taskId);
   if (effectiveWrId) {
     query = query.eq('work_request_id', effectiveWrId);
+  }
+  if (existing.status !== 'Completed' && targetStatus === 'Completed') {
+    query = query.neq('status', 'Completed');
   }
   if (expectedVersion !== null) {
     query = query.eq('version', expectedVersion);
@@ -2045,8 +2187,18 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     });
   }
 
-  if (expectedVersion !== null && (!updatedRows || updatedRows.length === 0)) {
-    throw concurrencyConflict();
+  if (!updatedRows || updatedRows.length === 0) {
+    if (expectedVersion !== null) {
+      throw concurrencyConflict();
+    }
+    if (existing.status !== 'Completed' && targetStatus === 'Completed') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: 'Task was modified or completed concurrently. Please reload.',
+        code: 'CONCURRENT_MODIFICATION',
+      });
+    }
   }
 
   // Dual-write assignees to task_assignees join table if assignees provided
@@ -2064,6 +2216,19 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
         created_at: now,
       }));
       await supabaseAdmin.from('task_assignees').insert(taInserts);
+    }
+  } else if (assigneeId === null && (existing.assigneeId || existing.assignee_id)) {
+    const { error: delError } = await supabaseAdmin
+      .from('task_assignees')
+      .delete()
+      .eq('task_id', taskId)
+      .eq('user_id', existing.assigneeId || existing.assignee_id);
+    if (delError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: `Failed to clear assignee from task_assignees: ${delError.message || delError}`,
+      });
     }
   }
 
@@ -3395,6 +3560,9 @@ module.exports = {
   qaReviewWorkRequest,
   rerouteWorkRequest,
   isUserAssignedToTask,
+  isManager,
+  validateProjectTeamRoles,
+  VALID_TRANSITIONS,
   PHASE_SEQUENCE,
   PHASE_STATUS_MAP,
 };
