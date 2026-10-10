@@ -362,17 +362,100 @@ export function WorkRequestModal({
             }
           }
 
-          // 2. Create or update tasks
+          // 2. Maintain ID map for dependency resolution (F4.1)
+          const tempToRealIdMap = new Map<string, string>();
+          for (const ext of existingTasks) {
+            tempToRealIdMap.set(ext.id, ext.id);
+          }
+          for (const t of tasks) {
+            if (t.id && existingTasks.some((ext) => ext.id === t.id)) {
+              tempToRealIdMap.set(t.id, t.id);
+              if (t.localId) {
+                tempToRealIdMap.set(t.localId, t.id);
+              }
+            }
+          }
+
+          const resolvePredecessors = (
+            dependsOn: string | string[] | null | undefined
+          ): string[] => {
+            if (!dependsOn) return [];
+            const rawList = Array.isArray(dependsOn) ? dependsOn : [dependsOn];
+            return rawList
+              .map((id) => tempToRealIdMap.get(id) || id)
+              .filter((id) => Boolean(id) && !id.startsWith('tmp-'));
+          };
+
+          // 3. First pass: Create all new tasks so they obtain real server UUIDs
+          const newlyCreatedTasks: Array<{
+            realId: string;
+            task: TaskItemData;
+            assignees: string[];
+            initialPredecessors: string[];
+          }> = [];
+
           for (const t of tasks) {
             if (!t.title.trim()) continue;
-            const assignees = Array.from(
-              new Set([
-                ...(t.assigneeId ? [t.assigneeId] : []),
-                ...t.coAssignees,
-              ])
-            ).filter(Boolean);
+            const isExisting = Boolean(t.id && existingTasks.some((ext) => ext.id === t.id));
+            if (!isExisting) {
+              const assignees = Array.from(
+                new Set([
+                  ...(t.assigneeId ? [t.assigneeId] : []),
+                  ...t.coAssignees,
+                ])
+              ).filter(Boolean);
 
-            if (t.id && existingTasks.some((ext) => ext.id === t.id)) {
+              const initialPredecessors = resolvePredecessors(t.dependsOn);
+
+              const createdTask = await createTask({
+                workRequestId: workRequest.id,
+                data: {
+                  title: t.title.trim(),
+                  description: t.description?.trim() || null,
+                  phase: t.phase,
+                  assigneeId: t.assigneeId || null,
+                  assignees,
+                  predecessors: initialPredecessors,
+                  checklist: t.checklist
+                    ?.filter((c) => c.text.trim())
+                    .map((c) => ({
+                      text: c.text.trim(),
+                      completed: c.completed,
+                      category: c.category,
+                      periodYear: c.periodYear ? String(c.periodYear) : null,
+                    })),
+                },
+              });
+
+              const returnedId =
+                (createdTask as { id?: string })?.id ||
+                (createdTask as { data?: { id?: string } })?.data?.id;
+
+              if (returnedId) {
+                if (t.localId) tempToRealIdMap.set(t.localId, returnedId);
+                if (t.id) tempToRealIdMap.set(t.id, returnedId);
+                newlyCreatedTasks.push({
+                  realId: returnedId,
+                  task: t,
+                  assignees,
+                  initialPredecessors,
+                });
+              }
+            }
+          }
+
+          // 4. Second pass: Update existing tasks with resolved predecessors
+          for (const t of tasks) {
+            if (!t.title.trim()) continue;
+            const isExisting = Boolean(t.id && existingTasks.some((ext) => ext.id === t.id));
+            if (isExisting && t.id) {
+              const assignees = Array.from(
+                new Set([
+                  ...(t.assigneeId ? [t.assigneeId] : []),
+                  ...t.coAssignees,
+                ])
+              ).filter(Boolean);
+
               await updateTask({
                 workRequestId: workRequest.id,
                 taskId: t.id,
@@ -381,6 +464,7 @@ export function WorkRequestModal({
                   description: t.description?.trim() || null,
                   assigneeId: t.assigneeId || null,
                   assignees,
+                  predecessors: resolvePredecessors(t.dependsOn),
                   checklist: t.checklist?.map((c) => ({
                     id: c.id,
                     text: c.text,
@@ -391,23 +475,34 @@ export function WorkRequestModal({
                   })),
                 },
               });
-            } else {
-              await createTask({
+            }
+          }
+
+          // 5. Update dependencies for newly created tasks if predecessors were resolved after creation
+          for (const item of newlyCreatedTasks) {
+            const finalPredecessors = resolvePredecessors(item.task.dependsOn);
+            const needsUpdate =
+              finalPredecessors.length !== item.initialPredecessors.length ||
+              finalPredecessors.some((p, idx) => p !== item.initialPredecessors[idx]);
+
+            if (needsUpdate) {
+              await updateTask({
                 workRequestId: workRequest.id,
+                taskId: item.realId,
                 data: {
-                  title: t.title.trim(),
-                  description: t.description?.trim() || null,
-                  phase: t.phase,
-                  assigneeId: t.assigneeId || null,
-                  assignees,
-                  checklist: t.checklist
-                    ?.filter((c) => c.text.trim())
-                    .map((c) => ({
-                      text: c.text.trim(),
-                      completed: c.completed,
-                      category: c.category,
-                      periodYear: c.periodYear ? String(c.periodYear) : null,
-                    })),
+                  title: item.task.title.trim(),
+                  description: item.task.description?.trim() || null,
+                  assigneeId: item.task.assigneeId || null,
+                  assignees: item.assignees,
+                  predecessors: finalPredecessors,
+                  checklist: item.task.checklist?.map((c) => ({
+                    id: c.id,
+                    text: c.text,
+                    completed: c.completed,
+                    category: c.category,
+                    periodYear: c.periodYear ? String(c.periodYear) : null,
+                    dependsOn: c.dependsOn || null,
+                  })),
                 },
               });
             }

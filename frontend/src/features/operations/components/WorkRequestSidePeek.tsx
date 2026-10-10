@@ -443,7 +443,7 @@ export function WorkRequestSidePeek({
                     Board
                   </Button>
                 )}
-                {canEdit && onEdit && workRequest && (
+                {canEdit && onEdit && workRequest && workRequest.status !== 'Completed' && workRequest.phase !== 'completion' && (
                   <Button
                     type="button"
                     variant="outline"

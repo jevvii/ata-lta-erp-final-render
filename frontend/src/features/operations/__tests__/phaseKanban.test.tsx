@@ -172,6 +172,27 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
   it('disables phase advance actions with tooltip when gate prerequisites are not met', async () => {
     const { wrapper } = createTestHarness();
 
+    // Ensure session uses a Manager (non-admin) role so manager actions are rendered genuinely
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-mgr-1',
+        email: 'manager@ata-lta.ph',
+        name: 'Manager Test',
+        role: 'Manager',
+        departments: ['Operations'],
+        entities: ['ALL'],
+      },
+      permissions: [
+        'workflow:view',
+        'workflow:edit',
+        'workflow:phase_transition',
+        'workflow:transition_request',
+        'workflow:qa_review',
+        'workflow:task_add',
+      ],
+      activeEntity: 'ALL',
+    });
+
     vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes('/operations/work-requests?')) {
@@ -201,6 +222,77 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
     // Admin advance button is disabled
     const adminBtn = screen.getByTestId('admin-advance-btn');
     expect(adminBtn).toBeDisabled();
+  });
+
+  it('suppresses manager notify-admin button for Admin users (Issue 16)', async () => {
+    const { wrapper } = createTestHarness();
+
+    // Default beforeEach user is Admin (role: 'Admin')
+    vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/operations/work-requests?')) {
+        return new Response(JSON.stringify({ data: mockWorkRequests }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101/tasks')) {
+        return new Response(JSON.stringify({ data: mockPreTasks }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101')) {
+        return new Response(JSON.stringify({ data: mockWorkRequests[0] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+    await screen.findByTestId('kanban-phase-column-pre_processing');
+
+    // Admin user should NOT see manager-notify-admin-btn
+    expect(screen.queryByTestId('manager-notify-admin-btn')).not.toBeInTheDocument();
+
+    // Admin user should see admin-advance-btn
+    expect(screen.getByTestId('admin-advance-btn')).toBeInTheDocument();
+  });
+
+  it('deletes task from board with confirmation prompt calling deleteTask (Issue 15)', async () => {
+    const { wrapper } = createTestHarness();
+
+    let deletedTaskId: string | null = null;
+    vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/operations/work-requests?')) {
+        return new Response(JSON.stringify({ data: mockWorkRequests }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101/tasks/task-1') && init?.method === 'DELETE') {
+        deletedTaskId = 'task-1';
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes('/operations/work-requests/wr-101/tasks')) {
+        return new Response(JSON.stringify({ data: mockPreTasks }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101')) {
+        return new Response(JSON.stringify({ data: mockWorkRequests[0] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+    await screen.findByTestId('kanban-task-card-task-1');
+
+    // Open task context menu
+    const menuBtn = screen.getByTestId('task-menu-btn-task-1');
+    fireEvent.click(menuBtn);
+
+    // Click delete task option
+    const deleteBtn = screen.getByTestId('delete-task-btn-task-1');
+    fireEvent.click(deleteBtn);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(deletedTaskId).toBe('task-1');
+    });
   });
 
   it('strictly blocks cross-phase drag-and-drop in the UI', async () => {

@@ -49,6 +49,7 @@ export interface InvoiceListProps {
 const STATUS_TABS: Array<{ label: string; value: InvoiceStatus | 'All' }> = [
   { label: 'All', value: 'All' },
   { label: 'Draft', value: 'Draft' },
+  { label: 'Approved', value: 'Approved' },
   { label: 'Pending', value: 'Pending' },
   { label: 'Sent', value: 'Sent' },
   { label: 'Partially Paid', value: 'Partially Paid' },

@@ -491,6 +491,7 @@ export interface CreateTaskInput {
   }>;
   coAssignees?: string[] | null;
   requiredLinkType?: string | null;
+  predecessors?: string[] | null;
 }
 
 export interface UpdateTaskInput {
@@ -501,6 +502,7 @@ export interface UpdateTaskInput {
   assigneeId?: string | null;
   assigneeName?: string | null;
   assignees?: string[];
+  predecessors?: string[] | null;
   dueDate?: string | null;
   displayOrder?: number;
   expectedVersion?: number;

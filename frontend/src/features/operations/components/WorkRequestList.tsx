@@ -780,7 +780,9 @@ export function WorkRequestList({
                     {/* Client & Entity */}
                     <TableCell className="text-xs text-slate-700">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium">{wr.clientName || '—'}</span>
+                        <span className="font-medium">
+                          {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
+                        </span>
                         <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
                           {wr.entity}
                         </Badge>
@@ -931,7 +933,7 @@ export function WorkRequestList({
                         </Button>
 
                         {/* Edit */}
-                        {canEdit && onEdit && (
+                        {canEdit && onEdit && wr.status !== 'Completed' && wr.phase !== 'completion' && (
                           <Button
                             type="button"
                             variant="ghost"
@@ -1033,7 +1035,9 @@ export function WorkRequestList({
                     </h4>
                     <div className="flex items-center gap-1.5 text-xs text-slate-500">
                       <Building className="h-3 w-3" />
-                      <span className="truncate max-w-40">{wr.clientName || '—'}</span>
+                      <span className="truncate max-w-40">
+                        {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
+                      </span>
                       <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
                         {wr.entity}
                       </Badge>
@@ -1107,7 +1111,7 @@ export function WorkRequestList({
                   </div>
 
                   <div className="flex items-center gap-1">
-                    {onEdit && canEdit && (
+                    {onEdit && canEdit && wr.status !== 'Completed' && wr.phase !== 'completion' && (
                       <Button
                         type="button"
                         variant="ghost"

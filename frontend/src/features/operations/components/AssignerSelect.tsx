@@ -72,7 +72,10 @@ export function AssignerSelect({
   const handleAssignAll = () => {
     const allEligibleIds = availableStaff
       .filter((m) => {
-        if (managerOnlyPrimary && (m.role === 'Manager' || m.role === 'Admin')) {
+        if (m.role === 'Admin') {
+          return false;
+        }
+        if (managerOnlyPrimary && m.role === 'Manager' && !(m.departments && m.departments.includes('Operations'))) {
           return false;
         }
         if (primaryAssigneeId && m.id === primaryAssigneeId) {

@@ -13,6 +13,8 @@ import {
   Edit3,
   Plus,
   X,
+  MoreVertical,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -24,6 +26,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 import { PresenceAvatars } from '@/components/common/PresenceAvatars';
 import {
   useWorkRequests,
@@ -38,8 +46,10 @@ import { WorkRequestModal } from './WorkRequestModal';
 import { TaskDetailModal } from './TaskDetailModal';
 import { operationsKeys } from '../api/queryKeys';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
+import { useSearchParams, useInRouterContext } from 'react-router-dom';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
+import { isUserAdmin } from '../lib/taskScope';
 import type {
   Phase,
   CreatablePhase,
@@ -60,13 +70,22 @@ export interface PhaseKanbanBoardProps {
   onEditWorkRequest?: (wr: WorkRequest) => void;
 }
 
-export function PhaseKanbanBoard({
+interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
+  searchParams: URLSearchParams;
+  setSearchParams: (setter: (prev: URLSearchParams) => URLSearchParams) => void;
+}
+
+function PhaseKanbanBoardInner({
   initialWorkRequestId,
   onEditWorkRequest,
-}: PhaseKanbanBoardProps) {
+  searchParams,
+  setSearchParams,
+}: PhaseKanbanBoardInnerProps) {
   // Session & RBAC
   const permissions = useSessionStore((state) => state.permissions);
   const activeEntity = useSessionStore((state) => state.activeEntity);
+  const currentUser = useSessionStore((state) => state.user);
+  const isAdmin = isUserAdmin(currentUser);
   const canAdvance = hasPermission(permissions, 'workflow:phase_transition');
   const canRequestTransition =
     hasPermission(permissions, 'workflow:transition_request') ||
@@ -84,16 +103,42 @@ export function PhaseKanbanBoard({
   }, [rawRequests]);
 
   const [selectedWrId, setSelectedWrId] = useState<string>(() => {
-    if (initialWorkRequestId) return initialWorkRequestId;
-    return '';
+    return searchParams.get('wrId') || initialWorkRequestId || '';
   });
 
-  // Keep selected ID in sync if empty
+  const urlWrId = searchParams.get('wrId');
   React.useEffect(() => {
-    if (!selectedWrId && workRequests.length > 0 && workRequests[0]) {
-      setSelectedWrId(workRequests[0].id);
+    if (urlWrId && urlWrId !== selectedWrId && workRequests.some((w) => w.id === urlWrId)) {
+      setSelectedWrId(urlWrId);
     }
-  }, [selectedWrId, workRequests]);
+  }, [urlWrId, selectedWrId, workRequests]);
+
+  // Keep selected ID in sync if empty or invalid for active entity (e.g. after entity switch)
+  React.useEffect(() => {
+    if (workRequests.length > 0) {
+      const exists = workRequests.some((w) => w.id === selectedWrId);
+      if (!selectedWrId || !exists) {
+        const fallbackId = workRequests[0]?.id || '';
+        if (fallbackId) {
+          setSelectedWrId(fallbackId);
+          setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            next.set('wrId', fallbackId);
+            return next;
+          });
+        }
+      }
+    }
+  }, [selectedWrId, workRequests, setSearchParams]);
+
+  const handleSelectWr = (id: string) => {
+    setSelectedWrId(id);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('wrId', id);
+      return next;
+    });
+  };
 
   const effectiveWrId = selectedWrId || (workRequests[0]?.id ?? '');
 
@@ -106,10 +151,30 @@ export function PhaseKanbanBoard({
   // Mutations
   const { advancePhase, requestTransition } = usePhaseTransitions(effectiveWrId);
   const { submitQaReview } = useQaReview(effectiveWrId);
-  const { createTask } = useTaskMutations(effectiveWrId);
+  const { createTask, deleteTask } = useTaskMutations(effectiveWrId);
   const canAddTask =
     hasPermission(permissions, 'workflow:task_add') ||
     hasPermission(permissions, 'workflow:edit');
+
+  const handleDeleteTask = async (taskId: string, taskTitle?: string) => {
+    const isConfirmed =
+      typeof window !== 'undefined' && typeof window.confirm === 'function'
+        ? window.confirm(
+            `Are you sure you want to delete "${taskTitle || 'this task'}"? This action cannot be undone.`
+          )
+        : true;
+
+    if (!isConfirmed) return;
+
+    try {
+      await deleteTask(taskId);
+      if (selectedTask?.id === taskId) {
+        setSelectedTask(null);
+      }
+    } catch (err) {
+      console.error('Failed to delete task:', err);
+    }
+  };
 
   // Quick-Add Task State (UAT2-10)
   const [quickAddPhase, setQuickAddPhase] = useState<Phase | null>(null);
@@ -315,7 +380,7 @@ export function PhaseKanbanBoard({
             <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
               Select Work Request
             </label>
-            <Select value={effectiveWrId} onValueChange={setSelectedWrId}>
+            <Select value={effectiveWrId} onValueChange={handleSelectWr}>
               <SelectTrigger
                 className="h-9 text-xs bg-slate-50 font-medium"
                 data-testid="kanban-wr-select"
@@ -347,7 +412,7 @@ export function PhaseKanbanBoard({
                 }
                 size="compact"
               >
-                {activeWr.priority} Priority
+                {activeWr.priority.endsWith('Priority') ? activeWr.priority : `${activeWr.priority} Priority`}
               </Badge>
               {(() => {
                 const phaseInfo = getPhaseBadgeInfo(activeWr.phase);
@@ -372,6 +437,12 @@ export function PhaseKanbanBoard({
                       <StatusIcon className="w-3 h-3 shrink-0" />
                       <span>{statusInfo.label}</span>
                     </span>
+                    {activeWr.dueDate && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                        <Calendar className="w-3 h-3 text-slate-500" />
+                        <span>Due: {new Date(activeWr.dueDate).toLocaleDateString()}</span>
+                      </span>
+                    )}
                   </>
                 );
               })()}
@@ -633,13 +704,64 @@ export function PhaseKanbanBoard({
                             {task.title}
                           </span>
 
-                          <Badge
-                            variant={task.status === 'Completed' ? 'success' : 'secondary'}
-                            size="compact"
-                            className="text-[10px]"
-                          >
-                            {task.status}
-                          </Badge>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Badge
+                              variant={task.status === 'Completed' ? 'success' : 'secondary'}
+                              size="compact"
+                              className="text-[10px]"
+                            >
+                              {task.status}
+                            </Badge>
+
+                            {(canEdit || isAdmin) && (
+                              <div className="flex items-center gap-0.5">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="xs"
+                                  className="h-5 w-5 p-0 text-slate-400 hover:text-red-600 focus:outline-none"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteTask(task.id, task.title);
+                                  }}
+                                  data-testid={`delete-task-btn-${task.id}`}
+                                  title="Delete Task"
+                                  aria-label="Delete Task"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="xs"
+                                      className="h-5 w-5 p-0 text-slate-400 hover:text-slate-600 focus:outline-none"
+                                      onClick={(e) => e.stopPropagation()}
+                                      data-testid={`task-menu-btn-${task.id}`}
+                                      aria-label="Task options"
+                                    >
+                                      <MoreVertical className="h-3.5 w-3.5" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                    <DropdownMenuItem
+                                      className="text-xs text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer gap-1.5"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteTask(task.id, task.title);
+                                      }}
+                                      data-testid={`menu-delete-task-btn-${task.id}`}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                      Delete Task
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {task.description && (
@@ -693,6 +815,7 @@ export function PhaseKanbanBoard({
                                   type="button"
                                   size="xs"
                                   variant={task.qaStatus === 'passed' ? 'default' : 'outline'}
+                                  disabled={task.qaStatus === 'passed'}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     handleQaReview(task.id, 'passed');
@@ -737,7 +860,7 @@ export function PhaseKanbanBoard({
                   {col.id === 'pre_processing' && (
                     <div className="space-y-1.5">
                       {/* Manager Action: Notify Admin */}
-                      {canRequestTransition && (
+                      {canRequestTransition && !isAdmin && (
                         <Button
                           type="button"
                           variant="outline"
@@ -776,7 +899,7 @@ export function PhaseKanbanBoard({
                   {/* Processing -> Quality Assurance */}
                   {col.id === 'processing' && (
                     <div className="space-y-1.5">
-                      {canRequestTransition && (
+                      {canRequestTransition && !isAdmin && (
                         <Button
                           type="button"
                           variant="outline"
@@ -897,4 +1020,24 @@ export function PhaseKanbanBoard({
       )}
     </div>
   );
+}
+
+function PhaseKanbanBoardWithRouter(props: PhaseKanbanBoardProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  return <PhaseKanbanBoardInner {...props} searchParams={searchParams} setSearchParams={setSearchParams} />;
+}
+
+function PhaseKanbanBoardWithoutRouter(props: PhaseKanbanBoardProps) {
+  const [searchParams, setSearchParams] = useState<URLSearchParams>(
+    () => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
+  );
+  return <PhaseKanbanBoardInner {...props} searchParams={searchParams} setSearchParams={setSearchParams} />;
+}
+
+export function PhaseKanbanBoard(props: PhaseKanbanBoardProps) {
+  const inRouter = useInRouterContext();
+  if (inRouter) {
+    return <PhaseKanbanBoardWithRouter {...props} />;
+  }
+  return <PhaseKanbanBoardWithoutRouter {...props} />;
 }

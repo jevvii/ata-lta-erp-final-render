@@ -92,6 +92,7 @@ export function TaskDetailModal({
   // Key state to reset select dropdowns after an action
   const [addSelectKey, setAddSelectKey] = useState(0);
   const [reassignSelectKey, setReassignSelectKey] = useState(0);
+  const [newChecklistText, setNewChecklistText] = useState('');
 
   // Time entries for this task
   const { data: timeEntries = [], isLoading: isLoadingTime } = useTimeEntriesList(
@@ -191,6 +192,20 @@ export function TaskDetailModal({
     return [];
   }, [rawTeam]);
 
+  const allowedWrTeamIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (workRequest?.assignedTo) ids.add(workRequest.assignedTo);
+    if (Array.isArray(workRequest?.coAssignees)) {
+      workRequest.coAssignees.forEach((id) => ids.add(id));
+    }
+    return ids;
+  }, [workRequest]);
+
+  const scopedTeamList = useMemo(() => {
+    if (allowedWrTeamIds.size === 0) return teamList;
+    return teamList.filter((m) => allowedWrTeamIds.has(m.id));
+  }, [teamList, allowedWrTeamIds]);
+
   const currentAssigneeIds = useMemo(() => {
     const ids = new Set<string>();
     if (task?.assigneeId) ids.add(task.assigneeId);
@@ -207,15 +222,15 @@ export function TaskDetailModal({
   }, [task]);
 
   const availableTeamMembers = useMemo(() => {
-    return teamList.filter((m) => {
+    return scopedTeamList.filter((m) => {
       if (!m || !m.id || currentAssigneeIds.has(m.id)) return false;
       if (m.role === 'Admin') return false;
-      if (m.role === 'Manager' && !(m.departments && m.departments.includes('Operations'))) {
+      if (m.role === 'Manager' && !allowedWrTeamIds.has(m.id) && !(m.departments && m.departments.includes('Operations'))) {
         return false;
       }
       return true;
     });
-  }, [teamList, currentAssigneeIds]);
+  }, [scopedTeamList, currentAssigneeIds, allowedWrTeamIds]);
 
   // Comprehensive assigned team members (lead + all co-assignees)
   const assignedTeamMembers = useMemo(() => {
@@ -460,6 +475,61 @@ export function TaskDetailModal({
     });
   };
 
+  const handleToggleChecklist = async (itemId: string, completed: boolean) => {
+    if (!task || !task.workRequestId) return;
+    const currentList = task.checklist || [];
+    const updated = currentList.map((c) =>
+      c.id === itemId ? { ...c, completed } : c
+    );
+    await updateTask({
+      workRequestId: task.workRequestId,
+      taskId: task.id,
+      data: {
+        checklist: updated.map((c) => ({
+          id: c.id,
+          text: c.text,
+          completed: c.completed,
+          category: c.category,
+          periodYear: c.periodYear ? String(c.periodYear) : null,
+          dependsOn: c.dependsOn || null,
+        })),
+      },
+    });
+  };
+
+  const handleAddChecklistItem = async () => {
+    if (!newChecklistText.trim() || !task || !task.workRequestId) return;
+    const currentList = task.checklist || [];
+    const generateChecklistId = (): string => {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        const v = c === 'x' ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      });
+    };
+
+    const newItem = {
+      id: generateChecklistId(),
+      text: newChecklistText.trim(),
+      completed: false,
+    };
+    await updateTask({
+      workRequestId: task.workRequestId,
+      taskId: task.id,
+      data: {
+        checklist: [...currentList, newItem].map((c) => ({
+          id: c.id,
+          text: c.text,
+          completed: c.completed,
+        })),
+      },
+    });
+    setNewChecklistText('');
+  };
+
   // Calculate total minutes logged
   const totalMinutes = useMemo(() => {
     return timeEntries.reduce((acc, entry) => acc + (entry.durationMinutes || 0), 0);
@@ -508,7 +578,7 @@ export function TaskDetailModal({
           data-testid="task-detail-modal"
         >
           {/* Header */}
-          <DialogHeader className="px-6 py-4 border-b border-slate-200 bg-slate-50 flex flex-row items-start justify-between">
+          <DialogHeader className="px-6 py-4 pr-14 border-b border-slate-200 bg-slate-50 flex flex-row items-start justify-between">
             <div className="space-y-1.5 pr-6">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge
@@ -621,11 +691,30 @@ export function TaskDetailModal({
                 </span>
                 <div className="flex items-center gap-1.5 font-medium text-slate-800">
                   <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                  <span>
-                    {task.dueDate
-                      ? new Date(task.dueDate).toLocaleDateString()
-                      : 'Not set'}
-                  </span>
+                  {canEdit ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="date"
+                        value={task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : ''}
+                        onChange={(e) => {
+                          updateTask({
+                            workRequestId: task.workRequestId || '',
+                            taskId: task.id,
+                            data: { dueDate: e.target.value || null },
+                          });
+                        }}
+                        className="text-xs bg-transparent border-b border-dashed border-slate-300 focus:outline-none focus:border-blue-500 py-0.5"
+                        data-testid="task-due-date-input"
+                      />
+                      {!task.dueDate && <span className="text-slate-400 text-xs">Not set</span>}
+                    </div>
+                  ) : (
+                    <span>
+                      {task.dueDate
+                        ? new Date(task.dueDate).toLocaleDateString()
+                        : 'Not set'}
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -638,7 +727,9 @@ export function TaskDetailModal({
                   <span>
                     {task.phaseEnteredAt
                       ? new Date(task.phaseEnteredAt).toLocaleDateString()
-                      : 'N/A'}
+                      : (workRequest?.phaseEnteredAt
+                          ? new Date(workRequest.phaseEnteredAt).toLocaleDateString()
+                          : 'N/A')}
                   </span>
                 </div>
               </div>
@@ -677,7 +768,7 @@ export function TaskDetailModal({
                 {canEdit && (
                   <div className="flex flex-wrap items-center gap-2">
                     {/* Reassign Lead Select */}
-                    {teamList.length > 0 && (
+                    {scopedTeamList.length > 0 && (
                       <div className="w-40 sm:w-44" data-testid="reassign-lead-container">
                         <Select
                           key={`reassign-${reassignSelectKey}`}
@@ -690,7 +781,7 @@ export function TaskDetailModal({
                             <SelectValue placeholder="Reassign Lead..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {teamList.map((m) => (
+                            {scopedTeamList.map((m) => (
                               <SelectItem key={m.id} value={m.id} className="text-xs">
                                 {m.name} {m.id === task.assigneeId ? '(Lead)' : `(${m.role})`}
                               </SelectItem>
@@ -701,7 +792,7 @@ export function TaskDetailModal({
                     )}
 
                     {/* Add Co-Assignee Select */}
-                    {availableTeamMembers.length > 0 && (
+                    {availableTeamMembers.length > 0 ? (
                       <div className="w-40 sm:w-44" data-testid="assign-employee-container">
                         <Select
                           key={`add-${addSelectKey}`}
@@ -720,6 +811,18 @@ export function TaskDetailModal({
                               </SelectItem>
                             ))}
                           </SelectContent>
+                        </Select>
+                      </div>
+                    ) : (
+                      <div className="w-40 sm:w-44" data-testid="assign-employee-container">
+                        <Select disabled>
+                          <SelectTrigger
+                            className="h-7 text-xs bg-slate-50 border-slate-200 text-slate-400 font-medium"
+                            data-testid="assign-employee-select"
+                          >
+                            <SelectValue placeholder="All team assigned" />
+                          </SelectTrigger>
+                          <SelectContent />
                         </Select>
                       </div>
                     )}
@@ -803,37 +906,71 @@ export function TaskDetailModal({
               </div>
             </div>
 
-            {/* 3. Checklist Items (if present) */}
-            {task.checklist && task.checklist.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+            {/* 3. Checklist Items */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
                   <CheckSquare className="h-3.5 w-3.5" />
-                  Checklist ({task.checklist.filter((c) => c.completed).length}/{task.checklist.length})
-                </h4>
+                  Checklist ({task.checklist?.filter((c) => c.completed).length || 0}/{task.checklist?.length || 0})
+                </span>
+              </h4>
+
+              {task.checklist && task.checklist.length > 0 ? (
                 <div className="p-2 border border-slate-200 rounded-lg divide-y divide-slate-100 bg-white">
                   {task.checklist.map((item) => (
                     <div key={item.id} className="py-2 px-2 flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-2 cursor-pointer flex-1">
                         <input
                           type="checkbox"
                           checked={item.completed}
-                          readOnly
-                          className="rounded text-blue-600"
+                          onChange={() => handleToggleChecklist(item.id, !item.completed)}
+                          disabled={!canEdit}
+                          className="rounded text-blue-600 cursor-pointer"
                         />
                         <span className={item.completed ? 'line-through text-slate-400' : 'text-slate-700 font-medium'}>
                           {item.text}
                         </span>
-                      </div>
+                      </label>
                       {item.assigneeName && (
                         <span className="text-[10px] text-slate-400">{item.assigneeName}</span>
                       )}
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="p-3 text-center text-xs text-slate-400 bg-slate-50 rounded border border-slate-200 italic">
+                  No checklist items yet.
+                </div>
+              )}
 
-            {/* 4. Predecessors (if present) */}
+              {canEdit && (
+                <div className="flex items-center gap-2 pt-1">
+                  <Input
+                    placeholder="Add a new checklist item..."
+                    value={newChecklistText}
+                    onChange={(e) => setNewChecklistText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddChecklistItem();
+                      }
+                    }}
+                    className="h-8 text-xs bg-white"
+                  />
+                  <Button
+                    type="button"
+                    size="xs"
+                    onClick={handleAddChecklistItem}
+                    disabled={!newChecklistText.trim()}
+                    className="h-8 text-xs gap-1"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Add
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            {/* 4. Predecessors */}
             {task.predecessors && task.predecessors.length > 0 && (
               <div className="space-y-1.5">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
@@ -841,11 +978,17 @@ export function TaskDetailModal({
                   Predecessors
                 </h4>
                 <div className="flex flex-wrap gap-1.5">
-                  {task.predecessors.map((pId) => (
-                    <Badge key={pId} variant="outline" size="compact" className="text-[10px]">
-                      Task: {pId}
-                    </Badge>
-                  ))}
+                  {task.predecessors.map((pId) => {
+                    const predTask = siblingTasks.find((t) => t.id === pId);
+                    return (
+                      <Badge key={pId} variant="outline" size="compact" className="text-[10px] gap-1">
+                        <span className="font-semibold">{predTask?.title || pId.slice(0, 8)}</span>
+                        {predTask?.status && (
+                          <span className="text-[9px] text-slate-500">({predTask.status})</span>
+                        )}
+                      </Badge>
+                    );
+                  })}
                 </div>
               </div>
             )}

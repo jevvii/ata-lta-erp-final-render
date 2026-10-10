@@ -200,7 +200,7 @@ export default function OperationsPage() {
             </Button>
           )}
 
-          {canEdit && (
+          {canEdit && activeTab !== 'work-requests' && (
             <Button
               type="button"
               size="sm"

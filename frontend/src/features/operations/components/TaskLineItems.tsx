@@ -60,7 +60,7 @@ export function TaskLineItems({
   onChange,
   projectTeam,
   disabled = false,
-  isEditMode = false,
+  isEditMode: _isEditMode = false,
 }: TaskLineItemsProps) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [activeDepDropdown, setActiveDepDropdown] = useState<string | null>(null);
@@ -287,7 +287,7 @@ export function TaskLineItems({
                     onValueChange={(val) =>
                       handleUpdateTask(index, 'phase', val as CreatablePhase)
                     }
-                    disabled={disabled || isEditMode}
+                    disabled={disabled || Boolean(task.id)}
                   >
                     <SelectTrigger className="h-8 text-[11px] bg-white">
                       <SelectValue />
