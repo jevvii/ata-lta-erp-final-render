@@ -291,6 +291,18 @@ export function CreateDisbursementModal({
     e.preventDefault();
     if (!validate()) return;
 
+    // Task B.5: Government Assessment Document Soft-Warning
+    const hasReceipt = Boolean(receiptFile || (receiptFilename && receiptFilename.trim()));
+    if (!hasReceipt) {
+      const proceed =
+        typeof window !== 'undefined' && typeof window.confirm === 'function'
+          ? window.confirm('No Government Assessment Document attached. Proceed anyway?')
+          : true;
+      if (proceed === false) {
+        return;
+      }
+    }
+
     // Status Anti-Forgery: Notice that `status` is NEVER defined in payload!
     const effectiveCategory = category === 'Other' && customCategory.trim() ? customCategory.trim() : category;
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -13,8 +13,16 @@ const statusStyles: Record<string, { label: string; className: string }> = {
     label: 'Draft',
     className: 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-100',
   },
+  Submitted: {
+    label: 'Submitted',
+    className: 'bg-blue-100 text-blue-800 border-blue-300 hover:bg-blue-100',
+  },
   Pending: {
     label: 'Pending',
+    className: 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-100',
+  },
+  'Pending Admin Approval': {
+    label: 'Pending Admin Approval',
     className: 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-100',
   },
   Approved: {
@@ -32,6 +40,10 @@ const statusStyles: Record<string, { label: string; className: string }> = {
   Rejected: {
     label: 'Rejected',
     className: 'bg-rose-100 text-rose-800 border-rose-300 hover:bg-rose-100',
+  },
+  Archived: {
+    label: 'Archived',
+    className: 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-100',
   },
   Cancelled: {
     label: 'Cancelled',

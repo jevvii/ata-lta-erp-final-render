@@ -96,17 +96,27 @@ export function DisbursementPrintModal({
     disbursement.id;
 
   const employeeName =
+    disbursement.employee_name ||
+    disbursement.employeeName ||
+    disbursement.requested_by_name ||
+    disbursement.requestedByName ||
+    disbursement.created_by_name ||
+    disbursement.createdByName ||
     disbursement.requested_by ||
     disbursement.requestedBy ||
     disbursement.employee_id ||
     'Authorized Staff';
 
   const approverName =
+    disbursement.approved_by_name ||
+    disbursement.approvedByName ||
     disbursement.approved_by ||
     disbursement.approvedBy ||
     (disbursement.status === 'Approved' || isReleased ? 'Authorized Manager' : '________________________');
 
   const releaserName =
+    disbursement.released_by_name ||
+    disbursement.releasedByName ||
     disbursement.released_by ||
     disbursement.releasedBy ||
     (isReleased ? 'Disbursing Officer' : '________________________');
@@ -220,13 +230,17 @@ export function DisbursementPrintModal({
                       {disbursement.created_at?.slice(0, 10)}
                     </span>
                   </div>
-                  {disbursement.linked_work_request_id && (
+                  {(disbursement.linked_work_request_name ||
+                    disbursement.linked_work_request_order_number ||
+                    disbursement.linked_work_request_id) && (
                     <div className="flex justify-between items-center text-xs pt-1.5 border-t border-dashed border-slate-300">
                       <span className="text-slate-500 font-semibold uppercase text-[10px] tracking-wide">
                         Work Request:
                       </span>
-                      <span className="font-mono text-[11px] text-blue-800 truncate max-w-[160px]">
-                        {disbursement.linked_work_request_id}
+                      <span className="font-mono text-[11px] text-blue-800 truncate max-w-[200px]" data-testid="print-work-request">
+                        {disbursement.linked_work_request_name ||
+                          disbursement.linked_work_request_order_number ||
+                          disbursement.linked_work_request_id}
                       </span>
                     </div>
                   )}
