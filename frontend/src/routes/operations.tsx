@@ -31,7 +31,7 @@ import { useRetainerTemplates, useRetainerMutations } from '@/features/operation
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
-import { useEntityRealtimeSync } from '@/lib/realtime';
+import { useEntityRealtimeSync, resolveEntityCodeFromUUID } from '@/lib/realtime';
 import type { WorkRequest, EntityCode, RetainerTemplate } from '@/features/operations/api/types';
 
 export default function OperationsPage() {
@@ -424,33 +424,43 @@ export default function OperationsPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {templates.map((tpl) => (
-                <div
-                  key={tpl.id}
-                  className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
-                  data-testid={`template-card-${tpl.id}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <h4 className="font-bold text-xs text-slate-900">{tpl.name}</h4>
-                    <div className="flex items-center gap-1.5">
-                      {canEditRetainers && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingTemplate(tpl);
-                            setIsTemplateModalOpen(true);
-                          }}
-                          className="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline px-1"
-                          data-testid={`edit-template-btn-${tpl.id}`}
-                        >
-                          Edit
-                        </button>
-                      )}
-                      <Badge variant={(tpl.entity || tpl.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact">
-                        {tpl.entity || tpl.entity_id}
-                      </Badge>
+              {templates.map((tpl) => {
+                const entityCode =
+                  (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
+                  ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
+                    ? (tpl as any).entities.code
+                    : undefined) ||
+                  resolveEntityCodeFromUUID(tpl.entity_id);
+
+                return (
+                  <div
+                    key={tpl.id}
+                    className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
+                    data-testid={`template-card-${tpl.id}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <h4 className="font-bold text-xs text-slate-900">{tpl.name}</h4>
+                      <div className="flex items-center gap-1.5">
+                        {canEditRetainers && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingTemplate(tpl);
+                              setIsTemplateModalOpen(true);
+                            }}
+                            className="text-[11px] font-medium text-blue-600 hover:text-blue-800 hover:underline px-1"
+                            data-testid={`edit-template-btn-${tpl.id}`}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {entityCode && (
+                          <Badge variant={entityCode === 'LTA' ? 'lta' : 'ata'} size="compact">
+                            {entityCode}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
-                  </div>
                   {tpl.description && (
                     <p className="text-xs text-slate-600 line-clamp-2">{tpl.description}</p>
                   )}
@@ -461,7 +471,8 @@ export default function OperationsPage() {
                     </Badge>
                   </div>
                 </div>
-              ))}
+              );
+            })}
             </div>
           </div>
         </TabsContent>
@@ -534,20 +545,30 @@ export default function OperationsPage() {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {otherTemplates.map((tpl) => (
-                    <div
-                      key={tpl.id}
-                      className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
-                      data-testid={`other-template-card-${tpl.id}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <h4 className="font-bold text-xs text-slate-900">{tpl.name || tpl.title}</h4>
-                        <div className="flex items-center gap-1.5">
-                          <Badge variant={(tpl.entity || tpl.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact">
-                            {tpl.entity || tpl.entity_id}
-                          </Badge>
+                  {otherTemplates.map((tpl) => {
+                    const entityCode =
+                      (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
+                      ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
+                        ? (tpl as any).entities.code
+                        : undefined) ||
+                      resolveEntityCodeFromUUID(tpl.entity_id);
+
+                    return (
+                      <div
+                        key={tpl.id}
+                        className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
+                        data-testid={`other-template-card-${tpl.id}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <h4 className="font-bold text-xs text-slate-900">{tpl.name || tpl.title}</h4>
+                          <div className="flex items-center gap-1.5">
+                            {entityCode && (
+                              <Badge variant={entityCode === 'LTA' ? 'lta' : 'ata'} size="compact">
+                                {entityCode}
+                              </Badge>
+                            )}
+                          </div>
                         </div>
-                      </div>
                       {tpl.description && (
                         <p className="text-xs text-slate-600 line-clamp-2">{tpl.description}</p>
                       )}
@@ -599,7 +620,8 @@ export default function OperationsPage() {
                         </div>
                       </div>
                     </div>
-                  ))}
+                  );
+                })}
                 </div>
               )}
             </div>

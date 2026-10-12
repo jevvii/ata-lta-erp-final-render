@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import React from 'react';
 import ProfilePage from '@/routes/profile';
 import { Topbar } from '@/components/layout/Topbar';
-import { useSessionStore } from '@/lib/session';
+import { ProfileDetailsCard } from '../components/ProfileDetailsCard';
+import { useSessionStore, type UserProfile } from '@/lib/session';
 import * as api from '@/lib/api';
 import { evaluatePassword, generateSecurePassword } from '../lib/passwordUtils';
+import type { UserProfileData } from '../api/types';
 
 // Mock clipboard
 Object.assign(navigator, {
@@ -19,7 +21,7 @@ Object.assign(navigator, {
 describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () => {
   let queryClient: QueryClient;
 
-  const mockUserProfile = {
+  const mockUserProfile: UserProfile & UserProfileData = {
     id: 'usr-123',
     email: 'test-user@ata-lta.ph',
     name: 'Juan dela Cruz',
@@ -62,6 +64,15 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       permissions: ['workflow:view'],
       activeEntity: 'ATA',
       unreadCount: 0,
+    });
+    vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
+      if (path === '/v1/me') {
+        return { data: { ...mockUserProfile } };
+      }
+      if (path.includes('notifications')) {
+        return { data: [] };
+      }
+      return { data: {} };
     });
   });
 
@@ -154,7 +165,10 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       await waitFor(() => {
         expect(apiRequestSpy).toHaveBeenCalledWith(
           '/v1/me/avatar-upload-url',
-          expect.objectContaining({ method: 'POST' })
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ contentType: 'image/png' }),
+          })
         );
       });
 
@@ -425,8 +439,106 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       render(React.createElement(Topbar), { wrapper: createWrapper() });
 
       const avatarEl = screen.getByTestId('topbar-user-avatar');
-      expect(avatarEl).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
+      await waitFor(() => {
+        expect(avatarEl).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
+      });
       expect(avatarEl).not.toHaveTextContent('JD');
+    });
+
+    it('falls back to user initials when Topbar avatar image probe fails to load', async () => {
+      const avatarUrl = 'https://s3.storage.supabase.com/avatars/user-broken.png';
+      useSessionStore.getState().setSession({
+        user: { ...mockUserProfile, avatarUrl },
+        permissions: ['workflow:view'],
+        activeEntity: 'ATA',
+      });
+
+      render(React.createElement(Topbar), { wrapper: createWrapper() });
+
+      const avatarEl = screen.getByTestId('topbar-user-avatar');
+      expect(avatarEl).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
+
+      const probeImg = avatarEl.querySelector('img');
+      expect(probeImg).toBeInTheDocument();
+      expect(probeImg).toHaveClass('hidden');
+
+      fireEvent.error(probeImg!);
+
+      await waitFor(() => {
+        expect(avatarEl).toHaveTextContent('JD');
+      });
+      expect(avatarEl).not.toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
+    });
+
+    it('resets avatarLoadFailed when user avatarUrl changes in session', async () => {
+      const initialUrl = 'https://s3.storage.supabase.com/avatars/broken-1.png';
+      useSessionStore.getState().setSession({
+        user: { ...mockUserProfile, avatarUrl: initialUrl },
+        permissions: ['workflow:view'],
+        activeEntity: 'ATA',
+      });
+
+      const { rerender } = render(React.createElement(Topbar), { wrapper: createWrapper() });
+      const avatarEl = screen.getByTestId('topbar-user-avatar');
+
+      const probeImg = avatarEl.querySelector('img');
+      fireEvent.error(probeImg!);
+
+      await waitFor(() => {
+        expect(avatarEl).toHaveTextContent('JD');
+      });
+
+      // Update avatarUrl in session store
+      const newUrl = 'https://s3.storage.supabase.com/avatars/fresh.png';
+      act(() => {
+        useSessionStore.getState().setSession({
+          user: { ...mockUserProfile, avatarUrl: newUrl },
+          permissions: ['workflow:view'],
+          activeEntity: 'ATA',
+        });
+      });
+
+      rerender(React.createElement(Topbar));
+
+      await waitFor(() => {
+        expect(avatarEl).toHaveStyle({ backgroundImage: `url('${newUrl}')` });
+      });
+    });
+  });
+
+  describe('Vector 6: ProfileDetailsCard Resilient Avatar Probe Fallback', () => {
+    it('falls back to initials in ProfileDetailsCard when avatar image probe fails', async () => {
+      const avatarUrl = 'https://s3.storage.supabase.com/avatars/profile-broken.png';
+      const profileWithAvatar = {
+        ...mockUserProfile,
+        avatarUrl,
+      };
+
+      vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
+        if (path === '/v1/me') {
+          return { data: profileWithAvatar };
+        }
+        return { data: {} };
+      });
+
+      render(React.createElement(ProfileDetailsCard, { profile: profileWithAvatar }), {
+        wrapper: createWrapper(),
+      });
+
+      const avatarCircle = screen.getByTestId('profile-avatar-circle');
+      expect(avatarCircle).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
+      expect(avatarCircle).not.toHaveTextContent('JD');
+
+      const probeImg = avatarCircle.querySelector('img');
+      expect(probeImg).toBeInTheDocument();
+      expect(probeImg).toHaveClass('hidden');
+
+      fireEvent.error(probeImg!);
+
+      await waitFor(() => {
+        expect(avatarCircle).toHaveTextContent('JD');
+      });
+      expect(avatarCircle).not.toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
     });
   });
 });

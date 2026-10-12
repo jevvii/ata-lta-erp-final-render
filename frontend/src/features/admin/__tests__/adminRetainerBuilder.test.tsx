@@ -444,6 +444,35 @@ describe('Retainer Template Builder & Generation Logs (Admin Gated)', () => {
         expect(modalState.error?.detail).toBe('Period already generated for this template');
       });
     });
+
+    it('allows professional fee input to be cleared, typed, and replaced without stuck 0', async () => {
+      const { wrapper } = createHarness();
+      render(
+        <RetainerTemplateModal
+          template={null}
+          isOpen={true}
+          onClose={vi.fn()}
+        />,
+        { wrapper }
+      );
+
+      const pfInput = screen.getByTestId('template-pf-input') as HTMLInputElement;
+      // Should start empty with placeholder 0.00
+      expect(pfInput.value).toBe('');
+      expect(pfInput.placeholder).toBe('0.00');
+
+      // Type 15000
+      fireEvent.change(pfInput, { target: { value: '15000' } });
+      expect(pfInput.value).toBe('15000');
+
+      // Clear / delete completely
+      fireEvent.change(pfInput, { target: { value: '' } });
+      expect(pfInput.value).toBe('');
+
+      // Replace with new value
+      fireEvent.change(pfInput, { target: { value: '25000.50' } });
+      expect(pfInput.value).toBe('25000.50');
+    });
   });
 
   describe('RetainerGenerationLogs (Audit Table)', () => {

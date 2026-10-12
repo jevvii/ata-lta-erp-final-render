@@ -180,4 +180,67 @@ describe('RouteGuard component (Spec §3.2, §6)', () => {
 
     expect(screen.getByTestId('approvals-content')).toBeInTheDocument();
   });
+
+  it('blocks non-admin user when adminOnly is required even with reports:view', () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-staff',
+        email: 'staff@ata-lta.ph',
+        name: 'Staff Member',
+        role: 'Operations',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['reports:view', 'workflow:view'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/reports']}>
+        <Routes>
+          <Route
+            path="/reports"
+            element={
+              <RouteGuard adminOnly requiredPermission="reports:view">
+                <div data-testid="reports-content">Reports Data</div>
+              </RouteGuard>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByTestId('reports-content')).not.toBeInTheDocument();
+    expect(screen.getByTestId('forbidden-screen')).toBeInTheDocument();
+  });
+
+  it('allows admin user when adminOnly is required', () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+      permissions: ['reports:view', 'users:manage'],
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/reports']}>
+        <Routes>
+          <Route
+            path="/reports"
+            element={
+              <RouteGuard adminOnly requiredPermission="reports:view">
+                <div data-testid="reports-content">Reports Data</div>
+              </RouteGuard>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('reports-content')).toBeInTheDocument();
+  });
 });

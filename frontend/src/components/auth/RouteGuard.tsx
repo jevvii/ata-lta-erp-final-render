@@ -8,10 +8,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 interface RouteGuardProps {
   children: ReactNode;
   requiredPermission?: PermissionKey | string;
+  adminOnly?: boolean;
 }
 
-export function RouteGuard({ children, requiredPermission }: RouteGuardProps) {
-  const { isAuthenticated, isLoading, permissions } = useSessionStore();
+export function RouteGuard({ children, requiredPermission, adminOnly }: RouteGuardProps) {
+  const { isAuthenticated, isLoading, permissions, user } = useSessionStore();
   const location = useLocation();
 
   if (isLoading) {
@@ -30,6 +31,12 @@ export function RouteGuard({ children, requiredPermission }: RouteGuardProps) {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  const isAdmin = user?.role === 'Admin' || hasPermission(permissions, 'users:manage');
+
+  if (adminOnly && !isAdmin) {
+    return <Forbidden requiredPermission="users:manage" />;
   }
 
   if (requiredPermission && !hasPermission(permissions, requiredPermission)) {

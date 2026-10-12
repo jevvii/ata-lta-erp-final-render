@@ -25,6 +25,7 @@ import { AssignerSelect } from './AssignerSelect';
 import { runBlockingAction } from './BlockingActionModal';
 import { operationsKeys } from '../api/queryKeys';
 import { useSessionStore } from '@/lib/session';
+import { resolveEntityCodeFromUUID } from '@/lib/realtime';
 import type {
   RetainerGenerateResponse,
   RetainerTemplateTask,
@@ -267,11 +268,28 @@ export function RetainerGenerateModal({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="unselected">— Choose Template —</SelectItem>
-                {templates.map((tpl) => (
-                  <SelectItem key={tpl.id} value={tpl.id}>
-                    {tpl.name} ({tpl.entity || tpl.entity_id} • {tpl.recurrence})
-                  </SelectItem>
-                ))}
+                {templates.map((tpl) => {
+                  const entityCode =
+                    (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
+                    ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
+                      ? (tpl as any).entities.code
+                      : undefined) ||
+                    resolveEntityCodeFromUUID(tpl.entity_id);
+                  const metaParts: string[] = [];
+                  if (entityCode) {
+                    metaParts.push(entityCode);
+                  }
+                  if (tpl.recurrence && tpl.recurrence !== 'none') {
+                    metaParts.push(tpl.recurrence);
+                  }
+                  const meta = metaParts.length > 0 ? ` (${metaParts.join(' • ')})` : '';
+
+                  return (
+                    <SelectItem key={tpl.id} value={tpl.id}>
+                      {tpl.name}{meta}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

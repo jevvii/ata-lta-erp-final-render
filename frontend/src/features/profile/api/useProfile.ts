@@ -91,6 +91,7 @@ export function useUploadAvatar() {
         '/v1/me/avatar-upload-url',
         {
           method: 'POST',
+          body: JSON.stringify({ contentType: file.type || 'image/png' }),
         }
       );
       const { signedUrl, publicUrl } = presignedRes.data;

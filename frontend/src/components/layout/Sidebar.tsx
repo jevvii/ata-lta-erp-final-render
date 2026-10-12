@@ -9,7 +9,6 @@ import {
   BarChart3,
   ShieldCheck,
   Building2,
-  Palette,
 } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
@@ -20,6 +19,7 @@ interface NavItem {
   path: string;
   icon: React.ComponentType<{ className?: string }>;
   permission: string | null;
+  adminOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -70,19 +70,24 @@ const NAV_ITEMS: NavItem[] = [
     path: '/reports',
     icon: BarChart3,
     permission: 'reports:view',
+    adminOnly: true,
   },
   {
     name: 'Admin',
     path: '/admin',
     icon: ShieldCheck,
     permission: 'users:manage',
+    adminOnly: true,
   },
 ];
 
 export function Sidebar() {
   const permissions = useSessionStore((state) => state.permissions);
+  const user = useSessionStore((state) => state.user);
+  const isAdmin = user?.role === 'Admin' || hasPermission(permissions, 'users:manage');
 
   const visibleNavItems = NAV_ITEMS.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
     if (!item.permission) return true;
     return hasPermission(permissions, item.permission);
   });
@@ -105,9 +110,6 @@ export function Sidebar() {
 
       {/* Navigation Links */}
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
-        <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[#9494a0]">
-          Modules
-        </div>
         {visibleNavItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -129,28 +131,6 @@ export function Sidebar() {
             </NavLink>
           );
         })}
-
-        {/* Dev Tools Section */}
-        <div className="pt-4">
-          <div className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[#9494a0]">
-            Development
-          </div>
-          <NavLink
-            to="/dev/kitchen-sink"
-            data-testid="nav-item-kitchen-sink"
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
-                isActive
-                  ? 'bg-[#475569] text-white font-semibold shadow-xs'
-                  : 'text-[#475569] hover:bg-[#f0f1f3]'
-              )
-            }
-          >
-            <Palette className="h-4 w-4 shrink-0" />
-            <span>Kitchen Sink</span>
-          </NavLink>
-        </div>
       </nav>
 
       {/* Footer Info */}

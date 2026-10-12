@@ -29,11 +29,18 @@ export default function ReportsPage() {
 
   // Session & RBAC
   const permissions = useSessionStore((state) => state.permissions);
+  const user = useSessionStore((state) => state.user);
   const activeEntity = useSessionStore((state) => state.activeEntity);
   const setActiveEntity = useSessionStore((state) => state.setActiveEntity);
 
+  const isAdmin = user?.role === 'Admin' || hasPermission(permissions, 'users:manage');
   const canViewReports = hasPermission(permissions, 'reports:view');
   const canViewBilling = hasPermission(permissions, 'billing:view');
+
+  // Enforce admin-only access when user profile is loaded
+  if (user && !isAdmin) {
+    return <Forbidden requiredPermission="users:manage" />;
+  }
 
   // Determine available tabs based on permissions
   const availableTabs = useMemo(() => {

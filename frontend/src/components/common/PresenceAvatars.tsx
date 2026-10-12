@@ -118,11 +118,12 @@ export function extractViewers(
       const name = String(rec.name || rec.displayName || rec.email || 'Colleague').trim();
       const email = String(rec.email || '').trim();
       const role = String(rec.role || 'Staff').trim();
-      const rawAvatarUrl =
-        typeof rec.avatarUrl === 'string' && rec.avatarUrl.trim() !== ''
-          ? rec.avatarUrl.trim()
+      const rawAvatar = rec.avatarUrl || rec.avatar_url;
+      const resolvedAvatar =
+        typeof rawAvatar === 'string' && rawAvatar.trim() !== ''
+          ? rawAvatar.trim()
           : null;
-      const avatarUrl = rawAvatarUrl || getCachedUserAvatar(id, email);
+      const avatarUrl = resolvedAvatar || getCachedUserAvatar(id, email);
 
       // Filter out current active user
       if (currentUserId && id === currentUserId) continue;

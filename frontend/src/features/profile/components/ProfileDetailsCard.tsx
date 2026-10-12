@@ -1,4 +1,4 @@
-import { useState, useRef, type ChangeEvent, type FormEvent } from 'react';
+import { useState, useRef, useEffect, type ChangeEvent, type FormEvent } from 'react';
 import { Camera, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,7 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [name, setName] = useState<string>(profile?.name || '');
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
 
   const uploadAvatarMutation = useUploadAvatar();
   const updateProfileMutation = useUpdateProfile();
@@ -92,6 +93,10 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
   const displayAvatar = previewUrl || profile?.avatarUrl;
   const initials = getInitials(name || displayName);
 
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [displayAvatar]);
+
   return (
     <Card className="border border-[#f0f0f5] dark:border-zinc-800 shadow-xs" data-testid="profile-details-card">
       <CardHeader>
@@ -104,7 +109,7 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
           <div
             className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xl font-bold text-primary overflow-hidden border border-[#f0f0f5] dark:border-zinc-800"
             style={
-              displayAvatar
+              displayAvatar && !avatarLoadFailed
                 ? {
                     backgroundImage: `url('${displayAvatar}')`,
                     backgroundSize: 'cover',
@@ -114,7 +119,15 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
             }
             data-testid="profile-avatar-circle"
           >
-            {!displayAvatar && initials}
+            {(!displayAvatar || avatarLoadFailed) && initials}
+            {displayAvatar && !avatarLoadFailed && (
+              <img
+                src={displayAvatar}
+                alt=""
+                className="hidden"
+                onError={() => setAvatarLoadFailed(true)}
+              />
+            )}
           </div>
 
           <div className="flex flex-col gap-2">

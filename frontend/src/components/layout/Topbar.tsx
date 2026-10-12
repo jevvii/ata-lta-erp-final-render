@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { LogOut, Building2, User } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
 import { signOut } from '@/lib/api';
@@ -25,6 +26,7 @@ export function Topbar() {
   const { user, activeEntity, setActiveEntity } = useSessionStore();
   const { data: profile } = useProfile();
   const navigate = useNavigate();
+  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
 
   const handleSignOut = () => {
     signOut();
@@ -36,6 +38,10 @@ export function Topbar() {
 
   const avatarUrl = user?.avatarUrl || profile?.avatarUrl || null;
   const displayName = profile?.name || user?.name || 'User';
+
+  useEffect(() => {
+    setAvatarLoadFailed(false);
+  }, [user?.avatarUrl, avatarUrl]);
 
   const initials = displayName
     ? displayName
@@ -92,9 +98,9 @@ export function Topbar() {
               data-testid="user-menu-button"
             >
               <div
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-[#2563eb] text-xs font-semibold text-white overflow-hidden shrink-0 border border-black/5"
+                className="relative flex h-8 w-8 items-center justify-center rounded-full bg-[#2563eb] text-xs font-semibold text-white overflow-hidden shrink-0 border border-black/5"
                 style={
-                  avatarUrl
+                  avatarUrl && !avatarLoadFailed
                     ? {
                         backgroundImage: `url('${avatarUrl}')`,
                         backgroundSize: 'cover',
@@ -104,17 +110,14 @@ export function Topbar() {
                 }
                 data-testid="topbar-user-avatar"
               >
-                {avatarUrl ? (
+                {(!avatarUrl || avatarLoadFailed) && initials}
+                {avatarUrl && !avatarLoadFailed && (
                   <img
                     src={avatarUrl}
-                    alt={displayName}
-                    className="h-full w-full object-cover"
-                    onError={(e) => {
-                      (e.currentTarget as HTMLElement).style.display = 'none';
-                    }}
+                    alt=""
+                    className="hidden"
+                    onError={() => setAvatarLoadFailed(true)}
                   />
-                ) : (
-                  initials
                 )}
               </div>
               <div className="hidden sm:flex flex-col text-left">

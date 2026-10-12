@@ -432,4 +432,50 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
       expect(body.overrides.tasks[0].assignees).toEqual([]);
     });
   });
+
+  it('renders clean template title without raw entity or template IDs', async () => {
+    const rawUuidTemplate: RetainerTemplate = {
+      ...mockTemplate,
+      id: 'tpl-raw-uuid-test',
+      entity: undefined,
+      entity_id: 'e83dc90b-d9b5-4854-8adf-7fe21c2e6822',
+      name: 'Clean Annual Compliance',
+      recurrence: 'annual',
+    };
+
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/operations/templates') && !u.includes('/generate')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: [rawUuidTemplate] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: [] }),
+      } as Response);
+    });
+
+    const { wrapper } = createHarness();
+    render(<RetainerGenerateModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('template-select')).not.toBeDisabled();
+    });
+
+    const trigger = screen.getByTestId('template-select');
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown', code: 'ArrowDown' });
+
+    // Should resolve to ATA and not display raw UUID
+    expect(
+      await screen.findByRole('option', {
+        name: 'Clean Annual Compliance (ATA • annual)',
+      })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/e83dc90b/i)).not.toBeInTheDocument();
+  });
 });

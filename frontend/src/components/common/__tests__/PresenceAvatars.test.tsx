@@ -825,5 +825,58 @@ describe('PresenceAvatars Component (Parcel F - Ephemeral Collaboration)', () =>
         expect(img).toHaveAttribute('src', 'https://example.com/resolved-lorein-avatar.png');
       });
     });
+
+    it('extractViewers correctly resolves snake_case avatar_url as well as camelCase avatarUrl', () => {
+      const state = {
+        'user-camel': [{ userId: 'user-camel', name: 'Camel Case', avatarUrl: 'https://example.com/camel.png' }],
+        'user-snake': [{ userId: 'user-snake', name: 'Snake Case', avatar_url: 'https://example.com/snake.png' }],
+        'user-both': [
+          {
+            userId: 'user-both',
+            name: 'Both Cases',
+            avatarUrl: 'https://example.com/camel-priority.png',
+            avatar_url: 'https://example.com/snake.png',
+          },
+        ],
+        'user-snake-blank': [{ userId: 'user-snake-blank', name: 'Blank Snake', avatar_url: '   ' }],
+      };
+
+      const viewers = extractViewers(state, 'curr-user');
+      const camelViewer = viewers.find((v) => v.userId === 'user-camel');
+      const snakeViewer = viewers.find((v) => v.userId === 'user-snake');
+      const bothViewer = viewers.find((v) => v.userId === 'user-both');
+      const blankViewer = viewers.find((v) => v.userId === 'user-snake-blank');
+
+      expect(camelViewer?.avatarUrl).toBe('https://example.com/camel.png');
+      expect(snakeViewer?.avatarUrl).toBe('https://example.com/snake.png');
+      expect(bothViewer?.avatarUrl).toBe('https://example.com/camel-priority.png');
+      expect(blankViewer?.avatarUrl).toBeNull();
+    });
+
+    it('renders avatar img for other viewer broadcasting snake_case avatar_url in presence state', async () => {
+      const userWithSnakeAvatar = {
+        userId: 'user-snake-presence',
+        email: 'snake@ata-lta.ph',
+        name: 'Snake Presence',
+        role: 'Field Worker',
+        avatar_url: 'https://example.com/snake-presence.png',
+      };
+
+      render(<PresenceAvatars roomId="wr-snake-case" />);
+      const channel = supabase.channel('presence:work_request:wr-snake-case') as unknown as MockRealtimeChannel;
+
+      act(() => {
+        channel.setPresenceState({
+          [userWithSnakeAvatar.userId]: [userWithSnakeAvatar],
+        });
+        channel.emit('presence', { event: 'sync' });
+      });
+
+      await waitFor(() => {
+        const img = screen.getByRole('img', { name: 'Snake Presence' });
+        expect(img).toBeInTheDocument();
+        expect(img).toHaveAttribute('src', 'https://example.com/snake-presence.png');
+      });
+    });
   });
 });

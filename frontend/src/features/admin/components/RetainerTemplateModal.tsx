@@ -67,7 +67,7 @@ export function RetainerTemplateModal({
   const [clientId, setClientId] = useState<string>('');
   const [schedule, setSchedule] = useState<string>('monthly');
   const [priority, setPriority] = useState<Priority>('Normal');
-  const [pfAmount, setPfAmount] = useState<number>(0);
+  const [pfAmount, setPfAmount] = useState<string | number>('');
   const [recurrence, setRecurrence] = useState<RecurrenceType>('none');
   const [tasks, setTasks] = useState<RetainerTemplateTask[]>([]);
   const taskTitleInputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -95,7 +95,13 @@ export function RetainerTemplateModal({
       setClientId(template.client_id || template.clientId || '');
       setSchedule(template.schedule || 'monthly');
       setPriority(template.priority || 'Normal');
-      setPfAmount(template.pf_amount || template.pfAmount || 0);
+      setPfAmount(
+        template.pf_amount != null
+          ? (template.pf_amount === 0 ? '' : String(template.pf_amount))
+          : template.pfAmount != null
+            ? (template.pfAmount === 0 ? '' : String(template.pfAmount))
+            : ''
+      );
       setRecurrence(template.recurrence || 'none');
       setTasks(
         (template.tasks || []).map((t, idx) => ({
@@ -113,7 +119,7 @@ export function RetainerTemplateModal({
       setClientId('');
       setSchedule('monthly');
       setPriority('Normal');
-      setPfAmount(0);
+      setPfAmount('');
       setRecurrence('none');
       setTasks([
         {
@@ -422,7 +428,7 @@ export function RetainerTemplateModal({
                 step="0.01"
                 placeholder="0.00"
                 value={pfAmount}
-                onChange={(e) => setPfAmount(parseFloat(e.target.value) || 0)}
+                onChange={(e) => setPfAmount(e.target.value)}
                 className="h-9 text-xs bg-white"
                 data-testid="template-pf-input"
               />
