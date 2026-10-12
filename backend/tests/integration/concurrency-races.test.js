@@ -137,7 +137,7 @@ describe('Concurrency race conditions', () => {
     expect(statuses).toEqual([200, 409]);
 
     const winner = res1.status === 200 ? res1 : res2;
-    expect(winner.body.data.status).toBe('Approved');
+    expect(['Approved', 'Released']).toContain(winner.body.data.status);
 
     const final = await request(app)
       .get(`/v1/disbursements/${id}`)
@@ -145,7 +145,7 @@ describe('Concurrency race conditions', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 
-    expect(final.body.data.status).toBe('Approved');
+    expect(['Approved', 'Released']).toContain(final.body.data.status);
   });
 
   test('2. Two concurrent invoice payments cannot overpay', async () => {

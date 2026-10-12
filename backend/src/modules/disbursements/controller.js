@@ -210,6 +210,20 @@ const rejectDisbursement = async (req, res, next) => {
 };
 
 /** @type {import('express').RequestHandler} */
+const forwardDisbursement = async (req, res, next) => {
+  try {
+    const data = await service.forwardDisbursement({
+      entityId: req.activeEntity,
+      id: req.params.id,
+      userId: req.user.id,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** @type {import('express').RequestHandler} */
 const getDisbursementCounts = async (req, res, next) => {
   try {
     const data = await service.getDisbursementCounts({
@@ -288,6 +302,7 @@ module.exports = {
     releaseDisbursement,
     fundDisbursement,
     rejectDisbursement,
+    forwardDisbursement,
     getDisbursementCounts,
     listDisbursementTemplates,
     createDisbursementTemplate,

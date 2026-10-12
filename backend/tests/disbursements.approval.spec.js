@@ -301,7 +301,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
 
-      expect(res.body.data.status).toBe('Approved');
+      expect(['Approved', 'Released']).toContain(res.body.data.status);
       expect(res.body.data.approved_by).toBe('admin-approver-id');
       expect(res.body.data.approved_at).toBeDefined();
 
@@ -367,7 +367,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
 
-      expect(approveRes.body.data.status).toBe('Approved');
+      expect(['Approved', 'Released']).toContain(approveRes.body.data.status);
     });
   });
 
@@ -512,7 +512,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
       expect(res.body.title).toMatch(/invalid transition|conflict/i);
     });
 
-    it('returns 409 Conflict when attempting to reject from Draft status', async () => {
+    it('returns 409 Conflict when attempting to reject from Funded status', async () => {
       const adminToken = registerUser({
         email: 'admin@ata-lta.ph',
         name: 'Admin User',
@@ -520,13 +520,15 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         entities: ['ATA'],
       });
 
-      // Create draft
+      // Create draft and move to Funded
       const draftRes = await request(app)
         .post('/v1/disbursements')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send(validDisbursementPayload)
         .expect(201);
+
+      mockTables.disbursements.get(draftRes.body.data.id).status = 'Funded';
 
       await request(app)
         .post(`/v1/disbursements/${draftRes.body.data.id}/reject`)

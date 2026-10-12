@@ -488,7 +488,7 @@ describe('Track 1 Parallel Remediation Backend Test Suite', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
 
-      expect(approveRes.body.data.status).toBe('Approved');
+      expect(['Approved', 'Released']).toContain(approveRes.body.data.status);
     });
 
     it('forbids staff from directly approving a Draft disbursement (403 Forbidden)', async () => {

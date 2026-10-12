@@ -81,12 +81,16 @@ function resolveEntity(options = {}) {
           }
         }
 
-        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id, /clients/:id)
-        if (!resolvedCode && req.params?.id) {
+        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id, /clients/:id, /invoices/:id, /disbursements/:id)
+        const routeParamId =
+          req.params?.id ||
+          req.path?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] ||
+          req.originalUrl?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+        if (!resolvedCode && routeParamId) {
           const { data: wr, error: wrParamErr } = await supabaseAdmin
             .from('work_requests')
             .select('entity_id')
-            .eq('id', req.params.id)
+            .eq('id', routeParamId)
             .maybeSingle();
           if (wrParamErr) {
             throw new AppError({
@@ -102,7 +106,7 @@ function resolveEntity(options = {}) {
             const { data: op, error: opParamErr } = await supabaseAdmin
               .from('operations_requests')
               .select('entity_id')
-              .eq('id', req.params.id)
+              .eq('id', routeParamId)
               .maybeSingle();
             if (opParamErr) {
               throw new AppError({
@@ -118,7 +122,7 @@ function resolveEntity(options = {}) {
               const { data: cl, error: clParamErr } = await supabaseAdmin
                 .from('clients')
                 .select('entity_id')
-                .eq('id', req.params.id)
+                .eq('id', routeParamId)
                 .maybeSingle();
               if (clParamErr) {
                 throw new AppError({
@@ -130,6 +134,40 @@ function resolveEntity(options = {}) {
               if (cl?.entity_id) {
                 resolvedUUID = cl.entity_id;
                 resolvedCode = await resolveEntityCode(cl.entity_id);
+              } else {
+                const { data: inv, error: invParamErr } = await supabaseAdmin
+                  .from('invoices')
+                  .select('entity_id')
+                  .eq('id', routeParamId)
+                  .maybeSingle();
+                if (invParamErr) {
+                  throw new AppError({
+                    statusCode: 500,
+                    title: 'Database Error',
+                    detail: 'Unable to resolve entity for invoice',
+                  });
+                }
+                if (inv?.entity_id) {
+                  resolvedUUID = inv.entity_id;
+                  resolvedCode = await resolveEntityCode(inv.entity_id);
+                } else {
+                  const { data: disb, error: disbParamErr } = await supabaseAdmin
+                    .from('disbursements')
+                    .select('entity_id')
+                    .eq('id', routeParamId)
+                    .maybeSingle();
+                  if (disbParamErr) {
+                    throw new AppError({
+                      statusCode: 500,
+                      title: 'Database Error',
+                      detail: 'Unable to resolve entity for disbursement',
+                    });
+                  }
+                  if (disb?.entity_id) {
+                    resolvedUUID = disb.entity_id;
+                    resolvedCode = await resolveEntityCode(disb.entity_id);
+                  }
+                }
               }
             }
           }

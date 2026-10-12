@@ -65,6 +65,7 @@ const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data,
  * Schema for updating a disbursement.
  */
 const updateDisbursementSchema = createDisbursementBaseSchema.partial().extend({
+  status: z.string().optional(),
   archived: z.boolean().optional(),
   // OCC guard (Spec 2.2 / R-10): update applies only if the stored version matches.
   expectedVersion: z.number().int().positive().optional(),

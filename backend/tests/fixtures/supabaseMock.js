@@ -518,7 +518,7 @@ const rpcImpl = {
     row.updated_by = params.p_user_id;
     row.version = (row.version || 1) + 1;
 
-    if (params.p_to_status === 'Approved') {
+    if (params.p_to_status === 'Approved' || (params.p_to_status === 'Released' && !row.approved_by)) {
       row.approved_by = params.p_user_id;
       row.approved_at = now;
     }

@@ -169,7 +169,7 @@ const createTransmittal = async ({ entityId, entityCode, userId, data }) => {
     const code = rawCode === 'ALL' ? 'ATA' : rawCode;
     const year = new Date().getFullYear();
     const prefix = `TR-${code}-${year}`;
-    const { data: seq, error: seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
+    const { data: seq, error: _seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
       p_prefix: prefix,
     });
     trackingNumber = seq || `${prefix}-0001`;

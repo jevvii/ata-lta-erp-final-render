@@ -134,10 +134,48 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     : { data: [] };
   const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
 
-  const mapped = rows.map((row) => ({
-    ...row,
-    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
-  }));
+  // Batch resolve parent Work Request and creator (Task A.3)
+  const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
+  let wrMap = new Map();
+  let userMap = new Map();
+
+  if (wrIds.length > 0) {
+    const { data: wrData } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_order_number, created_by')
+      .in('id', wrIds);
+
+    const wrs = wrData || [];
+    const creatorUserIds = [...new Set(wrs.map((w) => w.created_by).filter(Boolean))];
+    if (creatorUserIds.length > 0) {
+      const { data: usersData } = await supabaseAdmin
+        .from('users')
+        .select('id, name, email')
+        .in('id', creatorUserIds);
+      userMap = new Map((usersData || []).map((u) => [u.id, u]));
+    }
+    wrMap = new Map(wrs.map((w) => [w.id, w]));
+  }
+
+  const mapped = rows.map((row) => {
+    const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
+    const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
+    return {
+      ...row,
+      entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+      work_request_title: wr?.title || null,
+      work_request_creator_name: creator?.name || null,
+      work_request: wr
+        ? {
+            id: wr.id,
+            title: wr.title,
+            workOrderNumber: wr.work_order_number || null,
+            creatorName: creator?.name || null,
+            creatorEmail: creator?.email || null,
+          }
+        : null,
+    };
+  });
 
   return { data: mapped, count: count || 0 };
 };
@@ -272,7 +310,7 @@ const createInvoice = async ({ entityId, userId, data }) => {
  * @param {string} params.id
  * @returns {Promise<object>}
  */
-const getInvoiceById = async ({ entityId, id, user }) => {
+const getInvoiceById = async ({ entityId, id, user, allowFallback = false, checkViewPermissions = true }) => {
   let query = supabaseAdmin
     .from('invoices')
     .select('*, clients(name, tin, address)')
@@ -283,7 +321,26 @@ const getInvoiceById = async ({ entityId, id, user }) => {
     query = query.eq('entity_id', entityId);
   }
 
-  const { data: invoice, error } = await query.single();
+  let { data: invoice, error } = await query.single();
+
+  if ((error || !invoice) && entityId && entityId !== 'ALL' && allowFallback) {
+    const { data: fallbackInvoice } = await supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name, tin, address)')
+      .eq('id', id)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (fallbackInvoice) {
+      const isAdmin = user?.role === 'Admin';
+      const userEntities = (user?.entities || []).map((e) => e.toUpperCase());
+      const fallbackEntityCode = await resolveEntityCode(fallbackInvoice.entity_id);
+      if (!user || isAdmin || userEntities.includes(fallbackEntityCode)) {
+        invoice = fallbackInvoice;
+        error = null;
+      }
+    }
+  }
 
   if (error || !invoice) {
     throw new AppError({
@@ -294,7 +351,7 @@ const getInvoiceById = async ({ entityId, id, user }) => {
   }
 
   // Role restriction
-  if (user) {
+  if (user && checkViewPermissions) {
     const isAdmin = user.role === 'Admin';
     const isAccounting =
       (user.departments || []).includes('Accounting') || user.role === 'Accounting';
@@ -351,12 +408,44 @@ const getInvoiceById = async ({ entityId, id, user }) => {
     .eq('invoice_id', id)
     .order('payment_date', { ascending: false });
 
+  // Fetch parent Work Request and creator (Task A.3)
+  let workRequestInfo = null;
+  if (invoice.work_request_id) {
+    const { data: wr } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_order_number, created_by')
+      .eq('id', invoice.work_request_id)
+      .maybeSingle();
+
+    if (wr) {
+      let creatorUser = null;
+      if (wr.created_by) {
+        const { data: u } = await supabaseAdmin
+          .from('users')
+          .select('id, name, email')
+          .eq('id', wr.created_by)
+          .maybeSingle();
+        creatorUser = u;
+      }
+      workRequestInfo = {
+        id: wr.id,
+        title: wr.title,
+        workOrderNumber: wr.work_order_number || null,
+        creatorName: creatorUser?.name || null,
+        creatorEmail: creatorUser?.email || null,
+      };
+    }
+  }
+
   const entityCode = await resolveEntityCode(invoice.entity_id);
   return {
     ...invoice,
     entity_code: entityCode,
     line_items: lineItems || [],
     payments: payments || [],
+    work_request: workRequestInfo,
+    work_request_title: workRequestInfo?.title || null,
+    work_request_creator_name: workRequestInfo?.creatorName || null,
   };
 };
 
@@ -370,17 +459,23 @@ const getInvoiceById = async ({ entityId, id, user }) => {
  * @returns {Promise<object>}
  */
 const updateInvoice = async ({ entityId, id, userId, data, user }) => {
-  const existing = await getInvoiceById({ entityId, id });
-
   let effectiveUser = user;
   if (!effectiveUser && userId) {
     const { data: u } = await supabaseAdmin
       .from('users')
-      .select('id, name, role, departments')
+      .select('id, name, role, departments, entities')
       .eq('id', userId)
       .maybeSingle();
     effectiveUser = u;
   }
+
+  const existing = await getInvoiceById({
+    entityId,
+    id,
+    user: effectiveUser,
+    allowFallback: true,
+    checkViewPermissions: false,
+  });
 
   const permissions = effectiveUser
     ? (effectiveUser.permissions instanceof Set
@@ -398,6 +493,18 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     const amountPaid = Number(existing.amount_paid || 0);
     const total = Number(existing.total || 0);
     const balance = Number(existing.balance || 0);
+
+    const isApproving = targetStatus === 'Sent' && ['Draft', 'Pending'].includes(currentStatus);
+    const isRejecting = targetStatus === 'Draft' && currentStatus === 'Pending';
+
+    if ((isApproving || isRejecting) && effectiveUser?.role !== 'Admin') {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'Only System Administrators can approve or reject invoices.',
+        code: 'FORBIDDEN_INVOICE_APPROVAL',
+      });
+    }
 
     // Validate Paid status requirement
     if (targetStatus === 'Paid') {
@@ -577,7 +684,7 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     p_updates: rpcUpdates,
     p_line_items: rpcLineItems,
     p_user_id: userId,
-    p_entity_id: entityId,
+    p_entity_id: existing.entity_id || entityId,
     p_expected_version: expectedVersion,
   });
 

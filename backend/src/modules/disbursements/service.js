@@ -17,11 +17,12 @@ const { resolveEntityCode } = require('../../lib/entityResolver');
 
 /** Valid status transitions */
 const VALID_TRANSITIONS = {
-  submit: { from: 'Draft', to: 'Pending' },
-  approve: { from: 'Pending', to: 'Approved' },
-  release: { from: 'Approved', to: 'Released' },
-  fund: { from: 'Released', to: 'Funded' },
-  reject: { from: 'Pending', to: 'Rejected' },
+  submit: { from: ['Draft'], to: 'Submitted' },
+  forward_admin: { from: ['Submitted', 'Pending'], to: 'Pending Admin Approval' },
+  approve: { from: ['Pending Admin Approval', 'Submitted', 'Pending', 'Draft'], to: 'Released' },
+  release: { from: ['Approved', 'Pending Admin Approval'], to: 'Released' },
+  fund: { from: ['Released'], to: 'Funded' },
+  reject: { from: ['Submitted', 'Pending', 'Pending Admin Approval', 'Draft'], to: 'Rejected' },
 };
 
 /**
@@ -210,6 +211,76 @@ const getDisbursementCounts = async ({ entityId, user }) => {
 };
 
 /**
+ * Enrich disbursement rows with human-readable names and parent work request info (Task A.4).
+ * @param {object[]} rows
+ * @returns {Promise<object[]>}
+ */
+const enrichDisbursementExtras = async (rows = []) => {
+  if (!rows || rows.length === 0) return [];
+
+  const wrIds = [
+    ...new Set(
+      rows.map((r) => r.linked_work_request_id || r.work_request_id).filter(Boolean)
+    ),
+  ];
+  const userIds = [
+    ...new Set(
+      rows
+        .flatMap((r) => [
+          r.employee_id,
+          r.requested_by,
+          r.created_by,
+          r.approved_by,
+          r.released_by,
+          r.rejected_by,
+          r.payment_processed_by,
+        ])
+        .filter(Boolean)
+    ),
+  ];
+
+  let wrMap = new Map();
+  if (wrIds.length > 0) {
+    const { data: wrs } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_order_number')
+      .in('id', wrIds);
+    wrMap = new Map((wrs || []).map((w) => [w.id, w]));
+  }
+
+  let userMap = new Map();
+  if (userIds.length > 0) {
+    const { data: users } = await supabaseAdmin
+      .from('users')
+      .select('id, name')
+      .in('id', userIds);
+    userMap = new Map((users || []).map((u) => [u.id, u]));
+  }
+
+  return rows.map((row) => {
+    const wrId = row.linked_work_request_id || row.work_request_id;
+    const wr = wrId ? wrMap.get(wrId) : null;
+    const editedByAccounting = Boolean(
+      row.edited_by_accounting ||
+        (row.notes && row.notes.includes('Edited by Accounting'))
+    );
+
+    return {
+      ...row,
+      linked_work_request_name: wr?.title || null,
+      linked_work_request_order_number: wr?.work_order_number || null,
+      employee_name: userMap.get(row.employee_id)?.name || null,
+      requested_by_name: userMap.get(row.requested_by)?.name || null,
+      created_by_name: userMap.get(row.created_by)?.name || null,
+      approved_by_name: userMap.get(row.approved_by)?.name || null,
+      released_by_name: userMap.get(row.released_by)?.name || null,
+      rejected_by_name: userMap.get(row.rejected_by)?.name || null,
+      edited_by_accounting: editedByAccounting,
+    };
+  });
+};
+
+/**
  * List disbursements for the active entity.
  * @param {object} params
  * @param {string} params.entityId
@@ -314,7 +385,8 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
   }));
 
-  return { data: mapped, count: count || 0 };
+  const enriched = await enrichDisbursementExtras(mapped);
+  return { data: enriched, count: count || 0 };
 };
 
 /**
@@ -525,7 +597,8 @@ const getDisbursementById = async ({ entityId, id, user }) => {
   }
 
   const entityCode = await resolveEntityCode(data.entity_id);
-  return { ...data, entity_code: entityCode };
+  const enriched = await enrichDisbursementExtras([{ ...data, entity_code: entityCode }]);
+  return enriched[0];
 };
 
 /**
@@ -543,6 +616,24 @@ const updateDisbursement = async ({ entityId, id, userId, data, user }) => {
   if (data.status === 'Approved' && existing.status === 'Draft') {
     return approveDisbursement({ entityId, id, userId, user });
   }
+
+  let effectiveUser = user;
+  if (!effectiveUser && userId) {
+    const { data: u } = await supabaseAdmin
+      .from('users')
+      .select('id, name, role, departments')
+      .eq('id', userId)
+      .maybeSingle();
+    effectiveUser = u;
+  }
+
+  const isAccountingUser =
+    effectiveUser?.role === 'Accounting' ||
+    (effectiveUser?.departments || []).includes('Accounting');
+  const isAdminUser = effectiveUser?.role === 'Admin';
+
+  const financialFields = ['category', 'description', 'amount', 'fundSource'];
+  const isEditingFinancial = financialFields.some((f) => data[f] !== undefined);
 
   const contentFields = [
     'category',
@@ -564,12 +655,20 @@ const updateDisbursement = async ({ entityId, id, userId, data, user }) => {
   ];
   const isUpdatingContent = contentFields.some((field) => data[field] !== undefined);
 
+  const isReviewStatus = ['Draft', 'Submitted', 'Pending', 'Pending Admin Approval'].includes(
+    existing.status
+  );
+
   if (isUpdatingContent && existing.status !== 'Draft') {
-    throw new AppError({
-      statusCode: 409,
-      title: 'Conflict',
-      detail: `Cannot edit disbursement in "${existing.status}" status. Only Draft disbursements can be edited.`,
-    });
+    if ((isAccountingUser || isAdminUser) && isReviewStatus) {
+      // Allowed for Accounting/Admin in review stages
+    } else {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot edit disbursement in "${existing.status}" status. Only Draft disbursements can be edited.`,
+      });
+    }
   }
 
   const effectiveTaskId =
@@ -666,10 +765,19 @@ const updateDisbursement = async ({ entityId, id, userId, data, user }) => {
   if (data.linkedTransmittalId !== undefined)
     updates.linked_transmittal_id = data.linkedTransmittalId;
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
+  if (data.status !== undefined) updates.status = data.status;
   if (data.notes !== undefined) updates.notes = data.notes;
   if (data.archived !== undefined) updates.archived = data.archived;
   if (data.receiptS3Key !== undefined) updates.receipt_s3_key = data.receiptS3Key;
   if (data.receiptFilename !== undefined) updates.receipt_filename = data.receiptFilename;
+
+  // Prepend Accounting edit notes and set edited_by_accounting: true (Task A.5)
+  if (isAccountingUser && isEditingFinancial) {
+    const editPrefix = `[Edited by Accounting on ${new Date().toLocaleDateString('en-PH')} by ${effectiveUser?.name || 'Accounting Staff'}] `;
+    const currentNotes = data.notes !== undefined ? data.notes : (existing.notes || '');
+    updates.notes = currentNotes ? `${editPrefix}${currentNotes}` : editPrefix.trim();
+    updates.edited_by_accounting = true;
+  }
 
   // OCC (Spec 2.2 / R-10): version-guard the update when the client declares
   // the version it read; zero matching rows become a 409 conflict.
@@ -707,7 +815,8 @@ const updateDisbursement = async ({ entityId, id, userId, data, user }) => {
     });
   }
 
-  return updated;
+  const enriched = await enrichDisbursementExtras([updated]);
+  return enriched[0];
 };
 
 /**
@@ -790,7 +899,7 @@ const unarchiveDisbursement = async ({ entityId, id, userId }) => {
  */
 const performTransition = async ({ entityId, id, userId, action, extraUpdates = {}, user }) => {
   const transition = VALID_TRANSITIONS[action];
-  let validFrom = Array.isArray(transition.from) ? [...transition.from] : [transition.from];
+  const validFrom = Array.isArray(transition.from) ? [...transition.from] : [transition.from];
 
   if (action === 'approve') {
     let effectiveUser = user;
@@ -868,12 +977,22 @@ const performTransition = async ({ entityId, id, userId, action, extraUpdates = 
     details: { from: validFrom, to: transition.to },
   });
 
+  if (action === 'approve' && !updated.approved_by) {
+    await supabaseAdmin
+      .from('disbursements')
+      .update({ approved_by: userId, approved_at: new Date().toISOString() })
+      .eq('id', id);
+    updated.approved_by = userId;
+    updated.approved_at = new Date().toISOString();
+  }
+
   const entityCode = await resolveEntityCode(updated.entity_id);
-  return { ...updated, entity_code: entityCode };
+  const enriched = await enrichDisbursementExtras([{ ...updated, entity_code: entityCode }]);
+  return enriched[0];
 };
 
 /**
- * Submit a disbursement for approval. Draft → Pending.
+ * Submit a disbursement for approval. Draft → Submitted.
  */
 const submitDisbursement = async ({ entityId, id, userId }) => {
   return performTransition({
@@ -881,6 +1000,19 @@ const submitDisbursement = async ({ entityId, id, userId }) => {
     id,
     userId,
     action: 'submit',
+    extraUpdates: {},
+  });
+};
+
+/**
+ * Forward a disbursement to Admin approval. [Submitted, Pending] → Pending Admin Approval.
+ */
+const forwardDisbursement = async ({ entityId, id, userId }) => {
+  return performTransition({
+    entityId,
+    id,
+    userId,
+    action: 'forward_admin',
     extraUpdates: {},
   });
 };
@@ -1184,6 +1316,8 @@ module.exports = {
   releaseDisbursement,
   fundDisbursement,
   rejectDisbursement,
+  forwardDisbursement,
+  enrichDisbursementExtras,
   getDisbursementCounts,
   listDisbursementTemplates,
   createDisbursementTemplate,

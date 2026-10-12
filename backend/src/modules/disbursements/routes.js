@@ -46,6 +46,45 @@ const requireDisbursementApprove = (req, res, next) => {
   next();
 };
 
+/**
+ * Guard POST /v1/disbursements/:id/reject.
+ * Allows Admin, users with approve_change:disbursements, disbursement:edit, or disbursement:approve.
+ */
+const requireDisbursementReject = (req, res, next) => {
+  if (!req.user) {
+    return next(
+      new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required',
+      })
+    );
+  }
+
+  const permissions = computePermissions(req.user);
+  req.userPermissions = permissions;
+
+  const isAdmin = req.user.role === 'Admin';
+  const canReject =
+    isAdmin ||
+    hasPermission(permissions, 'disbursement:approve') ||
+    hasPermission(permissions, 'approve_change:disbursements') ||
+    hasPermission(permissions, 'disbursement:edit') ||
+    hasPermission(permissions, 'disbursement:*');
+
+  if (!canReject) {
+    return next(
+      new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'Permission to reject disbursements is required',
+      })
+    );
+  }
+
+  next();
+};
+
 // --- Badge Counts (before resolveEntity so ALL can be summed) ---
 router.get(
   '/counts',
@@ -155,8 +194,22 @@ router.post(
 );
 
 router.post(
+  '/:id/forward',
+  requirePermission('disbursement:edit'),
+  audit('disbursement.forward', { table: 'disbursements' }),
+  disbursementsController.forwardDisbursement
+);
+
+router.post(
+  '/:id/forward_admin',
+  requirePermission('disbursement:edit'),
+  audit('disbursement.forward_admin', { table: 'disbursements' }),
+  disbursementsController.forwardDisbursement
+);
+
+router.post(
   '/:id/reject',
-  requireDisbursementApprove,
+  requireDisbursementReject,
   audit('disbursement.reject', { table: 'disbursements' }),
   disbursementsController.rejectDisbursement
 );

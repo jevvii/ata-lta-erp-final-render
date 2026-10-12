@@ -599,4 +599,261 @@ describe('/v1/disbursements', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(403);
   });
+
+  describe('Parcel A: Backend Lifecycle & Governance (Tasks A.1, A.4, A.5)', () => {
+    it('Task A.1: Entity resolution Step 4 resolves disbursement entity in ALL entity mode', async () => {
+      const admin = registerUser({
+        email: 'admin-disb-all@ata-lta.ph',
+        name: 'Admin Disb All',
+        role: 'Admin',
+        entities: ['ATA', 'LTA'],
+      });
+
+      // Seed an LTA disbursement
+      const LTA_DISB_ID = '88888888-dddd-eeee-ffff-222222222222';
+      mockTables.disbursements.set(LTA_DISB_ID, {
+        id: LTA_DISB_ID,
+        entity_id: 'ent-lta',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-LTA-2026-ALL',
+        category: 'Supplies',
+        description: 'LTA special stationery',
+        amount: 2200,
+        fund_source: 'Firm Fund',
+        status: 'Draft',
+        archived: false,
+      });
+
+      // PUT /v1/disbursements/:id with X-Active-Entity: ALL
+      const res = await request(app)
+        .put(`/v1/disbursements/${LTA_DISB_ID}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ALL')
+        .send({ notes: 'Updated LTA disb in ALL mode' })
+        .expect(200);
+
+      expect(res.body.data.notes).toBe('Updated LTA disb in ALL mode');
+      expect(res.body.data.entity_id).toBe('ent-lta');
+    });
+
+    it('Task A.4: enrichDisbursementExtras resolves linked work request and human-readable names', async () => {
+      const admin = registerUser({
+        email: 'admin-enrich@ata-lta.ph',
+        name: 'Admin Enrich',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const EMP_ID = 'emp-user-1111';
+      const REQ_ID = 'req-user-2222';
+      const CRE_ID = 'cre-user-3333';
+      const APP_ID = 'app-user-4444';
+      const REL_ID = 'rel-user-5555';
+      const REJ_ID = 'rej-user-6666';
+
+      mockTables.users.set(EMP_ID, { id: EMP_ID, name: 'Employee Juan' });
+      mockTables.users.set(REQ_ID, { id: REQ_ID, name: 'Requester Pedro' });
+      mockTables.users.set(CRE_ID, { id: CRE_ID, name: 'Creator Clara' });
+      mockTables.users.set(APP_ID, { id: APP_ID, name: 'Approver Maria' });
+      mockTables.users.set(REL_ID, { id: REL_ID, name: 'Releaser Carlos' });
+      mockTables.users.set(REJ_ID, { id: REJ_ID, name: 'Rejecter Sofia' });
+
+      const WR_ENRICH_ID = 'wr-enrich-5555';
+      mockTables.work_requests.set(WR_ENRICH_ID, {
+        id: WR_ENRICH_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        title: 'Manila Office Setup',
+        work_order_number: 'WO-2026-MNL-01',
+      });
+
+      const DISB_ENRICH_ID = 'disb-enrich-7777';
+      mockTables.disbursements.set(DISB_ENRICH_ID, {
+        id: DISB_ENRICH_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WR_ENRICH_ID,
+        disbursement_number: 'DISB-ATA-2026-ENRICH',
+        category: 'Supplies',
+        description: 'Full audit supplies',
+        amount: 8800,
+        fund_source: 'Firm Fund',
+        status: 'Released',
+        employee_id: EMP_ID,
+        requested_by: REQ_ID,
+        created_by: CRE_ID,
+        approved_by: APP_ID,
+        released_by: REL_ID,
+        rejected_by: REJ_ID,
+        notes: 'Sample notes',
+        archived: false,
+      });
+
+      // 1. Check getDisbursementById
+      const getRes = await request(app)
+        .get(`/v1/disbursements/${DISB_ENRICH_ID}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(getRes.body.data.linked_work_request_name).toBe('Manila Office Setup');
+      expect(getRes.body.data.linked_work_request_order_number).toBe('WO-2026-MNL-01');
+      expect(getRes.body.data.employee_name).toBe('Employee Juan');
+      expect(getRes.body.data.requested_by_name).toBe('Requester Pedro');
+      expect(getRes.body.data.created_by_name).toBe('Creator Clara');
+      expect(getRes.body.data.approved_by_name).toBe('Approver Maria');
+      expect(getRes.body.data.released_by_name).toBe('Releaser Carlos');
+      expect(getRes.body.data.rejected_by_name).toBe('Rejecter Sofia');
+      expect(getRes.body.data.edited_by_accounting).toBe(false);
+
+      // 2. Check listDisbursements
+      const listRes = await request(app)
+        .get('/v1/disbursements')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      const found = listRes.body.data.find((d) => d.id === DISB_ENRICH_ID);
+      expect(found).toBeDefined();
+      expect(found.linked_work_request_name).toBe('Manila Office Setup');
+      expect(found.linked_work_request_order_number).toBe('WO-2026-MNL-01');
+      expect(found.employee_name).toBe('Employee Juan');
+    });
+
+    it('Task A.5: Standard 5-stage lifecycle transitions (Draft -> Submitted -> Pending Admin Approval -> Released -> Funded)', async () => {
+      const admin = registerUser({
+        email: 'admin-lifecycle@ata-lta.ph',
+        name: 'Admin Lifecycle',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      // 1. Create Draft disbursement
+      const createRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send(validDisbursement)
+        .expect(201);
+
+      const disbId = createRes.body.data.id;
+      expect(createRes.body.data.status).toBe('Draft');
+
+      // 2. submit: Draft -> Submitted
+      const submitRes = await request(app)
+        .post(`/v1/disbursements/${disbId}/submit`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(submitRes.body.data.status).toBe('Submitted');
+
+      // 3. forward_admin: Submitted -> Pending Admin Approval
+      const forwardRes = await request(app)
+        .post(`/v1/disbursements/${disbId}/forward_admin`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(forwardRes.body.data.status).toBe('Pending Admin Approval');
+
+      // 4. approve: Pending Admin Approval -> Released
+      const approveRes = await request(app)
+        .post(`/v1/disbursements/${disbId}/approve`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(approveRes.body.data.status).toBe('Released');
+
+      // 5. fund: Released -> Funded
+      const fundRes = await request(app)
+        .post(`/v1/disbursements/${disbId}/fund`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(fundRes.body.data.status).toBe('Funded');
+    });
+
+    it('Task A.5: Accounting staff can reject a voucher with reason', async () => {
+      const accountingToken = registerUser({
+        email: 'jen.andoga@ata-lta.ph',
+        name: 'Jen Andoga',
+        role: 'Accounting',
+        entities: ['ATA'],
+      });
+
+      // Seed a submitted disbursement
+      const DISB_TO_REJECT = 'disb-reject-9999';
+      mockTables.disbursements.set(DISB_TO_REJECT, {
+        id: DISB_TO_REJECT,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-REJ-01',
+        category: 'Meals',
+        description: 'Team dinner',
+        amount: 3200,
+        fund_source: 'Firm Fund',
+        status: 'Submitted',
+        archived: false,
+      });
+
+      const res = await request(app)
+        .post(`/v1/disbursements/${DISB_TO_REJECT}/reject`)
+        .set('Authorization', `Bearer ${accountingToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ reason: 'Duplicate meal reimbursement claim' })
+        .expect(200);
+
+      expect(res.body.data.status).toBe('Rejected');
+      expect(res.body.data.rejection_reason).toBe('Duplicate meal reimbursement claim');
+    });
+
+    it('Task A.5: Accounting staff modifying financial details prepends notes and sets edited_by_accounting: true', async () => {
+      const accountingToken = registerUser({
+        email: 'jen.andoga@ata-lta.ph',
+        name: 'Jen Andoga',
+        role: 'Accounting',
+        entities: ['ATA'],
+      });
+
+      // Seed a Pending voucher
+      const DISB_EDIT_ID = 'disb-edit-accounting-8888';
+      mockTables.disbursements.set(DISB_EDIT_ID, {
+        id: DISB_EDIT_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-EDIT-01',
+        category: 'Transportation',
+        description: 'Grab fare to SEC',
+        amount: 450,
+        fund_source: 'Firm Fund',
+        status: 'Pending',
+        notes: 'Original requester note',
+        archived: false,
+      });
+
+      const res = await request(app)
+        .put(`/v1/disbursements/${DISB_EDIT_ID}`)
+        .set('Authorization', `Bearer ${accountingToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          amount: 500,
+          category: 'Miscellaneous',
+          notes: 'Adjusted per official receipt',
+        })
+        .expect(200);
+
+      expect(res.body.data.amount).toBe(500);
+      expect(res.body.data.category).toBe('Miscellaneous');
+      expect(res.body.data.edited_by_accounting).toBe(true);
+      expect(res.body.data.notes).toContain('[Edited by Accounting on ');
+      expect(res.body.data.notes).toContain('by Jen Andoga]');
+      expect(res.body.data.notes).toContain('Adjusted per official receipt');
+    });
+  });
 });
