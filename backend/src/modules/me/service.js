@@ -171,15 +171,26 @@ const changePassword = async ({ userId, authUserId, email, currentPassword, newP
   }
 };
 
-const getAvatarUploadUrl = async ({ userId }) => {
-  const path = `entities/avatars/${userId}/${Date.now()}.png`;
+const getAvatarUploadUrl = async ({ userId, contentType = 'image/png' }) => {
+  const avatarBucket = env.storage.avatarBucket || 'avatars';
+  const extMap = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+  };
+  const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : 'image/png';
+  const ext = extMap[normalizedType] || 'png';
+  const path = `${userId}/${Date.now()}.${ext}`;
+
   const signedUrl = await storageService.getSignedUploadUrl({
+    bucket: avatarBucket,
     path,
-    contentType: 'image/png',
+    contentType,
     expiresInSeconds: 300,
   });
 
-  const publicUrl = `${env.supabase.url}/storage/v1/object/public/${env.storage.bucket}/${path}`;
+  const publicUrl = `${env.supabase.url}/storage/v1/object/public/${avatarBucket}/${path}`;
 
   return {
     signedUrl,

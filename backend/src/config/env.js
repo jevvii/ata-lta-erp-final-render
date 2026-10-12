@@ -16,6 +16,7 @@ const env = {
 
   storage: {
     bucket: process.env.SUPABASE_STORAGE_BUCKET || '',
+    avatarBucket: process.env.SUPABASE_AVATARS_BUCKET || 'avatars',
   },
 
   databaseUrl: process.env.DATABASE_URL || '',

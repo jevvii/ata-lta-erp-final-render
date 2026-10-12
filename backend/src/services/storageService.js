@@ -25,18 +25,27 @@ const assertBucket = () => {
 /**
  * Generate a pre-signed upload URL for the browser.
  * @param {Object} params
+ * @param {string} [params.bucket] - Optional target bucket
  * @param {string} params.path - Storage path (e.g. entities/ATA/...)
  * @param {string} [params.contentType] - Optional content type
  * @param {number} [params.expiresInSeconds=300]
  * @returns {Promise<string>}
  */
 const getSignedUploadUrl = async ({
+  bucket: targetBucket,
   path,
   contentType: _contentType,
   expiresInSeconds: _expiresInSeconds = 300,
 }) => {
-  assertBucket();
-  const { data, error } = await supabaseAdmin.storage.from(bucket).createSignedUploadUrl(path);
+  const activeBucket = targetBucket || env.storage.bucket;
+  if (!activeBucket) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Configuration Error',
+      detail: 'Storage bucket is not configured',
+    });
+  }
+  const { data, error } = await supabaseAdmin.storage.from(activeBucket).createSignedUploadUrl(path);
 
   if (error) {
     throw new AppError({

@@ -110,7 +110,11 @@ const changePassword = async (req, res, next) => {
  */
 const getAvatarUploadUrl = async (req, res, next) => {
   try {
-    const result = await meService.getAvatarUploadUrl({ userId: req.user.id });
+    const { contentType = 'image/png' } = req.body || {};
+    const result = await meService.getAvatarUploadUrl({
+      userId: req.user.id,
+      contentType,
+    });
     res.status(200).json({ data: result });
   } catch (err) {
     next(err);

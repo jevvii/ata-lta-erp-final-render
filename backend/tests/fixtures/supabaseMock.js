@@ -914,6 +914,8 @@ const supabaseAdmin = {
   },
   storage: {
     listBuckets: () => Promise.resolve({ data: [{ name: 'test-bucket' }], error: null }),
+    createBucket: () => Promise.resolve({ data: { name: 'avatars' }, error: null }),
+    updateBucket: () => Promise.resolve({ data: { name: 'avatars' }, error: null }),
     from: () => ({
       createSignedUploadUrl: () =>
         Promise.resolve({ data: { signedUrl: 'https://storage.example.com/upload' }, error: null }),

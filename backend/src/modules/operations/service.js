@@ -2734,7 +2734,10 @@ const listRetainerTemplates = async ({ entityId, type }) => {
     });
   }
 
-  return data || [];
+  return (data || []).map((t) => ({
+    ...t,
+    entity: t.entities?.code || (t.entity && t.entity.length <= 4 ? t.entity : null),
+  }));
 };
 
 const createRetainerTemplate = async ({ entityId, userId, data }) => {
@@ -2770,7 +2773,10 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
     });
   }
 
-  return template;
+  return {
+    ...template,
+    entity: template.entities?.code || (template.entity && template.entity.length <= 4 ? template.entity : null),
+  };
 };
 
 const updateRetainerTemplate = async ({ entityId, id, data }) => {
@@ -2809,7 +2815,10 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
     });
   }
 
-  return updated;
+  return {
+    ...updated,
+    entity: updated.entities?.code || (updated.entity && updated.entity.length <= 4 ? updated.entity : null),
+  };
 };
 
 const deleteRetainerTemplate = async ({ entityId, id }) => {
