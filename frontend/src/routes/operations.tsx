@@ -157,6 +157,11 @@ export default function OperationsPage() {
     enabled: canViewModule,
   });
   useEntityRealtimeSync({
+    table: 'task_assignees',
+    activeEntity,
+    enabled: canViewModule,
+  });
+  useEntityRealtimeSync({
     table: 'operations_requests',
     listRootKey: operationsKeys.requests(),
     detailQueryKey: (id) => operationsKeys.requestDetail(id),
@@ -524,8 +529,8 @@ export default function OperationsPage() {
               {templates.map((tpl) => {
                 const entityCode =
                   (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
-                  ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
-                    ? (tpl as any).entities.code
+                  ((tpl as { entities?: { code?: string } }).entities?.code && (tpl as { entities?: { code?: string } }).entities!.code!.length <= 4
+                    ? (tpl as { entities?: { code?: string } }).entities!.code
                     : undefined) ||
                   resolveEntityCodeFromUUID(tpl.entity_id);
 
@@ -646,8 +651,8 @@ export default function OperationsPage() {
                   {otherTemplates.map((tpl) => {
                     const entityCode =
                       (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
-                      ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
-                        ? (tpl as any).entities.code
+                      ((tpl as { entities?: { code?: string } }).entities?.code && (tpl as { entities?: { code?: string } }).entities!.code!.length <= 4
+                        ? (tpl as { entities?: { code?: string } }).entities!.code
                         : undefined) ||
                       resolveEntityCodeFromUUID(tpl.entity_id);
 

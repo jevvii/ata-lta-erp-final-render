@@ -97,15 +97,161 @@ export function TaskDetailModal({
     (initialTask as { work_request_id?: string } | null | undefined)?.work_request_id ||
     workRequest?.id;
   const effectiveTaskId = initialTask?.id;
+  const queryClient = useQueryClient();
+  const currentUser = useSessionStore((state) => state.user);
+  const activeEntity = useSessionStore((state) => state.activeEntity);
 
-  const { data: rawLiveTask } = useTaskDetail(effectiveWrId, effectiveTaskId, {
-    enabled: Boolean(effectiveWrId && effectiveTaskId && isOpen),
+  // Stable denied scope tracking (Directive 1, Interim Review 2):
+  // Preserve access-lost state even when query cache is invalidated or cleared,
+  // until the targeted taskId, entity, or user account changes.
+  const [deniedScope, setDeniedScope] = useState<{
+    taskId: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(null);
+
+  const isScopeMatch = Boolean(
+    deniedScope &&
+      deniedScope.taskId === effectiveTaskId &&
+      deniedScope.entity === activeEntity &&
+      deniedScope.userId === (currentUser?.id ?? null)
+  );
+
+  // Scope owner tracking (Directive 1, Final Review):
+  // Guard against entity or account switching while modal is open with an initialTask prop.
+  const [scopeOwner, setScopeOwner] = useState<{
+    taskId: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(() => {
+    if (isOpen && effectiveTaskId) {
+      return {
+        taskId: effectiveTaskId,
+        entity: activeEntity,
+        userId: currentUser?.id ?? null,
+      };
+    }
+    return null;
   });
+
+  useEffect(() => {
+    if (isOpen && effectiveTaskId) {
+      setScopeOwner((prev) => {
+        if (!prev || prev.taskId !== effectiveTaskId) {
+          return {
+            taskId: effectiveTaskId,
+            entity: activeEntity,
+            userId: currentUser?.id ?? null,
+          };
+        }
+        return prev;
+      });
+    } else if (!isOpen) {
+      setScopeOwner(null);
+    }
+  }, [isOpen, effectiveTaskId, activeEntity, currentUser?.id]);
+
+  const isScopeStale = Boolean(
+    scopeOwner &&
+      (scopeOwner.entity !== activeEntity ||
+        scopeOwner.userId !== (currentUser?.id ?? null))
+  );
+
+  useEffect(() => {
+    if (isScopeStale && isOpen) {
+      onClose?.();
+    }
+  }, [isScopeStale, isOpen, onClose]);
+
+  const {
+    data: rawLiveTask,
+    isError: isTaskError,
+    isPlaceholderData: isTaskPlaceholder,
+    error: taskError,
+  } = useTaskDetail(effectiveWrId, effectiveTaskId, {
+    enabled: Boolean(effectiveWrId && effectiveTaskId && isOpen && !isScopeStale),
+  });
+
+  const isTaskDetailErrorDenied = Boolean(
+    isTaskError &&
+      ((taskError as { status?: number })?.status === 403 ||
+        (taskError as { status?: number })?.status === 404 ||
+        String(taskError?.message || '').includes('403') ||
+        String(taskError?.message || '').includes('404'))
+  );
+
+  const {
+    data: rawRelatedRecords,
+    isError: isRelatedError,
+    error: relatedError,
+    refetch: refetchRelated,
+  } = useTaskRelated(effectiveTaskId, {
+    enabled: Boolean(
+      effectiveTaskId &&
+        isOpen &&
+        !isScopeStale &&
+        !isScopeMatch &&
+        !isTaskDetailErrorDenied
+    ),
+  });
+
+  const isRelatedErrorDenied = Boolean(
+    isRelatedError &&
+      ((relatedError as { status?: number })?.status === 403 ||
+        (relatedError as { status?: number })?.status === 404 ||
+        String(relatedError?.message || '').includes('403') ||
+        String(relatedError?.message || '').includes('404'))
+  );
+
+  const isTaskDenied = Boolean(
+    isScopeMatch || isTaskDetailErrorDenied || isRelatedErrorDenied
+  );
+  const isRelatedDenied = Boolean(isRelatedErrorDenied || isTaskDenied);
+
+  // When access denial is observed, record denied scope and purge confidential data
+  useEffect(() => {
+    if ((isTaskDetailErrorDenied || isRelatedErrorDenied) && effectiveTaskId) {
+      setDeniedScope({
+        taskId: effectiveTaskId,
+        entity: activeEntity,
+        userId: currentUser?.id ?? null,
+      });
+
+      // Cancel in-flight queries and overwrite query cache data with null so no observer holds protected data.
+      // CRITICAL: NEVER call removeQueries on taskDetail or taskRelated,
+      // as removing the driving query wipes the 403 error and resets active observers.
+      if (effectiveWrId) {
+        void queryClient.cancelQueries({ queryKey: operationsKeys.taskDetail(effectiveWrId, effectiveTaskId) });
+        queryClient.setQueryData(operationsKeys.taskDetail(effectiveWrId, effectiveTaskId), null);
+      }
+      void queryClient.cancelQueries({ queryKey: operationsKeys.taskRelated(effectiveTaskId) });
+      queryClient.setQueryData(operationsKeys.taskRelated(effectiveTaskId), null);
+      queryClient.removeQueries({ queryKey: ['operations', 'tasks', effectiveTaskId, 'documents'], exact: false });
+      queryClient.removeQueries({ queryKey: ['operations', 'time-entries', { taskId: effectiveTaskId }], exact: false });
+    }
+  }, [isTaskDetailErrorDenied, isRelatedErrorDenied, effectiveWrId, effectiveTaskId, activeEntity, currentUser?.id, queryClient]);
+
   const liveTask = Array.isArray(rawLiveTask)
     ? rawLiveTask.find((t) => t?.id === effectiveTaskId) || rawLiveTask[0]
     : rawLiveTask;
 
+  // Support restored membership on fresh successful authorized read (Directive 2):
+  // When genuinely fresh, non-null matching task data arrives without error, clear the denied latch.
+  useEffect(() => {
+    if (
+      liveTask &&
+      liveTask.id === effectiveTaskId &&
+      !isTaskError &&
+      !isTaskPlaceholder &&
+      deniedScope
+    ) {
+      setDeniedScope(null);
+      void refetchRelated();
+    }
+  }, [liveTask, effectiveTaskId, isTaskError, isTaskPlaceholder, deniedScope, refetchRelated]);
+
   const currentTask = useMemo<Task | null>(() => {
+    if (isTaskDenied || isScopeStale) return null;
     if (!liveTask || !liveTask.id) return initialTask;
     if (!initialTask) return liveTask as Task;
 
@@ -163,7 +309,7 @@ export function TaskDetailModal({
 
     // Authoritative liveTask fields always override static initialTask prop
     return { ...initialTask, ...liveTask } as Task;
-  }, [initialTask, liveTask]);
+  }, [initialTask, liveTask, isTaskDenied, isScopeStale]);
 
   const task = currentTask;
 
@@ -227,7 +373,7 @@ export function TaskDetailModal({
   );
 
   const linkedDocs: DmsDocument[] = useMemo(() => {
-    const docs = Array.isArray(rawDocs) ? rawDocs : rawDocs?.data ?? [];
+    const docs = Array.isArray(rawDocs) ? rawDocs : Array.isArray(rawDocs?.data) ? rawDocs.data : [];
     if (!task?.id) return [];
     return docs.filter(
       (d) => (d.linkedTaskId ?? d.linked_task_id) === task.id
@@ -238,9 +384,7 @@ export function TaskDetailModal({
   const createTimeEntryMutation = useCreateTimeEntry();
   const { updateTask } = useTaskMutations(task?.workRequestId || '');
 
-  const queryClient = useQueryClient();
   const permissions = useSessionStore((state) => state.permissions);
-  const currentUser = useSessionStore((state) => state.user);
   const isAdmin = isUserAdmin(currentUser);
   const isCompletedWr = workRequest?.status === 'Completed';
   const canEdit = !isCompletedWr && hasPermission(permissions, 'workflow:edit');
@@ -287,9 +431,9 @@ export function TaskDetailModal({
 
   // Sibling tasks for parent WR to verify WR membership
   const { data: siblingTasksData = [] } = useWorkRequestTasks(task?.workRequestId, {
-    enabled: Boolean(task?.workRequestId),
+    enabled: Boolean(task?.workRequestId && !isTaskDenied && !isScopeStale),
   });
-  const siblingTasks = siblingTasksData || [];
+  const siblingTasks = useMemo(() => siblingTasksData || [], [siblingTasksData]);
 
   // Task B.5: Graceful prerequisite blocker handling
   const incompletePredecessors = useMemo(() => {
@@ -317,7 +461,7 @@ export function TaskDetailModal({
       linkedTaskId: task?.id,
       status: 'pending',
     },
-    { enabled: Boolean(task?.id) }
+    { enabled: Boolean(task?.id && !isTaskDenied && !isScopeStale) }
   );
   const pendingReqs = useMemo(() => {
     if (Array.isArray(rawPendingReqs)) return rawPendingReqs;
@@ -346,10 +490,12 @@ export function TaskDetailModal({
   const [isUploadDocModalOpen, setIsUploadDocModalOpen] = useState(false);
 
   // Linked records query (UAT2-7) with defensive task-scoping
-  const { data: rawRelatedRecords, refetch: refetchRelated } = useTaskRelated(task?.id);
   const relatedRecords = useMemo(
-    () => filterTaskRelatedRecords(rawRelatedRecords, task?.id),
-    [rawRelatedRecords, task?.id]
+    () =>
+      isTaskDenied
+        ? { invoices: [], disbursements: [], transmittals: [] }
+        : filterTaskRelatedRecords(rawRelatedRecords, task?.id),
+    [isTaskDenied, rawRelatedRecords, task?.id]
   );
   const invoices = relatedRecords.invoices;
   const disbursements = relatedRecords.disbursements;
@@ -749,6 +895,41 @@ export function TaskDetailModal({
       setLogError(msg);
     }
   };
+
+  if (isScopeStale) return null;
+
+  if (isTaskDenied) {
+    return (
+      <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+        <DialogContent
+          className="max-w-md p-6 rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float text-center"
+          data-testid="task-access-denied-dialog"
+        >
+          <div className="flex flex-col items-center justify-center py-6 space-y-3">
+            <div className="w-12 h-12 rounded-full bg-[#F1F5F9] flex items-center justify-center">
+              <Lock className="w-6 h-6 text-[#64748B]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
+                You do not have access to this task or its parent work request.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="mt-2 text-xs rounded-[6px]"
+              data-testid="task-access-denied-close-btn"
+            >
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   if (!task) return null;
 
@@ -1515,7 +1696,14 @@ export function TaskDetailModal({
                 </div>
               </div>
 
-              {invoices.length === 0 && disbursements.length === 0 && transmittals.length === 0 ? (
+              {isRelatedDenied ? (
+                <div
+                  className="p-3 text-center text-xs text-[#DC2626] bg-[#FEF2F2] rounded-[8px] border border-[#FCA5A5]"
+                  data-testid="linked-records-access-denied"
+                >
+                  Records cannot be loaded. You are not assigned to this project.
+                </div>
+              ) : invoices.length === 0 && disbursements.length === 0 && transmittals.length === 0 ? (
                 <div className="p-3 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] italic">
                   No billing invoices, disbursements, or transmittals linked to this task.
                 </div>
@@ -1528,34 +1716,53 @@ export function TaskDetailModal({
                         Invoices ({invoices.length})
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {invoices.map((inv) => (
-                          <a
-                            key={inv.id}
-                            href={`/billing?invoiceId=${inv.id}`}
-                            className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
-                            data-testid={`linked-invoice-${inv.id}`}
-                          >
-                            <div className="flex items-center gap-2 truncate">
-                              <Receipt className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                              <div className="truncate">
-                                <span className="font-bold text-[#1E293B] block truncate">
-                                  {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
-                                </span>
-                                <span className="text-xs text-[#475569] block">
-                                  {inv.clients?.name || 'Client'}
-                                </span>
+                        {invoices.map((inv) => {
+                          const invTotal = inv.total != null ? inv.total : inv.amount;
+                          const clientName =
+                            inv.client_name ||
+                            inv.clientName ||
+                            inv.clients?.name ||
+                            workRequest?.clientName ||
+                            'Client';
+
+                          return (
+                            <a
+                              key={inv.id}
+                              href={`/billing?invoiceId=${inv.id}`}
+                              className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
+                              data-testid={`linked-invoice-${inv.id}`}
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <Receipt className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                                <div className="truncate">
+                                  <span className="font-bold text-[#1E293B] block truncate">
+                                    {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
+                                  </span>
+                                  <span className="text-xs text-[#475569] block">
+                                    {clientName}
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {inv.amount != null && (
-                                <span className="tabular-nums text-xs font-bold text-[#1E293B]">
-                                  ₱{Number(inv.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              )}
-                              <ExternalLink className="h-3 w-3 text-[#475569]" />
-                            </div>
-                          </a>
-                        ))}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {invTotal != null && (
+                                  <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                    ₱{Number(invTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                  </span>
+                                )}
+                                {inv.status && (
+                                  <Badge
+                                    variant={inv.status === 'Paid' ? 'success' : inv.status === 'Draft' ? 'secondary' : 'outline'}
+                                    size="compact"
+                                    className="text-xs rounded-[6px]"
+                                  >
+                                    {inv.status}
+                                  </Badge>
+                                )}
+                                <ExternalLink className="h-3 w-3 text-[#475569]" />
+                              </div>
+                            </a>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -1570,7 +1777,7 @@ export function TaskDetailModal({
                         {disbursements.map((d) => (
                           <a
                             key={d.id}
-                            href={`/disbursements?id=${d.id}`}
+                            href={`/disbursements?disbursementId=${d.id}`}
                             className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
                             data-testid={`linked-disbursement-${d.id}`}
                           >
@@ -1609,7 +1816,7 @@ export function TaskDetailModal({
                         {transmittals.map((t) => (
                           <a
                             key={t.id}
-                            href={`/transmittals?id=${t.id}`}
+                            href={`/transmittals?transmittalId=${t.id}`}
                             className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
                             data-testid={`linked-transmittal-${t.id}`}
                           >

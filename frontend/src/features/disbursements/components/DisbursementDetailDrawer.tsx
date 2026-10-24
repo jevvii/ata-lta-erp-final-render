@@ -25,7 +25,9 @@ import {
   RefreshCw,
   Archive,
   ArchiveRestore,
+  Lock,
 } from 'lucide-react';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import {
   useDisbursementDetail,
   useRejectDisbursement,
@@ -74,14 +76,37 @@ export function DisbursementDetailDrawer({
     isAdmin || user?.role === 'Accounting' || Boolean(user?.departments?.includes('Accounting'));
 
   const effectiveId = id || initialDisbursement?.id;
-  const { data: fetchedItem, isLoading: isFetching } = useDisbursementDetail(
+  const {
+    data: fetchedItem,
+    isLoading: isFetching,
+    isError: isDisbursementError,
+    error: disbursementError,
+    isPlaceholderData: isDisbursementPlaceholder,
+  } = useDisbursementDetail(
     effectiveId ?? undefined,
     {
       enabled: isOpen && Boolean(effectiveId),
     }
   );
-  const item = fetchedItem || initialDisbursement;
-  const isLoading = !item && isFetching;
+
+  const {
+    record: item,
+    isDenied,
+    isScopeStale,
+    canFetchChildren,
+  } = useScopedRecordGuard<Disbursement>({
+    recordId: effectiveId,
+    isOpen,
+    onClose,
+    queryError: disbursementError,
+    isQueryError: isDisbursementError,
+    isPlaceholderData: isDisbursementPlaceholder,
+    liveRecord: fetchedItem,
+    initialRecord: initialDisbursement,
+    queryKey: effectiveId ? disbursementKeys.detail(effectiveId) : undefined,
+  });
+
+  const isLoading = !item && isFetching && !isDenied;
   const voucher = item;
   const { captureContext } = useLiveModalContext({
     isOpen,
@@ -120,6 +145,7 @@ export function DisbursementDetailDrawer({
     enabled:
       isOpen &&
       Boolean(item?.id) &&
+      canFetchChildren &&
       Boolean(
         item?.receipt_filename ||
         item?.receiptFilename ||
@@ -246,13 +272,38 @@ export function DisbursementDetailDrawer({
     item?.client_name || item?.clientName || item?.clients?.name || 'Firm Internal';
   const workRequestId = item?.linked_work_request_id || item?.linkedWorkRequestId;
 
+  if (isScopeStale || !isOpen) return null;
+
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className="max-h-[90vh] space-y-5 border-[#E2E8F0] overflow-y-auto border p-6 shadow-float rounded-[12px] max-w-2xl bg-[#FFFFFF]"
         data-testid="disbursement-detail-drawer"
       >
-        <DialogHeader className="border-b border-[#E2E8F0] pb-3">
+        {isDenied ? (
+          <div className="py-16 text-center space-y-3" data-testid="disbursement-access-denied">
+            <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+              <Lock className="w-6 h-6 text-[#64748B]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
+                You do not have access to this disbursement voucher or access has been revoked.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="mt-2 text-xs"
+              data-testid="disbursement-access-denied-close-btn"
+            >
+              Close
+            </Button>
+          </div>
+        ) : (
+          <>
+            <DialogHeader className="border-b border-[#E2E8F0] pb-3">
           <div className="flex items-center justify-between">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
@@ -1038,6 +1089,8 @@ export function DisbursementDetailDrawer({
               });
             }}
           />
+        )}
+          </>
         )}
       </DialogContent>
     </Dialog>

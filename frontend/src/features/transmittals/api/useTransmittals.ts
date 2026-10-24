@@ -82,18 +82,20 @@ export function useTransmittalDetail(
       return res.data;
     },
     enabled: Boolean(id) && (options?.enabled ?? true),
-    // A missing record is not transient; retries/focus cannot repair a 404.
-    retry: (failureCount, error) => !(error instanceof ApiError && error.status === 404) && failureCount < 1,
-    refetchOnWindowFocus: (query) => !(query.state.error instanceof ApiError && query.state.error.status === 404),
-    refetchOnReconnect: (query) => !(query.state.error instanceof ApiError && query.state.error.status === 404),
+    // A missing or forbidden record is not transient; retries/focus cannot repair a 403 or 404.
+    retry: (failureCount, error) => !(error instanceof ApiError && (error.status === 404 || error.status === 403)) && failureCount < 1,
+    refetchOnWindowFocus: (query) => !(query.state.error instanceof ApiError && (query.state.error.status === 404 || query.state.error.status === 403)),
+    refetchOnReconnect: (query) => !(query.state.error instanceof ApiError && (query.state.error.status === 404 || query.state.error.status === 403)),
     // Instant feel: render from the matching list row while the detail fetch
     // completes — but only when the row carries its line items (the detail
     // modal renders items unguarded). Placeholder never persists.
-    placeholderData: () => {
+    placeholderData: (_prev): TransmittalWithItems | undefined => {
       if (!id) return undefined;
-      for (const [, list] of queryClient.getQueriesData<TransmittalListResponse>({
+      const currentEntity = useSessionStore.getState().activeEntity;
+      for (const [key, list] of queryClient.getQueriesData<TransmittalListResponse>({
         queryKey: transmittalKeys.lists(),
       })) {
+        if (key[2] !== currentEntity) continue;
         const hit = list?.data?.find((t) => t.id === id);
         if (hit && Array.isArray(hit.items)) return hit as TransmittalWithItems;
       }

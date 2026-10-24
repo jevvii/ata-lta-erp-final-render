@@ -64,7 +64,7 @@ import { operationsKeys } from '../api/queryKeys';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
-import { isUserAdmin } from '../lib/taskScope';
+import { isUserAdmin, isTaskAssignee } from '../lib/taskScope';
 import { useEntityRealtimeSync } from '@/lib/realtime';
 import type { ApiError } from '@/lib/api';
 import {
@@ -177,14 +177,22 @@ export function WorkRequestList({
       // Assignee Filter (Task B.10: Multi-dimensional)
       if (assigneeFilter !== 'all') {
         if (assigneeFilter === 'unassigned') {
-          if (wr.assignedTo) return false;
+          if (wr.assignedTo || (wr as { assigned_to?: string }).assigned_to) return false;
         } else {
-          const isManager = wr.assignedTo === assigneeFilter;
-          const isCoAssignee = Array.isArray(wr.coAssignees) && wr.coAssignees.includes(assigneeFilter);
-          const isTaskAssignee = Array.isArray(wr.tasks) && wr.tasks.some((t) =>
-            t.assigneeId === assigneeFilter || (Array.isArray(t.assignees) && t.assignees.includes(assigneeFilter))
-          );
-          if (!isManager && !isCoAssignee && !isTaskAssignee) return false;
+          const isManager =
+            wr.assignedTo === assigneeFilter ||
+            (wr as { assigned_to?: string }).assigned_to === assigneeFilter;
+          const coAssignees =
+            wr.coAssignees ||
+            (wr as { co_assignees?: unknown }).co_assignees;
+          const isCoAssignee =
+            Array.isArray(coAssignees) && coAssignees.includes(assigneeFilter);
+          const isAssignedToTask =
+            Array.isArray(wr.tasks) &&
+            wr.tasks.some((t) =>
+              isTaskAssignee({ id: assigneeFilter } as { id: string; email: string; name: string; role: string; departments: string[]; entities: string[] }, t)
+            );
+          if (!isManager && !isCoAssignee && !isAssignedToTask) return false;
         }
       }
 

@@ -34,6 +34,7 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { useInvoiceDetail } from '../api/useInvoices';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import {
   updateInvoiceAction,
   updateClientAddressAction,
@@ -72,11 +73,31 @@ export function InvoiceDetailModal({
   onOpenPrintPreview,
 }: InvoiceDetailModalProps) {
   const effectiveId = invoiceId || initialInvoice?.id;
-  const { data: fetchedInvoice, refetch } = useInvoiceDetail(effectiveId, {
+  const {
+    data: fetchedInvoice,
+    isError: isInvoiceError,
+    error: invoiceError,
+    isPlaceholderData: isInvoicePlaceholder,
+    refetch,
+  } = useInvoiceDetail(effectiveId, {
     enabled: isOpen && !!effectiveId,
   });
 
-  const invoice = fetchedInvoice || initialInvoice;
+  const {
+    record: invoice,
+    isDenied,
+    isScopeStale,
+  } = useScopedRecordGuard<Invoice>({
+    recordId: effectiveId,
+    isOpen,
+    onClose,
+    queryError: invoiceError,
+    isQueryError: isInvoiceError,
+    isPlaceholderData: isInvoicePlaceholder,
+    liveRecord: fetchedInvoice,
+    initialRecord: initialInvoice,
+    queryKey: effectiveId ? billingKeys.invoiceDetail(effectiveId) : undefined,
+  });
 
   // Session & Admin Check
   const user = useSessionStore((state) => state.user);
@@ -118,6 +139,38 @@ export function InvoiceDetailModal({
     setIsEditingNotes(false);
     setAddressFeedback(null);
   }, [invoice]);
+
+  if (isScopeStale || !isOpen) return null;
+
+  if (isDenied) {
+    return (
+      <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+        <DialogContent
+          className="max-w-md p-6 border-[#E2E8F0] bg-[#FFFFFF] shadow-float text-center space-y-3 rounded-[12px]"
+          data-testid="invoice-access-denied-dialog"
+        >
+          <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+            <Lock className="w-6 h-6 text-[#64748B]" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+            <p className="text-xs text-[#475569] max-w-xs mx-auto">
+              You do not have access to this invoice or access has been revoked.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClose}
+            className="mt-2 text-xs"
+            data-testid="invoice-access-denied-close-btn"
+          >
+            Close
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
 
   if (!invoice) return null;
 

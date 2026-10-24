@@ -39,8 +39,8 @@ export default function BillingPage() {
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
   const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
 
-  // Deep Link Handling (?invoiceId=...)
-  const invoiceIdParam = searchParams.get('invoiceId');
+  // Deep Link Handling (?invoiceId=... or ?id=...)
+  const invoiceIdParam = searchParams.get('invoiceId') || searchParams.get('id');
   const handledInvoiceIdRef = useRef<string | null>(null);
   const { data: deepLinkedInvoice } = useInvoiceDetail(invoiceIdParam || '', {
     enabled: Boolean(invoiceIdParam),
@@ -235,10 +235,11 @@ export default function BillingPage() {
         onClose={() => {
           setIsDetailModalOpen(false);
           setSelectedInvoice(null);
-          if (searchParams.get('invoiceId')) {
+          if (searchParams.get('invoiceId') || searchParams.get('id')) {
             setSearchParams((prev) => {
               const next = new URLSearchParams(prev);
               next.delete('invoiceId');
+              next.delete('id');
               return next;
             });
           }

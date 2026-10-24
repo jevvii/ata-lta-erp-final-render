@@ -32,7 +32,18 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
     localStorage.clear();
     clearLocalMutationsForTesting();
     resetTabIdForTesting('tab-challenger-01');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-adversarial',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Adversarial',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -639,7 +650,18 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
   // =========================================================================
   describe('Dimension 6: Live WebSocket Channel Event Routing', () => {
     it('routes incoming mock channel events to cache correctly', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-adversarial',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Adversarial',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       renderHook(
         () => useEntityRealtimeSync({ table: 'invoices' }),

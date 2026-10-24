@@ -6,7 +6,7 @@
  * Mounts BlockingActionModal at root.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Send,
@@ -54,7 +54,26 @@ export default function TransmittalsPage() {
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [formEditTarget, setFormEditTarget] = useState<Transmittal | null>(null);
 
-  const [detailModalId, setDetailModalId] = useState<string | null>(null);
+  // Deep-link read detail support (?transmittalId=... or ?id=...)
+  const deepLinkedTransmittalId = searchParams.get('transmittalId') || searchParams.get('id');
+  const [detailModalId, setDetailModalId] = useState<string | null>(deepLinkedTransmittalId);
+
+  useEffect(() => {
+    if (deepLinkedTransmittalId) {
+      setDetailModalId(deepLinkedTransmittalId);
+    }
+  }, [deepLinkedTransmittalId]);
+
+  const handleCloseDetailModal = () => {
+    setDetailModalId(null);
+    if (searchParams.has('transmittalId') || searchParams.has('id')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('transmittalId');
+      next.delete('id');
+      setSearchParams(next, { replace: true });
+    }
+  };
+
   const [printTarget, setPrintTarget] = useState<Transmittal | null>(null);
   const updateTransmittal = useUpdateTransmittal();
 
@@ -345,7 +364,7 @@ export default function TransmittalsPage() {
       <TransmittalDetailModal
         transmittalId={detailModalId}
         isOpen={Boolean(detailModalId)}
-        onClose={() => setDetailModalId(null)}
+        onClose={handleCloseDetailModal}
         onEdit={(t) => {
           setDetailModalId(null);
           setFormEditTarget(t);

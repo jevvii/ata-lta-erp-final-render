@@ -55,7 +55,17 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-001');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: 'admin-1',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
   });
 
   afterEach(() => {

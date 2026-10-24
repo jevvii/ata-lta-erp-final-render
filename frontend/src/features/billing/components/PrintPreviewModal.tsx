@@ -10,6 +10,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useInvoiceDetail } from '../api/useInvoices';
+import { billingKeys } from '../api/queryKeys';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import { updateClientAddressAction, fetchInvoicePdfUrl } from '../api/useBillingMutations';
 import { usePermission } from '@/lib/permissions';
 import { useSessionStore } from '@/lib/session';
@@ -35,10 +37,31 @@ export function PrintPreviewModal({
   initialInvoice,
 }: PrintPreviewModalProps) {
   const effectiveId = invoiceId || initialInvoice?.id;
-  const { data: fetchedInvoice, refetch } = useInvoiceDetail(effectiveId, {
+  const {
+    data: fetchedInvoice,
+    isError: isInvoiceError,
+    error: invoiceError,
+    isPlaceholderData: isInvoicePlaceholder,
+    refetch,
+  } = useInvoiceDetail(effectiveId, {
     enabled: isOpen && !!effectiveId,
   });
-  const invoice = fetchedInvoice || initialInvoice;
+
+  const {
+    record: invoice,
+    isDenied,
+    isScopeStale,
+  } = useScopedRecordGuard<Invoice>({
+    recordId: effectiveId,
+    isOpen,
+    onClose,
+    queryError: invoiceError,
+    isQueryError: isInvoiceError,
+    isPlaceholderData: isInvoicePlaceholder,
+    liveRecord: fetchedInvoice,
+    initialRecord: initialInvoice,
+    queryKey: effectiveId ? billingKeys.invoiceDetail(effectiveId) : undefined,
+  });
   const isAdmin = useSessionStore((s) => s.user?.role === 'Admin');
   const canEditAddress = usePermission('billing:edit_client_address');
   const [isEditingAddress, setIsEditingAddress] = useState(false);
@@ -57,7 +80,39 @@ export function PrintPreviewModal({
     setAddressInput(invoice?.address ?? invoice?.clients?.address ?? '');
     setIsEditingAddress(false);
   }, [invoice]);
-  if (!invoice || !isOpen) return null;
+  if (isScopeStale || !isOpen) return null;
+
+  if (isDenied) {
+    return (
+      <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+        <DialogContent
+          className="max-w-md p-6 border-[#E2E8F0] bg-[#FFFFFF] shadow-float text-center space-y-3 rounded-[12px]"
+          data-testid="print-preview-access-denied-dialog"
+        >
+          <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+            <Lock className="w-6 h-6 text-[#64748B]" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+            <p className="text-xs text-[#475569] max-w-xs mx-auto">
+              You do not have access to this invoice or access has been revoked.
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClose}
+            className="mt-2 text-xs"
+            data-testid="print-preview-access-denied-close-btn"
+          >
+            Close
+          </Button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  if (!invoice) return null;
 
   const saveAddress = async () => {
     try {

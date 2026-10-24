@@ -758,12 +758,15 @@ export type WorkRequestListResponse = ApiResponse<WorkRequest[]>;
 export type WorkRequestDetailResponse = ApiResponse<WorkRequest>;
 export type WorkRequestCountsResponse = ApiResponse<OperationsCounts>;
 
+export interface WorkRequestRelatedData {
+  invoices?: TaskRelatedInvoice[];
+  disbursements?: TaskRelatedDisbursement[];
+  transmittals?: TaskRelatedTransmittal[];
+  documents?: DmsDocument[];
+}
+
 export interface WorkRequestRelatedResponse {
-  data: {
-    workRequest: WorkRequest;
-    relatedRequests?: OperationsRequest[];
-    documents?: DmsDocument[];
-  };
+  data: WorkRequestRelatedData;
 }
 
 export type OperationsRequestListResponse = ApiResponse<OperationsRequest[]>;
@@ -793,9 +796,13 @@ export interface TaskRelatedInvoice {
   invoice_number?: string;
   invoiceNumber?: string;
   amount?: number;
+  total?: number;
+  balance?: number;
   status?: string;
   created_at?: string;
-  clients?: { name: string } | null;
+  client_name?: string | null;
+  clientName?: string | null;
+  clients?: { name?: string; id?: string } | null;
 }
 
 export interface TaskRelatedDisbursement {

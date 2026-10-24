@@ -12,9 +12,10 @@ import type {
  * Checks if the user is an assigned employee on this specific task
  * (either primary lead assignee or in the co-assignees / task_assignees list).
  */
-export function isTaskAssignee(user: UserProfile | null | undefined, task: Task | null | undefined): boolean {
-  if (!user?.id || !task) return false;
-  if ((task.assigneeId || (task as Task & { assignee_id?: string }).assignee_id) === user.id) return true;
+export function isTaskAssignee(user: UserProfile | string | null | undefined, task: Task | null | undefined): boolean {
+  const userId = typeof user === 'string' ? user : user?.id;
+  if (!userId || !task) return false;
+  if ((task.assigneeId || (task as Task & { assignee_id?: string }).assignee_id) === userId) return true;
   const aliases = task as Task & {
     coAssignees?: unknown; co_assignees?: unknown;
     relationalAssignees?: unknown; relational_assignees?: unknown;
@@ -22,10 +23,10 @@ export function isTaskAssignee(user: UserProfile | null | undefined, task: Task 
   const lists = [task.assignees, task.taskAssignees, task.task_assignees,
     aliases.coAssignees, aliases.co_assignees, aliases.relationalAssignees, aliases.relational_assignees];
   if (lists.some((list) => Array.isArray(list) && list.some((entry: unknown) => {
-    if (typeof entry === 'string') return entry === user.id;
+    if (typeof entry === 'string') return entry === userId;
     if (!entry || typeof entry !== 'object') return false;
     const member = entry as { userId?: string; user_id?: string; id?: string };
-    return member.userId === user.id || member.user_id === user.id || member.id === user.id;
+    return member.userId === userId || member.user_id === userId || member.id === userId;
   }))) return true;
   return false;
 }
@@ -68,14 +69,31 @@ export function isBillingTask(task: Task | null | undefined): boolean {
  * - OR assigned to ANY task within this Work Request
  */
 export function isWrTeamMember(
-  user: UserProfile | null | undefined,
+  user: UserProfile | string | null | undefined,
   workRequest: WorkRequest | null | undefined,
   tasks: Task[] = []
 ): boolean {
-  if (!user?.id || !workRequest) return false;
-  if (workRequest.assignedTo === user.id) return true;
-  if (Array.isArray(workRequest.coAssignees) && workRequest.coAssignees.includes(user.id)) return true;
-  if (tasks.some((t) => isTaskAssignee(user, t))) return true;
+  if (!user || !workRequest) return false;
+  const userId = typeof user === 'string' ? user : user.id;
+  if (!userId) return false;
+
+  const leadId =
+    workRequest.assignedTo ??
+    (workRequest as { assigned_to?: string | null }).assigned_to;
+  if (leadId === userId) return true;
+
+  const coAssignees =
+    workRequest.coAssignees ??
+    (workRequest as { co_assignees?: unknown }).co_assignees;
+  if (
+    Array.isArray(coAssignees) &&
+    coAssignees.some((id: unknown) => id === userId)
+  ) {
+    return true;
+  }
+
+  const effectiveTasks = tasks.length > 0 ? tasks : (Array.isArray(workRequest.tasks) ? workRequest.tasks : []);
+  if (effectiveTasks.some((t) => isTaskAssignee(user, t))) return true;
   return false;
 }
 

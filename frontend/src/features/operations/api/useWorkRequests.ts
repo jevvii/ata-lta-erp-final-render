@@ -30,7 +30,7 @@ export function useWorkRequests(
 
   return useQuery({
     queryKey: operationsKeys.workRequestsList(activeEntity, filters),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const params = new URLSearchParams();
       if (filters?.search) params.append('search', filters.search);
       if (filters?.status) params.append('status', filters.status);
@@ -47,7 +47,7 @@ export function useWorkRequests(
 
       const queryStr = params.toString();
       const path = `/operations/work-requests${queryStr ? `?${queryStr}` : ''}`;
-      const res = await apiRequest<WorkRequestListResponse>(path);
+      const res = await apiRequest<WorkRequestListResponse>(path, { signal });
       return res;
     },
     placeholderData: keepPreviousData,
@@ -63,23 +63,25 @@ export function useWorkRequestDetail(
   options?: { enabled?: boolean }
 ) {
   const queryClient = useQueryClient();
+  const activeEntity = useSessionStore((state) => state.activeEntity);
 
   return useQuery({
     queryKey: operationsKeys.workRequestDetail(id ?? ''),
-    queryFn: async () => {
+    queryFn: async ({ signal }): Promise<WorkRequest> => {
       if (!id) throw new Error('Work request ID is required');
       const res = await apiRequest<WorkRequestDetailResponse>(
-        `/operations/work-requests/${id}`
+        `/operations/work-requests/${id}`,
+        { signal }
       );
       return res.data;
     },
     enabled: Boolean(id) && (options?.enabled ?? true),
     // Instant feel: render the side peek from the matching list row (already
-    // fetched) while the detail fetch completes. Placeholder never persists.
-    placeholderData: () => {
+    // fetched) while the detail fetch completes. Scoped to active entity.
+    placeholderData: (_prev): WorkRequest | undefined => {
       if (!id) return undefined;
       for (const [, list] of queryClient.getQueriesData<WorkRequestListResponse>({
-        queryKey: [...operationsKeys.workRequests(), 'list'],
+        queryKey: operationsKeys.workRequestsList(activeEntity),
       })) {
         const hit = list?.data?.find((wr) => wr.id === id);
         if (hit) return hit;
@@ -124,10 +126,11 @@ export function useWorkRequestRelated(
 ) {
   return useQuery({
     queryKey: operationsKeys.workRequestRelated(id ?? ''),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       if (!id) throw new Error('Work request ID is required');
       const res = await apiRequest<WorkRequestRelatedResponse>(
-        `/operations/work-requests/${id}/related`
+        `/operations/work-requests/${id}/related`,
+        { signal }
       );
       return res.data;
     },

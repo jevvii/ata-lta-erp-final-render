@@ -74,8 +74,8 @@ export default function DisbursementsPage() {
     activeTab = 'all';
   }
 
-  // Deep-link support from notifications or external references
-  const disbursementIdParam = searchParams.get('disbursementId');
+  // Deep-link support from notifications or external references (?disbursementId=... or ?id=...)
+  const disbursementIdParam = searchParams.get('disbursementId') || searchParams.get('id');
   useEffect(() => {
     if (disbursementIdParam) {
       setSelectedDisbursementId(disbursementIdParam);
@@ -413,10 +413,11 @@ export default function DisbursementsPage() {
         isOpen={Boolean(selectedDisbursementId)}
         onClose={() => {
           setSelectedDisbursementId(null);
-          if (searchParams.has('disbursementId')) {
+          if (searchParams.has('disbursementId') || searchParams.has('id')) {
             setSearchParams((prev) => {
               const next = new URLSearchParams(prev);
               next.delete('disbursementId');
+              next.delete('id');
               return next;
             });
           }

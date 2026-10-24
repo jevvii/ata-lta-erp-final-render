@@ -17,7 +17,10 @@ import {
   Trash2,
   Layers,
   MapPin,
+  Lock,
 } from 'lucide-react';
+import { transmittalKeys } from '../api/queryKeys';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import {
   Dialog,
   DialogContent,
@@ -66,8 +69,32 @@ export function TransmittalDetailModal({
   onUnarchive: _onUnarchive,
   onDelete,
 }: TransmittalDetailModalProps) {
-  const { data: transmittal, isLoading, error, refetch, isFetching } = useTransmittalDetail(transmittalId ?? undefined, {
+  const {
+    data: liveTransmittal,
+    isLoading,
+    isError: isTransmittalError,
+    error: transmittalError,
+    isPlaceholderData: isTransmittalPlaceholder,
+    refetch,
+    isFetching,
+  } = useTransmittalDetail(transmittalId ?? undefined, {
     enabled: isOpen && Boolean(transmittalId),
+  });
+
+  const {
+    record: transmittal,
+    isDenied,
+    isScopeStale,
+  } = useScopedRecordGuard<Transmittal>({
+    recordId: transmittalId,
+    isOpen,
+    onClose,
+    queryError: transmittalError,
+    isQueryError: isTransmittalError,
+    isPlaceholderData: isTransmittalPlaceholder,
+    liveRecord: liveTransmittal,
+    initialRecord: null,
+    queryKey: transmittalId ? transmittalKeys.detail(transmittalId) : undefined,
   });
 
   const permissions = useSessionStore((state) => state.permissions);
@@ -81,14 +108,37 @@ export function TransmittalDetailModal({
 
   const isSendDisabled = !isAdmin && !transmittal?.approved;
 
-  if (!isOpen) return null;
+  if (isScopeStale || !isOpen) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="border-[#E2E8F0] max-w-2xl border max-h-[90vh] rounded-[12px] bg-[#FFFFFF] shadow-float overflow-y-auto"
         data-testid="transmittal-detail-modal"
       >
-        <DialogHeader className="border-b pb-3">
+        {isDenied ? (
+          <div className="py-16 text-center space-y-3" data-testid="transmittal-access-denied">
+            <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+              <Lock className="w-6 h-6 text-[#64748B]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
+                You do not have access to this transmittal or access has been revoked.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="mt-2 text-xs"
+              data-testid="transmittal-access-denied-close-btn"
+            >
+              Close
+            </Button>
+          </div>
+        ) : (
+          <>
+            <DialogHeader className="border-b pb-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <FileText className="h-5 w-5 text-[#1E293B]" />
@@ -112,9 +162,9 @@ export function TransmittalDetailModal({
           </div>
         </DialogHeader>
 
-        {error ? (
+        {transmittalError ? (
           <div role="alert" className="space-y-3 py-10 text-center text-sm text-[#475569]">
-            <p>{error.message || 'Unable to load this transmittal.'}</p>
+            <p>{transmittalError.message || 'Unable to load this transmittal.'}</p>
             <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>Retry</Button>
           </div>
         ) : isLoading || !transmittal ? (
@@ -352,6 +402,8 @@ export function TransmittalDetailModal({
             </Button>
           </div>
         </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

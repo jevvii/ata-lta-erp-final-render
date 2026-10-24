@@ -35,7 +35,10 @@ import {
   Maximize2,
   Minimize2,
   ExternalLink,
+  Lock,
 } from 'lucide-react';
+import { documentKeys } from '../api/queryKeys';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import {
   useDocumentDownloadUrl,
   useDocumentDetail,
@@ -93,8 +96,36 @@ export function DocumentViewerModal({
   const initialDoc = propDocument ?? propDoc ?? null;
   const workRequest = propWorkRequest ?? (propWorkRequests && propWorkRequests[0]) ?? null;
   const [selectedDoc, setDoc] = useState<DmsDocument | null>(initialDoc);
-  const { data: liveDoc } = useDocumentDetail(selectedDoc?.id, { enabled: isOpen });
-  const doc = liveDoc ?? selectedDoc;
+
+  useEffect(() => {
+    if (initialDoc && initialDoc.id !== selectedDoc?.id) {
+      setDoc(initialDoc);
+    }
+  }, [initialDoc, selectedDoc?.id]);
+
+  const {
+    data: liveDoc,
+    isError: isDocError,
+    error: docError,
+    isPlaceholderData: isDocPlaceholder,
+  } = useDocumentDetail(selectedDoc?.id, { enabled: isOpen && Boolean(selectedDoc?.id) });
+
+  const {
+    record: doc,
+    isDenied: isDocDenied,
+    isScopeStale,
+    canFetchChildren,
+  } = useScopedRecordGuard<DmsDocument>({
+    recordId: selectedDoc?.id,
+    isOpen,
+    onClose,
+    queryError: docError,
+    isQueryError: isDocError,
+    isPlaceholderData: isDocPlaceholder,
+    liveRecord: liveDoc,
+    initialRecord: selectedDoc,
+    queryKey: selectedDoc?.id ? documentKeys.detail(selectedDoc.id) : undefined,
+  });
   useEntityRealtimeSync({ table: 'documents', enabled: isOpen && Boolean(doc?.id) });
   const commentsRef = useRef<HTMLDivElement | null>(null);
   const followComments = useRef(true);
@@ -187,8 +218,30 @@ export function DocumentViewerModal({
   }, [isFullPage]);
 
   const documentId = doc?.id;
-  const { data: downloadData, isLoading: isDownloadLoading, error: downloadError, refetch: retryDownload, isFetching: isDownloadFetching } =
-    useDocumentDownloadUrl(documentId, { enabled: isOpen && Boolean(documentId) && !Boolean(doc?.external_url?.trim() || doc?.externalUrl?.trim()) });
+  const {
+    data: downloadData,
+    isLoading: isDownloadLoading,
+    isError: isDownloadError,
+    error: downloadError,
+    refetch: retryDownload,
+    isFetching: isDownloadFetching,
+  } = useDocumentDownloadUrl(documentId, {
+    enabled:
+      isOpen &&
+      Boolean(documentId) &&
+      canFetchChildren &&
+      !(doc?.external_url?.trim() || doc?.externalUrl?.trim()),
+  });
+
+  const isDownloadDenied = Boolean(
+    isDownloadError &&
+      ((downloadError as { status?: number })?.status === 403 ||
+        (downloadError as { status?: number })?.status === 404 ||
+        String((downloadError as { message?: string })?.message || '').includes('403') ||
+        String((downloadError as { message?: string })?.message || '').includes('404'))
+  );
+
+  const isDenied = Boolean(isDocDenied || isDownloadDenied);
 
   const addComment = useAddDocumentComment();
   const editComment = useEditDocumentComment();
@@ -497,14 +550,41 @@ export function DocumentViewerModal({
     ? 'fixed inset-0 left-0 top-0 translate-x-0 translate-y-0 w-screen h-screen max-w-none max-h-none rounded-[8px] border-0 p-0 flex flex-col overflow-hidden z-50 bg-white gap-0'
     : 'max-w-6xl w-[95vw] h-[88vh] max-h-[92vh] flex flex-col p-0 overflow-hidden border-[#E2E8F0] bg-white gap-0';
 
+  if (isScopeStale || !isOpen) return null;
+
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className={contentClasses}
         data-testid="document-viewer-modal"
       >
-        {/* Header */}
-        <DialogHeader className="px-6 py-3 border-b border-[#E2E8F0] flex flex-row items-center justify-between space-y-0">
+        {isDenied ? (
+          <div className="py-24 text-center space-y-3" data-testid="document-access-denied">
+            <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+              <Lock className="w-6 h-6 text-[#64748B]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
+                You do not have access to this document or access has been revoked.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="mt-2 text-xs"
+              data-testid="document-access-denied-close-btn"
+            >
+              Close
+            </Button>
+          </div>
+        ) : !doc ? (
+          <div className="py-24 text-center text-xs text-[#475569]">Loading document...</div>
+        ) : (
+          <>
+            {/* Header */}
+            <DialogHeader className="px-6 py-3 border-b border-[#E2E8F0] flex flex-row items-center justify-between space-y-0">
           <div className="flex items-center gap-2 min-w-0">
             <DialogTitle className="text-base font-bold text-[#1E293B] truncate max-w-md">
               {fileName}
@@ -809,6 +889,8 @@ export function DocumentViewerModal({
             Close
           </Button>
         </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

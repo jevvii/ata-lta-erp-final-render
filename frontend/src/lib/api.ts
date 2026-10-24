@@ -84,16 +84,27 @@ export const queryClient = new QueryClient({
 setupTabSyncListener(queryClient);
 
 
+let currentScopeGeneration = 0;
+
+export const getScopeGeneration = (): number => currentScopeGeneration;
+
 /**
- * Entity switch ⇒ every query is stale. All module lists/tasks/reports scope
- * by the X-Active-Entity header, so changing the entity must refresh whatever
- * is mounted. invalidateQueries() marks all entries stale and refetches the
- * active ones in the background (previous data stays rendered during the
- * refetch — no flash, no skeleton).
+ * Entity or User switch ⇒ cancel in-flight queries and refresh/reset cache.
+ * Tracks currentScopeGeneration to ensure stale in-flight fetches are rejected.
  */
 useSessionStore.subscribe((state, prevState) => {
-  if (state.activeEntity !== prevState.activeEntity) {
-    void queryClient.invalidateQueries();
+  const userChanged = state.user?.id !== prevState.user?.id;
+  const entityChanged = state.activeEntity !== prevState.activeEntity;
+
+  if (userChanged || entityChanged) {
+    currentScopeGeneration++;
+    if (userChanged) {
+      void queryClient.cancelQueries();
+      queryClient.clear();
+    } else if (entityChanged) {
+      void queryClient.cancelQueries();
+      void queryClient.resetQueries();
+    }
   }
 });
 
@@ -129,7 +140,30 @@ export async function apiRequest<T = unknown>(
   const cleanPath = path.startsWith('/v1/') ? path.slice(3) : path === '/v1' ? '' : path;
   const url = `${API_BASE_URL}${cleanPath.startsWith('/') ? cleanPath : `/${cleanPath}`}`;
   const token = getToken();
-  const activeEntity = useSessionStore.getState().activeEntity;
+
+  // Scope tracking: capture generation and direct identity values
+  const capturedGeneration = currentScopeGeneration;
+  const capturedUserId = useSessionStore.getState().user?.id ?? null;
+  const capturedEntity = useSessionStore.getState().activeEntity ?? null;
+  const isSkipAuth = Boolean(options.skipAuth);
+
+  const checkScopeSafety = () => {
+    if (isSkipAuth) return;
+    if (options.signal?.aborted) {
+      throw new ApiError(499, 'Request aborted by client');
+    }
+    const nowUserId = useSessionStore.getState().user?.id ?? null;
+    const nowEntity = useSessionStore.getState().activeEntity ?? null;
+    if (
+      currentScopeGeneration !== capturedGeneration ||
+      nowUserId !== capturedUserId ||
+      nowEntity !== capturedEntity
+    ) {
+      throw new ApiError(499, 'Request aborted: session or entity scope changed during request');
+    }
+  };
+
+  const activeEntity = capturedEntity;
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -169,20 +203,23 @@ export async function apiRequest<T = unknown>(
     headers,
   });
 
+  // Scope check #1: immediate post-fetch
+  checkScopeSafety();
+
   // Handle 401 with token refresh attempt (Spec 3.2, R6)
   if (res.status === 401 && !path.startsWith('/auth/')) {
-    try {
-      // Concurrent 401s share one refresh; late responses use the rotated token.
-      const latestToken = getToken();
-      const accessToken = latestToken && latestToken !== token ? latestToken : await refreshAccessToken();
-      if (accessToken) {
-        headers['Authorization'] = `Bearer ${accessToken}`;
-        res = await fetch(url, { ...options, cache: 'no-cache', headers });
-      }
-    } catch (refreshError) {
-      // Preserve the session on a temporary network failure.
-      throw refreshError;
+    // Concurrent 401s share one refresh; late responses use the rotated token.
+    const latestToken = getToken();
+    const accessToken = latestToken && latestToken !== token ? latestToken : await refreshAccessToken();
+    // Scope check #2: recheck scope immediately AFTER refresh/latest-token resolution and BEFORE issuing any retry fetch
+    checkScopeSafety();
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+      res = await fetch(url, { ...options, cache: 'no-cache', headers });
     }
+
+    // Scope check #3: post-401 retry response
+    checkScopeSafety();
 
     if (res.status === 401) {
       // Refresh failed or retry returned 401 -> logout & redirect (R6)
@@ -206,14 +243,20 @@ export async function apiRequest<T = unknown>(
     } catch {
       // ignore
     }
+    // Scope check #3: post-error parsing
+    checkScopeSafety();
     throw new ApiError(res.status, res.statusText, errorDetail, errorCode);
   }
 
   if (res.status === 204) {
+    checkScopeSafety();
     return null as T;
   }
 
-  return (await res.json()) as T;
+  const data = (await res.json()) as T;
+  // Scope check #4: post-body parsing before returning
+  checkScopeSafety();
+  return data;
 }
 
 export interface SignInResponse {

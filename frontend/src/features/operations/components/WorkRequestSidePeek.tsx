@@ -25,6 +25,9 @@ import {
   FileSpreadsheet,
   FileImage,
   FileCode,
+  Receipt,
+  CreditCard,
+  Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +44,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useWorkRequestDetail,
   useWorkRequestMutations,
+  useWorkRequestRelated,
 } from '../api/useWorkRequests';
 import { useWorkRequestTasks } from '../api/useTasks';
 import { useDocuments, useDocumentDownloadUrl } from '../api/useDocuments';
@@ -104,33 +108,155 @@ export function WorkRequestSidePeek({
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
 
+  const activeEntity = useSessionStore((state) => state.activeEntity);
+
+  // Scope owner tracking (Directive 1, Final Review):
+  // Guard against entity or account switching while sidepeek is open.
+  const [peekScopeOwner, setPeekScopeOwner] = useState<{
+    id: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(() => {
+    if (isOpen && workRequestId) {
+      return {
+        id: workRequestId,
+        entity: activeEntity,
+        userId: user?.id ?? null,
+      };
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (isOpen && workRequestId) {
+      setPeekScopeOwner((prev) => {
+        if (!prev || prev.id !== workRequestId) {
+          return {
+            id: workRequestId,
+            entity: activeEntity,
+            userId: user?.id ?? null,
+          };
+        }
+        return prev;
+      });
+    } else if (!isOpen) {
+      setPeekScopeOwner(null);
+    }
+  }, [isOpen, workRequestId, activeEntity, user?.id]);
+
+  const isPeekScopeStale = Boolean(
+    peekScopeOwner &&
+      (peekScopeOwner.entity !== activeEntity ||
+        peekScopeOwner.userId !== (user?.id ?? null))
+  );
+
+  useEffect(() => {
+    if (isPeekScopeStale && isOpen) {
+      onClose?.();
+    }
+  }, [isPeekScopeStale, isOpen, onClose]);
+
   // Fetch work request detail
   const {
-    data: workRequest,
+    data: rawWorkRequest,
     isLoading: isLoadingWr,
+    isError: isWrError,
+    isPlaceholderData: isWrPlaceholder,
+    error: wrError,
   } = useWorkRequestDetail(workRequestId || '', {
-    enabled: Boolean(isOpen && workRequestId),
+    enabled: Boolean(isOpen && workRequestId && !isPeekScopeStale),
   });
+
+  // Stable denied scope tracking (Directive 1 & Coordinator Interim Review):
+  // Preserve access-lost state even when query cache is invalidated or cleared,
+  // until the targeted workRequestId, entity, or user account changes.
+  const [deniedScope, setDeniedScope] = useState<{
+    id: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(null);
+
+  const isScopeMatch = Boolean(
+    deniedScope &&
+    deniedScope.id === workRequestId &&
+    deniedScope.entity === activeEntity &&
+    deniedScope.userId === (user?.id ?? null)
+  );
+
+  const isCurrentWrErrorDenied = Boolean(
+    isWrError &&
+      ((wrError as { status?: number })?.status === 403 ||
+        (wrError as { status?: number })?.status === 404 ||
+        String(wrError?.message || '').includes('403') ||
+        String(wrError?.message || '').includes('404'))
+  );
+
+  const isWrDenied = Boolean(isScopeMatch || isCurrentWrErrorDenied);
+
+  // Suppress confidential child queries when access is denied or scope is stale
+  const canFetchChildren = Boolean(isOpen && workRequestId && !isWrDenied && !isPeekScopeStale);
+
+  // Support restored membership on fresh successful authorized read (Directive 2):
+  // When genuinely fresh, non-null matching record arrives without error, clear the denied latch.
+  useEffect(() => {
+    if (rawWorkRequest && rawWorkRequest.id === workRequestId && !isWrError && !isWrPlaceholder && deniedScope) {
+      setDeniedScope(null);
+    }
+  }, [rawWorkRequest, workRequestId, isWrError, isWrPlaceholder, deniedScope]);
+
+  // When access denial is observed, record denied scope and purge confidential data
+  useEffect(() => {
+    if (isCurrentWrErrorDenied && workRequestId) {
+      setDeniedScope({
+        id: workRequestId,
+        entity: activeEntity,
+        userId: user?.id ?? null,
+      });
+
+      // Cancel in-flight queries and overwrite WR detail cache with null
+      // CRITICAL: Never call queryClient.removeQueries on workRequestDetail(workRequestId),
+      // as removing the driving query resets the active observer to an indefinite 'loading' state.
+      void queryClient.cancelQueries({ queryKey: operationsKeys.workRequestDetail(workRequestId) });
+      queryClient.setQueryData(operationsKeys.workRequestDetail(workRequestId), null);
+      queryClient.removeQueries({ queryKey: operationsKeys.tasks(workRequestId), exact: false });
+      queryClient.removeQueries({ queryKey: operationsKeys.workRequestRelated(workRequestId), exact: false });
+    }
+  }, [isCurrentWrErrorDenied, workRequestId, activeEntity, user?.id, queryClient]);
+
+  // If work request was denied, do not hold onto stale/observer data
+  const workRequest = isWrDenied ? null : rawWorkRequest;
 
   const { statusOptimistic, isStatusOptimisticPending: isUpdatingWr } = useWorkRequestMutations();
 
-  // Fetch tasks
+  // Fetch tasks (suppressed when WR is denied)
   const {
     data: tasks = [],
     isLoading: isLoadingTasks,
   } = useWorkRequestTasks(workRequestId || '', {
-    enabled: Boolean(isOpen && workRequestId),
+    enabled: canFetchChildren,
   });
 
-  // Fetch documents
+  // Fetch documents (suppressed when WR is denied)
   const { data: rawDocs, isLoading: isLoadingDocs } = useDocuments(
     workRequestId ? { workRequestId } : undefined,
-    { enabled: Boolean(isOpen && workRequestId) }
+    { enabled: canFetchChildren }
   );
 
   const documents = useMemo(() => {
     return Array.isArray(rawDocs) ? rawDocs : rawDocs?.data ?? [];
   }, [rawDocs]);
+
+  // Fetch WR-level related records: 360° Shared Project Team Visibility (Directive 4)
+  const {
+    data: wrRelatedData,
+    isLoading: isLoadingWrRelated,
+  } = useWorkRequestRelated(workRequestId || '', {
+    enabled: canFetchChildren,
+  });
+
+  const relatedInvoices = useMemo(() => wrRelatedData?.invoices || [], [wrRelatedData]);
+  const relatedDisbursements = useMemo(() => wrRelatedData?.disbursements || [], [wrRelatedData]);
+  const relatedTransmittals = useMemo(() => wrRelatedData?.transmittals || [], [wrRelatedData]);
 
   // Fetch team directory for name resolution (UAT2-5)
   const { data: rawTeam } = useTeam();
@@ -271,7 +397,67 @@ export function WorkRequestSidePeek({
     return Math.round((completedTasksCount / tasks.length) * 100);
   }, [completedTasksCount, tasks.length]);
 
-  if (!isOpen || !workRequestId) return null;
+  if (!isOpen || !workRequestId || isPeekScopeStale) return null;
+
+  if (isWrDenied) {
+    return (
+      <div
+        className="fixed inset-0 z-50 overflow-hidden"
+        data-testid="wr-side-peek"
+        aria-label="Work Request Side Peek"
+        role="region"
+      >
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-200"
+          onClick={onClose}
+          aria-hidden="true"
+          data-testid="side-peek-backdrop"
+        />
+
+        <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10 z-50">
+          <div className="w-screen max-w-2xl md:max-w-3xl bg-[#FFFFFF] shadow-2xl border-l border-[#E2E8F0] flex flex-col h-full animate-in slide-in-from-right duration-200 text-[#1E293B]">
+            <div className="px-6 py-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
+              <h2 className="text-sm font-bold text-[#1E293B]">Work Request</h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={onClose}
+                className="text-[#475569] hover:text-[#1E293B] rounded-[6px]"
+                data-testid="side-peek-close-btn"
+                aria-label="Close Side Peek"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div
+              className="flex-1 overflow-y-auto p-12 flex flex-col items-center justify-center text-center space-y-3"
+              data-testid="wr-access-lost"
+            >
+              <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-[#475569] mb-1">
+                <Lock className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs leading-relaxed">
+                You are not an assigned member of this project team, or access has been revoked.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+                className="text-xs rounded-[6px] border-[#E2E8F0] mt-2"
+                data-testid="access-lost-close-btn"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -953,6 +1139,181 @@ export function WorkRequestSidePeek({
                             );
                           })}
                         </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 6. Financials & Transmittals (360° Project Records) */}
+                  <div className="space-y-3" data-testid="side-peek-project-records">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-2">
+                        <Receipt className="h-4 w-4 text-[#1E293B]" />
+                        <span>Project Financials & Transmittals</span>
+                      </h4>
+                    </div>
+
+                    {isLoadingWrRelated ? (
+                      <div className="p-4 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[6px] border-[#E2E8F0]">
+                        Loading project records...
+                      </div>
+                    ) : relatedInvoices.length === 0 && relatedDisbursements.length === 0 && relatedTransmittals.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[6px] border-[#E2E8F0] italic">
+                        No linked invoices, disbursements, or transmittals for this work request.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Invoices Group */}
+                        {relatedInvoices.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-invoices-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Invoices ({relatedInvoices.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedInvoices.map((inv) => {
+                                const invTotal = inv.total != null ? inv.total : inv.amount;
+                                const invBalance = inv.balance != null ? inv.balance : null;
+                                const clientName =
+                                  inv.client_name ||
+                                  inv.clientName ||
+                                  inv.clients?.name ||
+                                  rawWorkRequest?.clientName ||
+                                  'Client';
+
+                                return (
+                                  <a
+                                    key={inv.id}
+                                    href={`/billing?invoiceId=${inv.id}`}
+                                    className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                    data-testid={`side-peek-invoice-${inv.id}`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                      <Receipt className="h-4 w-4 text-[#475569] shrink-0" />
+                                      <div className="min-w-0 flex-1">
+                                        <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                          {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
+                                        </span>
+                                        <span className="text-xs text-[#475569] block truncate">
+                                          {clientName}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {invTotal != null && (
+                                        <div className="flex flex-col items-end">
+                                          <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                            ₱{Number(invTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                          </span>
+                                          {invBalance != null && Number(invBalance) > 0 ? (
+                                            <span className="tabular-nums text-[10px] text-amber-600 font-medium">
+                                              Bal: ₱{Number(invBalance).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                            </span>
+                                          ) : invBalance === 0 || inv.status === 'Paid' ? (
+                                            <span className="tabular-nums text-[10px] text-emerald-600 font-medium">
+                                              Paid in full
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                      )}
+                                      {inv.status && (
+                                        <Badge
+                                          variant={inv.status === 'Paid' ? 'success' : inv.status === 'Draft' ? 'secondary' : 'outline'}
+                                          size="compact"
+                                          className="text-xs rounded-[6px]"
+                                        >
+                                          {inv.status}
+                                        </Badge>
+                                      )}
+                                      <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                    </div>
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Disbursements Group */}
+                        {relatedDisbursements.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-disbursements-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Disbursements ({relatedDisbursements.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedDisbursements.map((d) => (
+                                <a
+                                  key={d.id}
+                                  href={`/disbursements?disbursementId=${d.id}`}
+                                  className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                  data-testid={`side-peek-disbursement-${d.id}`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <CreditCard className="h-4 w-4 text-[#475569] shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                        {d.category || 'Disbursement'}
+                                      </span>
+                                      <span className="text-xs text-[#475569] block truncate">
+                                        {d.description || 'No description'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {d.amount != null && (
+                                      <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                        ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                      </span>
+                                    )}
+                                    {d.status && (
+                                      <Badge variant={d.status === 'Released' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
+                                        {d.status}
+                                      </Badge>
+                                    )}
+                                    <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Transmittals Group */}
+                        {relatedTransmittals.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-transmittals-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Transmittals ({relatedTransmittals.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedTransmittals.map((t) => (
+                                <a
+                                  key={t.id}
+                                  href={`/transmittals?transmittalId=${t.id}`}
+                                  className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                  data-testid={`side-peek-transmittal-${t.id}`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <Send className="h-4 w-4 text-[#475569] shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                        {t.tracking_number || t.trackingNumber || 'Transmittal'}
+                                      </span>
+                                      <span className="text-xs text-[#475569] block truncate">
+                                        {t.recipient_name || t.recipientName || 'Recipient'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {t.status && (
+                                      <Badge variant={t.status === 'Acknowledged' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
+                                        {t.status}
+                                      </Badge>
+                                    )}
+                                    <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

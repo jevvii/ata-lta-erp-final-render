@@ -21,6 +21,7 @@ import { documentKeys } from '@/features/documents/api/queryKeys';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { billingKeys } from '@/features/billing/api/queryKeys';
 import { disbursementKeys } from '@/features/disbursements/api/queryKeys';
+import { transmittalKeys } from '@/features/transmittals/api/queryKeys';
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys';
 import { resolveEntityUUID, resolveEntityCodeFromUUID } from './tenantResolver';
 
@@ -728,6 +729,34 @@ export function findWrIdForTaskFromCache(queryClient: QueryClient, taskId: strin
   return undefined;
 }
 
+function invalidateAllProjectProtectedCaches(queryClient: QueryClient, activeEntity?: string | null) {
+  // Cancel in-flight scope reads so revoked data cannot be restored
+  void queryClient.cancelQueries({ queryKey: operationsKeys.all });
+  void queryClient.cancelQueries({ queryKey: billingKeys.all });
+  void queryClient.cancelQueries({ queryKey: disbursementKeys.all });
+  void queryClient.cancelQueries({ queryKey: transmittalKeys.all });
+  void queryClient.cancelQueries({ queryKey: documentKeys.all });
+  void queryClient.cancelQueries({ queryKey: dashboardKeys.assignedTasks.all });
+  void queryClient.cancelQueries({ queryKey: dashboardKeys.timeEntries.all });
+  void queryClient.cancelQueries({ queryKey: ['operations', 'time-entries'] });
+  void queryClient.cancelQueries({ queryKey: ['operations', 'requests'] });
+
+  // Invalidate so authorized views refetch via backend permissions
+  void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+  void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+  void queryClient.invalidateQueries({ queryKey: disbursementKeys.all });
+  void queryClient.invalidateQueries({ queryKey: transmittalKeys.all });
+  void queryClient.invalidateQueries({ queryKey: documentKeys.all });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.assignedTasks.all });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.timeEntries.all });
+  void queryClient.invalidateQueries({ queryKey: ['operations', 'time-entries'] });
+  void queryClient.invalidateQueries({ queryKey: ['operations', 'requests'] });
+  if (activeEntity) {
+    void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+    void queryClient.invalidateQueries({ queryKey: operationsKeys.requestCounts(activeEntity) });
+  }
+}
+
 /**
  * Core event handler for PostgreSQL CDC payloads.
  * Returns true if event was processed, false if dropped by one of the guards.
@@ -836,7 +865,10 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       : useSessionStore.getState().activeEntity;
   const targetUUID = options.activeEntityUUID || resolveEntityUUID(activeEntity);
 
-  if (activeEntity !== 'ALL') {
+  if (options.table === 'task_assignees') {
+    // task_assignees has no entity_id column in its relational schema (task_id, user_id, assigned_at).
+    // Never discard mounted assignment events via tenant entity guards.
+  } else if (activeEntity !== 'ALL') {
     // Preserve explicit null values; do not coalesce null into undefined
     const recordEntityId =
       incomingRecord.entity_id !== undefined
@@ -868,10 +900,14 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
 
       const recordCode =
         recordEntity ||
-        (recordEntityId != null ? resolveEntityCodeFromUUID(String(recordEntityId)) : undefined);
+        (recordEntityId != null
+          ? (String(recordEntityId).trim().toUpperCase() === 'ATA' || String(recordEntityId).trim().toUpperCase() === 'LTA'
+              ? String(recordEntityId).trim().toUpperCase()
+              : resolveEntityCodeFromUUID(String(recordEntityId)))
+          : undefined);
       const recordUUID =
-        (recordEntityId != null ? String(recordEntityId) : undefined) ||
-        (recordEntity != null ? resolveEntityUUID(String(recordEntity)) : undefined);
+        (recordEntityId != null && String(recordEntityId).includes('-') ? String(recordEntityId) : undefined) ||
+        (recordCode != null ? resolveEntityUUID(String(recordCode)) : undefined);
 
       // 1. UUID matching: Case-insensitive and trimmed (RFC 4122 compliance)
       const matchesUUID = Boolean(
@@ -899,7 +935,7 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
   // =========================================================================
   // Query Keys & Soft-Delete Detection (Pre-Guard 2)
   // =========================================================================
-  let detailKey = options.detailQueryKey
+  const detailKey = options.detailQueryKey
     ? options.detailQueryKey(id, incomingRecord as T)
     : getDefaultDetailQueryKey(options.table, id, incomingRecord);
   const listRootKey = options.listRootKey ?? getDefaultListRootKey(options.table);
@@ -1164,6 +1200,62 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         }
         triggerTaskCoInvalidations(queryClient, targetWrId, id, activeEntity);
       }
+    }
+
+    if (options.table === 'task_assignees') {
+      invalidateAllProjectProtectedCaches(queryClient, activeEntity);
+    }
+  } else if (
+    String(useSessionStore.getState().user?.role || '').trim().toLowerCase() !== 'admin' &&
+    ['work_requests', 'tasks', 'invoices', 'disbursements', 'transmittals', 'documents', 'time_entries', 'task_time_logs', 'operations_requests', 'task_assignees'].includes(options.table)
+  ) {
+    // 360° Shared Project Team Visibility Rule (F01–F10, Directive 3):
+    // For non-admin users (and null users), raw CDC INSERT/UPDATE payloads must NOT be injected directly into query caches.
+    // Instead, invalidate queries so TanStack Query refetches freshly authorized data through backend authorization.
+    if (detailKey) {
+      void queryClient.invalidateQueries({ queryKey: detailKey });
+    }
+    if (listRootKey) {
+      void queryClient.invalidateQueries({ queryKey: listRootKey });
+    }
+    if (options.table === 'disbursements') {
+      void queryClient.invalidateQueries({ queryKey: ['disbursements', 'all-for-queue'] });
+      void queryClient.invalidateQueries({ queryKey: ['disbursements', 'all-for-status'] });
+    }
+    if (options.table === 'tasks') {
+      let targetWrId = (
+        payloadObj.new?.work_request_id ??
+        payloadObj.new?.workRequestId ??
+        incomingRecord.work_request_id ??
+        incomingRecord.workRequestId
+      ) as string | undefined;
+      if (!targetWrId) {
+        targetWrId = findWrIdForTaskFromCache(queryClient, id);
+      }
+      if (targetWrId) {
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(targetWrId) });
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(targetWrId) });
+      }
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(id) });
+    }
+    if (options.table === 'work_requests') {
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(id) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestRelated(id) });
+    }
+
+    // Check for assignment changes on work_requests, tasks, or task_assignees
+    const isWrAssignmentChange =
+      options.table === 'work_requests' &&
+      ((payloadObj.new?.assigned_to ?? payloadObj.new?.assignedTo) !== (payloadObj.old?.assigned_to ?? payloadObj.old?.assignedTo) ||
+        JSON.stringify(payloadObj.new?.co_assignees ?? payloadObj.new?.coAssignees) !== JSON.stringify(payloadObj.old?.co_assignees ?? payloadObj.old?.coAssignees));
+
+    const isTaskAssignmentChange =
+      options.table === 'tasks' &&
+      ((payloadObj.new?.assignee_id ?? payloadObj.new?.assigneeId) !== (payloadObj.old?.assignee_id ?? payloadObj.old?.assigneeId) ||
+        JSON.stringify(payloadObj.new?.assignees) !== JSON.stringify(payloadObj.old?.assignees));
+
+    if (isWrAssignmentChange || isTaskAssignmentChange || options.table === 'task_assignees') {
+      invalidateAllProjectProtectedCaches(queryClient, activeEntity);
     }
   } else if (isInsert) {
     // Populate detail cache

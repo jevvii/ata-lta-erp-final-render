@@ -49,7 +49,18 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('challenger-tab-emp-1');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 

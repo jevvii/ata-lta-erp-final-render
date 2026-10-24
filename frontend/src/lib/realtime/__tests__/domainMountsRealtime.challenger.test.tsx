@@ -284,7 +284,7 @@ function setupSession(activeEntity: string = 'ALL') {
       id: 'u-mgr-1',
       email: 'maria@ata-lta.ph',
       name: 'Maria Santos',
-      role: 'Manager',
+      role: 'Admin',
       departments: ['Operations', 'Billing', 'Administration'],
       entities: ['ATA', 'LTA'],
     },
@@ -1244,6 +1244,54 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       // UI should NOT update to self-originated title
       expect(screen.getByText('SEC GIS 2026 Filing')).toBeInTheDocument();
       expect(screen.queryByText('Self-Originated Title Update')).not.toBeInTheDocument();
+    });
+
+    it('for non-admin staff, triggers query invalidation rather than blind cache injection (SHARED-PROJECT-VISIBILITY-20261024)', async () => {
+      // Set session to non-admin Staff
+      useSessionStore.getState().setSession({
+        user: {
+          id: 'u-staff-1',
+          email: 'staff@ata-lta.ph',
+          name: 'Staff Member',
+          role: 'Staff',
+          departments: ['Operations'],
+          entities: ['ATA'],
+        },
+        permissions: ['workflow:view'],
+        activeEntity: 'ATA',
+      });
+
+      const { queryClient, wrapper } = createTestHarness();
+      window.fetch = setupGlobalFetchMock();
+
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      render(<WorkRequestList />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByText('SEC GIS 2026 Filing')).toBeInTheDocument();
+      });
+
+      const wrChannel = (supabase as unknown as MockSupabaseClient).getChannel(
+        'cdc_work_requests'
+      ) as MockRealtimeChannel;
+
+      act(() => {
+        wrChannel.emit('postgres_changes', {
+          eventType: 'UPDATE',
+          new: {
+            ...initialWorkRequests[0],
+            title: 'Staff Should Invalidate Not Inject',
+            version: 2,
+          },
+          old: initialWorkRequests[0],
+        });
+      });
+
+      // Query invalidation must be called for work requests
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-101') })
+      );
     });
   });
 });
