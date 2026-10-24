@@ -11,6 +11,13 @@ const { tokenizeTask } = require('../../lib/tokenizer');
 const auditService = require('../../services/auditService');
 const { notify } = require('../../services/notify');
 const logger = require('../../lib/logger');
+const {
+  getUserConcernedWorkRequestIds,
+  isUserMemberOfWorkRequest,
+  isUserEntitledToEntity,
+  fetchInPages,
+} = require('../../lib/userScope');
+const { filterValidProjectRecords } = require('../../lib/projectLinkage');
 
 const PHASE_SEQUENCE = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
 
@@ -233,7 +240,7 @@ const toApiTask = (
   };
 };
 
-const isBackOffice = (user) => {
+const _isBackOffice = (user) => {
   if (!user) return false;
   return user.role === 'Admin';
 };
@@ -467,25 +474,28 @@ const loadTaskExtras = async (taskIds, knownPredIds = null) => {
 };
 
 const canViewWorkRequest = (wr, user, taskMap) => {
-  if (!user) return false;
+  if (!user || !user.id || !isValidUUID(user.id)) return false;
   if (user.role === 'Admin') return true;
   if (
-    wr.submitted_by === user.id ||
-    wr.submittedBy === user.id ||
-    wr.requested_by === user.id ||
-    wr.requestedBy === user.id ||
     wr.assigned_to === user.id ||
     wr.assignedTo === user.id
   ) {
     return true;
   }
   const coAssignees = Array.isArray(wr.co_assignees) ? wr.co_assignees : (wr.coAssignees || []);
-  if (coAssignees.some((ca) => ca === user.id || ca === user.name)) return true;
+  if (
+    coAssignees.some(
+      (ca) =>
+        typeof ca === 'string' &&
+        isValidUUID(ca) &&
+        ca.toLowerCase() === user.id.toLowerCase()
+    )
+  ) {
+    return true;
+  }
   const tasks = taskMap?.get ? (taskMap.get(wr.id) || []) : (wr.tasks || []);
   return tasks.some((t) => {
-    if (t.assignee_id === user.id || t.assigneeId === user.id || t.assignee_name === user.name || t.assigneeName === user.name) return true;
-    const taskCo = Array.isArray(t.co_assignees) ? t.co_assignees : (t.coAssignees || []);
-    if (taskCo.some((ca) => ca === user.id || ca === user.name)) return true;
+    if (t.assignee_id === user.id || t.assigneeId === user.id) return true;
     const relationalCo = Array.isArray(t.relational_assignees)
       ? t.relational_assignees
       : Array.isArray(t.relationalAssignees)
@@ -493,10 +503,36 @@ const canViewWorkRequest = (wr, user, taskMap) => {
         : Array.isArray(t.assignees)
           ? t.assignees
           : [];
-    if (relationalCo.some((id) => id === user.id || id?.user_id === user.id || id?.userId === user.id)) return true;
-    if (Array.isArray(t.task_assignees) && t.task_assignees.some((ta) => ta.user_id === user.id || ta.userId === user.id)) return true;
-    if (Array.isArray(t.taskAssignees) && t.taskAssignees.some((ta) => ta.user_id === user.id || ta.userId === user.id)) return true;
-    if (Array.isArray(t.checklist) && t.checklist.some((item) => item.assignee_name === user.name || item.assigneeName === user.name || item.assignee_id === user.id || item.assigneeId === user.id)) return true;
+    if (
+      relationalCo.some(
+        (id) =>
+          (typeof id === 'string' && isValidUUID(id) && id.toLowerCase() === user.id.toLowerCase()) ||
+          (id?.user_id && isValidUUID(id.user_id) && id.user_id.toLowerCase() === user.id.toLowerCase()) ||
+          (id?.userId && isValidUUID(id.userId) && id.userId.toLowerCase() === user.id.toLowerCase())
+      )
+    ) {
+      return true;
+    }
+    if (
+      Array.isArray(t.task_assignees) &&
+      t.task_assignees.some(
+        (ta) =>
+          (ta.user_id && isValidUUID(ta.user_id) && ta.user_id.toLowerCase() === user.id.toLowerCase()) ||
+          (ta.userId && isValidUUID(ta.userId) && ta.userId.toLowerCase() === user.id.toLowerCase())
+      )
+    ) {
+      return true;
+    }
+    if (
+      Array.isArray(t.taskAssignees) &&
+      t.taskAssignees.some(
+        (ta) =>
+          (ta.user_id && isValidUUID(ta.user_id) && ta.user_id.toLowerCase() === user.id.toLowerCase()) ||
+          (ta.userId && isValidUUID(ta.userId) && ta.userId.toLowerCase() === user.id.toLowerCase())
+      )
+    ) {
+      return true;
+    }
     return false;
   });
 };
@@ -547,6 +583,22 @@ const listWorkRequests = async ({
     query = query.or(`title.ilike.%${q}%,description.ilike.%${q}%`);
   }
 
+  if (user && user.role !== 'Admin') {
+    const concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        data: [],
+        meta: {
+          total: 0,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: 0,
+        },
+      };
+    }
+    query = query.in('id', concernedWrIds);
+  }
+
   const { data, error } = await query;
   if (error) {
     throw new AppError({
@@ -556,17 +608,17 @@ const listWorkRequests = async ({
     });
   }
 
-  // For Admin users, skip the expensive visibility filter entirely.
-  // For other users, filter by task-level assignment (where the user is assigned to at least one task).
-  let visibleRows;
-  let allTaskMap = null;
-  if (isBackOffice(user)) {
-    visibleRows = data || [];
-  } else {
-    const allWrIds = (data || []).map((r) => r.id);
-    allTaskMap = await loadTasksForWorkRequests(allWrIds);
-    visibleRows = (data || []).filter((row) => canViewWorkRequest(row, user, allTaskMap));
+  let visibleRows = data || [];
+  if (entityId === 'ALL' && user) {
+    const allowedRows = [];
+    for (const r of visibleRows) {
+      if (await isUserEntitledToEntity(r.entity_id, user)) {
+        allowedRows.push(r);
+      }
+    }
+    visibleRows = allowedRows;
   }
+  const allTaskMap = null;
 
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
 
@@ -1535,22 +1587,8 @@ const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) 
   }
 
   const res = await query.maybeSingle();
-  let data = res.data;
+  const data = res.data;
   const error = res.error;
-
-  // Fallback: If not found under entityId (e.g. cross-entity lookup from consolidated view or link),
-  // lookup by ID alone and verify user has access to that work request's entity
-  if (!data && entityId && entityId !== 'ALL') {
-    const fallbackRes = await supabaseAdmin
-      .from('work_requests')
-      .select('*, clients(name)')
-      .eq('id', id)
-      .is('deleted_at', null)
-      .maybeSingle();
-    if (fallbackRes.data) {
-      data = fallbackRes.data;
-    }
-  }
 
   if (error) {
     throw new AppError({
@@ -1561,13 +1599,24 @@ const getWorkRequestById = async ({ id, entityId, user, includeTasks = false }) 
   }
   if (!data) return null;
 
+  // Enforce entity entitlement (applies to all users including Admin)
+  if (user) {
+    const entitled = await isUserEntitledToEntity(data.entity_id, user);
+    if (!entitled) return null;
+  }
+
+  // Canonical project membership check
+  if (user && user.role !== 'Admin') {
+    const isMember = await isUserMemberOfWorkRequest(id, user, { entityId });
+    if (!isMember) return null;
+  }
+
   const withTasks = includeTasks === true || String(includeTasks).toLowerCase() === 'true';
 
   let taskMap = null;
-  if (withTasks || !canViewWorkRequest(data, user, null)) {
+  if (withTasks) {
     taskMap = await loadTasksForWorkRequests([id]);
   }
-  if (!canViewWorkRequest(data, user, taskMap)) return null;
 
   const entityCode = await resolveEntityCode(data.entity_id || entityId);
   const wr = toApiWorkRequest(data, entityCode);
@@ -1762,13 +1811,24 @@ const unarchiveWorkRequest = async ({ id, entityId, user }) => {
   return getWorkRequestById({ id, entityId, user });
 };
 
-const getWorkRequestCounts = async ({ entityId }) => {
+const getWorkRequestCounts = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) return { active: 0, all: 0, archived: 0 };
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { active: 0, all: 0, archived: 0 };
+    }
+  }
+
   const baseQuery = () => {
     let q = supabaseAdmin
       .from('work_requests')
       .select('*', { count: 'exact', head: true })
       .is('deleted_at', null);
     if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    if (!isAdmin && concernedWrIds) q = q.in('id', concernedWrIds);
     return q;
   };
 
@@ -1804,13 +1864,55 @@ const deleteWorkRequest = async ({ id, entityId, user }) => {
   return true;
 };
 
-const listTasks = async ({ workRequestId, entityId: _entityId }) => {
-  const { data, error } = await supabaseAdmin
+const listTasks = async ({ workRequestId, entityId, user, internal = false }) => {
+  if (!internal) {
+    if (!user) {
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required to list tasks',
+      });
+    }
+
+    let wrQuery = supabaseAdmin
+      .from('work_requests')
+      .select('id, entity_id, deleted_at')
+      .eq('id', workRequestId)
+      .is('deleted_at', null);
+
+    if (entityId && entityId !== 'ALL') {
+      wrQuery = wrQuery.eq('entity_id', entityId);
+    }
+
+    const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
+    if (wrErr || !wr) {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Work request not found',
+      });
+    }
+
+    if (user.role !== 'Admin') {
+      const isMember = await isUserMemberOfWorkRequest(workRequestId, user, { entityId });
+      if (!isMember) {
+        throw new AppError({
+          statusCode: 404,
+          title: 'Not Found',
+          detail: 'Work request not found',
+        });
+      }
+    }
+  }
+
+  const taskListQuery = supabaseAdmin
     .from('tasks')
     .select('*')
     .eq('work_request_id', workRequestId)
     .is('deleted_at', null)
     .order('display_order', { ascending: true });
+
+  const { data, error } = await taskListQuery;
 
   if (error) {
     throw new AppError({
@@ -1843,7 +1945,14 @@ const listTasks = async ({ workRequestId, entityId: _entityId }) => {
   );
 };
 
-const getTaskById = async ({ workRequestId, taskId, entityId: _entityId, skipExtras = false }) => {
+const getTaskById = async ({
+  workRequestId,
+  taskId,
+  entityId,
+  skipExtras = false,
+  user,
+  internal = false,
+}) => {
   let query = supabaseAdmin
     .from('tasks')
     .select('*')
@@ -1864,6 +1973,35 @@ const getTaskById = async ({ workRequestId, taskId, entityId: _entityId, skipExt
     });
   }
   if (!data) return null;
+
+  // Validate parent WR
+  if (data.work_request_id) {
+    let wrQuery = supabaseAdmin
+      .from('work_requests')
+      .select('id, entity_id, deleted_at')
+      .eq('id', data.work_request_id)
+      .is('deleted_at', null);
+    if (entityId && entityId !== 'ALL') {
+      wrQuery = wrQuery.eq('entity_id', entityId);
+    }
+    const { data: wr } = await wrQuery.maybeSingle();
+    if (!wr) return null; // Parent deleted or entity mismatch
+  }
+
+  // Authorization check
+  if (!internal) {
+    if (!user) {
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required to retrieve task',
+      });
+    }
+    if (user.role !== 'Admin') {
+      const isMember = await isUserMemberOfWorkRequest(data.work_request_id, user, { entityId });
+      if (!isMember) return null;
+    }
+  }
 
   if (skipExtras) {
     return toApiTask(data);
@@ -2047,7 +2185,7 @@ const createTask = async ({ workRequestId, entityId, data, user: _user }) => {
   }
   // Time logs in task snapshots are read-only. Use the permission-checked logging endpoints.
 
-  return getTaskById({ workRequestId, taskId: id, entityId });
+  return getTaskById({ workRequestId, taskId: id, entityId, internal: true });
 };
 
 const upsertChecklist = async (taskId, checklist) => {
@@ -2130,7 +2268,7 @@ const upsertChecklist = async (taskId, checklist) => {
 };
 
 const addTimeLogs = async ({ workRequestId, taskId, entityId, logs, user }) => {
-  const existing = await getTaskById({ workRequestId, taskId, entityId });
+  const existing = await getTaskById({ workRequestId, taskId, entityId, internal: true });
   if (!existing) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
   }
@@ -2197,7 +2335,7 @@ const addTimeLogs = async ({ workRequestId, taskId, entityId, logs, user }) => {
     });
   }
 
-  return getTaskById({ workRequestId, taskId, entityId });
+  return getTaskById({ workRequestId, taskId, entityId, internal: true });
 };
 
 /**
@@ -2208,7 +2346,7 @@ const addTimeLogs = async ({ workRequestId, taskId, entityId, logs, user }) => {
 const { isUserAssignedToTask } = require('../../lib/taskAssignment');
 
 
-const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }) => {
+const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user, caller, internal = false }) => {
   if (data && data.phase !== undefined) {
     throw new AppError({
       statusCode: 400,
@@ -2218,7 +2356,17 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
     });
   }
 
-  const existing = await getTaskById({ workRequestId, taskId, entityId, skipExtras: true });
+  const effectiveUser = caller || _user;
+  const isInternal = Boolean(internal || !effectiveUser);
+  const existing = await getTaskById({
+    workRequestId,
+    taskId,
+    entityId,
+    skipExtras: true,
+    user: effectiveUser,
+    caller: effectiveUser,
+    internal: isInternal,
+  });
   if (!existing) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
   }
@@ -2537,11 +2685,21 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user }
   }
   // Never replace employee-owned history from an echoed task/checklist snapshot.
 
-  return getTaskById({ workRequestId: effectiveWrId, taskId, entityId });
+  return getTaskById({ workRequestId: effectiveWrId, taskId, entityId, internal: true });
 };
 
-const deleteTask = async ({ workRequestId, taskId, entityId }) => {
-  const existing = await getTaskById({ workRequestId, taskId, entityId, skipExtras: true });
+const deleteTask = async ({ workRequestId, taskId, entityId, user, caller, internal = false }) => {
+  const effectiveUser = caller || user;
+  const isInternal = Boolean(internal || !effectiveUser);
+  const existing = await getTaskById({
+    workRequestId,
+    taskId,
+    entityId,
+    skipExtras: true,
+    user: effectiveUser,
+    caller: effectiveUser,
+    internal: isInternal,
+  });
   if (!existing) return false;
 
   const effectiveWrId = workRequestId || existing.workRequestId || existing.work_request_id;
@@ -2590,70 +2748,114 @@ const deleteTask = async ({ workRequestId, taskId, entityId }) => {
  * @returns {Promise<{ invoices: object[], disbursements: object[], transmittals: object[], documents: object[] }>}
  */
 const getWorkRequestRelated = async (arg1, arg2) => {
-  const { id, entityId: _entityId, caller, user } =
+  const { id, entityId, caller, user } =
     typeof arg1 === 'object' && arg1 !== null
       ? arg1
       : { id: arg1, caller: arg2 };
 
-  const { data: wr } = await supabaseAdmin
-    .from('work_requests')
-    .select('id, entity_id')
-    .eq('id', id)
-    .is('deleted_at', null)
-    .maybeSingle();
+  const effectiveCaller = caller || user;
+  if (!effectiveCaller) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to retrieve related records',
+    });
+  }
 
-  if (!wr) {
-    return { invoices: [], disbursements: [], transmittals: [], documents: [] };
+  let wrQuery = supabaseAdmin
+    .from('work_requests')
+    .select('id, entity_id, deleted_at')
+    .eq('id', id)
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    wrQuery = wrQuery.eq('entity_id', entityId);
+  }
+
+  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
+
+  if (wrErr || !wr) {
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Work request not found',
+    });
+  }
+
+  if (effectiveCaller.role !== 'Admin') {
+    const isMember = await isUserMemberOfWorkRequest(id, effectiveCaller, { entityId });
+    if (!isMember) {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Work request not found',
+      });
+    }
   }
 
   const relatedEntityId = wr.entity_id;
-  const effectiveCaller = caller || user;
 
-  const [{ data: invoices }, { data: disbursements }, { data: transmittals }, { data: documents }] =
-    await Promise.all([
+  const [invoices, disbursements, transmittals, documents] = await Promise.all([
+    fetchInPages(() =>
       supabaseAdmin
         .from('invoices')
         .select('*, clients(name)')
         .eq('entity_id', relatedEntityId)
         .eq('work_request_id', id)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false }),
-      (() => {
-        let q = supabaseAdmin
-          .from('disbursements')
-          .select('*, clients(name)')
-          .eq('entity_id', relatedEntityId)
-          .eq('linked_work_request_id', id)
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false });
-        if (effectiveCaller) {
-          const isAdmin = effectiveCaller.role === 'Admin';
-          const isAccounting =
-            String(effectiveCaller.role || '').toLowerCase() === 'accounting' ||
-            (effectiveCaller.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-          if (!isAdmin && !isAccounting) {
-            q = q.eq('created_by', effectiveCaller.id || '00000000-0000-0000-0000-000000000000');
-          }
-        }
-        return q;
-      })(),
+        .order('created_at', { ascending: false })
+    ),
+    fetchInPages(() =>
+      supabaseAdmin
+        .from('disbursements')
+        .select('*, clients(name)')
+        .eq('entity_id', relatedEntityId)
+        .eq('linked_work_request_id', id)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+    ),
+    fetchInPages(() =>
       supabaseAdmin
         .from('transmittals')
         .select('*, clients(name), transmittal_items(*)')
         .eq('entity_id', relatedEntityId)
         .eq('work_request_id', id)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false }),
+        .order('created_at', { ascending: false })
+    ),
+    fetchInPages(() =>
       supabaseAdmin
         .from('documents')
         .select('*')
         .eq('entity_id', relatedEntityId)
         .eq('work_request_id', id)
         .is('deleted_at', null)
-        .order('created_at', { ascending: false }),
-    ]);
+        .order('created_at', { ascending: false })
+    ),
+  ]);
 
-  const mappedTransmittals = (transmittals || []).map((t) => {
+  const validInvoices = await filterValidProjectRecords(invoices || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [id],
+  });
+  const validDisbursements = await filterValidProjectRecords(disbursements || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [id],
+  });
+  const validTransmittals = await filterValidProjectRecords(transmittals || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [id],
+  });
+  const validDocuments = await filterValidProjectRecords(documents || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [id],
+  });
+
+  const mappedTransmittals = validTransmittals.map((t) => {
     const { transmittal_items, ...rest } = t;
     return {
       ...rest,
@@ -2661,23 +2863,11 @@ const getWorkRequestRelated = async (arg1, arg2) => {
     };
   });
 
-  const filteredDisbursements = (() => {
-    if (!effectiveCaller) return disbursements || [];
-    const isAdmin = effectiveCaller.role === 'Admin';
-    const isAccounting =
-      String(effectiveCaller.role || '').toLowerCase() === 'accounting' ||
-      (effectiveCaller.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-    if (!isAdmin && !isAccounting) {
-      return (disbursements || []).filter((d) => d.created_by === effectiveCaller.id);
-    }
-    return disbursements || [];
-  })();
-
   return {
-    invoices: invoices || [],
-    disbursements: filteredDisbursements,
+    invoices: validInvoices,
+    disbursements: validDisbursements,
     transmittals: mappedTransmittals,
-    documents: documents || [],
+    documents: validDocuments,
   };
 };
 
@@ -2699,30 +2889,50 @@ const getTaskRelated = async (arg1, arg2) => {
       ? arg1
       : { id: arg1, caller: arg2 };
 
-  const { data: task } = await supabaseAdmin
-    .from('tasks')
-    .select('id, work_request_id')
-    .eq('id', id)
-    .is('deleted_at', null)
-    .maybeSingle();
-
-  if (!task || !task.work_request_id) {
-    return { invoices: [], disbursements: [], transmittals: [] };
-  }
-
-  const { data: wr } = await supabaseAdmin
-    .from('work_requests')
-    .select('id, entity_id')
-    .eq('id', task.work_request_id)
-    .is('deleted_at', null)
-    .maybeSingle();
-
-  if (!wr) {
-    return { invoices: [], disbursements: [], transmittals: [] };
-  }
-
-  const relatedEntityId = entityId && entityId !== 'ALL' ? entityId : wr.entity_id;
   const effectiveCaller = caller || user;
+  if (!effectiveCaller) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to retrieve related records',
+    });
+  }
+
+  const taskQuery = supabaseAdmin
+    .from('tasks')
+    .select('id, work_request_id, deleted_at')
+    .eq('id', id)
+    .is('deleted_at', null);
+
+  const { data: task, error: taskErr } = await taskQuery.maybeSingle();
+
+  if (taskErr || !task || !task.work_request_id) {
+    return { invoices: [], disbursements: [], transmittals: [] };
+  }
+
+  let wrQuery = supabaseAdmin
+    .from('work_requests')
+    .select('id, entity_id, deleted_at')
+    .eq('id', task.work_request_id)
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    wrQuery = wrQuery.eq('entity_id', entityId);
+  }
+
+  const { data: wr, error: wrErr } = await wrQuery.maybeSingle();
+  if (wrErr || !wr) {
+    return { invoices: [], disbursements: [], transmittals: [] };
+  }
+
+  if (effectiveCaller.role !== 'Admin') {
+    const isMember = await isUserMemberOfWorkRequest(wr.id, effectiveCaller, { entityId });
+    if (!isMember) {
+      return { invoices: [], disbursements: [], transmittals: [] };
+    }
+  }
+
+  const relatedEntityId = wr.entity_id;
 
   const [{ data: invoices }, { data: disbursements }, { data: transmittals }] = await Promise.all([
     supabaseAdmin
@@ -2732,25 +2942,13 @@ const getTaskRelated = async (arg1, arg2) => {
       .or(`task_id.eq.${id},and(task_id.is.null,linked_task_id.eq.${id})`)
       .is('deleted_at', null)
       .order('created_at', { ascending: false }),
-    (() => {
-      let q = supabaseAdmin
-        .from('disbursements')
-        .select('*, clients(name)')
-        .eq('entity_id', relatedEntityId)
-        .or(`task_id.eq.${id},and(task_id.is.null,linked_task_id.eq.${id})`)
-        .is('deleted_at', null)
-        .order('created_at', { ascending: false });
-      if (effectiveCaller) {
-        const isAdmin = effectiveCaller.role === 'Admin';
-        const isAccounting =
-          String(effectiveCaller.role || '').toLowerCase() === 'accounting' ||
-          (effectiveCaller.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-        if (!isAdmin && !isAccounting) {
-          q = q.eq('created_by', effectiveCaller.id || '00000000-0000-0000-0000-000000000000');
-        }
-      }
-      return q;
-    })(),
+    supabaseAdmin
+      .from('disbursements')
+      .select('*, clients(name)')
+      .eq('entity_id', relatedEntityId)
+      .or(`task_id.eq.${id},and(task_id.is.null,linked_task_id.eq.${id})`)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
     supabaseAdmin
       .from('transmittals')
       .select('*, clients(name)')
@@ -2760,22 +2958,26 @@ const getTaskRelated = async (arg1, arg2) => {
       .order('created_at', { ascending: false }),
   ]);
 
-  const filteredDisbursements = (() => {
-    if (!effectiveCaller) return disbursements || [];
-    const isAdmin = effectiveCaller.role === 'Admin';
-    const isAccounting =
-      String(effectiveCaller.role || '').toLowerCase() === 'accounting' ||
-      (effectiveCaller.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-    if (!isAdmin && !isAccounting) {
-      return (disbursements || []).filter((d) => d.created_by === effectiveCaller.id);
-    }
-    return disbursements || [];
-  })();
+  const validInvoices = await filterValidProjectRecords(invoices || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [wr.id],
+  });
+  const validDisbursements = await filterValidProjectRecords(disbursements || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [wr.id],
+  });
+  const validTransmittals = await filterValidProjectRecords(transmittals || [], {
+    user: effectiveCaller,
+    entityId: relatedEntityId,
+    concernedWrIds: [wr.id],
+  });
 
   return {
-    invoices: invoices || [],
-    disbursements: filteredDisbursements,
-    transmittals: transmittals || [],
+    invoices: validInvoices,
+    disbursements: validDisbursements,
+    transmittals: validTransmittals,
   };
 };
 

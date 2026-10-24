@@ -11,6 +11,12 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const { getSignedUploadUrl, getSignedDownloadUrl } = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const { getUserConcernedWorkRequestIds, fetchInPages } = require('../../lib/userScope');
+const { resolveTrustedUser } = require('../../lib/taskAssignment');
+const {
+  validateRecordProjectLinkage,
+  filterValidProjectRecords,
+} = require('../../lib/projectLinkage');
 
 /**
  * Sanitize a file name for safe storage.
@@ -116,7 +122,15 @@ const enrichDocuments = async (docs) => {
  * @param {object} [params.filters] - Optional filters
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listDocuments = async ({ entityId, filters = {} }) => {
+const listDocuments = async ({ entityId, filters = {}, user }) => {
+  if (!user) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to list documents',
+    });
+  }
+
   const {
     category,
     status,
@@ -131,49 +145,57 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin
-    .from('documents')
-    .select('*', { count: 'exact' })
-    .is('deleted_at', null);
-
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
+  const isAdmin = user.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
   }
 
-  if (isArchived) {
-    query = query.eq('archived', true);
-  } else {
-    query = query.eq('archived', false);
-  }
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('documents').select('*').is('deleted_at', null);
 
-  if (category) query = query.eq('category', category);
-  if (status) query = query.eq('status', status);
-  if (lifecycle) query = query.eq('document_lifecycle', lifecycle);
-  if (clientId) query = query.eq('client_id', clientId);
-  if (workRequestId) query = query.eq('work_request_id', workRequestId);
-  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
-  if (search) {
-    query = query.or(
-      `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
-    );
-  }
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
 
+    if (isArchived) {
+      q = q.eq('archived', true);
+    } else {
+      q = q.eq('archived', false);
+    }
+
+    if (category) q = q.eq('category', category);
+    if (status) q = q.eq('status', status);
+    if (lifecycle) q = q.eq('document_lifecycle', lifecycle);
+    if (clientId) q = q.eq('client_id', clientId);
+    if (workRequestId) q = q.eq('work_request_id', workRequestId);
+    if (linkedTaskId) q = q.eq('linked_task_id', linkedTaskId);
+    if (search) {
+      q = q.or(
+        `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
+      );
+    }
+    return q.order('created_at', { ascending: false });
+  };
+
+  const rawRows = await fetchInPages(makeQuery);
+
+  const validRows = await filterValidProjectRecords(rawRows || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const total = validRows.length;
   const offset = (page - 1) * limit;
-  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+  const rows = validRows.slice(offset, offset + limit);
 
-  const { data, error, count } = await query;
+  const enriched = await enrichDocuments(rows);
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch documents',
-    });
-  }
-
-  const enriched = await enrichDocuments(data || []);
-
-  return { data: enriched, count: count || 0 };
+  return { data: enriched, count: total };
 };
 
 /**
@@ -314,7 +336,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<object>}
  */
-const getDocumentById = async ({ entityId, id }) => {
+const getDocumentById = async ({ entityId, id, user, internal = false }) => {
   let query = supabaseAdmin
     .from('documents')
     .select('*')
@@ -335,8 +357,37 @@ const getDocumentById = async ({ entityId, id }) => {
     });
   }
 
+  if (!internal) {
+    if (!user) {
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required to view document',
+      });
+    }
+
+    await validateRecordProjectLinkage({
+      record: data,
+      entityId,
+      user,
+      internal: false,
+    });
+  }
+
   const [enriched] = await enrichDocuments([data]);
   return enriched || data;
+};
+
+const resolveDocumentCaller = async ({ user, userId, caller, internal }) => {
+  const effectiveUser = caller || user || (await resolveTrustedUser({ user, userId }));
+  if (!internal && !effectiveUser) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to modify document',
+    });
+  }
+  return effectiveUser;
 };
 
 /**
@@ -348,9 +399,10 @@ const getDocumentById = async ({ entityId, id }) => {
  * @param {object} params.data - Fields to update
  * @returns {Promise<object>}
  */
-const updateDocument = async ({ entityId, id, userId, data }) => {
-  // Verify document exists and belongs to entity
-  await getDocumentById({ entityId, id });
+const updateDocument = async ({ entityId, id, userId, data, user, caller, internal = false }) => {
+  // Verify document exists, belongs to entity, and caller has project membership
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  await getDocumentById({ entityId, id, user: effectiveUser, internal });
 
   const updates = {
     updated_by: userId,
@@ -397,8 +449,9 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
  * @param {string} params.userId - User performing deletion
  * @returns {Promise<void>}
  */
-const deleteDocument = async ({ entityId, id, userId }) => {
-  const doc = await getDocumentById({ entityId, id });
+const deleteDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const doc = await getDocumentById({ entityId, id, user: effectiveUser, internal });
 
   const { error } = await supabaseAdmin
     .from('documents')
@@ -428,8 +481,9 @@ const deleteDocument = async ({ entityId, id, userId }) => {
   });
 };
 
-const archiveDocument = async ({ entityId, id, userId }) => {
-  const existing = await getDocumentById({ entityId, id });
+const archiveDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
     .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
@@ -458,8 +512,9 @@ const archiveDocument = async ({ entityId, id, userId }) => {
   return updated;
 };
 
-const unarchiveDocument = async ({ entityId, id, userId }) => {
-  const existing = await getDocumentById({ entityId, id });
+const unarchiveDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
     .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
@@ -488,22 +543,38 @@ const unarchiveDocument = async ({ entityId, id, userId }) => {
   return updated;
 };
 
-const countDocuments = async ({ entityId }) => {
-  const baseQuery = () => {
-    let q = supabaseAdmin
-      .from('documents')
-      .select('*', { count: 'exact', head: true })
-      .is('deleted_at', null);
-    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
-    return q;
+const countDocuments = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) return { active: 0, archived: 0 };
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { active: 0, archived: 0 };
+    }
+  }
+
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('documents').select('*').is('deleted_at', null);
+
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+    return q.order('created_at', { ascending: false });
   };
 
-  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
-    baseQuery().eq('archived', false),
-    baseQuery().eq('archived', true),
-  ]);
+  const data = await fetchInPages(makeQuery);
 
-  return { active: activeCount || 0, archived: archivedCount || 0 };
+  const validRows = await filterValidProjectRecords(data || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const activeCount = validRows.filter((d) => !d.archived).length;
+  const archivedCount = validRows.filter((d) => d.archived).length;
+
+  return { active: activeCount, archived: archivedCount };
 };
 
 /**
@@ -514,8 +585,9 @@ const countDocuments = async ({ entityId }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<object>}
  */
-const confirmUpload = async ({ entityId, id }) => {
-  const doc = await getDocumentById({ entityId, id });
+const confirmUpload = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const doc = await getDocumentById({ entityId, id, user: effectiveUser, internal });
 
   if (doc.status !== 'pending_upload') {
     throw new AppError({
@@ -555,8 +627,8 @@ const confirmUpload = async ({ entityId, id }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<{ url: string, fileName: string }>}
  */
-const getDownloadUrl = async ({ entityId, id }) => {
-  const doc = await getDocumentById({ entityId, id });
+const getDownloadUrl = async ({ entityId, id, user }) => {
+  const doc = await getDocumentById({ entityId, id, user });
 
   if (doc.external_url && doc.external_url.trim()) {
     return { url: doc.external_url.trim(), fileName: doc.original_name || doc.file_name || 'document' };
@@ -595,8 +667,9 @@ const getDownloadUrl = async ({ entityId, id }) => {
  * @param {string} params.lifecycle - Target lifecycle state
  * @returns {Promise<object>}
  */
-const updateLifecycle = async ({ entityId, id, userId, lifecycle }) => {
-  await getDocumentById({ entityId, id });
+const updateLifecycle = async ({ entityId, id, userId, lifecycle, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  await getDocumentById({ entityId, id, user: effectiveUser, internal });
 
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
@@ -633,6 +706,15 @@ const updateLifecycle = async ({ entityId, id, userId, lifecycle }) => {
 // Authorization and mutation run together under a PostgreSQL row lock. Never
 // read/replace the thread in JavaScript: separate API workers must serialize too.
 const mutateDocumentComment = async ({ entityId, id, commentId, user, text, action }) => {
+  if (!user || !user.id) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to mutate document comments',
+    });
+  }
+  await getDocumentById({ entityId, id, user, internal: false });
+
   const { data, error } = await supabaseAdmin.rpc('mutate_document_comment', {
     p_entity_id: entityId,
     p_document_id: id,

@@ -4,6 +4,15 @@
  * Supports the atomic RPC transitions introduced by the concurrency hardening plan.
  */
 
+try {
+  const mime = require('mime');
+  if (mime && typeof mime.getType !== 'function' && typeof mime.lookup === 'function') {
+    mime.getType = (path) => mime.lookup(path);
+  }
+} catch (_) {
+  // mime compatibility shim optional
+}
+
 const mockUsers = new Map();
 const mockTokens = new Map();
 const mockTables = {
@@ -141,7 +150,7 @@ const registerUser = (user) => {
 const tableQuery = (table) => {
   const rows = mockTables[table] || new Map();
   const filters = [];
-  let order = null;
+  const orders = [];
   let limit = null;
   let op = 'select';
   let countOptions = null;
@@ -250,7 +259,10 @@ const tableQuery = (table) => {
     }
     const notM = part.match(/^([^.]+)\.not\.([^.]+)\.%?(.+)%?$/);
     if (notM) {
-      return { column: notM[1], value: notM[3], op: 'not', innerOp: notM[2] };
+      let val = notM[3];
+      if (val === 'true') val = true;
+      else if (val === 'false') val = false;
+      return { column: notM[1], value: val, op: 'not', innerOp: notM[2] };
     }
     const m = part.match(/^([^.]+)\.([^.]+)\.%?(.+)%?$/);
     if (!m) return null;
@@ -261,6 +273,10 @@ const tableQuery = (table) => {
       val = val.slice(1, -1).split(',').map((s) => s.trim());
     } else if (fop === 'cs' && val.startsWith('{') && val.endsWith('}')) {
       val = val.slice(1, -1).split(',').map((s) => s.trim());
+    } else if (val === 'true') {
+      val = true;
+    } else if (val === 'false') {
+      val = false;
     }
     return { column: col, value: val, op: fop };
   };
@@ -339,13 +355,15 @@ const tableQuery = (table) => {
       return inserted;
     }
 
-    if (order) {
+    if (orders.length > 0) {
       result.sort((a, b) => {
-        const aVal = a[order.column];
-        const bVal = b[order.column];
-        if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) return 0;
-        if (aVal < bVal) return order.ascending ? -1 : 1;
-        if (aVal > bVal) return order.ascending ? 1 : -1;
+        for (const ord of orders) {
+          const aVal = a[ord.column];
+          const bVal = b[ord.column];
+          if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) continue;
+          if (aVal < bVal) return ord.ascending ? -1 : 1;
+          if (aVal > bVal) return ord.ascending ? 1 : -1;
+        }
         return 0;
       });
     }
@@ -395,7 +413,7 @@ const tableQuery = (table) => {
       return builder;
     },
     order: (column, { ascending = true } = {}) => {
-      order = { column, ascending };
+      orders.push({ column, ascending });
       return builder;
     },
     limit: (n) => {

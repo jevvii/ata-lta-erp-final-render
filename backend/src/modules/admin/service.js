@@ -14,6 +14,13 @@ const transmittalsService = require('../transmittals/service');
 const { computePermissions } = require('../../middleware/rbac');
 const { hasPermission } = require('../../lib/permissions');
 const { evictUserProfile } = require('../../middleware/auth');
+const { filterValidProjectRecords } = require('../../lib/projectLinkage');
+const { normalizeTaskAndParentAliases } = require('../../lib/taskAssignment');
+const {
+  getUserConcernedWorkRequestIds,
+  getUserAuthorizedClientIds,
+  fetchInPages,
+} = require('../../lib/userScope');
 
 const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
@@ -328,49 +335,108 @@ const toApiPendingChange = (row) => ({
   rejectionReason: row.rejection_reason || null,
 });
 
+const filterPendingApprovalsByProject = async (rows, user, entityId) => {
+  if (!rows?.length || !user) return [];
+  if (user.role === 'Admin') return rows;
+
+  const concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+  const projectTables = new Set([
+    'work_requests', 'tasks', 'invoices', 'disbursements', 'transmittals', 'documents',
+  ]);
+  const targets = new Map();
+  for (const table of [...projectTables, 'clients']) {
+    const ids = [...new Set(rows
+      .filter((r) => (r.table_name === 'workRequests' ? 'work_requests' : r.table_name) === table)
+      .map((r) => r.parent_record_id).filter(Boolean))];
+    const records = [];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500);
+      records.push(...await fetchInPages(() =>
+        supabaseAdmin.from(table).select('*').in('id', chunk)
+      ));
+    }
+    targets.set(table, new Map(records.map((r) => [r.id, r])));
+  }
+  const allowedClientIds = rows.some((r) => r.table_name === 'clients')
+    ? new Set(await getUserAuthorizedClientIds(user, entityId)) : new Set();
+
+  const candidates = [];
+  const records = [];
+  for (const row of rows) {
+    const table = row.table_name === 'workRequests' ? 'work_requests' : row.table_name;
+    if (!projectTables.has(table) && table !== 'clients') {
+      candidates.push({ row }); // Preserve existing non-project/HR queue policy.
+      continue;
+    }
+    const target = row.parent_record_id ? targets.get(table).get(row.parent_record_id) : null;
+    // Existing target lookup failures cannot fall back to a proposed parent.
+    if (row.parent_record_id && (!target || target.deleted_at)) continue;
+    if (table === 'clients') {
+      if (target && allowedClientIds.has(target.id)) candidates.push({ row });
+      continue;
+    }
+    if (target && row.entity_id && target.entity_id && row.entity_id !== target.entity_id) continue;
+
+    let record = target;
+    if (target && table === 'work_requests') {
+      record = { ...target, work_request_id: target.id };
+    } else if (target && table === 'tasks') {
+      record = { ...target, task_id: target.id };
+    } else if (!target) {
+      try {
+        const { effectiveTaskId, effectiveWrId } = normalizeTaskAndParentAliases(row.proposed_data || {});
+        record = { entity_id: row.entity_id, task_id: effectiveTaskId, work_request_id: effectiveWrId };
+      } catch (error) {
+        if (error.statusCode === 400) continue;
+        throw error;
+      }
+    }
+    candidates.push({ row, record });
+    records.push(record);
+  }
+  const valid = new Set(await filterValidProjectRecords(records, { user, entityId, concernedWrIds }));
+  return candidates.filter(({ record }) => !record || valid.has(record)).map(({ row }) => row);
+};
+
 const listPendingApprovals = async ({
   entityId,
-  user: _user,
+  user,
   status,
   tableName,
   parentRecordId,
   submittedBy,
 } = {}) => {
-  let query = supabaseAdmin.from('pending_changes').select('*');
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('pending_changes').select('*');
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
 
-  if (status) {
-    query = query.eq('status', status);
-  } else {
-    query = query.eq('status', 'pending');
-  }
+    if (status) {
+      q = q.eq('status', status);
+    } else {
+      q = q.eq('status', 'pending');
+    }
 
-  if (tableName) {
-    query = query.eq('table_name', tableName);
-  }
+    if (tableName) {
+      q = q.eq('table_name', tableName);
+    }
 
-  if (parentRecordId !== undefined && parentRecordId !== null && parentRecordId !== '') {
-    query = query.eq('parent_record_id', parentRecordId);
-  }
+    if (parentRecordId !== undefined && parentRecordId !== null && parentRecordId !== '') {
+      q = q.eq('parent_record_id', parentRecordId);
+    }
 
-  if (submittedBy) {
-    query = query.eq('submitted_by', submittedBy);
-  }
+    if (submittedBy) {
+      q = q.eq('submitted_by', submittedBy);
+    }
 
-  const { data, error } = await query.order('created_at', { ascending: false });
+    return q.order('created_at', { ascending: false });
+  };
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Unable to list pending approvals',
-    });
-  }
-
-  return (data || []).map(toApiPendingChange);
+  const rawRows = await fetchInPages(makeQuery);
+  const filtered = await filterPendingApprovalsByProject(rawRows, user, entityId);
+  return filtered.map(toApiPendingChange);
 };
 
 const createPendingChange = async ({ entityId, userId, data }) => {

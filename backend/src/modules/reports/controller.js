@@ -12,8 +12,8 @@ const AppError = require('../../lib/AppError');
 /** @type {import('express').RequestHandler} */
 const analytics = async (req, res, next) => {
   try {
-    const data = await service.getAnalytics({ entityId: req.activeEntity });
-    res.set('Cache-Control', 'private, max-age=30');
+    const data = await service.getAnalytics({ entityId: req.activeEntity, user: req.user });
+    res.set('Cache-Control', req.user?.role === 'Admin' ? 'private, max-age=30' : 'private, no-store');
     res.json({ data });
   } catch (err) {
     next(err);
@@ -40,6 +40,7 @@ const daily = async (req, res, next) => {
     const data = await service.getDailyReport({
       entityId: req.activeEntity,
       date: validated.date,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -63,6 +64,7 @@ const weekly = async (req, res, next) => {
     const data = await service.getWeeklyReport({
       entityId: req.activeEntity,
       date: validated.date,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -86,6 +88,7 @@ const monthlyPending = async (req, res, next) => {
     const data = await service.getMonthlyPending({
       entityId: req.activeEntity,
       month: validated.month,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -105,7 +108,7 @@ const monthlyPending = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const aging = async (req, res, next) => {
   try {
-    const data = await service.getAgingReport({ entityId: req.activeEntity });
+    const data = await service.getAgingReport({ entityId: req.activeEntity, user: req.user });
     res.json({ data });
   } catch (err) {
     next(err);

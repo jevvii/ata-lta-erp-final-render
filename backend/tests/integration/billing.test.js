@@ -520,29 +520,53 @@ describe('/v1/invoices', () => {
     expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
     expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
-    // 2. Ops lists invoices -> sees only Sent
+    // 2. Ops (project teammate on WORK_REQUEST_ID) lists invoices -> sees both Draft and Sent (F07)
     const opsList = await request(app)
       .get('/v1/invoices')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
     expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
-    // 3. Ops tries to fetch draft invoice directly -> 403 Forbidden
+    // 3. Outsider user not on project team cannot see either and is denied direct fetch
+    const outsider = registerUser({
+      id: '00000000-0000-4000-a000-000000000444',
+      email: 'outsider-billing@ata-lta.ph',
+      name: 'Outsider User',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    const outsiderList = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${outsider}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(outsiderList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(outsiderList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(false);
+
     await request(app)
       .get(`/v1/invoices/${draftRes.body.data.id}`)
-      .set('Authorization', `Bearer ${ops}`)
+      .set('Authorization', `Bearer ${outsider}`)
       .set('X-Active-Entity', 'ATA')
       .expect(403);
 
-    // 4. Ops gets counts -> count does not include draft/pending
+    // 4. Ops (project teammate) gets counts -> count includes both project invoices (Draft & Sent) (F07, F09)
     const opsCounts = await request(app)
       .get('/v1/invoices/counts')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsCounts.body.data.active).toBe(1); // Only the Sent one
+    expect(opsCounts.body.data.active).toBe(2);
+
+    // 4b. Outsider gets counts -> 0 active (F09)
+    const outsiderCounts = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${outsider}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(outsiderCounts.body.data.active).toBe(0);
 
     // 5. Admin gets counts -> count includes both
     const adminCounts = await request(app)
@@ -561,24 +585,27 @@ describe('/v1/invoices', () => {
       entities: ['ATA'],
     });
 
+    const staff1Id = '00000000-0000-4000-a000-000000000561';
     const staff1 = registerUser({
-      id: 'staff-1-id',
+      id: staff1Id,
       email: 'staff1@ata-lta.ph',
       name: 'Staff One',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    const staff2Id = '00000000-0000-4000-a000-000000000562';
     const staff2 = registerUser({
-      id: 'staff-2-id',
+      id: staff2Id,
       email: 'staff2@ata-lta.ph',
       name: 'Staff Two',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    const acctId = '00000000-0000-4000-a000-000000000563';
     const accounting = registerUser({
-      id: 'accounting-id',
+      id: acctId,
       email: 'acct@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
@@ -603,16 +630,17 @@ describe('/v1/invoices', () => {
     });
 
     // Seed tasks assigning Staff One to WR_1, but no one to WR_2
-    mockTables.tasks.set('task-staff1', {
-      id: 'task-staff1',
+    const taskIdStaff1 = '22222222-3333-4444-5555-666666666661';
+    mockTables.tasks.set(taskIdStaff1, {
+      id: taskIdStaff1,
       work_request_id: WR_1,
-      assignee_id: 'staff-1-id',
+      assignee_id: staff1Id,
       deleted_at: null,
     });
 
     // Seed invoices linked to WR_1 and WR_2
-    const invoiceWr1 = 'inv-wr1';
-    const invoiceWr2 = 'inv-wr2';
+    const invoiceWr1 = '33333333-4444-5555-6666-777777777771';
+    const invoiceWr2 = '33333333-4444-5555-6666-777777777772';
 
     mockTables.invoices.set(invoiceWr1, {
       id: invoiceWr1,
@@ -665,14 +693,23 @@ describe('/v1/invoices', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 
-    // 5. Accounting Staff can see both invoices across the entity
-    const resAcct = await request(app)
+    // 5. Accounting Staff without project membership cannot see unrelated invoices (Finding F03)
+    const resAcctOutsider = await request(app)
       .get('/v1/invoices')
       .set('Authorization', `Bearer ${accounting}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(resAcct.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
-    expect(resAcct.body.data.some((i) => i.id === invoiceWr2)).toBe(true);
+    expect(resAcctOutsider.body.data.length).toBe(0);
+
+    // 6. Accounting Staff assigned to WR_1 sees WR_1's invoice
+    mockTables.work_requests.get(WR_1).assigned_to = acctId;
+    const resAcctAssigned = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${accounting}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(resAcctAssigned.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
+    expect(resAcctAssigned.body.data.some((i) => i.id === invoiceWr2)).toBe(false);
   });
 
   it('supports linking a transmittal to an invoice on create, update, and filtering by linkedTransmittalId', async () => {
@@ -885,12 +922,20 @@ describe('/v1/invoices', () => {
         entities: ['ATA', 'LTA'],
       };
 
+      const WR_LTA = '77777777-8888-4999-a000-bbbbbbbbbbbb';
+      mockTables.work_requests.set(WR_LTA, {
+        id: WR_LTA,
+        entity_id: 'ent-lta',
+        client_id: CLIENT_ID_LTA,
+        title: 'LTA Work Request',
+      });
+
       const INV_ID = '88888888-aaaa-bbbb-cccc-222222222222';
       mockTables.invoices.set(INV_ID, {
         id: INV_ID,
         entity_id: 'ent-lta',
         client_id: CLIENT_ID_LTA,
-        work_request_id: WORK_REQUEST_ID,
+        work_request_id: WR_LTA,
         invoice_number: 'LTA-SI-2026-FB',
         status: 'Draft',
         total: 3000,
@@ -920,12 +965,15 @@ describe('/v1/invoices', () => {
     });
 
     it('Task A.2: Non-admin attempting to approve invoice to Sent gets HTTP 403 FORBIDDEN_INVOICE_APPROVAL', async () => {
+      const jenId = '00000000-0000-4000-a000-000000000781';
       const accountingToken = registerUser({
+        id: jenId,
         email: 'jen.andoga@ata-lta.ph',
         name: 'Jen Andoga',
         role: 'Accounting',
         entities: ['ATA'],
       });
+      mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = jenId;
 
       // Seed a draft invoice
       const INV_DRAFT = '12345678-0000-0000-0000-000000000001';
@@ -954,12 +1002,15 @@ describe('/v1/invoices', () => {
     });
 
     it('Task A.2: Non-admin attempting to reject invoice from Pending to Draft gets HTTP 403 FORBIDDEN_INVOICE_APPROVAL', async () => {
+      const jenId = '00000000-0000-4000-a000-000000000782';
       const accountingToken = registerUser({
-        email: 'jen.andoga@ata-lta.ph',
-        name: 'Jen Andoga',
+        id: jenId,
+        email: 'jen.andoga2@ata-lta.ph',
+        name: 'Jen Andoga 2',
         role: 'Accounting',
         entities: ['ATA'],
       });
+      mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = jenId;
 
       // Seed a pending invoice
       const INV_PENDING = '12345678-0000-0000-0000-000000000002';
@@ -1052,7 +1103,7 @@ describe('/v1/invoices', () => {
         entities: ['ATA'],
       });
 
-      const CREATOR_ID = 'creator-user-8888';
+      const CREATOR_ID = '00000000-0000-4000-a000-000000000883';
       mockTables.users.set(CREATOR_ID, {
         id: CREATOR_ID,
         name: 'Maria Creator',
@@ -1060,7 +1111,7 @@ describe('/v1/invoices', () => {
         role: 'Operations',
       });
 
-      const WR_CREATOR_ID = 'wr-with-creator-9999';
+      const WR_CREATOR_ID = '00000000-0000-4000-a000-000000000881';
       mockTables.work_requests.set(WR_CREATOR_ID, {
         id: WR_CREATOR_ID,
         entity_id: 'ent-ata',
@@ -1070,7 +1121,7 @@ describe('/v1/invoices', () => {
         created_by: CREATOR_ID,
       });
 
-      const INV_WITH_WR = 'inv-with-wr-7777';
+      const INV_WITH_WR = '00000000-0000-4000-a000-000000000882';
       mockTables.invoices.set(INV_WITH_WR, {
         id: INV_WITH_WR,
         entity_id: 'ent-ata',

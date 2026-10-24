@@ -7,25 +7,30 @@
  */
 
 const { supabaseAdmin } = require('../../services/supabaseClient');
-const AppError = require('../../lib/AppError');
+const _AppError = require('../../lib/AppError');
 const logger = require('../../lib/logger');
 const { resolveEntityId, resolveEntityCode } = require('../../lib/entityResolver');
-const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
+const {
+  getUserConcernedWorkRequestIds,
+  getUserAuthorizedClientIds,
+  fetchInPages,
+} = require('../../lib/userScope');
+const { filterValidProjectRecords } = require('../../lib/projectLinkage');
 
 // Mirror of the operations module's back-office gate: only these roles may see
 // work requests they are not directly involved in (assignee / requester).
-const isBackOfficeUser = (user) => {
+const _isBackOfficeUser = (user) => {
   if (!user) return false;
   return user.role === 'Admin';
 };
 
 // Mirror of the disbursements module's list gate for calendar disbursements.
-const isAccountingUser = (user) =>
+const _isAccountingUser = (user) =>
   !!user && ((user.departments || []).includes('Accounting') || user.role === 'Accounting');
 
 // Disbursement statuses visible to non-admin/non-accounting users, matching
 // the disbursements module list restriction.
-const STAFF_VISIBLE_DISB_STATUSES = ['Released', 'Funded', 'Rejected'];
+const _STAFF_VISIBLE_DISB_STATUSES = ['Released', 'Funded', 'Rejected'];
 
 // ============================================================
 // Helper: get Monday and Sunday of the week containing a date
@@ -74,48 +79,111 @@ const setCachedAnalytics = (entityId, data) => {
 /**
  * Aggregate the six independent analytics queries into the dashboard shape.
  * @param {string} entityId
+ * @param {object} [user]
  * @returns {Promise<object>}
  */
-const computeAnalytics = async (entityId) => {
+const computeAnalytics = async (entityId, user) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  let authorizedClientIds = null;
+
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        clients: { total: 0 },
+        workRequests: { total: 0 },
+        documents: { total: 0 },
+        invoices: { total: 0, totalBilled: 0, totalCollected: 0, totalOutstanding: 0, byStatus: {} },
+        disbursements: { total: 0, totalAmount: 0, releasedAmount: 0, byStatus: {} },
+        transmittals: { total: 0, byStatus: {} },
+        revenue: { totalBilled: 0, totalCollected: 0, totalOutstanding: 0, totalExpenses: 0, netIncome: 0 },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    authorizedClientIds = await getUserAuthorizedClientIds(user, entityId);
+    if (concernedWrIds.length === 0) {
+      return {
+        clients: { total: 0 },
+        workRequests: { total: 0 },
+        documents: { total: 0 },
+        invoices: { total: 0, totalBilled: 0, totalCollected: 0, totalOutstanding: 0, byStatus: {} },
+        disbursements: { total: 0, totalAmount: 0, releasedAmount: 0, byStatus: {} },
+        transmittals: { total: 0, byStatus: {} },
+        revenue: { totalBilled: 0, totalCollected: 0, totalOutstanding: 0, totalExpenses: 0, netIncome: 0 },
+      };
+    }
+  }
+
+  let clientsQuery = supabaseAdmin
+    .from('clients')
+    .select('*', { count: 'exact', head: true })
+    .is('deleted_at', null);
+
+  let wrQuery = supabaseAdmin
+    .from('work_requests')
+    .select('*', { count: 'exact', head: true })
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    clientsQuery = clientsQuery.eq('entity_id', entityId);
+    wrQuery = wrQuery.eq('entity_id', entityId);
+  }
+
+  if (!isAdmin) {
+    if (authorizedClientIds) clientsQuery = clientsQuery.in('id', authorizedClientIds);
+    if (concernedWrIds) wrQuery = wrQuery.in('id', concernedWrIds);
+  }
+
   const [
     { count: clientsCount },
     { count: wrCount },
-    { count: docsCount },
-    { data: invoices },
-    { data: disbursements },
-    { data: transmittals },
+    rawDocs,
+    rawInvoices,
+    rawDisbursements,
+    rawTransmittals,
   ] = await Promise.all([
-    supabaseAdmin
-      .from('clients')
-      .select('*', { count: 'exact', head: true })
-      .eq('entity_id', entityId)
-      .is('deleted_at', null),
-    supabaseAdmin
-      .from('work_requests')
-      .select('*', { count: 'exact', head: true })
-      .eq('entity_id', entityId)
-      .is('deleted_at', null),
-    supabaseAdmin
-      .from('documents')
-      .select('*', { count: 'exact', head: true })
-      .eq('entity_id', entityId)
-      .is('deleted_at', null)
-      .eq('status', 'active'),
-    supabaseAdmin
-      .from('invoices')
-      .select('status, total, amount_paid, balance')
-      .eq('entity_id', entityId)
-      .is('deleted_at', null),
-    supabaseAdmin
-      .from('disbursements')
-      .select('status, amount')
-      .eq('entity_id', entityId)
-      .is('deleted_at', null),
-    supabaseAdmin
-      .from('transmittals')
-      .select('status')
-      .eq('entity_id', entityId)
-      .is('deleted_at', null),
+    clientsQuery,
+    wrQuery,
+    fetchInPages(() => {
+      let q = supabaseAdmin
+        .from('documents')
+        .select('*')
+        .is('deleted_at', null)
+        .eq('status', 'active');
+      if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+      return q;
+    }),
+    fetchInPages(() => {
+      let q = supabaseAdmin
+        .from('invoices')
+        .select('*')
+        .is('deleted_at', null);
+      if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+      return q;
+    }),
+    fetchInPages(() => {
+      let q = supabaseAdmin
+        .from('disbursements')
+        .select('*')
+        .is('deleted_at', null);
+      if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+      return q;
+    }),
+    fetchInPages(() => {
+      let q = supabaseAdmin
+        .from('transmittals')
+        .select('*')
+        .is('deleted_at', null);
+      if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+      return q;
+    }),
+  ]);
+
+  const [docs, invoices, disbursements, transmittals] = await Promise.all([
+    filterValidProjectRecords(rawDocs || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawInvoices || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawDisbursements || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawTransmittals || [], { user, entityId, concernedWrIds }),
   ]);
 
   const invoiceSummary = {
@@ -154,7 +222,7 @@ const computeAnalytics = async (entityId) => {
   return {
     clients: { total: clientsCount || 0 },
     workRequests: { total: wrCount || 0 },
-    documents: { total: docsCount || 0 },
+    documents: { total: (docs || []).length },
     invoices: invoiceSummary,
     disbursements: disbursementSummary,
     transmittals: transmittalSummary,
@@ -176,18 +244,19 @@ const computeAnalytics = async (entityId) => {
  * Get dashboard-level analytics for an entity.
  * @param {object} params
  * @param {string} params.entityId
+ * @param {object} [params.user]
  * @returns {Promise<object>}
  */
-const getAnalytics = async ({ entityId }) => {
+const getAnalytics = async ({ entityId, user }) => {
   if (entityId === 'ALL') {
     const [ata, lta] = await Promise.all([
-      getAnalyticsForEntityCode('ATA'),
-      getAnalyticsForEntityCode('LTA'),
+      getAnalyticsForEntityCode('ATA', user),
+      getAnalyticsForEntityCode('LTA', user),
     ]);
     return { analyticsByEntity: { ATA: ata, LTA: lta } };
   }
 
-  return getAnalyticsForEntityCode(entityId);
+  return getAnalyticsForEntityCode(entityId, user);
 };
 
 /**
@@ -301,19 +370,19 @@ const loadCalendarItemsForEntity = async (entityUuid, user) => {
 
   const entityCode = await resolveEntityCode(entityUuid);
 
-  // Per-user visibility scope. Back-office users see every work request;
-  // Admin/Accounting see every disbursement. Anyone else is limited to the
-  // records they are concerned with (the same rule the list endpoints enforce).
-  const seeAllWrs = isBackOfficeUser(user);
-  const canSeeAllDisbursements = user?.role === 'Admin' || isAccountingUser(user);
-  let concernedWrIds = null;
+  // Per-user visibility scope: only Admin sees all projects.
+  // Other users are strictly limited to their concerned projects.
+  const seeAllWrs = user?.role === 'Admin';
+  const canSeeAllDisbursements = user?.role === 'Admin';
+  let concernedWrSet = null;
   if (!seeAllWrs || !canSeeAllDisbursements) {
-    concernedWrIds = new Set(await getUserConcernedWorkRequestIds(user));
+    const ids = await getUserConcernedWorkRequestIds(user, { entityId: entityUuid });
+    concernedWrSet = new Set(ids);
   }
 
   const items = [];
   for (const wr of workRequests || []) {
-    if (!seeAllWrs && wr.submitted_by !== user?.id && !concernedWrIds.has(wr.id)) continue;
+    if (!seeAllWrs && (!concernedWrSet || !concernedWrSet.has(wr.id))) continue;
     items.push({
       id: wr.id,
       type: 'wr',
@@ -336,8 +405,7 @@ const loadCalendarItemsForEntity = async (entityUuid, user) => {
 
   for (const d of disbursements || []) {
     if (!canSeeAllDisbursements) {
-      if (!STAFF_VISIBLE_DISB_STATUSES.includes(d.status)) continue;
-      if (!d.linked_work_request_id || !concernedWrIds.has(d.linked_work_request_id)) continue;
+      if (!d.linked_work_request_id || !concernedWrSet || !concernedWrSet.has(d.linked_work_request_id)) continue;
     }
     items.push({
       id: d.id,
@@ -357,47 +425,48 @@ const loadCalendarItemsForEntity = async (entityUuid, user) => {
 /**
  * Internal helper that accepts either an entity code ('ATA'/'LTA') or UUID.
  * @param {string} codeOrUuid
+ * @param {object} [user]
  * @returns {Promise<object>}
  */
-const getAnalyticsForEntityCode = async (codeOrUuid) => {
+const getAnalyticsForEntityCode = async (codeOrUuid, user) => {
   const resolved = await resolveEntityIdOrAll(codeOrUuid);
-  const cached = getCachedAnalytics(resolved);
-  if (cached) return cached;
-  const data = await computeAnalytics(resolved);
-  setCachedAnalytics(resolved, data);
-  return data;
+  const isAdmin = user?.role === 'Admin';
+  if (isAdmin) {
+    const cached = getCachedAnalytics(resolved);
+    if (cached) return cached;
+    const data = await computeAnalytics(resolved, user);
+    setCachedAnalytics(resolved, data);
+    return data;
+  }
+  // Non-admin: fresh computation without caching so revocation is immediate
+  return computeAnalytics(resolved, user);
 };
 
 /**
  * Optimized dashboard summary intended for the dashboard widget.
- * Attempts a single Supabase RPC call; falls back to the parallelized
- * computeAnalytics aggregator with a 30-second in-memory cache.
- *
- * The aggregate analytics are user-agnostic and safe to share via the
- * entity-keyed cache. The `calendar` payload is user-specific (visibility
- * filtered), so it is ALWAYS computed per request and never stored in the
- * shared cache — otherwise one user's calendar could be served to another.
  * @param {object} params
  * @param {string} params.entityId
- * @param {object} [params.user] - authenticated user for calendar visibility
+ * @param {object} [params.user] - authenticated user for calendar and analytics visibility
  * @returns {Promise<object>}
  */
 const getDashboardSummary = async ({ entityId, user }) => {
-  // Consolidated view for ALL: the RPC path is single-entity only, so we
-  // always compute both entities in parallel through the JS aggregator.
+  const isAdmin = user?.role === 'Admin';
+
   if (entityId === 'ALL') {
-    let analyticsPayload = getCachedAnalytics('ALL');
+    let analyticsPayload = isAdmin ? getCachedAnalytics('ALL') : null;
     if (!analyticsPayload) {
       const [ataAnalytics, ltaAnalytics] = await Promise.all([
-        getAnalyticsForEntityCode('ATA'),
-        getAnalyticsForEntityCode('LTA'),
+        getAnalyticsForEntityCode('ATA', user),
+        getAnalyticsForEntityCode('LTA', user),
       ]);
       analyticsPayload = {
         analyticsByEntity: { ATA: ataAnalytics, LTA: ltaAnalytics },
         ATA: ataAnalytics,
         LTA: ltaAnalytics,
       };
-      setCachedAnalytics('ALL', analyticsPayload);
+      if (isAdmin) {
+        setCachedAnalytics('ALL', analyticsPayload);
+      }
     }
 
     const [ataCalendar, ltaCalendar] = await Promise.all([
@@ -409,36 +478,38 @@ const getDashboardSummary = async ({ entityId, user }) => {
   }
 
   const resolved = await resolveEntityIdOrAll(entityId);
-
-  // The calendar is user-scoped; always compute it fresh for the caller.
   const calendarPromise = loadCalendarItemsForEntity(resolved, user);
 
-  const cached = getCachedAnalytics(resolved);
-  if (cached) {
-    // Strip any legacy cached calendar defensively; the fresh, user-filtered
-    // calendar computed above is authoritative.
-    const { calendar: _ignoredCalendar, ...analytics } = cached;
+  if (isAdmin) {
+    const cached = getCachedAnalytics(resolved);
+    if (cached) {
+      const { calendar: _ignoredCalendar, ...analytics } = cached;
+      return { ...analytics, calendar: await calendarPromise };
+    }
+
+    try {
+      const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', {
+        entity_id: resolved,
+      });
+      if (!error && data) {
+        const result = Array.isArray(data) ? data[0] : data;
+        if (result && typeof result === 'object') {
+          const { calendar: _ignoredCalendar, ...analytics } = result;
+          setCachedAnalytics(resolved, analytics);
+          return { ...analytics, calendar: await calendarPromise };
+        }
+      }
+    } catch (rpcErr) {
+      logger.warn('getDashboardSummary rpc fallback', { entityId, error: rpcErr.message });
+    }
+
+    const analytics = await computeAnalytics(resolved, user);
+    setCachedAnalytics(resolved, analytics);
     return { ...analytics, calendar: await calendarPromise };
   }
 
-  try {
-    const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', {
-      entity_id: resolved,
-    });
-    if (!error && data) {
-      const result = Array.isArray(data) ? data[0] : data;
-      if (result && typeof result === 'object') {
-        const { calendar: _ignoredCalendar, ...analytics } = result;
-        setCachedAnalytics(resolved, analytics);
-        return { ...analytics, calendar: await calendarPromise };
-      }
-    }
-  } catch (rpcErr) {
-    logger.warn('getDashboardSummary rpc fallback', { entityId, error: rpcErr.message });
-  }
-
-  const analytics = await computeAnalytics(resolved);
-  setCachedAnalytics(resolved, analytics);
+  // Non-admin: fresh computation without caching
+  const analytics = await computeAnalytics(resolved, user);
   return { ...analytics, calendar: await calendarPromise };
 };
 
@@ -453,90 +524,167 @@ const getDashboardSummary = async ({ entityId, user }) => {
  * @param {string} params.date - YYYY-MM-DD
  * @returns {Promise<object>}
  */
-const getDailyReport = async ({ entityId, date }) => {
+const getDailyReport = async ({ entityId, date, user }) => {
   const dayStart = `${date}T00:00:00.000Z`;
   const dayEnd = `${date}T23:59:59.999Z`;
 
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        date,
+        workRequests: [],
+        documents: [],
+        invoices: [],
+        payments: [],
+        disbursements: [],
+        transmittals: [],
+        summary: {
+          workRequests: 0,
+          documents: 0,
+          invoices: 0,
+          invoicesTotal: 0,
+          payments: 0,
+          paymentsTotal: 0,
+          disbursements: 0,
+          disbursementsTotal: 0,
+          transmittals: 0,
+        },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        date,
+        workRequests: [],
+        documents: [],
+        invoices: [],
+        payments: [],
+        disbursements: [],
+        transmittals: [],
+        summary: {
+          workRequests: 0,
+          documents: 0,
+          invoices: 0,
+          invoicesTotal: 0,
+          payments: 0,
+          paymentsTotal: 0,
+          disbursements: 0,
+          disbursementsTotal: 0,
+          transmittals: 0,
+        },
+      };
+    }
+  }
+
   // Work requests created that day
-  const { data: workRequests } = await supabaseAdmin
-    .from('work_requests')
-    .select('id, title, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd);
+  const rawWrs = await fetchInPages(() => {
+    let wrQ = supabaseAdmin
+      .from('work_requests')
+      .select('id, title, status, created_at, entity_id')
+      .is('deleted_at', null)
+      .gte('created_at', dayStart)
+      .lte('created_at', dayEnd);
+    if (entityId && entityId !== 'ALL') wrQ = wrQ.eq('entity_id', entityId);
+    if (!isAdmin && concernedWrIds) wrQ = wrQ.in('id', concernedWrIds);
+    return wrQ.order('created_at', { ascending: false });
+  });
 
   // Documents uploaded
-  const { data: documents } = await supabaseAdmin
-    .from('documents')
-    .select('id, original_name, category, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd);
+  const rawDocs = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('documents')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', dayStart)
+      .lte('created_at', dayEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
   // Invoices issued
-  const { data: invoices } = await supabaseAdmin
-    .from('invoices')
-    .select('id, invoice_number, total, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd);
-
-  // Payments received (scoped to entity via invoices; invoice_payments has no entity_id)
-  const { data: invoiceRows } = await supabaseAdmin
-    .from('invoices')
-    .select('id')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null);
-  const invoiceIds = (invoiceRows || []).map((i) => i.id);
-
-  const { data: payments } = invoiceIds.length
-    ? await supabaseAdmin
-        .from('invoice_payments')
-        .select('id, amount, method, payment_date, invoice_id')
-        .in('invoice_id', invoiceIds)
-        .gte('created_at', dayStart)
-        .lte('created_at', dayEnd)
-    : { data: [] };
+  const rawInvoices = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('invoices')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', dayStart)
+      .lte('created_at', dayEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
   // Disbursements filed
-  const { data: disbursements } = await supabaseAdmin
-    .from('disbursements')
-    .select('id, disbursement_number, amount, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd);
+  const rawDisb = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('disbursements')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', dayStart)
+      .lte('created_at', dayEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
   // Transmittals
-  const { data: transmittals } = await supabaseAdmin
-    .from('transmittals')
-    .select('id, tracking_number, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', dayStart)
-    .lte('created_at', dayEnd);
+  const rawTrans = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('transmittals')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', dayStart)
+      .lte('created_at', dayEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
+
+  const [documents, invoices, disbursements, transmittals] = await Promise.all([
+    filterValidProjectRecords(rawDocs || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawInvoices || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawDisb || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawTrans || [], { user, entityId, concernedWrIds }),
+  ]);
+
+  const validInvoiceIds = (invoices || []).map((i) => i.id);
+  const payments = [];
+  if (validInvoiceIds.length > 0) {
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < validInvoiceIds.length; i += CHUNK_SIZE) {
+      const chunk = validInvoiceIds.slice(i, i + CHUNK_SIZE);
+      const chunkPayments = await fetchInPages(() =>
+        supabaseAdmin
+          .from('invoice_payments')
+          .select('id, amount, method, payment_date, invoice_id, created_at')
+          .in('invoice_id', chunk)
+          .gte('created_at', dayStart)
+          .lte('created_at', dayEnd)
+          .order('created_at', { ascending: false })
+      );
+      if (chunkPayments) payments.push(...chunkPayments);
+    }
+  }
+
+  const workRequests = rawWrs || [];
 
   return {
     date,
-    workRequests: workRequests || [],
-    documents: documents || [],
-    invoices: invoices || [],
+    workRequests,
+    documents,
+    invoices,
     payments: payments || [],
-    disbursements: disbursements || [],
-    transmittals: transmittals || [],
+    disbursements,
+    transmittals,
     summary: {
-      workRequests: (workRequests || []).length,
-      documents: (documents || []).length,
-      invoices: (invoices || []).length,
-      invoicesTotal: (invoices || []).reduce((s, i) => s + parseFloat(i.total || 0), 0),
+      workRequests: workRequests.length,
+      documents: documents.length,
+      invoices: invoices.length,
+      invoicesTotal: invoices.reduce((s, i) => s + parseFloat(i.total || 0), 0),
       payments: (payments || []).length,
       paymentsTotal: (payments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0),
-      disbursements: (disbursements || []).length,
-      disbursementsTotal: (disbursements || []).reduce((s, d) => s + parseFloat(d.amount || 0), 0),
-      transmittals: (transmittals || []).length,
+      disbursements: disbursements.length,
+      disbursementsTotal: disbursements.reduce((s, d) => s + parseFloat(d.amount || 0), 0),
+      transmittals: transmittals.length,
     },
   };
 };
@@ -550,91 +698,175 @@ const getDailyReport = async ({ entityId, date }) => {
  * @param {object} params
  * @param {string} params.entityId
  * @param {string} params.date - YYYY-MM-DD
+ * @param {object} [params.user]
  * @returns {Promise<object>}
  */
-const getWeeklyReport = async ({ entityId, date }) => {
+const getWeeklyReport = async ({ entityId, date, user }) => {
   const { start, end } = getWeekBounds(date);
   const weekStart = `${start}T00:00:00.000Z`;
   const weekEnd = `${end}T23:59:59.999Z`;
 
-  const { data: workRequests } = await supabaseAdmin
-    .from('work_requests')
-    .select('id, title, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', weekStart)
-    .lte('created_at', weekEnd);
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        weekStart: start,
+        weekEnd: end,
+        summary: {
+          workRequests: 0,
+          invoices: 0,
+          invoicesTotal: 0,
+          payments: 0,
+          paymentsTotal: 0,
+          disbursements: 0,
+          disbursementsTotal: 0,
+          documents: 0,
+          transmittals: 0,
+        },
+        details: {
+          workRequests: [],
+          invoices: [],
+          payments: [],
+          disbursements: [],
+          documents: [],
+          transmittals: [],
+        },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        weekStart: start,
+        weekEnd: end,
+        summary: {
+          workRequests: 0,
+          invoices: 0,
+          invoicesTotal: 0,
+          payments: 0,
+          paymentsTotal: 0,
+          disbursements: 0,
+          disbursementsTotal: 0,
+          documents: 0,
+          transmittals: 0,
+        },
+        details: {
+          workRequests: [],
+          invoices: [],
+          payments: [],
+          disbursements: [],
+          documents: [],
+          transmittals: [],
+        },
+      };
+    }
+  }
 
-  const { data: invoices } = await supabaseAdmin
-    .from('invoices')
-    .select('id, invoice_number, total, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', weekStart)
-    .lte('created_at', weekEnd);
+  const rawWrs = await fetchInPages(() => {
+    let wrQ = supabaseAdmin
+      .from('work_requests')
+      .select('id, title, status, created_at, entity_id')
+      .is('deleted_at', null)
+      .gte('created_at', weekStart)
+      .lte('created_at', weekEnd);
+    if (entityId && entityId !== 'ALL') wrQ = wrQ.eq('entity_id', entityId);
+    if (!isAdmin && concernedWrIds) wrQ = wrQ.in('id', concernedWrIds);
+    return wrQ.order('created_at', { ascending: false });
+  });
 
-  // Payments received (scoped to entity via invoices; invoice_payments has no entity_id)
-  const { data: invoiceRows } = await supabaseAdmin
-    .from('invoices')
-    .select('id')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null);
-  const invoiceIds = (invoiceRows || []).map((i) => i.id);
+  const rawInvoices = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('invoices')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', weekStart)
+      .lte('created_at', weekEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
-  const { data: payments } = invoiceIds.length
-    ? await supabaseAdmin
-        .from('invoice_payments')
-        .select('id, amount, method, created_at')
-        .in('invoice_id', invoiceIds)
-        .gte('created_at', weekStart)
-        .lte('created_at', weekEnd)
-    : { data: [] };
+  const rawDisb = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('disbursements')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', weekStart)
+      .lte('created_at', weekEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
-  const { data: disbursements } = await supabaseAdmin
-    .from('disbursements')
-    .select('id, disbursement_number, amount, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', weekStart)
-    .lte('created_at', weekEnd);
+  const rawDocs = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('documents')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', weekStart)
+      .lte('created_at', weekEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
-  const { data: documents } = await supabaseAdmin
-    .from('documents')
-    .select('id, original_name, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', weekStart)
-    .lte('created_at', weekEnd);
+  const rawTrans = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('transmittals')
+      .select('*')
+      .is('deleted_at', null)
+      .gte('created_at', weekStart)
+      .lte('created_at', weekEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
-  const { data: transmittals } = await supabaseAdmin
-    .from('transmittals')
-    .select('id, tracking_number, status, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gte('created_at', weekStart)
-    .lte('created_at', weekEnd);
+  const [documents, invoices, disbursements, transmittals] = await Promise.all([
+    filterValidProjectRecords(rawDocs || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawInvoices || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawDisb || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawTrans || [], { user, entityId, concernedWrIds }),
+  ]);
+
+  const validInvoiceIds = (invoices || []).map((i) => i.id);
+  const payments = [];
+  if (validInvoiceIds.length > 0) {
+    const CHUNK_SIZE = 100;
+    for (let i = 0; i < validInvoiceIds.length; i += CHUNK_SIZE) {
+      const chunk = validInvoiceIds.slice(i, i + CHUNK_SIZE);
+      const chunkPayments = await fetchInPages(() =>
+        supabaseAdmin
+          .from('invoice_payments')
+          .select('id, amount, method, created_at, invoice_id')
+          .in('invoice_id', chunk)
+          .gte('created_at', weekStart)
+          .lte('created_at', weekEnd)
+          .order('created_at', { ascending: false })
+      );
+      if (chunkPayments) payments.push(...chunkPayments);
+    }
+  }
+
+  const workRequests = rawWrs || [];
 
   return {
     weekStart: start,
     weekEnd: end,
     summary: {
-      workRequests: (workRequests || []).length,
-      invoices: (invoices || []).length,
-      invoicesTotal: (invoices || []).reduce((s, i) => s + parseFloat(i.total || 0), 0),
+      workRequests: workRequests.length,
+      invoices: invoices.length,
+      invoicesTotal: invoices.reduce((s, i) => s + parseFloat(i.total || 0), 0),
       payments: (payments || []).length,
       paymentsTotal: (payments || []).reduce((s, p) => s + parseFloat(p.amount || 0), 0),
-      disbursements: (disbursements || []).length,
-      disbursementsTotal: (disbursements || []).reduce((s, d) => s + parseFloat(d.amount || 0), 0),
-      documents: (documents || []).length,
-      transmittals: (transmittals || []).length,
+      disbursements: disbursements.length,
+      disbursementsTotal: disbursements.reduce((s, d) => s + parseFloat(d.amount || 0), 0),
+      documents: documents.length,
+      transmittals: transmittals.length,
     },
     details: {
-      workRequests: workRequests || [],
-      invoices: invoices || [],
+      workRequests,
+      invoices,
       payments: payments || [],
-      disbursements: disbursements || [],
-      documents: documents || [],
-      transmittals: transmittals || [],
+      disbursements,
+      documents,
+      transmittals,
     },
   };
 };
@@ -648,59 +880,96 @@ const getWeeklyReport = async ({ entityId, date }) => {
  * @param {object} params
  * @param {string} params.entityId
  * @param {string} [params.month] - YYYY-MM, defaults to current
+ * @param {object} [params.user]
  * @returns {Promise<object>}
  */
-const getMonthlyPending = async ({ entityId, month }) => {
+const getMonthlyPending = async ({ entityId, month, user }) => {
   const targetMonth = month || new Date().toISOString().slice(0, 7);
   const monthEnd = `${targetMonth}-31`; // Safe upper bound
 
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        month: targetMonth,
+        overdueInvoices: { count: 0, totalOutstanding: 0, items: [] },
+        pendingDisbursements: { count: 0, totalAmount: 0, items: [] },
+        staleTransmittals: { count: 0, items: [] },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        month: targetMonth,
+        overdueInvoices: { count: 0, totalOutstanding: 0, items: [] },
+        pendingDisbursements: { count: 0, totalAmount: 0, items: [] },
+        staleTransmittals: { count: 0, items: [] },
+      };
+    }
+  }
+
   // Overdue invoices (due in or before this month, balance > 0)
-  const { data: overdueInvoices } = await supabaseAdmin
-    .from('invoices')
-    .select('id, invoice_number, client_id, due_date, total, balance, status, clients(name)')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gt('balance', 0)
-    .lte('due_date', monthEnd)
-    .order('due_date', { ascending: true });
+  const rawInvoices = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name)')
+      .is('deleted_at', null)
+      .gt('balance', 0)
+      .lte('due_date', monthEnd);
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('due_date', { ascending: true });
+  });
 
   // Pending disbursements
-  const { data: pendingDisbursements } = await supabaseAdmin
-    .from('disbursements')
-    .select('id, disbursement_number, amount, status, category, created_at')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .or(
-      'and(lifecycle_version.eq.2,status.in.(Draft,Approved,Funded)),and(lifecycle_version.eq.1,status.in.(Pending,Approved))'
-    );
+  const rawDisb = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('disbursements')
+      .select('*')
+      .is('deleted_at', null)
+      .or(
+        'and(lifecycle_version.eq.2,status.in.(Draft,Approved,Funded)),and(lifecycle_version.eq.1,status.in.(Pending,Approved))'
+      );
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
 
   // Draft transmittals older than 7 days
   const sevenDaysAgo = new Date();
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-  const { data: staleDraftTransmittals } = await supabaseAdmin
-    .from('transmittals')
-    .select('id, tracking_number, client_id, created_at, clients(name)')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .eq('status', 'Draft')
-    .lt('created_at', sevenDaysAgo.toISOString());
+  const rawTrans = await fetchInPages(() => {
+    let q = supabaseAdmin
+      .from('transmittals')
+      .select('*, clients(name)')
+      .is('deleted_at', null)
+      .eq('status', 'Draft')
+      .lt('created_at', sevenDaysAgo.toISOString());
+    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
+    return q.order('created_at', { ascending: false });
+  });
+
+  const [overdueInvoices, pendingDisbursements, staleDraftTransmittals] = await Promise.all([
+    filterValidProjectRecords(rawInvoices || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawDisb || [], { user, entityId, concernedWrIds }),
+    filterValidProjectRecords(rawTrans || [], { user, entityId, concernedWrIds }),
+  ]);
 
   return {
     month: targetMonth,
     overdueInvoices: {
-      count: (overdueInvoices || []).length,
-      totalOutstanding: (overdueInvoices || []).reduce((s, i) => s + parseFloat(i.balance || 0), 0),
-      items: overdueInvoices || [],
+      count: overdueInvoices.length,
+      totalOutstanding: overdueInvoices.reduce((s, i) => s + parseFloat(i.balance || 0), 0),
+      items: overdueInvoices,
     },
     pendingDisbursements: {
-      count: (pendingDisbursements || []).length,
-      totalAmount: (pendingDisbursements || []).reduce((s, d) => s + parseFloat(d.amount || 0), 0),
-      items: pendingDisbursements || [],
+      count: pendingDisbursements.length,
+      totalAmount: pendingDisbursements.reduce((s, d) => s + parseFloat(d.amount || 0), 0),
+      items: pendingDisbursements,
     },
     staleTransmittals: {
-      count: (staleDraftTransmittals || []).length,
-      items: staleDraftTransmittals || [],
+      count: staleDraftTransmittals.length,
+      items: staleDraftTransmittals,
     },
   };
 };
@@ -713,23 +982,60 @@ const getMonthlyPending = async ({ entityId, month }) => {
  * Calculate accounts receivable aging report.
  * @param {object} params
  * @param {string} params.entityId
+ * @param {object} [params.user]
  * @returns {Promise<object>}
  */
-const getAgingReport = async ({ entityId }) => {
-  const { data: invoices, error } = await supabaseAdmin
-    .from('invoices')
-    .select('id, invoice_number, client_id, due_date, total, balance, clients(name)')
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .gt('balance', 0);
-
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch aging data',
-    });
+const getAgingReport = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        summary: { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, grandTotal: 0 },
+        buckets: {
+          current: { total: 0, count: 0, invoices: [] },
+          '1-30': { total: 0, count: 0, invoices: [] },
+          '31-60': { total: 0, count: 0, invoices: [] },
+          '61-90': { total: 0, count: 0, invoices: [] },
+          '90+': { total: 0, count: 0, invoices: [] },
+        },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        summary: { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, grandTotal: 0 },
+        buckets: {
+          current: { total: 0, count: 0, invoices: [] },
+          '1-30': { total: 0, count: 0, invoices: [] },
+          '31-60': { total: 0, count: 0, invoices: [] },
+          '61-90': { total: 0, count: 0, invoices: [] },
+          '90+': { total: 0, count: 0, invoices: [] },
+        },
+      };
+    }
   }
+
+  const makeQuery = () => {
+    let q = supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name)')
+      .is('deleted_at', null)
+      .gt('balance', 0);
+
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+    return q.order('created_at', { ascending: false });
+  };
+
+  const rawInvoices = await fetchInPages(makeQuery);
+
+  const invoices = await filterValidProjectRecords(rawInvoices || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
 
   const now = new Date();
   const buckets = {

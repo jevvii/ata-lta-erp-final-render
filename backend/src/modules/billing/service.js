@@ -22,6 +22,11 @@ const {
   resolveAndAuthorizeTaskTarget,
   authorizeTaskRelink,
 } = require('../../lib/taskAssignment');
+const { getUserConcernedWorkRequestIds, fetchInPages } = require('../../lib/userScope');
+const {
+  validateRecordProjectLinkage,
+  filterValidProjectRecords,
+} = require('../../lib/projectLinkage');
 
 // ============================================================
 // Invoice CRUD
@@ -35,6 +40,14 @@ const {
  * @returns {Promise<{ data: object[], count: number }>}
  */
 const listInvoices = async ({ entityId, filters = {}, user }) => {
+  if (!user) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to list invoices',
+    });
+  }
+
   const {
     status,
     clientId,
@@ -50,96 +63,58 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin.from('invoices').select('*, clients(name)', { count: 'exact' });
-
-  if (includeDeleted !== true && includeDeleted !== 'true') {
-    query = query.is('deleted_at', null);
-  }
-
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
-
-  if (isArchived) {
-    // Archive view shows both explicitly archived invoices and cancelled (trashed) invoices.
-    query = query.or('archived.eq.true,status.eq.Cancelled');
-  } else if (archived === false || archived === 'false') {
-    query = query.eq('archived', false).neq('status', 'Cancelled');
-  }
-
-  // Role restriction: non-admin and non-accounting scoping.
-  const isAdmin = user?.role === 'Admin';
-  const isAccounting =
-    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
-
-  if (!isAdmin && !isAccounting) {
-    // Determine Work Requests where the user is manager (assigned_to) or co-assignee
-    const { data: userWrs } = await supabaseAdmin
-      .from('work_requests')
-      .select('id')
-      .or(`assigned_to.eq.${user.id},co_assignees.cs.{${user.id}}`)
-      .is('deleted_at', null);
-    const userWrIds = (userWrs || []).map((w) => w.id);
-
-    if (status) {
-      if (['Draft', 'Pending'].includes(status)) {
-        if (userWrIds.length > 0) {
-          query = query.eq('status', status).in('work_request_id', userWrIds);
-        } else {
-          query = query.eq('status', '___NONE___');
-        }
-      } else {
-        query = query.eq('status', status);
-      }
-    } else {
-      if (userWrIds.length > 0) {
-        // Allow viewing released invoices OR draft/pending invoices linked to their work requests
-        query = query.or(
-          `status.in.(Sent,Approved,Partially Paid,Paid,Overdue),work_request_id.in.(${userWrIds.join(',')})`
-        );
-      } else {
-        query = query.in('status', ['Sent', 'Approved', 'Partially Paid', 'Paid', 'Overdue']);
-      }
-    }
-  } else {
-    if (status) query = query.eq('status', status);
-  }
-
-  if (clientId) query = query.eq('client_id', clientId);
-  const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
-  if (effectiveFilterTaskId) {
-    query = query.or(
-      `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
-    );
-  }
-  if (linkedTransmittalId) query = query.eq('linked_transmittal_id', linkedTransmittalId);
-  if (search) {
-    query = query.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
-  }
-
-  if (!isAdmin && !isAccounting) {
-    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
-    const concernedWrIds = await getUserConcernedWorkRequestIds(user);
+  const isAdmin = user.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
     if (concernedWrIds.length === 0) {
       return { data: [], count: 0 };
     }
-    query = query.in('work_request_id', concernedWrIds);
   }
 
-  const offset = (page - 1) * limit;
-  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+  const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
 
-  const { data, error, count } = await query;
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('invoices').select('*, clients(name)');
+    if (includeDeleted !== true && includeDeleted !== 'true') {
+      q = q.is('deleted_at', null);
+    }
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+    if (isArchived) {
+      q = q.or('archived.eq.true,status.eq.Cancelled');
+    } else if (archived === false || archived === 'false') {
+      q = q.eq('archived', false).neq('status', 'Cancelled');
+    }
+    if (status) q = q.eq('status', status);
+    if (clientId) q = q.eq('client_id', clientId);
+    if (effectiveFilterTaskId) {
+      q = q.or(
+        `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
+      );
+    }
+    if (linkedTransmittalId) q = q.eq('linked_transmittal_id', linkedTransmittalId);
+    if (search) {
+      q = q.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
+    }
+    return q.order('created_at', { ascending: false });
+  };
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch invoices',
-    });
-  }
+  const rawRows = await fetchInPages(makeQuery);
 
-  const rows = data || [];
+  // Batch filter to exclude conflicting, corrupt, deleted-parent, or unauthorized rows
+  const validRows = await filterValidProjectRecords(rawRows || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const total = validRows.length;
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.max(1, parseInt(limit, 10) || 50);
+  const offset = (pageNum - 1) * limitNum;
+  const rows = validRows.slice(offset, offset + limitNum);
   const { data: entitiesData } = rows.length
     ? await supabaseAdmin.from('entities').select('id, code')
     : { data: [] };
@@ -188,7 +163,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     };
   });
 
-  return { data: mapped, count: count || 0 };
+  return { data: mapped, count: total };
 };
 
 /**
@@ -315,6 +290,7 @@ const getInvoiceById = async ({
   user,
   allowFallback = false,
   checkViewPermissions = true,
+  internal = false,
 }) => {
   let query = supabaseAdmin
     .from('invoices')
@@ -355,48 +331,14 @@ const getInvoiceById = async ({
     });
   }
 
-  // Role restriction
-  if (user && checkViewPermissions) {
-    const isAdmin = user.role === 'Admin';
-    const isAccounting =
-      (user.departments || []).includes('Accounting') || user.role === 'Accounting';
-    if (!isAdmin && !isAccounting && ['Draft', 'Pending'].includes(invoice.status)) {
-      let isWrManagerOrCoAssignee = false;
-      if (invoice.work_request_id) {
-        const { data: wr } = await supabaseAdmin
-          .from('work_requests')
-          .select('id, assigned_to, co_assignees')
-          .eq('id', invoice.work_request_id)
-          .is('deleted_at', null)
-          .maybeSingle();
-        if (
-          wr &&
-          (wr.assigned_to === user.id ||
-            (Array.isArray(wr.co_assignees) && wr.co_assignees.includes(user.id)))
-        ) {
-          isWrManagerOrCoAssignee = true;
-        }
-      }
-      if (!isWrManagerOrCoAssignee) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'You do not have permission to view this invoice in its current status.',
-        });
-      }
-    }
-
-    if (!isAdmin && !isAccounting) {
-      const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
-      const concernedWrIds = await getUserConcernedWorkRequestIds(user);
-      if (!invoice.work_request_id || !concernedWrIds.includes(invoice.work_request_id)) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'You do not have permission to view this invoice.',
-        });
-      }
-    }
+  // Enforce project linkage consistency and user authorization
+  if (checkViewPermissions && !internal) {
+    await validateRecordProjectLinkage({
+      record: invoice,
+      entityId: allowFallback ? invoice.entity_id : entityId,
+      user,
+      internal: false,
+    });
   }
 
   // Fetch line items
@@ -479,7 +421,7 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     id,
     user: effectiveUser,
     allowFallback: true,
-    checkViewPermissions: false,
+    checkViewPermissions: Boolean(effectiveUser && effectiveUser.role !== 'Admin'),
   });
 
   const permissions = effectiveUser
@@ -840,7 +782,7 @@ const updateInvoiceStatus = async ({ entityId, id, userId, status, user }) => {
  * @returns {Promise<void>}
  */
 const deleteInvoice = async ({ entityId, id, userId }) => {
-  await getInvoiceById({ entityId, id });
+  await getInvoiceById({ entityId, id, internal: true });
 
   const { error } = await supabaseAdmin
     .from('invoices')
@@ -875,8 +817,8 @@ const deleteInvoice = async ({ entityId, id, userId }) => {
  * @param {object} params.data - Payment data
  * @returns {Promise<object>}
  */
-const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
-  const invoice = await getInvoiceById({ entityId, id: invoiceId });
+const recordPayment = async ({ entityId, invoiceId, userId, user, data }) => {
+  const invoice = await getInvoiceById({ entityId, id: invoiceId, user });
   const releasedStatuses = ['Sent', 'Approved', 'Partially Paid', 'Overdue'];
 
   if (!releasedStatuses.includes(invoice.status)) {
@@ -946,8 +888,8 @@ const recordPayment = async ({ entityId, invoiceId, userId, data }) => {
  * @param {string} params.id - Invoice UUID
  * @returns {Promise<{ url: string }>}
  */
-const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDetails = true }) => {
-  const invoice = await getInvoiceById({ entityId, id });
+const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDetails = true, user }) => {
+  const invoice = await getInvoiceById({ entityId, id, user });
 
   const code = entityCode || entityId;
   let body = buildStatementDocument({ ...invoice, entity_code: code }, { includeCompanyDetails });
@@ -979,8 +921,8 @@ const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDeta
  * @param {string} params.id - Invoice UUID
  * @returns {Promise<{ url: string }>}
  */
-const generateVoucherPdf = async ({ entityId, entityCode, id }) => {
-  const invoice = await getInvoiceById({ entityId, id });
+const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
+  const invoice = await getInvoiceById({ entityId, id, user });
 
   const code = entityCode || entityId;
   const html = buildVoucherHtml(invoice, code);
@@ -1067,26 +1009,57 @@ const buildVoucherHtml = (invoice, entityId) => {
  * @param {string} params.entityId
  * @returns {Promise<{ summary: object, details: object[] }>}
  */
-const getAgingReport = async ({ entityId }) => {
-  let query = supabaseAdmin
-    .from('invoices')
-    .select('*, clients(name)')
-    .is('deleted_at', null)
-    .gt('balance', 0);
-
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
+const getAgingReport = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) {
+      return {
+        summary: { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, grandTotal: 0 },
+        details: {
+          current: { total: 0, invoices: [] },
+          '1-30': { total: 0, invoices: [] },
+          '31-60': { total: 0, invoices: [] },
+          '61-90': { total: 0, invoices: [] },
+          '90+': { total: 0, invoices: [] },
+        },
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        summary: { current: 0, '1-30': 0, '31-60': 0, '61-90': 0, '90+': 0, grandTotal: 0 },
+        details: {
+          current: { total: 0, invoices: [] },
+          '1-30': { total: 0, invoices: [] },
+          '31-60': { total: 0, invoices: [] },
+          '61-90': { total: 0, invoices: [] },
+          '90+': { total: 0, invoices: [] },
+        },
+      };
+    }
   }
 
-  const { data: invoices, error } = await query;
+  const makeQuery = () => {
+    let q = supabaseAdmin
+      .from('invoices')
+      .select('*, clients(name)')
+      .is('deleted_at', null)
+      .gt('balance', 0);
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch aging data',
-    });
-  }
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+    return q.order('created_at', { ascending: false });
+  };
+
+  const rawInvoices = await fetchInPages(makeQuery);
+
+  const invoices = await filterValidProjectRecords(rawInvoices || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
 
   const now = new Date();
   const buckets = {
@@ -1184,12 +1157,10 @@ const getInvoiceCounts = async ({ entityId, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
-  const isAccounting =
-    (user?.departments || []).includes('Accounting') || user?.role === 'Accounting';
   let concernedWrIds = [];
-  if (!isAdmin && !isAccounting) {
-    const { getUserConcernedWorkRequestIds } = require('../../lib/userScope');
-    concernedWrIds = await getUserConcernedWorkRequestIds(user);
+  if (!isAdmin) {
+    if (!user) return { active: 0, archived: 0, rejected: 0, templates: 0 };
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
     if (concernedWrIds.length === 0) {
       return { active: 0, archived: 0, rejected: 0, templates: 0 };
     }
@@ -1213,22 +1184,13 @@ const getInvoiceCounts = async ({ entityId, user }) => {
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
-    if (!isAdmin && !isAccounting) {
+    if (!isAdmin) {
       q = q.in('work_request_id', concernedWrIds);
     }
     return q;
   };
 
-  let activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
-  if (!isAdmin && !isAccounting) {
-    activeQuery = activeQuery.in('status', [
-      'Sent',
-      'Approved',
-      'Partially Paid',
-      'Paid',
-      'Overdue',
-    ]);
-  }
+  const activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
 
   const [active, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
     await Promise.all([
@@ -1251,7 +1213,7 @@ const getInvoiceCounts = async ({ entityId, user }) => {
             .in('entity_id', entityIds)
             .eq('type', 'billing')
             .eq('status', 'rejected');
-          if (!isAdmin && !isAccounting) {
+          if (!isAdmin) {
             q = q.in('work_request_id', concernedWrIds);
           }
           return q;
@@ -1409,8 +1371,23 @@ const deleteTemplate = async ({ entityId, id }) => {
   }
 };
 
-const archiveInvoice = async ({ entityId, id, userId }) => {
-  const existing = await getInvoiceById({ entityId, id });
+const archiveInvoice = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = caller || user;
+  const isInternal = Boolean(internal || !effectiveUser);
+  const existing = await getInvoiceById({
+    entityId,
+    id,
+    user: effectiveUser,
+    caller: effectiveUser,
+    internal: isInternal,
+  });
+  if (!existing) {
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Invoice not found',
+    });
+  }
   const { data: updated, error } = await supabaseAdmin
     .from('invoices')
     .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
@@ -1439,8 +1416,23 @@ const archiveInvoice = async ({ entityId, id, userId }) => {
   return updated;
 };
 
-const unarchiveInvoice = async ({ entityId, id, userId }) => {
-  const existing = await getInvoiceById({ entityId, id });
+const unarchiveInvoice = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = caller || user;
+  const isInternal = Boolean(internal || !effectiveUser);
+  const existing = await getInvoiceById({
+    entityId,
+    id,
+    user: effectiveUser,
+    caller: effectiveUser,
+    internal: isInternal,
+  });
+  if (!existing) {
+    throw new AppError({
+      statusCode: 404,
+      title: 'Not Found',
+      detail: 'Invoice not found',
+    });
+  }
   const updateData = { archived: false, updated_by: userId, updated_at: new Date().toISOString() };
   if (existing && existing.status === 'Cancelled') {
     updateData.status = 'Draft';

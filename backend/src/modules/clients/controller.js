@@ -31,7 +31,7 @@ const validate = (schema, data) => {
 const counts = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const data = await clientsService.getClientCounts({ entityId });
+    const data = await clientsService.getClientCounts({ entityId, user: req.user });
     res.status(200).json({ data });
   } catch (err) {
     next(err);
@@ -50,6 +50,7 @@ const list = async (req, res, next) => {
       limit: req.query.limit,
       sortBy: req.query.sortBy,
       sortOrder: req.query.sortOrder,
+      user: req.user,
     });
     const isPaginated = req.query.page !== undefined || req.query.limit !== undefined;
     res.status(200).json(isPaginated ? { data, meta } : { data });
@@ -129,6 +130,7 @@ const getById = async (req, res, next) => {
       entityId,
       allowCrossEntity: !entityId,
       includeArchived,
+      user: req.user,
     });
 
     if (!client) {

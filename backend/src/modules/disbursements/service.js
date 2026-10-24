@@ -36,6 +36,11 @@ const {
   resolveAndAuthorizeTaskTarget,
   authorizeTaskRelink,
 } = require('../../lib/taskAssignment');
+const { getUserConcernedWorkRequestIds, fetchInPages } = require('../../lib/userScope');
+const {
+  validateRecordProjectLinkage,
+  filterValidProjectRecords,
+} = require('../../lib/projectLinkage');
 const {
   createReservation,
   getReservation,
@@ -368,21 +373,21 @@ const getDisbursementCounts = async ({ entityId, user }) => {
   }
 
   const isAdmin = user?.role === 'Admin';
-  const isAccounting =
-    String(user?.role || '').toLowerCase() === 'accounting' ||
-    (user?.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-
-  if (!isAdmin && !isAccounting && !user?.id) {
-    return {
-      active: 0,
-      archived: 0,
-      rejected: 0,
-      awaitingRelease: 0,
-      initialRequests: 0,
-      paymentReleases: 0,
-      readyForFunding: 0,
-      needsCorrection: 0,
-    };
+  let concernedWrIds = [];
+  if (!isAdmin) {
+    if (!user || !user.id) {
+      return {
+        active: 0,
+        archived: 0,
+        rejected: 0,
+        awaitingRelease: 0,
+        initialRequests: 0,
+        paymentReleases: 0,
+        readyForFunding: 0,
+        needsCorrection: 0,
+      };
+    }
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
   }
 
   const runCount = async (query) => {
@@ -403,8 +408,12 @@ const getDisbursementCounts = async ({ entityId, user }) => {
       .select('*', { count: 'exact', head: true })
       .in('entity_id', entityIds)
       .is('deleted_at', null);
-    if (!isAdmin && !isAccounting) {
-      q = q.eq('created_by', user.id);
+    if (!isAdmin) {
+      if (concernedWrIds.length === 0) {
+        q = q.in('linked_work_request_id', ['00000000-0000-0000-0000-000000000000']);
+      } else {
+        q = q.in('linked_work_request_id', concernedWrIds);
+      }
     }
     return q;
   };
@@ -433,7 +442,7 @@ const getDisbursementCounts = async ({ entityId, user }) => {
           .in('entity_id', entityIds)
           .eq('table_name', 'disbursements')
           .eq('status', 'rejected');
-        if (!isAdmin && !isAccounting) {
+        if (!isAdmin) {
           q = q.eq('submitted_by', user.id);
         }
         return q;
@@ -447,8 +456,12 @@ const getDisbursementCounts = async ({ entityId, user }) => {
           .in('entity_id', entityIds)
           .eq('type', 'disbursement')
           .eq('status', 'rejected');
-        if (!isAdmin && !isAccounting) {
-          q = q.eq('requested_by', user.id);
+        if (!isAdmin) {
+          if (concernedWrIds.length === 0) {
+            q = q.in('work_request_id', ['00000000-0000-0000-0000-000000000000']);
+          } else {
+            q = q.in('work_request_id', concernedWrIds);
+          }
         }
         return q;
       })()
@@ -630,11 +643,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin
-    .from('disbursements')
-    .select('*, clients(name)', { count: 'exact' })
-    .is('deleted_at', null);
-
+  let entityIds = null;
   if (entityId === 'ALL') {
     const codes = (user?.entities || []).filter((c) =>
       VALID_ENTITY_CODES.includes(c.toUpperCase())
@@ -649,84 +658,93 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
         return data?.id;
       })
     );
-    const entityIds = resolved.filter(Boolean);
+    entityIds = resolved.filter(Boolean);
     if (entityIds.length === 0) {
       return { data: [], count: 0 };
     }
-    query = query.in('entity_id', entityIds);
-  } else if (entityId) {
-    query = query.eq('entity_id', entityId);
   }
 
-  // Queue predicates (server-side authoritative filtering)
-  if (queue === 'initial_requests') {
-    query = query
-      .eq('lifecycle_version', 2)
-      .eq('status', 'Draft')
-      .eq('review_ready', true)
-      .eq('archived', false);
-  } else if (queue === 'ready_for_funding') {
-    query = query.eq('lifecycle_version', 2).eq('status', 'Approved').eq('archived', false);
-  } else if (queue === 'payment_releases') {
-    query = query.eq('lifecycle_version', 2).eq('status', 'Funded').eq('archived', false);
-  } else if (queue === 'needs_correction') {
-    query = query
-      .eq('lifecycle_version', 2)
-      .eq('status', 'Draft')
-      .eq('review_ready', false)
-      .eq('archived', false);
-  } else {
-    if (isArchived) {
-      query = query.eq('archived', true);
-    } else if (archived === false || archived === 'false') {
-      query = query.eq('archived', false);
-    }
-    if (status) query = query.eq('status', status);
-  }
-
-  // Role restriction and voucher ownership
-  const isAdmin = user?.role === 'Admin';
-  const isAccounting =
-    String(user?.role || '').toLowerCase() === 'accounting' ||
-    (user?.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-  if (!isAdmin && !isAccounting) {
-    if (!user?.id) {
-      return { data: [], count: 0 };
-    }
-    query = query.eq('created_by', user.id);
-  }
-
-  if (category) query = query.eq('category', category);
-  if (fundSource) query = query.eq('fund_source', fundSource);
-  const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
-  if (effectiveFilterTaskId) {
-    query = query.or(
-      `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
-    );
-  }
-  if (linkedTransmittalId) query = query.eq('linked_transmittal_id', linkedTransmittalId);
-  if (search) {
-    query = query.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
-  }
-
-  const effectiveLimit = Number(limit) || 50;
-  const effectiveOffset =
-    filters.offset !== undefined ? Number(filters.offset) : (page - 1) * effectiveLimit;
-  query = query
-    .order('created_at', { ascending: false })
-    .range(effectiveOffset, effectiveOffset + effectiveLimit - 1);
-
-  const { data, error, count } = await query;
-
-  if (error) {
+  if (!user || !user.id) {
     throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch disbursements',
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to list disbursements',
     });
   }
 
-  const rows = data || [];
+  const isAdmin = user.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
+  }
+
+  const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
+
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('disbursements').select('*').is('deleted_at', null);
+
+    if (entityIds) {
+      q = q.in('entity_id', entityIds);
+    } else if (entityId) {
+      q = q.eq('entity_id', entityId);
+    }
+
+    if (queue === 'initial_requests') {
+      q = q
+        .eq('lifecycle_version', 2)
+        .eq('status', 'Draft')
+        .eq('review_ready', true)
+        .eq('archived', false);
+    } else if (queue === 'ready_for_funding') {
+      q = q.eq('lifecycle_version', 2).eq('status', 'Approved').eq('archived', false);
+    } else if (queue === 'payment_releases') {
+      q = q.eq('lifecycle_version', 2).eq('status', 'Funded').eq('archived', false);
+    } else if (queue === 'needs_correction') {
+      q = q
+        .eq('lifecycle_version', 2)
+        .eq('status', 'Draft')
+        .eq('review_ready', false)
+        .eq('archived', false);
+    } else {
+      if (isArchived) {
+        q = q.eq('archived', true);
+      } else if (archived === false || archived === 'false') {
+        q = q.eq('archived', false);
+      }
+      if (status) q = q.eq('status', status);
+    }
+
+    if (category) q = q.eq('category', category);
+    if (fundSource) q = q.eq('fund_source', fundSource);
+    if (effectiveFilterTaskId) {
+      q = q.or(
+        `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
+      );
+    }
+    if (linkedTransmittalId) q = q.eq('linked_transmittal_id', linkedTransmittalId);
+    if (search) {
+      q = q.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
+    }
+    return q.order('created_at', { ascending: false });
+  };
+
+  const data = await fetchInPages(makeQuery);
+
+  const validRows = await filterValidProjectRecords(data || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const total = validRows.length;
+  const effectiveLimit = Number(limit) || 50;
+  const effectiveOffset =
+    filters.offset !== undefined ? Number(filters.offset) : (page - 1) * effectiveLimit;
+  const rows = validRows.slice(effectiveOffset, effectiveOffset + effectiveLimit);
+
   const { data: entitiesData } = rows.length
     ? await supabaseAdmin.from('entities').select('id, code')
     : { data: [] };
@@ -738,7 +756,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   }));
 
   const enriched = await enrichDisbursementExtras(mapped);
-  return { data: enriched, count: count || 0 };
+  return { data: enriched, count: total };
 };
 
 /**
@@ -968,31 +986,12 @@ const getDisbursementById = async ({ entityId, id, user, internal = false }) => 
       });
     }
 
-    const isAdmin = user.role === 'Admin';
-    const isAccounting =
-      String(user.role || '').toLowerCase() === 'accounting' ||
-      (user.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
-
-    if (!isAdmin && !isAccounting) {
-      if (data.created_by !== user.id) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'You do not have permission to view this disbursement.',
-          code: 'FORBIDDEN',
-        });
-      }
-    } else if (user.entities && Array.isArray(user.entities)) {
-      const entityCode = await resolveEntityCode(data.entity_id);
-      if (entityCode && !user.entities.includes(entityCode)) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'You do not have permission to view disbursements for this entity.',
-          code: 'FORBIDDEN',
-        });
-      }
-    }
+    await validateRecordProjectLinkage({
+      record: data,
+      entityId,
+      user,
+      internal: false,
+    });
   }
 
   const entityCode = await resolveEntityCode(data.entity_id);
@@ -1000,16 +999,27 @@ const getDisbursementById = async ({ entityId, id, user, internal = false }) => 
   return enriched[0];
 };
 
+const resolveDisbursementCaller = async ({ user, userId, internal }) => {
+  const effectiveUser = user || (await resolveTrustedUser({ user, userId }));
+  if (!internal && !effectiveUser) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to modify disbursement',
+    });
+  }
+  return effectiveUser;
+};
+
 /**
  * Update a disbursement.
  * Only Draft disbursements can be edited for financial/content details.
  * Admin can edit print_details on Released vouchers with expectedVersion.
  */
-const updateDisbursement = async ({ entityId, id, userId, data, user }) => {
+const updateDisbursement = async ({ entityId, id, userId, data, user, internal = false }) => {
   rejectGovernanceFields(data);
-  const existing = await getDisbursementById({ entityId, id, user, internal: true });
-
-  const effectiveUser = await resolveTrustedUser({ user, userId });
+  const effectiveUser = await resolveDisbursementCaller({ user, userId, internal });
+  const existing = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
 
   const isAccountingUser =
     String(effectiveUser?.role || '').toLowerCase() === 'accounting' ||
@@ -1312,6 +1322,7 @@ const performWorkflowTransition = async ({
   expectedVersion,
   reason = null,
   paymentDetails = null,
+  internal = false,
 }) => {
   const transition = VALID_TRANSITIONS[action];
   if (!transition) {
@@ -1322,7 +1333,8 @@ const performWorkflowTransition = async ({
     });
   }
 
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+  const effectiveUser = await resolveDisbursementCaller({ user, userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
 
   // Keep previously saved workflow records unchanged
   if (current.lifecycle_version === 1) {
@@ -1534,8 +1546,9 @@ const resendDraftDisbursement = async ({ entityId, id, userId, user, expectedVer
 /**
  * Archive a Released disbursement (Admin only, v2).
  */
-const archiveDisbursement = async ({ entityId, id, userId, user, expectedVersion }) => {
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+const archiveDisbursement = async ({ entityId, id, userId, user, expectedVersion, internal = false }) => {
+  const effectiveUser = await resolveDisbursementCaller({ user, userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
   if (current.lifecycle_version === 1) {
     throw new AppError({
       statusCode: 409,
@@ -1580,8 +1593,9 @@ const archiveDisbursement = async ({ entityId, id, userId, user, expectedVersion
 /**
  * Unarchive a Released disbursement (Admin only, v2).
  */
-const unarchiveDisbursement = async ({ entityId, id, userId, user, expectedVersion }) => {
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+const unarchiveDisbursement = async ({ entityId, id, userId, user, expectedVersion, internal = false }) => {
+  const effectiveUser = await resolveDisbursementCaller({ user, userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
   if (current.lifecycle_version === 1) {
     throw new AppError({
       statusCode: 409,
@@ -1626,8 +1640,9 @@ const unarchiveDisbursement = async ({ entityId, id, userId, user, expectedVersi
 /**
  * Obsolete workflow actions (deprecated on v2).
  */
-const submitDisbursement = async ({ entityId, id, userId: _userId, user }) => {
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+const submitDisbursement = async ({ entityId, id, userId: _userId, user, internal = false }) => {
+  const effectiveUser = await resolveDisbursementCaller({ user, userId: _userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
   if (current.lifecycle_version === 2) {
     throw new AppError({
       statusCode: 409,
@@ -1645,8 +1660,9 @@ const submitDisbursement = async ({ entityId, id, userId: _userId, user }) => {
   });
 };
 
-const forwardDisbursement = async ({ entityId, id, userId: _userId, user }) => {
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+const forwardDisbursement = async ({ entityId, id, userId: _userId, user, internal = false }) => {
+  const effectiveUser = await resolveDisbursementCaller({ user, userId: _userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
   if (current.lifecycle_version === 2) {
     throw new AppError({
       statusCode: 409,
@@ -1690,8 +1706,9 @@ const updatePaymentDetails = async ({ entityId, id, user }) => {
  * Soft-delete a disbursement.
  * Allowed ONLY for unarchived Draft disbursements by creator or Admin.
  */
-const deleteDisbursement = async ({ entityId, id, userId, user, expectedVersion }) => {
-  const current = await getDisbursementById({ entityId, id, user, internal: true });
+const deleteDisbursement = async ({ entityId, id, userId, user, expectedVersion, internal = false }) => {
+  const effectiveUser = await resolveDisbursementCaller({ user, userId, internal });
+  const current = await getDisbursementById({ entityId, id, user: effectiveUser, internal });
   requireVersion(expectedVersion);
   const { data: rows, error } = await supabaseAdmin.rpc('disbursement_atomic_delete', {
     p_id: id,

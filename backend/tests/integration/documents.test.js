@@ -208,7 +208,26 @@ describe('/v1/documents', () => {
 
   it('allows workflow:task_upload permission users to create and confirm upload', async () => {
     // Operations role only has workflow:task_upload and dms:view, not dms:edit
+    const opsUserId = '00000000-0000-4000-a000-000000000888';
+    const wrId = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const taskId = 'bbbbbbbb-2222-4222-8222-222222222222';
+
+    mockTables.work_requests.set(wrId, {
+      id: wrId,
+      entity_id: 'ent-ata',
+      title: 'Ops Project',
+      status: 'In Progress',
+      assigned_to: opsUserId,
+    });
+    mockTables.tasks.set(taskId, {
+      id: taskId,
+      work_request_id: wrId,
+      assignee_id: opsUserId,
+      deleted_at: null,
+    });
+
     const token = registerUser({
+      id: opsUserId,
       email: 'ops@ata-lta.ph',
       name: 'Ops Staff',
       role: 'Operations',
@@ -219,7 +238,7 @@ describe('/v1/documents', () => {
       .post('/v1/documents')
       .set('Authorization', `Bearer ${token}`)
       .set('X-Active-Entity', 'ATA')
-      .send(validDocument)
+      .send({ ...validDocument, linkedTaskId: taskId, workRequestId: wrId })
       .expect(201);
 
     const docId = created.body.data.document.id;

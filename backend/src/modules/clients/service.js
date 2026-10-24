@@ -7,6 +7,7 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const { concurrencyConflict, resolveExpectedVersion } = require('../../lib/concurrency');
 const { randomUUID } = require('crypto');
+const { getUserAuthorizedClientIds, isUserEntitledToEntity } = require('../../lib/userScope');
 
 /**
  * Map a database row to the API client shape.
@@ -140,6 +141,7 @@ const listClients = async ({
   limit,
   sortBy,
   sortOrder,
+  user,
 }) => {
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -172,6 +174,18 @@ const listClients = async ({
 
   if (search) {
     query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
+  }
+
+  if (user && user.role !== 'Admin') {
+    const authorizedClientIds = await getUserAuthorizedClientIds(user, entityId);
+    if (authorizedClientIds.length === 0) {
+      if (!isPaginated) return { data: [] };
+      return {
+        data: [],
+        meta: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
+      };
+    }
+    query = query.in('id', authorizedClientIds);
   }
 
   if (isPaginated) {
@@ -338,6 +352,8 @@ const getClientById = async ({
   entityId,
   allowCrossEntity = false,
   includeArchived = false,
+  user,
+  internal = false,
 }) => {
   let query = supabaseAdmin.from('clients').select('*').eq('id', id);
 
@@ -366,6 +382,18 @@ const getClientById = async ({
   }
 
   if (!data) return null;
+
+  if (!internal && user) {
+    const entitled = await isUserEntitledToEntity(data.entity_id, user);
+    if (!entitled) return null;
+
+    if (user.role !== 'Admin') {
+      const authorizedClientIds = await getUserAuthorizedClientIds(user, entityId);
+      if (!authorizedClientIds.includes(id)) {
+        return null;
+      }
+    }
+  }
 
   const [related, entityCode] = await Promise.all([
     loadRelated([id]),
@@ -561,7 +589,17 @@ const unarchiveClient = async ({ id, entityId, userId }) => {
 /**
  * Get client count breakdown.
  */
-const getClientCounts = async ({ entityId }) => {
+const getClientCounts = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let authorizedClientIds = null;
+  if (!isAdmin) {
+    if (!user) return { active: 0, archived: 0 };
+    authorizedClientIds = await getUserAuthorizedClientIds(user, entityId);
+    if (authorizedClientIds.length === 0) {
+      return { active: 0, archived: 0 };
+    }
+  }
+
   let activeQuery = supabaseAdmin
     .from('clients')
     .select('*', { count: 'exact', head: true })
@@ -576,6 +614,11 @@ const getClientCounts = async ({ entityId }) => {
   if (entityId && entityId !== 'ALL') {
     activeQuery = activeQuery.eq('entity_id', entityId);
     archivedQuery = archivedQuery.eq('entity_id', entityId);
+  }
+
+  if (!isAdmin && authorizedClientIds) {
+    activeQuery = activeQuery.in('id', authorizedClientIds);
+    archivedQuery = archivedQuery.in('id', authorizedClientIds);
   }
 
   const [activeResult, archivedResult] = await Promise.all([

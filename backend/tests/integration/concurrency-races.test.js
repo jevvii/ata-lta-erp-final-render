@@ -222,19 +222,34 @@ describe('Concurrency race conditions', () => {
 
   test('4. Two concurrent operations-request fulfillments: only one succeeds', async () => {
     const admin = adminFor(['ATA']);
+    const opsUserId = '00000000-0000-4000-a000-000000000999';
     const ops = registerUser({
-      id: 'ops-user',
+      id: opsUserId,
       email: 'ops@ata-lta.ph',
       name: 'Ops',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    mockTables.work_requests.set(WORK_REQUEST_ID, {
+      id: WORK_REQUEST_ID,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      title: 'Acme Audit',
+      status: 'In Progress',
+      assigned_to: opsUserId,
+    });
+
     const created = await request(app)
       .post('/v1/operations-requests')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ type: 'billing', amount: 5000, notes: 'Need billing' })
+      .send({
+        type: 'billing',
+        amount: 5000,
+        notes: 'Need billing',
+        workRequestId: WORK_REQUEST_ID,
+      })
       .expect(201);
 
     const id = created.body.data.id;

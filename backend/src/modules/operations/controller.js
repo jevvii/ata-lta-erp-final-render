@@ -308,7 +308,11 @@ const remove = async (req, res, next) => {
 const listTasks = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const data = await operationsService.listTasks({ workRequestId: req.params.wrId, entityId });
+    const data = await operationsService.listTasks({
+      workRequestId: req.params.wrId,
+      entityId,
+      user: req.user,
+    });
     res.status(200).json({ data });
   } catch (err) {
     next(err);
@@ -395,6 +399,7 @@ const removeTask = async (req, res, next) => {
       workRequestId: req.params.wrId,
       taskId,
       entityId,
+      user: req.user,
     });
     if (!removed) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
@@ -627,6 +632,7 @@ const getTask = async (req, res, next) => {
       workRequestId: req.params.wrId,
       taskId: req.params.taskId || req.params.id,
       entityId,
+      user: req.user,
     });
     if (!task) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });

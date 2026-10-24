@@ -176,11 +176,21 @@ describe('/v1/transmittals', () => {
   });
 
   it('blocks a non-admin user from sending an unapproved transmittal', async () => {
+    const USER_ID = '22222222-3333-4444-8555-666666666666';
     const token = registerUser({
+      id: USER_ID,
       email: 'doc@ata-lta.ph',
       name: 'Doc Staff',
       role: 'Documentation',
       entities: ['ATA'],
+    });
+
+    const taskId = 'c1111111-2222-4333-8444-555555555555';
+    mockTables.tasks.set(taskId, {
+      id: taskId,
+      work_request_id: WORK_REQUEST_ID,
+      assignee_id: USER_ID,
+      deleted_at: null,
     });
 
     // Seed a draft transmittal
@@ -189,6 +199,8 @@ describe('/v1/transmittals', () => {
       id: transmittalId,
       entity_id: 'ent-ata',
       client_id: CLIENT_ID,
+      work_request_id: WORK_REQUEST_ID,
+      linked_task_id: taskId,
       tracking_number: 'TR-12345',
       status: 'Draft',
       approved: false,
@@ -204,7 +216,7 @@ describe('/v1/transmittals', () => {
   });
 
   it('allows a non-admin user to send an approved transmittal', async () => {
-    const USER_ID = 'doc-staff-send-approved-1';
+    const USER_ID = '11111111-2222-4333-8444-555555555555';
     const token = registerUser({
       id: USER_ID,
       email: 'doc@ata-lta.ph',
@@ -227,7 +239,7 @@ describe('/v1/transmittals', () => {
       id: transmittalId,
       entity_id: 'ent-ata',
       client_id: CLIENT_ID,
-      tracking_number: 'TR-12345',
+      work_request_id: WORK_REQUEST_ID,
       linked_task_id: taskId,
       status: 'Draft',
       approved: true,
@@ -363,7 +375,7 @@ describe('/v1/transmittals', () => {
   });
 
   it('disallows updating tracking_number on existing transmittal', async () => {
-    const USER_ID = 'doc-update-staff-1';
+    const USER_ID = '33333333-4444-4555-8666-777777777777';
     const token = registerUser({
       id: USER_ID,
       email: 'doc-update@ata-lta.ph',
@@ -405,11 +417,19 @@ describe('/v1/transmittals', () => {
   });
   describe('Consolidated transmittal entity resolution', () => {
     const id = 'fae8185a-7ea3-4096-b10d-a74c5bd580ca';
+    const wrIdLta = '44444444-5555-4666-8777-888888888888';
     let token;
     beforeEach(() => {
       token = registerUser({ email: 'admin-consolidated@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+      mockTables.work_requests.set(wrIdLta, {
+        id: wrIdLta,
+        entity_id: 'ent-lta',
+        client_id: CLIENT_ID,
+        title: 'LTA Work Request',
+        status: 'In Progress',
+      });
       mockTables.transmittals.set(id, {
-        id, entity_id: 'ent-lta', client_id: CLIENT_ID, status: 'Acknowledged', version: 1,
+        id, entity_id: 'ent-lta', client_id: CLIENT_ID, work_request_id: wrIdLta, status: 'Acknowledged', version: 1,
       });
     });
 
@@ -431,7 +451,9 @@ describe('/v1/transmittals', () => {
     });
 
     it('rejects non-Admin edits and ignores a forged Admin role in the body', async () => {
-      const staff = registerUser({ email: 'doc-lta@ata-lta.ph', name: 'Doc', role: 'Documentation', entities: ['LTA'] });
+      const staffId = '55555555-6666-4777-8888-999999999999';
+      const staff = registerUser({ id: staffId, email: 'doc-lta@ata-lta.ph', name: 'Doc', role: 'Documentation', entities: ['LTA'] });
+      mockTables.work_requests.get(wrIdLta).assigned_to = staffId;
       await request(app).put(`/v1/transmittals/${id}`)
         .set('Authorization', `Bearer ${staff}`).set('X-Active-Entity', 'LTA')
         .send({ items: [{ description: 'Forbidden edit' }], user: { role: 'Admin' } }).expect(409);

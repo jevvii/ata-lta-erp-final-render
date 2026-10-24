@@ -115,6 +115,7 @@ const approveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -145,6 +146,7 @@ const acknowledgeTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
@@ -160,6 +162,7 @@ const archiveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -174,6 +177,7 @@ const unarchiveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -188,6 +192,7 @@ const deleteTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.status(204).send();
   } catch (err) {

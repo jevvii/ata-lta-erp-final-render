@@ -368,7 +368,7 @@ describe('Cross-Task Document Isolation (getTaskRelated)', () => {
       expect(resT3.disbursements.map((d) => d.id)).not.toContain('disb-legacy');
     });
 
-    it('resolves conflicting aliases strictly to canonical task_id, never exposing to conflicting legacy', async () => {
+    it('conflicting task canonical and legacy aliases fail closed and are not exposed', async () => {
       // Record has canonical task_id = TASK_1_ID, but conflicting linked_task_id = TASK_3_ID
       mockTables.invoices.set('inv-conflict-1', {
         id: 'inv-conflict-1',
@@ -408,15 +408,15 @@ describe('Cross-Task Document Isolation (getTaskRelated)', () => {
       });
 
       const resT1 = await operationsService.getTaskRelated(TASK_1_ID, adminUser);
-      expect(resT1.invoices.map((i) => i.id)).toContain('inv-conflict-1');
+      expect(resT1.invoices.map((i) => i.id)).not.toContain('inv-conflict-1');
       expect(resT1.invoices.map((i) => i.id)).not.toContain('inv-conflict-3');
-      expect(resT1.disbursements.map((d) => d.id)).toContain('disb-conflict-1');
+      expect(resT1.disbursements.map((d) => d.id)).not.toContain('disb-conflict-1');
       expect(resT1.disbursements.map((d) => d.id)).not.toContain('disb-conflict-3');
 
       const resT3 = await operationsService.getTaskRelated(TASK_3_ID, adminUser);
-      expect(resT3.invoices.map((i) => i.id)).toContain('inv-conflict-3');
+      expect(resT3.invoices.map((i) => i.id)).not.toContain('inv-conflict-3');
       expect(resT3.invoices.map((i) => i.id)).not.toContain('inv-conflict-1');
-      expect(resT3.disbursements.map((d) => d.id)).toContain('disb-conflict-3');
+      expect(resT3.disbursements.map((d) => d.id)).not.toContain('disb-conflict-3');
       expect(resT3.disbursements.map((d) => d.id)).not.toContain('disb-conflict-1');
     });
   });
@@ -559,25 +559,22 @@ describe('Cross-Task Document Isolation (getTaskRelated)', () => {
       expect(ids).toContain('disb-by-other-creator');
     });
 
-    it('Accounting caller receives all disbursements for the task', async () => {
-      const res = await operationsService.getTaskRelated(TASK_1_ID, accountingUser);
-      const ids = res.disbursements.map((d) => d.id);
-      expect(ids).toContain('disb-by-creator');
-      expect(ids).toContain('disb-by-other-creator');
-    });
-
-    it('Employee creator receives only their own created disbursements for the task', async () => {
+    it('Assigned project member receives all disbursements for the task', async () => {
+      mockTables.work_requests.get(WR_A_ID).assigned_to = creatorUser.id;
       const res = await operationsService.getTaskRelated(TASK_1_ID, creatorUser);
       const ids = res.disbursements.map((d) => d.id);
       expect(ids).toContain('disb-by-creator');
-      expect(ids).not.toContain('disb-by-other-creator');
+      expect(ids).toContain('disb-by-other-creator');
     });
 
-    it('Other employee creator receives only their own created disbursements for the task', async () => {
+    it('Accounting outsider without assignment receives empty disbursements (F01/F02 outsider denial)', async () => {
+      const res = await operationsService.getTaskRelated(TASK_1_ID, accountingUser);
+      expect(res.disbursements).toEqual([]);
+    });
+
+    it('Historical creator without current assignment receives empty disbursements (F10)', async () => {
       const res = await operationsService.getTaskRelated(TASK_1_ID, otherCreatorUser);
-      const ids = res.disbursements.map((d) => d.id);
-      expect(ids).not.toContain('disb-by-creator');
-      expect(ids).toContain('disb-by-other-creator');
+      expect(res.disbursements).toEqual([]);
     });
 
     it('Unrelated employee creator receives empty disbursements for the task', async () => {

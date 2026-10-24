@@ -47,6 +47,8 @@ const CLIENT_ID_1 = '11111111-1111-4111-8111-111111111111';
 const CLIENT_ID_2 = '22222222-2222-4222-8222-222222222222';
 const WORK_REQUEST_ID = '33333333-3333-4333-8333-333333333333';
 const INVOICE_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const ADMIN_USER_ID = '00000000-0000-4000-a000-000000000001';
+const ACCT_USER_ID = '00000000-0000-4000-a000-000000000002';
 
 const FINANCIAL_FIELDS = [
   'terms',
@@ -79,7 +81,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
 
     // Register test actors
     adminToken = registerUser({
-      id: 'admin-user-id',
+      id: ADMIN_USER_ID,
       email: 'admin@ata-lta.ph',
       name: 'System Admin',
       role: 'Admin',
@@ -87,10 +89,11 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
     });
 
     accountingToken = registerUser({
-      id: 'acct-user-id',
+      id: ACCT_USER_ID,
       email: 'acct@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
+      departments: ['Accounting'],
       entities: ['ATA'],
     });
 
@@ -102,6 +105,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
       name: 'Alpha Corp',
       tin: '111-111-111-00000',
       status: 'Active',
+      deleted_at: null,
     });
     mockTables.clients.set(CLIENT_ID_2, {
       id: CLIENT_ID_2,
@@ -109,6 +113,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
       name: 'Beta Corp',
       tin: '222-222-222-00000',
       status: 'Active',
+      deleted_at: null,
     });
     mockTables.work_requests.set(WORK_REQUEST_ID, {
       id: WORK_REQUEST_ID,
@@ -116,6 +121,10 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
       client_id: CLIENT_ID_1,
       title: 'Audit WR',
       status: 'In Progress',
+      assigned_to: ACCT_USER_ID,
+      co_assignees: [],
+      deleted_at: null,
+      archived: false,
     });
 
     // Seed baseline Draft invoice at version 1
@@ -137,6 +146,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
       issue_date: '2026-10-01',
       due_date: '2026-10-31',
       archived: false,
+      deleted_at: null,
     });
   });
 

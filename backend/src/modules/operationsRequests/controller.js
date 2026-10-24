@@ -26,7 +26,11 @@ const handleZodError = (err, next) => {
 const listRequests = async (req, res, next) => {
   try {
     const validated = listQuerySchema.parse(req.query);
-    const result = await service.listRequests({ entityId: req.activeEntity, filters: validated });
+    const result = await service.listRequests({
+      entityId: req.activeEntity,
+      filters: validated,
+      user: req.user,
+    });
     res.json({
       data: result.data,
       meta: { total: result.count, page: validated.page, limit: validated.limit },
@@ -120,6 +124,7 @@ const getRequest = async (req, res, next) => {
     const data = await service.getRequestById({
       entityId: req.activeEntity,
       id: req.params.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -135,6 +140,7 @@ const updateRequest = async (req, res, next) => {
     const existing = await service.getRequestById({
       entityId: req.activeEntity,
       id: req.params.id,
+      user: req.user,
     });
 
     if (existing.type === 'wr_phase_transition') {
@@ -198,6 +204,7 @@ const deleteRequest = async (req, res, next) => {
       const existing = await service.getRequestById({
         entityId: req.activeEntity,
         id: req.params.id,
+        user: req.user,
       });
       if (existing.requested_by !== req.user.id) {
         return next(
