@@ -187,7 +187,9 @@ const countTransmittals = async ({ entityId, user }) => {
  * Authoritatively validates transmittal relationships:
  * - Checks linked task existence, entity, deletion, and that its parent WR matches workRequestId.
  * - Checks work request existence, entity, deletion, and that its client matches clientId.
- * - If non-Admin Documentation user, enforces task assignment and task requirement.
+ * - Enforces task requirement whenever a work request is set.
+ * - Enforces task assignment for all non-Admin users (Admin bypass only).
+ * - Enforces task selectability (rejecting Cancelled/Completed tasks on new/changed linkages).
  */
 const validateTransmittalRelationships = async ({
   entityId,
@@ -196,26 +198,29 @@ const validateTransmittalRelationships = async ({
   linkedTaskId,
   userId,
   caller,
+  enforceMandatoryTask = true,
+  isNewOrChanged = true,
 }) => {
+  const isAdmin = caller?.role === 'Admin';
   const isDoc = isNonAdminDocumentationUser(caller);
 
-  if (isDoc) {
-    const hasLinkedTask =
-      linkedTaskId && typeof linkedTaskId === 'string' && linkedTaskId.trim() !== '';
-    if (!hasLinkedTask) {
-      throw new AppError({
-        statusCode: 400,
-        title: 'Bad Request',
-        detail: 'A valid linked task is required for transmittals',
-      });
-    }
+  const hasLinkedTask =
+    linkedTaskId && typeof linkedTaskId === 'string' && linkedTaskId.trim() !== '';
+
+  if ((enforceMandatoryTask ? Boolean(workRequestId) || isDoc : isDoc) && !hasLinkedTask) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'A valid linked task is required for transmittals',
+      code: 'TASK_REQUIRED',
+    });
   }
 
   let task = null;
-  if (linkedTaskId && typeof linkedTaskId === 'string' && linkedTaskId.trim() !== '') {
+  if (hasLinkedTask) {
     const { data: taskRow, error: taskErr } = await supabaseAdmin
       .from('tasks')
-      .select('id, work_request_id, assignee_id, deleted_at')
+      .select('id, work_request_id, assignee_id, status, deleted_at')
       .eq('id', linkedTaskId)
       .maybeSingle();
 
@@ -232,18 +237,21 @@ const validateTransmittalRelationships = async ({
         statusCode: 400,
         title: 'Bad Request',
         detail: 'Linked task not found or has been deleted',
+        code: 'TASK_NOT_FOUND',
       });
     }
 
     task = taskRow;
 
-    if (isDoc) {
+    const requireAssignment = enforceMandatoryTask ? !isAdmin : isDoc;
+    if (requireAssignment) {
       const assigned = await isUserAssignedToTask(linkedTaskId, userId);
       if (!assigned) {
         throw new AppError({
           statusCode: 403,
           title: 'Forbidden',
           detail: 'You are not assigned to this task',
+          code: 'TASK_ASSIGNMENT_REQUIRED',
         });
       }
     }
@@ -253,7 +261,28 @@ const validateTransmittalRelationships = async ({
         statusCode: 400,
         title: 'Bad Request',
         detail: 'Linked task does not belong to the specified work request',
+        code: 'TASK_WR_MISMATCH',
       });
+    }
+
+    if (enforceMandatoryTask && isNewOrChanged && task.status) {
+      const normStatus = String(task.status).trim().toLowerCase();
+      if (normStatus === 'cancelled') {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Task is cancelled and cannot be linked',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
+      if (normStatus === 'completed' || normStatus === 'done') {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Completed tasks cannot be linked to this record',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
     }
   }
 
@@ -508,12 +537,51 @@ const updateTransmittal = async ({ entityId, id, userId, user, data, internal = 
     });
   }
 
+  const isTaskSpecified = data.linkedTaskId !== undefined;
+  const isWrSpecified = data.workRequestId !== undefined;
+  const isLinkageInPayload = isTaskSpecified || isWrSpecified;
   const effectiveLinkedTaskId =
-    data.linkedTaskId !== undefined ? data.linkedTaskId : existing.linked_task_id;
+    isTaskSpecified ? data.linkedTaskId : existing.linked_task_id;
   const effectiveWorkRequestId =
-    data.workRequestId !== undefined ? data.workRequestId : existing.work_request_id;
+    isWrSpecified ? data.workRequestId : existing.work_request_id;
   const effectiveClientId =
     data.clientId !== undefined ? data.clientId : existing.client_id;
+
+  const isTaskChanged = isTaskSpecified && data.linkedTaskId !== existing.linked_task_id;
+  const isWrChanged = isWrSpecified && data.workRequestId !== existing.work_request_id;
+  const isLinkageChanged = isTaskChanged || isWrChanged;
+
+  if (isLinkageInPayload) {
+    if (
+      effectiveWorkRequestId &&
+      (!effectiveLinkedTaskId ||
+        (typeof effectiveLinkedTaskId === 'string' && effectiveLinkedTaskId.trim() === ''))
+    ) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'A valid linked task is required for transmittals',
+        code: 'TASK_REQUIRED',
+      });
+    }
+
+    if (!isLinkageChanged && existing.linked_task_id && effectiveWorkRequestId) {
+      const { data: storedTask } = await supabaseAdmin
+        .from('tasks')
+        .select('id, deleted_at')
+        .eq('id', existing.linked_task_id)
+        .maybeSingle();
+
+      if (!storedTask || Boolean(storedTask.deleted_at)) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'The previously linked task has been deleted. A valid linked task is required.',
+          code: 'TASK_REQUIRED',
+        });
+      }
+    }
+  }
 
   await validateTransmittalRelationships({
     entityId,
@@ -522,6 +590,8 @@ const updateTransmittal = async ({ entityId, id, userId, user, data, internal = 
     linkedTaskId: effectiveLinkedTaskId,
     userId,
     caller,
+    enforceMandatoryTask: isLinkageInPayload,
+    isNewOrChanged: isLinkageChanged,
   });
 
   const updates = {
@@ -693,6 +763,8 @@ const sendTransmittal = async ({ entityId, id, userId, user, boardOrder, interna
     linkedTaskId: existing.linked_task_id,
     userId,
     caller,
+    enforceMandatoryTask: false,
+    isNewOrChanged: false,
   });
 
   const updates = {
