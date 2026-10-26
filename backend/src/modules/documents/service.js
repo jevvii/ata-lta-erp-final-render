@@ -237,19 +237,34 @@ const listDocuments = async ({ entityId, filters = {}, user }) => {
  * @returns {Promise<{ document: object, uploadUrl: string }>}
  */
 const createDocument = async ({ entityId, entityCode, userId, data }) => {
+  // Enforce mandatory linked task when a work request is specified
+  if (
+    data.workRequestId &&
+    (!data.linkedTaskId ||
+      (typeof data.linkedTaskId === 'string' && data.linkedTaskId.trim() === ''))
+  ) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'A valid linked task is required when a work request is selected',
+      code: 'TASK_REQUIRED',
+    });
+  }
+
   // Validate linkedTaskId if provided
   if (data.linkedTaskId) {
     const { data: task, error: taskError } = await supabaseAdmin
       .from('tasks')
-      .select('id, work_request_id, assignee_id')
+      .select('id, work_request_id, assignee_id, status, deleted_at')
       .eq('id', data.linkedTaskId)
-      .single();
+      .maybeSingle();
 
-    if (taskError || !task) {
+    if (taskError || !task || Boolean(task.deleted_at)) {
       throw new AppError({
         statusCode: 400,
         title: 'Validation Error',
-        detail: `Linked task ${data.linkedTaskId} does not exist`,
+        detail: `Linked task ${data.linkedTaskId} does not exist or has been deleted`,
+        code: 'TASK_NOT_FOUND',
       });
     }
 
@@ -258,7 +273,28 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
         statusCode: 400,
         title: 'Validation Error',
         detail: `Linked task ${data.linkedTaskId} does not belong to work request ${data.workRequestId}`,
+        code: 'TASK_WR_MISMATCH',
       });
+    }
+
+    if (task.status) {
+      const normStatus = String(task.status).trim().toLowerCase();
+      if (normStatus === 'cancelled') {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Task is cancelled and cannot be linked',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
+      if (normStatus === 'completed' || normStatus === 'done') {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Completed tasks cannot be linked to this record',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
     }
 
     // Role check: Admin bypasses
@@ -266,17 +302,10 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
       .from('users')
       .select('role')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
     if (uploader?.role !== 'Admin') {
-      // Check if user is task assignee or task_assignees member
-      const { data: taRows } = await supabaseAdmin
-        .from('task_assignees')
-        .select('id')
-        .eq('task_id', data.linkedTaskId)
-        .eq('user_id', userId);
-
-      const isAssigned = task.assignee_id === userId || (taRows && taRows.length > 0);
+      const isAssigned = await isUserAssignedToTask(data.linkedTaskId, userId);
       if (!isAssigned) {
         throw new AppError({
           statusCode: 403,
@@ -433,7 +462,102 @@ const resolveDocumentCaller = async ({ user, userId, caller, internal }) => {
 const updateDocument = async ({ entityId, id, userId, data, user, caller, internal = false }) => {
   // Verify document exists, belongs to entity, and caller has project membership
   const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
-  await getDocumentById({ entityId, id, user: effectiveUser, internal });
+  const existingDoc = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const isWrSpecified = data.workRequestId !== undefined;
+  const isTaskSpecified = data.linkedTaskId !== undefined;
+  const isLinkageInPayload = isWrSpecified || isTaskSpecified;
+  const effectiveWrId = isWrSpecified ? data.workRequestId : existingDoc.work_request_id;
+  const effectiveTaskId = isTaskSpecified ? data.linkedTaskId : existingDoc.linked_task_id;
+  const isTaskChanged = isTaskSpecified && data.linkedTaskId !== existingDoc.linked_task_id;
+
+  if (isLinkageInPayload) {
+    if (
+      effectiveWrId &&
+      (!effectiveTaskId || (typeof effectiveTaskId === 'string' && effectiveTaskId.trim() === ''))
+    ) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'A valid linked task is required when document is associated with a work request',
+        code: 'TASK_REQUIRED',
+      });
+    }
+
+    if (isTaskChanged && effectiveTaskId) {
+      const { data: task, error: taskError } = await supabaseAdmin
+        .from('tasks')
+        .select('id, work_request_id, assignee_id, status, deleted_at')
+        .eq('id', effectiveTaskId)
+        .maybeSingle();
+
+      if (taskError || !task || Boolean(task.deleted_at)) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: `Linked task ${effectiveTaskId} does not exist or has been deleted`,
+          code: 'TASK_NOT_FOUND',
+        });
+      }
+
+      if (effectiveWrId && task.work_request_id !== effectiveWrId) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: `Linked task ${effectiveTaskId} does not belong to work request ${effectiveWrId}`,
+          code: 'TASK_WR_MISMATCH',
+        });
+      }
+
+      if (task.status) {
+        const normStatus = String(task.status).trim().toLowerCase();
+        if (normStatus === 'cancelled') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Task is cancelled and cannot be linked',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+        if (normStatus === 'completed' || normStatus === 'done') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Completed tasks cannot be linked to this record',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+      }
+
+      if (effectiveUser?.role !== 'Admin') {
+        const isAssigned = await isUserAssignedToTask(effectiveTaskId, userId);
+        if (!isAssigned) {
+          throw new AppError({
+            statusCode: 403,
+            title: 'Forbidden',
+            detail: 'You are not assigned to this task and cannot attach documents to it.',
+            code: 'FORBIDDEN_TASK_ATTACHMENT',
+          });
+        }
+      }
+    } else if (!isTaskChanged && effectiveTaskId && effectiveWrId) {
+      // Unchanged stored linkage: check if stored task was deleted
+      const { data: storedTask } = await supabaseAdmin
+        .from('tasks')
+        .select('id, deleted_at')
+        .eq('id', effectiveTaskId)
+        .maybeSingle();
+
+      if (!storedTask || Boolean(storedTask.deleted_at)) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'The previously linked task has been deleted. A valid linked task is required.',
+          code: 'TASK_REQUIRED',
+        });
+      }
+    }
+  }
 
   const updates = {
     updated_by: userId,
