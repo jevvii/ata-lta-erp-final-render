@@ -129,13 +129,22 @@ export function TransmittalFormModal({
     ? (transmittalToEdit.linked_task_id || transmittalToEdit.linkedTaskId || null)
     : null;
 
+  const selectedWorkRequest = React.useMemo(
+    () => workRequests.find((w) => w.id === workRequestId),
+    [workRequests, workRequestId]
+  );
+
   const {
     options: taskOptions,
+    blockingReason,
+    blockingMessage,
     isBlocked: isTaskBlocked,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
   } = useSelectableTasks({
     workRequestId: workRequestId || undefined,
+    workRequestPhase: selectedWorkRequest?.phase,
     recordType: 'transmittal',
     isOpen,
     currentTaskId: originTaskId,
@@ -316,9 +325,11 @@ export function TransmittalFormModal({
       if (!selectedTaskId) {
         newErrors.selectedTaskId = 'A valid linked task is required';
       } else if (isTaskBlocked && selectedTaskId !== originTaskId) {
-        newErrors.selectedTaskId = isNoTasksBlocked
-          ? 'This work request has no tasks — create one first'
-          : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
+        newErrors.selectedTaskId =
+          blockingMessage ||
+          (isNoTasksBlocked
+            ? 'This work request has no tasks — create one first'
+            : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.");
       } else {
         const found = taskOptions.find((t) => t.id === selectedTaskId);
         if (found && found.disabled && found.id !== originTaskId) {
@@ -543,8 +554,10 @@ export function TransmittalFormModal({
 
             <div className="md:col-span-2">
               <TaskBlockingAlert
+                blockingReason={blockingReason}
                 isNoTasksBlocked={isNoTasksBlocked}
                 isNotAssignedBlocked={isNotAssignedBlocked}
+                isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
                 workRequestId={workRequestId}
               />
             </div>

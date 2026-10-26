@@ -128,13 +128,22 @@ export function DocumentUploadModal({
 
   const isTaskLocked = Boolean(defaultTaskId);
 
+  const selectedWorkRequest = React.useMemo(
+    () => workRequests.find((w) => w.id === workRequestId),
+    [workRequests, workRequestId]
+  );
+
   const {
     options: taskOptions,
+    blockingReason,
+    blockingMessage,
     isBlocked: isTaskBlocked,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
   } = useSelectableTasks({
     workRequestId: workRequestId || undefined,
+    workRequestPhase: selectedWorkRequest?.phase,
     recordType: 'document',
     isOpen: isOpen && isAllowedUser,
     entity: activeEntity !== 'ALL' ? (activeEntity as 'ATA' | 'LTA') : undefined,
@@ -221,9 +230,10 @@ export function DocumentUploadModal({
 
     if (effectiveWrId && isTaskBlocked) {
       setTaskError(
-        isNoTasksBlocked
-          ? 'This work request has no tasks — create one first'
-          : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you."
+        blockingMessage ||
+          (isNoTasksBlocked
+            ? 'This work request has no tasks — create one first'
+            : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.")
       );
       return;
     }
@@ -577,8 +587,10 @@ export function DocumentUploadModal({
 
           {isAllowedUser && (
             <TaskBlockingAlert
+              blockingReason={blockingReason}
               isNoTasksBlocked={isNoTasksBlocked}
               isNotAssignedBlocked={isNotAssignedBlocked}
+              isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
               workRequestId={workRequestId}
             />
           )}

@@ -284,22 +284,30 @@ export function InvoiceEditModal({
     if (Array.isArray((workRequestsData as unknown as { data: unknown[] }).data)) {
       return (
         workRequestsData as unknown as {
-          data: Array<{ id: string; title: string; client_id?: string | null }>;
+          data: Array<{ id: string; title: string; client_id?: string | null; phase?: string | null }>;
         }
       ).data;
     }
     return [];
   }, [workRequestsData]);
 
+  const selectedWorkRequest = useMemo(
+    () => workRequests.find((w) => w.id === workRequestId),
+    [workRequests, workRequestId]
+  );
+
   // Work Request Tasks query & selectability hook
   const {
     tasksQuery,
     options: taskOptions,
+    blockingReason,
     isBlocked: isTaskBlocked,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
   } = useSelectableTasks({
     workRequestId: workRequestId || undefined,
+    workRequestPhase: selectedWorkRequest?.phase,
     recordType: 'invoice',
     isOpen,
     entity: originEntity,
@@ -852,8 +860,10 @@ export function InvoiceEditModal({
         </div>
 
         <TaskBlockingAlert
+          blockingReason={blockingReason}
           isNoTasksBlocked={isNoTasksBlocked}
           isNotAssignedBlocked={isNotAssignedBlocked}
+          isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
           workRequestId={workRequestId}
         />
 

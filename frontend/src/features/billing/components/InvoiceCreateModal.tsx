@@ -163,16 +163,25 @@ export function InvoiceCreateModal({
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId);
 
+  const selectedWorkRequest = useMemo(
+    () => workRequests.find((w) => w.id === workRequestId),
+    [workRequests, workRequestId]
+  );
+
   // Work Request Tasks query & selectability hook
   const {
     tasksQuery,
     allWrTasks: tasks,
     options: taskOptions,
+    blockingReason,
+    blockingMessage,
     isBlocked: isTaskBlocked,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
   } = useSelectableTasks({
     workRequestId: workRequestId || undefined,
+    workRequestPhase: selectedWorkRequest?.phase,
     recordType: 'invoice',
     isOpen,
     entity: effectiveEntity,
@@ -262,9 +271,10 @@ export function InvoiceCreateModal({
 
     if (isTaskBlocked) {
       setFormError(
-        isNoTasksBlocked
-          ? 'This work request has no tasks — create one first.'
-          : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you."
+        blockingMessage ||
+          (isNoTasksBlocked
+            ? 'This work request has no tasks — create one first.'
+            : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.")
       );
       return;
     }
@@ -534,8 +544,10 @@ export function InvoiceCreateModal({
           </div>
 
           <TaskBlockingAlert
+            blockingReason={blockingReason}
             isNoTasksBlocked={isNoTasksBlocked}
             isNotAssignedBlocked={isNotAssignedBlocked}
+            isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
             workRequestId={workRequestId}
           />
 

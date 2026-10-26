@@ -1,19 +1,133 @@
 import { useMemo, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useSessionStore, type UserProfile } from '@/lib/session';
 import { useWorkRequestTasks } from '../api/useTasks';
+import { operationsKeys } from '../api/queryKeys';
 import { useTeam, type TeamMember } from '../api/useTeam';
 import {
   isTaskAssignee,
   isRoleAdmin,
   isTaskOfWorkRequest,
 } from '../lib/taskScope';
-import type { Task } from '../api/types';
+import type { Task, WorkRequest } from '../api/types';
 
 export type RecordType = 'invoice' | 'disbursement' | 'transmittal' | 'document';
+
+export const PHASE_SEQUENCE = [
+  'pre_processing',
+  'processing',
+  'quality_assurance',
+  'completion',
+] as const;
+
+export type BlockingReason = 'no_tasks' | 'unassigned' | 'phase_or_prereq_locked' | null;
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export function isUuid(value?: string | null): boolean {
   return typeof value === 'string' && UUID_REGEX.test(value.trim());
+}
+
+/**
+ * Formats a phase slug into a human-readable label (e.g. 'pre_processing' -> 'Pre-processing').
+ */
+export function formatPhaseLabel(phase?: string | null): string {
+  const normalized = String(phase || '').toLowerCase().trim();
+  if (normalized === 'pre_processing') return 'Pre-processing';
+  if (normalized === 'processing') return 'Processing';
+  if (normalized === 'quality_assurance') return 'Quality Assurance';
+  if (normalized === 'completion') return 'Completion';
+  return phase ? String(phase) : '';
+}
+
+/**
+ * Determines whether a task is locked due to its phase vs. the work request's active phase.
+ * - Current stored task on edit is never locked.
+ * - If either task.phase or workRequestPhase is empty/null/undefined, not locked.
+ * - For non-invoice records (disbursement, document, transmittal): locked if task.phase !== workRequestPhase.
+ * - For invoice records: locked if PHASE_SEQUENCE.indexOf(task.phase) > PHASE_SEQUENCE.indexOf(workRequestPhase).
+ */
+export function isTaskPhaseLocked(
+  task: Task,
+  workRequestPhase?: string | null,
+  recordType: RecordType = 'disbursement',
+  currentTaskId?: string | null
+): boolean {
+  if (currentTaskId && task.id === currentTaskId) {
+    return false;
+  }
+
+  const taskPhase = typeof task.phase === 'string' ? task.phase.trim() : '';
+  const wrPhase = typeof workRequestPhase === 'string' ? workRequestPhase.trim() : '';
+
+  if (!taskPhase || !wrPhase) {
+    return false;
+  }
+
+  if (recordType !== 'invoice') {
+    return taskPhase !== wrPhase;
+  }
+
+  const taskIdx = (PHASE_SEQUENCE as readonly string[]).indexOf(taskPhase);
+  const wrIdx = (PHASE_SEQUENCE as readonly string[]).indexOf(wrPhase);
+
+  if (taskIdx !== -1 && wrIdx !== -1) {
+    return taskIdx > wrIdx;
+  }
+
+  return taskPhase !== wrPhase;
+}
+
+function isPredecessorCompleteOrCancelled(status?: string | null): boolean {
+  const s = String(status || '').toLowerCase().trim();
+  return s === 'completed' || s === 'done' || s === 'cancelled';
+}
+
+/**
+ * Determines whether a task is locked due to an incomplete prerequisite (predecessor) task.
+ * Checks task.predecessors (IDs looked up against allTasksOnWr) and/or task.predecessorDetails.
+ */
+export function isTaskPrereqLocked(
+  task: Task,
+  allTasksOnWr: Task[] = [],
+  currentTaskId?: string | null
+): boolean {
+  if (currentTaskId && task.id === currentTaskId) {
+    return false;
+  }
+
+  const details = [
+    ...(task.predecessorDetails || []),
+    ...(task.predecessor_details || []),
+  ];
+
+  for (const d of details) {
+    if (d && d.status !== undefined && d.status !== null) {
+      if (!isPredecessorCompleteOrCancelled(d.status)) {
+        return true;
+      }
+    }
+  }
+
+  if (Array.isArray(task.predecessors) && task.predecessors.length > 0) {
+    for (const predId of task.predecessors) {
+      if (!predId) continue;
+      const detailMatch = details.find((d) => d && d.id === predId);
+      if (detailMatch && detailMatch.status !== undefined && detailMatch.status !== null) {
+        if (!isPredecessorCompleteOrCancelled(detailMatch.status)) {
+          return true;
+        }
+        continue;
+      }
+      const predTask = allTasksOnWr.find((t) => t.id === predId);
+      if (predTask) {
+        if (!isPredecessorCompleteOrCancelled(predTask.status)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -175,12 +289,15 @@ export interface SelectableTaskOption {
   task: Task;
   assigneeText: string;
   isAssigned: boolean;
+  isPhaseLocked: boolean;
+  isPrereqLocked: boolean;
   disabled: boolean;
   label: string;
 }
 
 export interface UseSelectableTasksOptions {
   workRequestId?: string | null;
+  workRequestPhase?: string | null;
   recordType: RecordType;
   isOpen?: boolean;
   entity?: 'ATA' | 'LTA' | string | null;
@@ -192,6 +309,7 @@ export interface UseSelectableTasksOptions {
 
 export function useSelectableTasks({
   workRequestId,
+  workRequestPhase,
   recordType,
   isOpen = true,
   entity,
@@ -200,8 +318,34 @@ export function useSelectableTasks({
   onSelectTask,
   isTaskLocked = false,
 }: UseSelectableTasksOptions) {
+  const queryClient = useQueryClient();
   const currentUser = useSessionStore((state) => state.user);
   const isAdmin = isRoleAdmin(currentUser);
+
+  // Resolve Work Request phase from explicit prop or React Query cache fallback
+  const resolvedWrPhase = useMemo(() => {
+    if (workRequestPhase !== undefined && workRequestPhase !== null && workRequestPhase !== '') {
+      return workRequestPhase;
+    }
+    if (!workRequestId) return null;
+
+    const detail = queryClient.getQueryData<WorkRequest>(
+      operationsKeys.workRequestDetail(workRequestId)
+    );
+    if (detail?.phase) return detail.phase;
+
+    const lists = queryClient.getQueriesData<{ data?: WorkRequest[] } | WorkRequest[]>({
+      queryKey: operationsKeys.workRequests(),
+    });
+    for (const [, data] of lists) {
+      const arr = Array.isArray(data) ? data : data?.data;
+      if (Array.isArray(arr)) {
+        const hit = arr.find((w) => w.id === workRequestId);
+        if (hit?.phase) return hit.phase;
+      }
+    }
+    return null;
+  }, [workRequestPhase, workRequestId, queryClient]);
 
   const { data: rawTeam = [] } = useTeam();
   const teamList: TeamMember[] = useMemo(() => {
@@ -245,22 +389,43 @@ export function useSelectableTasks({
     );
   }, [allWrTasks, recordType, currentTaskId]);
 
-  // Build options with assignee labels and disabled states
+  // Build options with assignee labels, phase/prerequisite lock state, and disabled states
   const options: SelectableTaskOption[] = useMemo(() => {
     const list: SelectableTaskOption[] = candidateTasks.map((task) => {
       const assigneeText = formatTaskAssignees(task, teamList);
-      const isAssigned = isUserAuthorizedForTask(currentUser, task, currentTaskId);
-      const disabled = !isAssigned;
-      const label = isAssigned
-        ? `${task.title} — ${assigneeText}`
-        : `${task.title} — ${assigneeText} (Not assigned to you)`;
+      const isCurrentStoredTask = Boolean(currentTaskId && task.id === currentTaskId);
+      const isAuthorized = isUserAuthorizedForTask(currentUser, task, currentTaskId);
+      const isPhaseLocked = isCurrentStoredTask
+        ? false
+        : isTaskPhaseLocked(task, resolvedWrPhase, recordType, currentTaskId);
+      const isPrereqLocked = isCurrentStoredTask
+        ? false
+        : isTaskPrereqLocked(task, allWrTasks, currentTaskId);
+
+      const disabled = isCurrentStoredTask
+        ? false
+        : !isAuthorized || isPhaseLocked || isPrereqLocked;
+
+      let label = `${task.title} — ${assigneeText}`;
+      if (!isCurrentStoredTask) {
+        if (isPhaseLocked) {
+          const phaseLabel = formatPhaseLabel(task.phase);
+          label = `${task.title} — ${assigneeText} (Locked: ${phaseLabel} phase not active)`;
+        } else if (isPrereqLocked) {
+          label = `${task.title} — ${assigneeText} (Locked: Waiting on prerequisite task)`;
+        } else if (!isAuthorized) {
+          label = `${task.title} — ${assigneeText} (Not assigned to you)`;
+        }
+      }
 
       return {
         id: task.id,
         title: task.title,
         task,
         assigneeText,
-        isAssigned,
+        isAssigned: isAuthorized,
+        isPhaseLocked,
+        isPrereqLocked,
         disabled,
         label,
       };
@@ -292,13 +457,24 @@ export function useSelectableTasks({
         },
         assigneeText: 'Current',
         isAssigned: true,
+        isPhaseLocked: false,
+        isPrereqLocked: false,
         disabled: false,
         label: `${currentTaskId} (Current)`,
       });
     }
 
     return list;
-  }, [candidateTasks, teamList, currentUser, currentTaskId, workRequestId]);
+  }, [
+    candidateTasks,
+    teamList,
+    currentUser,
+    currentTaskId,
+    workRequestId,
+    resolvedWrPhase,
+    recordType,
+    allWrTasks,
+  ]);
 
   // Options that the current user can actually select
   const selectableOptions = useMemo(() => {
@@ -313,26 +489,44 @@ export function useSelectableTasks({
       tasksQuery.isFetched
   );
 
-  const isNoTasksBlocked = Boolean(
-    isQuerySettled && candidateTasks.length === 0 && !currentTaskId
-  );
-  const isNotAssignedBlocked = Boolean(
-    isQuerySettled &&
-      candidateTasks.length > 0 &&
-      selectableOptions.length === 0 &&
-      !currentTaskId
-  );
-  const isBlocked = isNoTasksBlocked || isNotAssignedBlocked;
+  // Whether the user is authorized for at least one status-eligible task on the WR
+  const hasAuthorizedCandidateTask = useMemo(() => {
+    return candidateTasks.some((t) => isUserAuthorizedForTask(currentUser, t, currentTaskId));
+  }, [candidateTasks, currentUser, currentTaskId]);
 
-  const blockingMessage = useMemo(() => {
-    if (isNoTasksBlocked) {
-      return 'This work request has no tasks — create one first';
+  const blockingReason: BlockingReason = useMemo(() => {
+    if (!isQuerySettled || currentTaskId) {
+      return null;
     }
-    if (isNotAssignedBlocked) {
-      return "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
+    if (candidateTasks.length === 0) {
+      return 'no_tasks';
+    }
+    if (!hasAuthorizedCandidateTask) {
+      return 'unassigned';
+    }
+    if (selectableOptions.length === 0) {
+      return 'phase_or_prereq_locked';
     }
     return null;
-  }, [isNoTasksBlocked, isNotAssignedBlocked]);
+  }, [isQuerySettled, currentTaskId, candidateTasks.length, hasAuthorizedCandidateTask, selectableOptions.length]);
+
+  const isNoTasksBlocked = blockingReason === 'no_tasks';
+  const isNotAssignedBlocked = blockingReason === 'unassigned';
+  const isPhaseOrPrereqBlocked = blockingReason === 'phase_or_prereq_locked';
+  const isBlocked = blockingReason !== null;
+
+  const blockingMessage = useMemo(() => {
+    if (blockingReason === 'no_tasks') {
+      return 'This work request has no tasks — create one first';
+    }
+    if (blockingReason === 'unassigned') {
+      return "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
+    }
+    if (blockingReason === 'phase_or_prereq_locked') {
+      return 'No tasks are available in the current phase yet — complete the active phase or prerequisite tasks first.';
+    }
+    return null;
+  }, [blockingReason]);
 
   // Auto-selection: exactly one selectable task -> auto-select
   const autoSelectFiredRef = useRef<string | null>(null);
@@ -367,12 +561,16 @@ export function useSelectableTasks({
     tasksQuery,
     isLoading: tasksQuery.isLoading,
     isQuerySettled,
+    workRequestPhase: resolvedWrPhase,
     allWrTasks,
     candidateTasks,
     options,
     selectableOptions,
+    selectableTasks: selectableOptions,
+    blockingReason,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
     isBlocked,
     blockingMessage,
     isAdmin,

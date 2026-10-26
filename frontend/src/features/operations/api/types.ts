@@ -228,6 +228,8 @@ export interface Task {
   taskAssignees?: TaskAssignee[];
   task_assignees?: TaskAssignee[];
   predecessors: string[];
+  predecessorDetails?: Array<{ id: string; title?: string; status?: TaskStatus | string | null }>;
+  predecessor_details?: Array<{ id: string; title?: string; status?: TaskStatus | string | null }>;
   dueDate: string | null;
   requiredLinkType: string | null;
   displayOrder: number;

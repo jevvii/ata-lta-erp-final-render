@@ -1,9 +1,12 @@
 import { AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { BlockingReason } from '../hooks/useSelectableTasks';
 
 export interface TaskBlockingAlertProps {
-  isNoTasksBlocked: boolean;
-  isNotAssignedBlocked: boolean;
+  isNoTasksBlocked?: boolean;
+  isNotAssignedBlocked?: boolean;
+  isPhaseOrPrereqBlocked?: boolean;
+  blockingReason?: BlockingReason;
   workRequestId?: string | null;
   className?: string;
 }
@@ -11,10 +14,22 @@ export interface TaskBlockingAlertProps {
 export function TaskBlockingAlert({
   isNoTasksBlocked,
   isNotAssignedBlocked,
+  isPhaseOrPrereqBlocked,
+  blockingReason,
   workRequestId,
   className,
 }: TaskBlockingAlertProps) {
-  if (!isNoTasksBlocked && !isNotAssignedBlocked) {
+  const effectiveReason: BlockingReason =
+    blockingReason ??
+    (isNoTasksBlocked
+      ? 'no_tasks'
+      : isPhaseOrPrereqBlocked
+        ? 'phase_or_prereq_locked'
+        : isNotAssignedBlocked
+          ? 'unassigned'
+          : null);
+
+  if (!effectiveReason) {
     return null;
   }
 
@@ -29,7 +44,7 @@ export function TaskBlockingAlert({
     >
       <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
       <div className="leading-relaxed">
-        {isNoTasksBlocked ? (
+        {effectiveReason === 'no_tasks' ? (
           <>
             <span>This work request has no tasks — create one first</span>
             {workRequestId && (
@@ -43,6 +58,26 @@ export function TaskBlockingAlert({
                   data-testid="task-blocking-wr-link"
                 >
                   View Work Request
+                </a>
+              </>
+            )}
+          </>
+        ) : effectiveReason === 'phase_or_prereq_locked' ? (
+          <>
+            <span>
+              No tasks are available in the current phase yet — complete the active phase or prerequisite tasks first.
+            </span>
+            {workRequestId && (
+              <>
+                {' '}
+                <a
+                  href={`/operations?tab=work-requests&wrId=${encodeURIComponent(workRequestId)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline font-semibold hover:text-amber-950 inline-flex items-center gap-0.5"
+                  data-testid="task-blocking-wr-link"
+                >
+                  Go to Work Request →
                 </a>
               </>
             )}

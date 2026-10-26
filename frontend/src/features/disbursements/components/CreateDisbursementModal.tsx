@@ -474,11 +474,15 @@ export function CreateDisbursementModal({
     tasksQuery,
     allWrTasks: tasks,
     options: taskOptions,
+    blockingReason,
+    blockingMessage,
     isBlocked: isTaskBlocked,
     isNoTasksBlocked,
     isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
   } = useSelectableTasks({
     workRequestId: linkedWorkRequestId || undefined,
+    workRequestPhase: selectedWr?.phase,
     recordType: 'disbursement',
     isOpen: canFetch,
     entity: resolvedTargetEntity,
@@ -619,9 +623,11 @@ export function CreateDisbursementModal({
     if (!selectedTaskId.trim()) {
       newErrors.selectedTaskId = 'Linked task is required';
     } else if (isTaskBlocked) {
-      newErrors.selectedTaskId = isNoTasksBlocked
-        ? 'This work request has no tasks — create one first'
-        : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
+      newErrors.selectedTaskId =
+        blockingMessage ||
+        (isNoTasksBlocked
+          ? 'This work request has no tasks — create one first'
+          : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.");
     } else {
       const trimmedTask = selectedTaskId.trim();
       if (!isTaskLocked && (tasksQuery.isLoading || (tasksQuery.isFetching && tasks.length === 0))) {
@@ -1104,8 +1110,10 @@ export function CreateDisbursementModal({
           </div>
 
           <TaskBlockingAlert
+            blockingReason={blockingReason}
             isNoTasksBlocked={isNoTasksBlocked}
             isNotAssignedBlocked={isNotAssignedBlocked}
+            isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
             workRequestId={linkedWorkRequestId}
           />
 
