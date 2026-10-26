@@ -234,6 +234,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -385,6 +386,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -510,6 +512,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -590,6 +593,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -673,6 +677,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -775,6 +780,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -841,6 +847,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -903,6 +910,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -951,6 +959,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -1094,6 +1103,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );

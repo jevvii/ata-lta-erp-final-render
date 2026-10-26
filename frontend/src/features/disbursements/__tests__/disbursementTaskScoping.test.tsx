@@ -155,9 +155,13 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
         .map((el) => el.textContent);
 
       // Assigned task must be in dropdown
-      expect(optionTexts).toContain('Assigned Voucher Task');
-      // Foreign unassigned task must NOT be in dropdown for non-admin
-      expect(optionTexts).not.toContain('Unassigned Foreign Task');
+      expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
+      // Foreign unassigned task must be in dropdown but marked as not assigned
+      expect(
+        optionTexts.some(
+          (t) => t?.includes('Unassigned Foreign Task') && t?.includes('Not assigned to you')
+        )
+      ).toBe(true);
 
       unmount();
       cleanup();
@@ -198,8 +202,11 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       .getAllByRole('option')
       .map((el) => el.textContent);
 
-    expect(optionTexts).toContain('Assigned Voucher Task');
-    expect(optionTexts).toContain('Unassigned Foreign Task');
+    expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
+    expect(optionTexts.some((t) => t?.includes('Unassigned Foreign Task'))).toBe(true);
+    expect(optionTexts.find((t) => t?.includes('Unassigned Foreign Task'))).not.toContain(
+      'Not assigned to you'
+    );
   });
 
   it('denies admin exemption to email lorein@ata-lta.ph when role is Staff', async () => {
@@ -236,8 +243,12 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       .getAllByRole('option')
       .map((el) => el.textContent);
 
-    expect(optionTexts).toContain('Assigned Voucher Task');
-    expect(optionTexts).not.toContain('Unassigned Foreign Task');
+    expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
+    expect(
+      optionTexts.some(
+        (t) => t?.includes('Unassigned Foreign Task') && t?.includes('Not assigned to you')
+      )
+    ).toBe(true);
   });
 
   it('blocks submission and shows visible error for invalid/unassigned prefilled task', async () => {
@@ -284,7 +295,7 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
     expect(posts).toHaveLength(0);
   });
 
-  it('allows WR-only disbursement when None is selected', async () => {
+  it('enforces mandatory linked task: rejects disbursement creation when no task is selected', async () => {
     useSessionStore.getState().setSession({
       user: {
         id: CALLER_USER_ID,
@@ -304,31 +315,20 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
 
     render(
       <QueryClientProvider client={client}>
-        <CreateDisbursementModal isOpen onClose={vi.fn()} prefill={{ workRequestId: WR_1, clientId: CLIENT_1 }} />
+        <CreateDisbursementModal isOpen onClose={vi.fn()} />
       </QueryClientProvider>
     );
-
-    await waitFor(() => {
-      const qState = client.getQueryState(operationsKeys.tasks(WR_1, 'ATA'));
-      expect(qState?.status).toBe('success');
-    });
 
     fireEvent.change(screen.getByTestId('textarea-description'), { target: { value: 'WR general expense' } });
     fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '250' } });
 
-    // Submit with default None (No linked task)
+    // Submit with no linked task
     fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
 
-    // Confirm no-receipt modal
-    const confirmBtn = await screen.findByTestId('btn-confirm-no-receipt');
-    fireEvent.click(confirmBtn);
-
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]!.body).toMatchObject({
-      linkedWorkRequestId: WR_1,
-      linkedTaskId: null,
-      amount: 250,
+    await waitFor(() => {
+      expect(screen.getByTestId('error-selected-task')).toHaveTextContent(/linked task is required/i);
     });
+    expect(posts).toHaveLength(0);
   });
 
   it('Assigned task-linked disbursement success must POST proper task ID', async () => {

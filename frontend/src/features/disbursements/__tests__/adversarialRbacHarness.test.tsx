@@ -541,6 +541,7 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         amount: 250,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: '11111111-1111-1111-1111-111111111111',
+        linkedTaskId: '22222222-2222-2222-2222-222222222222',
       };
 
       // Valid payload passes

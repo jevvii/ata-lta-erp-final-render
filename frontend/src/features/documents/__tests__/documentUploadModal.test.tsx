@@ -1,10 +1,21 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DocumentUploadModal } from '../components/DocumentUploadModal';
 
 import { useSessionStore } from '@/lib/session';
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
+
+vi.mock('@/features/operations/api/useTeam', () => ({
+  useTeam: () => ({ data: [], isLoading: false }),
+}));
 
 const mockMutateAsyncUpload = vi.fn();
 
@@ -17,8 +28,8 @@ const mockWorkRequestsData = [
     clientId: 'cli-ata-1',
     archived: false,
     tasks: [
-      { id: 'task-ata-1', title: 'Prepare ATA BIR 1702', workRequestId: 'wr-ata-1' },
-      { id: 'task-ata-2', title: 'Review ATA Books', workRequestId: 'wr-ata-1' },
+      { id: 'task-ata-1', title: 'Prepare ATA BIR 1702', workRequestId: 'wr-ata-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' },
+      { id: 'task-ata-2', title: 'Review ATA Books', workRequestId: 'wr-ata-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' },
     ],
   },
   {
@@ -29,7 +40,7 @@ const mockWorkRequestsData = [
     clientId: 'cli-lta-1',
     archived: false,
     tasks: [
-      { id: 'task-lta-1', title: 'Draft LTA Report', workRequestId: 'wr-lta-1' },
+      { id: 'task-lta-1', title: 'Draft LTA Report', workRequestId: 'wr-lta-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' },
     ],
   },
 ];
@@ -53,11 +64,11 @@ vi.mock('@/features/operations/api/useTasks', () => ({
     data:
       wrId === 'wr-ata-1'
         ? [
-            { id: 'task-ata-1', title: 'Prepare ATA BIR 1702', workRequestId: 'wr-ata-1' },
-            { id: 'task-ata-2', title: 'Review ATA Books', workRequestId: 'wr-ata-1' },
+            { id: 'task-ata-1', title: 'Prepare ATA BIR 1702', workRequestId: 'wr-ata-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' },
+            { id: 'task-ata-2', title: 'Review ATA Books', workRequestId: 'wr-ata-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' },
           ]
         : wrId === 'wr-lta-1'
-        ? [{ id: 'task-lta-1', title: 'Draft LTA Report', workRequestId: 'wr-lta-1' }]
+        ? [{ id: 'task-lta-1', title: 'Draft LTA Report', workRequestId: 'wr-lta-1', assigneeId: 'u-docs', assignees: ['u-docs'], status: 'In Progress' }]
         : [],
     isLoading: false,
   }),
@@ -261,7 +272,7 @@ describe('DocumentUploadModal - External URL & Task Linking', () => {
       expect(screen.queryByTestId('work-request-select')).not.toBeInTheDocument();
     });
 
-    it('renders work request task dropdown for allowed users (e.g. workflow:view) and filters by active entity ATA', () => {
+    it('renders work request task dropdown for allowed users (e.g. workflow:view) and filters by active entity ATA', async () => {
       useSessionStore.getState().setSession({
         user: {
           id: 'u-docs',
@@ -281,17 +292,29 @@ describe('DocumentUploadModal - External URL & Task Linking', () => {
       const taskTrigger = screen.getByTestId('work-request-task-select');
       expect(wrTrigger).toBeInTheDocument();
       expect(taskTrigger).toBeInTheDocument();
+      // Disabled until WR is selected
+      expect(taskTrigger).toBeDisabled();
+
+      // Select ATA work request
+      fireEvent.keyDown(wrTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+      const wrOption = await screen.findByRole('option', { name: /WR-ATA-001/i });
+      fireEvent.click(wrOption);
+
+      // Task select is now enabled
+      await waitFor(() => {
+        expect(taskTrigger).not.toBeDisabled();
+      });
 
       // Open task select
-      fireEvent.click(taskTrigger);
+      fireEvent.keyDown(taskTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
       // Verify ATA tasks are shown and LTA tasks are filtered out
-      expect(screen.getByRole('option', { name: /Prepare ATA BIR 1702/i })).toBeInTheDocument();
+      expect(await screen.findByRole('option', { name: /Prepare ATA BIR 1702/i })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: /Review ATA Books/i })).toBeInTheDocument();
       expect(screen.queryByRole('option', { name: /Draft LTA Report/i })).not.toBeInTheDocument();
     });
 
-    it('filters work request task dropdown by active entity LTA when active entity is switched', () => {
+    it('filters work request task dropdown by active entity LTA when active entity is switched', async () => {
       useSessionStore.getState().setSession({
         user: {
           id: 'u-docs',
@@ -307,11 +330,23 @@ describe('DocumentUploadModal - External URL & Task Linking', () => {
 
       render(<DocumentUploadModal isOpen={true} onClose={vi.fn()} />, { wrapper });
 
+      const wrTrigger = screen.getByTestId('work-request-select');
       const taskTrigger = screen.getByTestId('work-request-task-select');
-      fireEvent.click(taskTrigger);
+      expect(taskTrigger).toBeDisabled();
+
+      // Select LTA work request
+      fireEvent.keyDown(wrTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+      const wrOption = await screen.findByRole('option', { name: /WR-LTA-001/i });
+      fireEvent.click(wrOption);
+
+      await waitFor(() => {
+        expect(taskTrigger).not.toBeDisabled();
+      });
+
+      fireEvent.keyDown(taskTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
       // Verify LTA task is shown and ATA tasks are filtered out
-      expect(screen.getByRole('option', { name: /Draft LTA Report/i })).toBeInTheDocument();
+      expect(await screen.findByRole('option', { name: /Draft LTA Report/i })).toBeInTheDocument();
       expect(screen.queryByRole('option', { name: /Prepare ATA BIR 1702/i })).not.toBeInTheDocument();
     });
 
@@ -337,11 +372,20 @@ describe('DocumentUploadModal - External URL & Task Linking', () => {
 
       render(<DocumentUploadModal isOpen={true} onClose={vi.fn()} />, { wrapper });
 
-      // Select task
-      const taskTrigger = screen.getByTestId('work-request-task-select');
-      fireEvent.click(taskTrigger);
+      // First select WR
+      const wrTrigger = screen.getByTestId('work-request-select');
+      fireEvent.keyDown(wrTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+      const wrOption = await screen.findByRole('option', { name: /WR-ATA-001/i });
+      fireEvent.click(wrOption);
 
-      const taskOption = screen.getByRole('option', { name: /Prepare ATA BIR 1702/i });
+      // Then select task
+      const taskTrigger = screen.getByTestId('work-request-task-select');
+      await waitFor(() => {
+        expect(taskTrigger).not.toBeDisabled();
+      });
+      fireEvent.keyDown(taskTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+
+      const taskOption = await screen.findByRole('option', { name: /Prepare ATA BIR 1702/i });
       fireEvent.click(taskOption);
 
       // Switch to external mode to submit

@@ -95,6 +95,7 @@ describe('Transmittals Zod Schemas (transmittals@2.0.0)', () => {
       const payloadWithoutTracking = {
         clientId: validUuid,
         workRequestId: validUuid,
+        linkedTaskId: validUuid,
         items: [
           {
             description: 'Audited Financial Statements',

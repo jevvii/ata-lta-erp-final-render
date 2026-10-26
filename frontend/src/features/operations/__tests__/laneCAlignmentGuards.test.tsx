@@ -252,6 +252,34 @@ describe('Lane C: TransmittalFormModal UI Restrictions', () => {
       activeEntity: 'ATA',
     });
 
+    const secondAssignedTask: Task = {
+      ...baseTask,
+      id: 't-101',
+      title: 'Second Assigned Task',
+    };
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/operations/work-requests/wr-100/tasks') || u.includes('/tasks')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [baseTask, secondAssignedTask, unassignedTask] }),
+        });
+      }
+      if (u.includes('/operations/work-requests')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [baseWr] }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: [] }),
+      });
+    });
+
     const { wrapper } = createHarness();
     render(
       <TransmittalFormModal
@@ -272,12 +300,12 @@ describe('Lane C: TransmittalFormModal UI Restrictions', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('task-error-message')).toHaveTextContent(
-        'Task selection is required for Documentation users'
+        /A valid linked task is required/i
       );
     });
   });
 
-  it('enables blank None option for Admin users', async () => {
+  it('allows Admin users to submit with any selectable task', async () => {
     useSessionStore.getState().setSession({
       user: adminUser,
       permissions: ['transmittal:view', 'transmittal:create'],
@@ -289,7 +317,7 @@ describe('Lane C: TransmittalFormModal UI Restrictions', () => {
       <TransmittalFormModal
         isOpen={true}
         onClose={vi.fn()}
-        prefill={{ workRequestId: 'wr-100', clientId: 'client-1' }}
+        prefill={{ workRequestId: 'wr-100', clientId: 'client-1', taskId: 't-200' }}
       />,
       { wrapper }
     );
@@ -301,7 +329,7 @@ describe('Lane C: TransmittalFormModal UI Restrictions', () => {
     const descInput = screen.getByTestId('item-description-input-0');
     fireEvent.change(descInput, { target: { value: 'Annual Report 2026' } });
 
-    // Submit without task succeeds (no task-error-message)
+    // Submit with task succeeds (no task-error-message)
     const submitBtn = screen.getByTestId('submit-transmittal-btn');
     fireEvent.click(submitBtn);
 

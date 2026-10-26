@@ -236,6 +236,7 @@ describe('Transmittals Data Layer & Zero Optimistic Updates Doctrine', () => {
       const res = await result.current.mutateAsync({
         clientId: validUuid,
         workRequestId: validUuid,
+        linkedTaskId: validUuid,
         trackingNumber: 'TR-ATA-2026-9999',
         items: [{ description: 'BIR 2316', quantity: 2 }],
       });

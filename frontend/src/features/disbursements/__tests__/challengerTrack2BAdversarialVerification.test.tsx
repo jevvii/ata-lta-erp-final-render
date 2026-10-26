@@ -822,6 +822,25 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
             }),
           });
         }
+        if (String(_url).includes('/tasks')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: [
+                {
+                  id: '22222222-2222-2222-2222-222222222222',
+                  title: 'Assigned Task',
+                  status: 'In Progress',
+                  workRequestId: '11111111-1111-1111-1111-111111111111',
+                  assigneeId: 'staff-1',
+                  assignees: ['staff-1'],
+                },
+              ],
+            }),
+          });
+        }
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -836,9 +855,14 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-work-request-task')).toHaveTextContent(/Assigned Task/);
+      });
 
       fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '2500' } });
       fireEvent.change(screen.getByTestId('textarea-description'), {
@@ -884,6 +908,25 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
             }),
           });
         }
+        if (String(_url).includes('/tasks')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: [
+                {
+                  id: '22222222-2222-2222-2222-222222222222',
+                  title: 'Assigned Task',
+                  status: 'In Progress',
+                  workRequestId: '11111111-1111-1111-1111-111111111111',
+                  assigneeId: 'staff-1',
+                  assignees: ['staff-1'],
+                },
+              ],
+            }),
+          });
+        }
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -898,9 +941,14 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('select-work-request-task')).toHaveTextContent(/Assigned Task/);
+      });
 
       fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '800' } });
       fireEvent.change(screen.getByTestId('textarea-description'), {

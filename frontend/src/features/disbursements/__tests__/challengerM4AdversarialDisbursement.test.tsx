@@ -100,6 +100,18 @@ const mockImageDisbursement: Disbursement = {
 describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDrawer (F15 & F16 / R7 / V8, V9)', () => {
   const originalFetch = global.fetch;
 
+  const VALID_M4_TASK_ID = '22222222-2222-4222-8222-222222222222';
+  const mockDefaultTasks = [
+    {
+      id: VALID_M4_TASK_ID,
+      workRequestId: '11111111-1111-1111-1111-111111111111',
+      title: 'Cascade Task',
+      status: 'In Progress',
+      assigneeId: 'u-admin-1',
+      assignees: ['u-admin-1'],
+    },
+  ];
+
   const setAdminSession = () => {
     useSessionStore.getState().setSession({
       user: {
@@ -238,7 +250,25 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           };
         }
 
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         // Fallback for auxiliary lookups (work requests, clients, etc.)
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -257,6 +287,7 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           onClose={onClose}
           onSuccess={onSuccess}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId={VALID_M4_TASK_ID}
         />,
         { wrapper }
       );
@@ -372,6 +403,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           };
         }
 
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -386,6 +426,7 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId={VALID_M4_TASK_ID}
         />,
         { wrapper }
       );
@@ -487,6 +528,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           };
         }
 
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -501,6 +551,7 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId={VALID_M4_TASK_ID}
         />,
         { wrapper }
       );
@@ -543,6 +594,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
         if (u.includes('/disbursements/receipt-uploads')) {
           uploadReservationCount++;
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -557,6 +617,7 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId={VALID_M4_TASK_ID}
         />,
         { wrapper }
       );
@@ -601,6 +662,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: { id: 'disb-no-rec-1', status: 'Draft', ...postedBody } }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -615,6 +685,7 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
           isOpen={true}
           onClose={vi.fn()}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId={VALID_M4_TASK_ID}
         />,
         { wrapper }
       );
@@ -670,6 +741,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: disbWithReceipt }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -750,6 +830,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: disbWithReceipt }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -815,6 +904,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: mockImageDisbursement }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -898,6 +996,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: mockDraftDisbursement }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -969,6 +1076,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: mockDraftDisbursement }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
@@ -1031,6 +1147,15 @@ describe('Adversarial Challenge: CreateDisbursementModal & DisbursementDetailDra
             json: async () => ({ data: mockDraftDisbursement }),
           };
         }
+        if (u.includes('/tasks')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockDefaultTasks }),
+          };
+        }
+
         return {
           ok: true,
           status: 200,
