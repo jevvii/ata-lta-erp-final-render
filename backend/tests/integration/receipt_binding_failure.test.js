@@ -8,6 +8,7 @@ const { registerUser, resetMock, seedDefaults, mockTables } = require('../fixtur
 const reservations = require('../../src/modules/disbursements/receiptReservationStore');
 const OWNER = '99999999-9999-4999-8999-999999999999';
 const WR = '33333333-3333-4333-8333-333333333333';
+const TASK = '44444444-4444-4444-4444-444444444444';
 let token;
 const send = (method, url, body) =>
   request(app)
@@ -27,6 +28,7 @@ beforeEach(() => {
     entities: ['ATA'],
   });
   mockTables.work_requests.set(WR, { id: WR, entity_id: 'ent-ata', title: 'WR' });
+  mockTables.tasks.set(TASK, { id: TASK, work_request_id: WR, title: 'Task', status: 'In Progress' });
   reservations.createReservation({
     uploadId: 'failure',
     objectKey: 'verified-key',
@@ -53,6 +55,9 @@ it.each(['create', 'update'])(
         requested_by: OWNER,
         amount: 5,
         description: 'Before',
+        linked_work_request_id: WR,
+        task_id: TASK,
+        linked_task_id: TASK,
       });
     const rename = fs.renameSync;
     jest.spyOn(fs, 'renameSync').mockImplementation((source, destination) => {
@@ -70,6 +75,7 @@ it.each(['create', 'update'])(
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      linkedTaskId: TASK,
       receiptS3Key: 'verified-key',
       receiptFilename: 'receipt.pdf',
       ...(operation === 'update' ? { expectedVersion: 1 } : {}),
@@ -131,6 +137,7 @@ it.each([
     amount: 100,
     fundSource: 'Firm Fund',
     linkedWorkRequestId: WR,
+    linkedTaskId: TASK,
     receiptS3Key: 'verified-key',
     receiptFilename: 'receipt.pdf',
   });

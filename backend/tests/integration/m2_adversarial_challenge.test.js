@@ -29,6 +29,7 @@ const storageService = require('../../src/services/storageService');
 const OWNER = '99999999-9999-4999-8999-999999999999';
 const OTHER_USER = '88888888-8888-4888-8888-888888888888';
 const WR = '33333333-3333-4333-8333-333333333333';
+const VALID_TASK_UUID = '77777777-7777-4777-8777-777777777777';
 const NON_EXISTENT_TASK_UUID = '11111111-1111-4111-8111-111111111111';
 const MAX_10MB = 10 * 1024 * 1024; // 10,485,760 bytes
 
@@ -66,6 +67,16 @@ beforeEach(() => {
     id: WR,
     entity_id: 'ent-ata',
     title: 'Adversarial Challenge WR',
+  });
+
+  mockTables.tasks.set(VALID_TASK_UUID, {
+    id: VALID_TASK_UUID,
+    work_request_id: WR,
+    entity_id: 'ent-ata',
+    title: 'Adversarial Challenge Task',
+    status: 'In Progress',
+    assignee_id: OWNER,
+    deleted_at: null,
   });
 });
 
@@ -474,6 +485,7 @@ describe('Adversarial Challenge 3: Replay Prevention on Consumed Reservations', 
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
       receiptS3Key: consumedKey,
       receiptFilename: 'replay-test.pdf',
     });
@@ -493,6 +505,7 @@ describe('Adversarial Challenge 3: Replay Prevention on Consumed Reservations', 
       amount: 200,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
       receiptS3Key: consumedKey,
       receiptFilename: 'replay-test.pdf',
     });
@@ -508,6 +521,7 @@ describe('Adversarial Challenge 3: Replay Prevention on Consumed Reservations', 
       amount: 50,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
     });
     expect(otherVoucher.status).toBe(201);
     const voucherId = otherVoucher.body.data.id;
@@ -587,6 +601,7 @@ describe('Adversarial Challenge 3: Replay Prevention on Consumed Reservations', 
       amount: 150,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
       receiptS3Key: objectKey,
       receiptFilename: 'owner-doc.pdf',
     }, otherToken);
@@ -622,6 +637,7 @@ describe('Adversarial Challenge 4: Concurrency Race Conditions on Reservation Cl
         amount: 100 + idx,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        taskId: VALID_TASK_UUID,
         receiptS3Key: objectKey,
         receiptFilename: 'swarm-create.pdf',
       })
@@ -654,6 +670,7 @@ describe('Adversarial Challenge 4: Concurrency Race Conditions on Reservation Cl
         amount: 50 + i,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        taskId: VALID_TASK_UUID,
       });
       voucherIds.push(v.body.data.id);
     }
@@ -703,6 +720,7 @@ describe('Adversarial Challenge 4: Concurrency Race Conditions on Reservation Cl
         amount: 80 + i,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        taskId: VALID_TASK_UUID,
       });
       voucherIds.push(v.body.data.id);
     }
@@ -732,6 +750,7 @@ describe('Adversarial Challenge 4: Concurrency Race Conditions on Reservation Cl
         amount: 120,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        taskId: VALID_TASK_UUID,
         receiptS3Key: objectKey,
         receiptFilename: 'mixed-race.pdf',
       })
@@ -868,6 +887,7 @@ describe('Adversarial Challenge 4: Concurrency Race Conditions on Reservation Cl
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
       receiptS3Key: objectKey,
       receiptFilename: 'exploit_double_spend.pdf',
     });
@@ -928,13 +948,14 @@ describe('Adversarial Challenge 5: Create-Fail-Retry Rollback Safety Probes', ()
     });
     expect(record?.data?.status).toBe('completed');
 
-    // Immediate retry without invalid task succeeds
+    // Immediate retry with valid task succeeds
     const retryRes = await send('post', '/v1/disbursements', {
       category: 'Supplies',
       description: 'Clean retry without task',
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
       receiptS3Key: objectKey,
       receiptFilename: 'rollback-task.pdf',
     });
@@ -996,6 +1017,7 @@ describe('Adversarial Challenge 5: Create-Fail-Retry Rollback Safety Probes', ()
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: VALID_TASK_UUID,
     });
     const voucherId = v.body.data.id;
 

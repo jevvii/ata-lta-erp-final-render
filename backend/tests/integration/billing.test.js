@@ -14,11 +14,15 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-4444-444444444444';
+const WORK_REQUEST_ID_LTA = '33333333-3333-3333-3333-333333333334';
+const TASK_ID_LTA = '44444444-4444-4444-4444-444444444445';
 
 const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -53,6 +57,25 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Acme Audit Task',
+    status: 'In Progress',
+  });
+  mockTables.work_requests.set(WORK_REQUEST_ID_LTA, {
+    id: WORK_REQUEST_ID_LTA,
+    entity_id: 'ent-lta',
+    client_id: CLIENT_ID_LTA,
+    title: 'Beta Audit',
+    status: 'In Progress',
+  });
+  mockTables.tasks.set(TASK_ID_LTA, {
+    id: TASK_ID_LTA,
+    work_request_id: WORK_REQUEST_ID_LTA,
+    title: 'Beta Audit Task',
+    status: 'In Progress',
+  });
 };
 
 describe('/v1/invoices', () => {
@@ -63,12 +86,15 @@ describe('/v1/invoices', () => {
   });
 
   it('creates an invoice when user has billing:edit', async () => {
+    const accUserId = 'acc-billing-user-1';
     const token = registerUser({
+      id: accUserId,
       email: 'accounting@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
       entities: ['ATA'],
     });
+    mockTables.tasks.get(TASK_ID).assignee_id = accUserId;
 
     const res = await request(app)
       .post('/v1/invoices')
@@ -101,7 +127,7 @@ describe('/v1/invoices', () => {
       .post('/v1/invoices')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'LTA')
-      .send({ ...validInvoice, invoiceNumber: 'LTA-SI-2026-001', clientId: CLIENT_ID_LTA })
+      .send({ ...validInvoice, invoiceNumber: 'LTA-SI-2026-001', clientId: CLIENT_ID_LTA, workRequestId: WORK_REQUEST_ID_LTA, taskId: TASK_ID_LTA })
       .expect(201);
 
     const res = await request(app)
@@ -450,7 +476,7 @@ describe('/v1/invoices', () => {
       .post('/v1/invoices')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ ...validInvoice, linkedTaskId: taskId })
+      .send({ ...validInvoice, taskId: undefined, linkedTaskId: taskId })
       .expect(201);
 
     expect(created.body.data.linked_task_id).toBe(taskId);
@@ -816,6 +842,14 @@ describe('/v1/invoices', () => {
       deleted_at: null,
     });
 
+    const mgrTaskId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    mockTables.tasks.set(mgrTaskId, {
+      id: mgrTaskId,
+      work_request_id: WR_MANAGED_ID,
+      title: 'Managed Task',
+      status: 'In Progress',
+    });
+
     // Create Draft invoice linked to WR_MANAGED_ID
     const draftRes = await request(app)
       .post('/v1/invoices')
@@ -825,6 +859,7 @@ describe('/v1/invoices', () => {
         ...validInvoice,
         invoiceNumber: 'ATA-SI-2026-MGR-DRAFT',
         workRequestId: WR_MANAGED_ID,
+        taskId: mgrTaskId,
         status: 'Draft',
       })
       .expect(201);
@@ -882,7 +917,9 @@ describe('/v1/invoices', () => {
         id: LTA_INV_ID,
         entity_id: 'ent-lta',
         client_id: CLIENT_ID_LTA,
-        work_request_id: WORK_REQUEST_ID,
+        work_request_id: WORK_REQUEST_ID_LTA,
+        task_id: TASK_ID_LTA,
+        linked_task_id: TASK_ID_LTA,
         invoice_number: 'LTA-SI-2026-ALL',
         status: 'Draft',
         total: 5000,
@@ -1019,6 +1056,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-GOV-2',
         status: 'Pending',
         total: 4000,
@@ -1053,6 +1092,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-ADMIN-1',
         status: 'Draft',
         total: 5000,
@@ -1077,6 +1118,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-ADMIN-2',
         status: 'Pending',
         total: 6000,

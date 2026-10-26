@@ -290,6 +290,17 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     });
 
     it('derives employee_id, requested_by, and created_by as authenticated caller ID when omitted', async () => {
+      const taskId = '55555555-eeee-4555-8eee-555555555501';
+      mockTables.tasks.set(taskId, {
+        id: taskId,
+        work_request_id: WR_ATA_ID,
+        entity_id: 'ent-ata',
+        title: 'Alice Task',
+        status: 'In Progress',
+        assignee_id: STAFF_A_ID,
+        deleted_at: null,
+      });
+
       const res = await request(app)
         .post('/v1/disbursements')
         .set('Authorization', `Bearer ${staffA_Token}`)
@@ -300,6 +311,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
           amount: 450,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA_ID,
+          taskId,
         })
         .expect(201);
 
@@ -752,6 +764,17 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       expect(completeRes.body.data.receiptFilename).toBe('taxi_receipt.pdf');
 
       // 6. Alice creates voucher binding this receipt
+      const taskId = '55555555-eeee-4555-8eee-555555555502';
+      mockTables.tasks.set(taskId, {
+        id: taskId,
+        work_request_id: WR_ATA_ID,
+        entity_id: 'ent-ata',
+        title: 'Alice Receipt Task',
+        status: 'In Progress',
+        assignee_id: STAFF_A_ID,
+        deleted_at: null,
+      });
+
       const voucherRes = await request(app)
         .post('/v1/disbursements')
         .set('Authorization', `Bearer ${staffA_Token}`)
@@ -762,6 +785,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
           amount: 850,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA_ID,
+          taskId,
           receiptS3Key: completeRes.body.data.receiptS3Key,
           receiptFilename: completeRes.body.data.receiptFilename,
         })
@@ -781,6 +805,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
           amount: 850,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA_ID,
+          taskId,
           receiptS3Key: completeRes.body.data.receiptS3Key,
           receiptFilename: completeRes.body.data.receiptFilename,
         })

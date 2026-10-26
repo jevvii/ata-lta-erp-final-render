@@ -26,6 +26,7 @@ const {
 } = require('../src/modules/billing/statementDocument');
 const clientId = '11111111-1111-1111-1111-111111111111';
 const workRequestId = '33333333-3333-3333-3333-333333333333';
+const taskId = '44444444-4444-4444-4444-444444444444';
 let admin, accounting, invoice;
 const api = (token) =>
   request(app)
@@ -51,6 +52,12 @@ beforeEach(async () => {
     status: 'In Progress',
     co_assignees: [accountingId],
   });
+  mockTables.tasks.set(taskId, {
+    id: taskId,
+    work_request_id: workRequestId,
+    title: 'Audit Task',
+    status: 'In Progress',
+  });
   admin = registerUser({ email: 'admin@example.test', role: 'Admin', entities: ['ATA'] });
   accounting = registerUser({
     id: accountingId,
@@ -65,6 +72,7 @@ beforeEach(async () => {
     .send({
       clientId,
       workRequestId,
+      taskId,
       invoiceNumber: 'ATA-100',
       issueDate: '2026-10-19',
       dueDate: '2026-11-19',

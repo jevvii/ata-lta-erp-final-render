@@ -787,15 +787,15 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.detail || res.body.message).toMatch(/valid linked task is required/i);
     });
 
-    it('F07-5: Admin user can create whole-project transmittal without task selection', async () => {
+    it('F07-5: Admin user creating transmittal with WR without task selection is rejected with 400 TASK_REQUIRED', async () => {
       const res = await request(app)
         .post('/v1/transmittals')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({ ...basePayload, linkedTaskId: null, trackingNumber: 'TR-ADMIN-01' })
-        .expect(201);
+        .expect(400);
 
-      expect(res.body.data.linked_task_id).toBeNull();
+      expect(res.body.code).toBe('TASK_REQUIRED');
     });
   });
 

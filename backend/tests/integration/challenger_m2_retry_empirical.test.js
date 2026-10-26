@@ -28,6 +28,7 @@ const reservations = require('../../src/modules/disbursements/receiptReservation
 
 const OWNER = '99999999-9999-4999-8999-999999999999';
 const WR = '33333333-3333-4333-8333-333333333333';
+const TASK = '77777777-7777-4777-8777-777777777777';
 let token;
 
 const send = (method, url, body) =>
@@ -51,6 +52,15 @@ beforeEach(() => {
     id: WR,
     entity_id: 'ent-ata',
     title: 'M2 Challenger Retry WR',
+  });
+  mockTables.tasks.set(TASK, {
+    id: TASK,
+    work_request_id: WR,
+    entity_id: 'ent-ata',
+    title: 'M2 Challenger Retry Task',
+    status: 'In Progress',
+    assignee_id: OWNER,
+    deleted_at: null,
   });
 });
 
@@ -189,6 +199,7 @@ describe('EMPIRICAL CHALLENGE 2: HTTP 409 RECEIPT_RESERVATION_ALREADY_CLAIMED on
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'endpoint_consumed.pdf',
     });
@@ -260,6 +271,7 @@ describe('EMPIRICAL CHALLENGE 3: Double-Spend Prevention Under In-Flight Race Co
       amount: 250,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'double_spend_probe.pdf',
     });
@@ -278,6 +290,7 @@ describe('EMPIRICAL CHALLENGE 3: Double-Spend Prevention Under In-Flight Race Co
       amount: 250,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'double_spend_probe.pdf',
     });
@@ -317,6 +330,7 @@ describe('EMPIRICAL CHALLENGE 3: Double-Spend Prevention Under In-Flight Race Co
         amount: 50,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+      taskId: TASK,
       });
       existingIds.push(v.body.data.id);
     }
@@ -331,6 +345,7 @@ describe('EMPIRICAL CHALLENGE 3: Double-Spend Prevention Under In-Flight Race Co
           amount: 100 + i,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR,
+      taskId: TASK,
           receiptS3Key: objectKey,
           receiptFilename: 'massive_race.pdf',
         })
@@ -409,6 +424,7 @@ describe('EMPIRICAL CHALLENGE 4: Failed Consumption Rollbacks', () => {
       amount: 500,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'consume_fail_create.pdf',
     });
@@ -432,6 +448,7 @@ describe('EMPIRICAL CHALLENGE 4: Failed Consumption Rollbacks', () => {
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      taskId: TASK,
     });
     expect(initialCreate.status).toBe(201);
     const voucherId = initialCreate.body.data.id;

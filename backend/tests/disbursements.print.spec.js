@@ -21,6 +21,7 @@ const { generatePdf } = require('../src/services/pdfService');
 const { uploadBuffer } = require('../src/services/storageService');
 const clientId = '11111111-1111-1111-1111-111111111111';
 const wrId = '33333333-3333-3333-3333-333333333333';
+const taskId = '44444444-4444-4444-8444-444444444444';
 let admin, accounting, other, voucher;
 const api = (method, path, token = admin, entity = 'ATA') =>
   request(app)[method](path).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', entity);
@@ -37,6 +38,15 @@ beforeEach(async () => {
     title: 'Audit',
     status: 'In Progress',
     co_assignees: [accountingId],
+  });
+  mockTables.tasks.set(taskId, {
+    id: taskId,
+    work_request_id: wrId,
+    entity_id: 'ent-ata',
+    title: 'Audit Task',
+    status: 'In Progress',
+    assignee_id: accountingId,
+    deleted_at: null,
   });
   admin = registerUser({
     name: 'Maria Santos',
@@ -65,6 +75,7 @@ beforeEach(async () => {
       fundSource: 'Firm Fund',
       clientId,
       linkedWorkRequestId: wrId,
+      taskId,
     })
     .expect(201);
   voucher = res.body.data;
@@ -125,6 +136,8 @@ it.each(['ATA', 'LTA'])(
       entity_id: entity === 'ATA' ? 'ent-ata' : 'ent-lta',
       client_id: entity === 'ATA' ? clientId : ltaClientId,
       linked_work_request_id: entity === 'ATA' ? wrId : ltaWrId,
+      task_id: null,
+      linked_task_id: null,
       disbursement_number: `${entity}-100`,
     });
     await api('get', `/v1/disbursements/${voucher.id}/pdf`, admin, 'ALL').expect(200);

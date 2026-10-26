@@ -19,6 +19,7 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-4444-444444444444';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -46,6 +47,12 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Acme Task',
+    status: 'In Progress',
+  });
 };
 
 const validDisbursement = {
@@ -55,6 +62,7 @@ const validDisbursement = {
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
   linkedWorkRequestId: WORK_REQUEST_ID,
+  linkedTaskId: TASK_ID,
   dueDate: '2026-07-31',
   notes: 'Test disbursement',
 };
@@ -63,6 +71,7 @@ const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -113,6 +122,7 @@ describe('Concurrency race conditions', () => {
       role: 'Operations',
       entities: ['ATA'],
     });
+    mockTables.tasks.get(TASK_ID).assignee_id = 'staff-user-concurrency';
 
     const created = await request(app)
       .post('/v1/disbursements')

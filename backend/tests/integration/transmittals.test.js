@@ -13,6 +13,7 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const DEFAULT_TASK_ID = 'e1111111-1111-4111-8111-111111111111';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -31,11 +32,18 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(DEFAULT_TASK_ID, {
+    id: DEFAULT_TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Default Transmittal Task',
+    status: 'In Progress',
+  });
 };
 
 const validTransmittal = {
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  linkedTaskId: DEFAULT_TASK_ID,
   trackingNumber: 'TR-12345',
   items: [{ description: 'Tax returns', documentType: 'Tax', quantity: 1 }],
   notes: 'Urgent',
@@ -428,8 +436,15 @@ describe('/v1/transmittals', () => {
         title: 'LTA Work Request',
         status: 'In Progress',
       });
+      const taskIdLta = 'e2222222-2222-4222-8222-222222222222';
+      mockTables.tasks.set(taskIdLta, {
+        id: taskIdLta,
+        work_request_id: wrIdLta,
+        title: 'LTA Task',
+        status: 'In Progress',
+      });
       mockTables.transmittals.set(id, {
-        id, entity_id: 'ent-lta', client_id: CLIENT_ID, work_request_id: wrIdLta, status: 'Acknowledged', version: 1,
+        id, entity_id: 'ent-lta', client_id: CLIENT_ID, work_request_id: wrIdLta, linked_task_id: taskIdLta, status: 'Acknowledged', version: 1,
       });
     });
 

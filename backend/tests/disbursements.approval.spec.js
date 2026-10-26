@@ -21,10 +21,27 @@ jest.mock('../src/services/supabaseClient', () => {
 
 const request = require('supertest');
 const { app } = require('./helpers/testServer');
-const { registerUser, seedDefaults, resetMock, mockTables } = require('./fixtures/supabaseMock');
+const {
+  registerUser: rawRegisterUser,
+  seedDefaults,
+  resetMock,
+  mockTables,
+} = require('./fixtures/supabaseMock');
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-8444-444444444444';
+
+const registerUser = (opts = {}) => {
+  const userId = opts.id || `user-${mockTables.users.size + 1}`;
+  const token = rawRegisterUser({ ...opts, id: userId });
+  mockTables.task_assignees.set(`ta-${userId}`, {
+    id: `ta-${userId}`,
+    task_id: TASK_ID,
+    user_id: userId,
+  });
+  return token;
+};
 
 const seedClientAndWr = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -43,6 +60,14 @@ const seedClientAndWr = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    entity_id: 'ent-ata',
+    title: 'Acme Audit Task',
+    status: 'In Progress',
+    deleted_at: null,
+  });
 };
 
 const validDisbursementPayload = {
@@ -52,6 +77,7 @@ const validDisbursementPayload = {
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
   linkedWorkRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   dueDate: '2026-10-31',
   notes: 'Client visit transportation',
 };

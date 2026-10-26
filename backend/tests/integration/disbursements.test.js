@@ -13,6 +13,7 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-4444-444444444444';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -31,6 +32,12 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Acme Disbursement Task',
+    status: 'In Progress',
+  });
 };
 
 const validDisbursement = {
@@ -40,6 +47,7 @@ const validDisbursement = {
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
   linkedWorkRequestId: WORK_REQUEST_ID,
+  linkedTaskId: TASK_ID,
   dueDate: '2026-07-31',
   notes: 'Test disbursement',
 };
@@ -72,12 +80,15 @@ describe('/v1/disbursements', () => {
   });
 
   it('allows disbursement creation for any department (P0-A §3.2) — non-admin creates land in Pending for the P0-G approval gate', async () => {
+    const docUserId = 'doc-user-disb-1';
     const token = registerUser({
+      id: docUserId,
       email: 'doc@ata-lta.ph',
       name: 'Doc Staff',
       role: 'Documentation',
       entities: ['ATA'],
     });
+    mockTables.tasks.get(TASK_ID).assignee_id = docUserId;
 
     const res = await request(app)
       .post('/v1/disbursements')
@@ -418,11 +429,20 @@ describe('/v1/disbursements', () => {
     expect(adminCounts.body.data.active).toBe(2);
 
     // 6. Ops creates their own disbursement on OPS_WR_ID -> Ops can see own disbursement and count is 1
+    const opsTaskId = 'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee';
+    mockTables.tasks.set(opsTaskId, {
+      id: opsTaskId,
+      work_request_id: OPS_WR_ID,
+      title: 'Ops Task',
+      status: 'In Progress',
+      assignee_id: OPS_USER_ID,
+    });
+
     const opsCreatedRes = await request(app)
       .post('/v1/disbursements')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ ...validDisbursement, linkedWorkRequestId: OPS_WR_ID, category: 'OpsCategory' })
+      .send({ ...validDisbursement, linkedWorkRequestId: OPS_WR_ID, linkedTaskId: opsTaskId, category: 'OpsCategory' })
       .expect(201);
 
     const opsListAfter = await request(app)
@@ -803,6 +823,7 @@ describe('/v1/disbursements', () => {
 
       mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = staffUserId;
       mockTables.work_requests.get(WORK_REQUEST_ID).co_assignees = [acctUserId];
+      mockTables.tasks.get(TASK_ID).assignee_id = staffUserId;
 
       // 1. Create Draft disbursement
       const createRes = await request(app)
@@ -904,6 +925,7 @@ describe('/v1/disbursements', () => {
         entities: ['ATA'],
       });
       mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = jenId;
+      mockTables.tasks.get(TASK_ID).assignee_id = jenId;
 
       // Seed a Draft voucher
       const DISB_EDIT_ID = 'disb-edit-accounting-8888';
@@ -912,6 +934,8 @@ describe('/v1/disbursements', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         linked_work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         disbursement_number: 'DISB-ATA-2026-EDIT-01',
         category: 'Transportation',
         description: 'Grab fare to SEC',

@@ -36,6 +36,7 @@ const service = require('../../src/modules/disbursements/service');
 
 const OWNER = '99999999-9999-4999-8999-999999999999';
 const WR = '33333333-3333-4333-8333-333333333333';
+const TASK = '44444444-4444-4444-4444-444444444444';
 const NON_EXISTENT_TASK_UUID = '11111111-1111-4111-8111-111111111111';
 let token;
 
@@ -60,6 +61,12 @@ beforeEach(() => {
     id: WR,
     entity_id: 'ent-ata',
     title: 'M2 Lifecycle WR',
+  });
+  mockTables.tasks.set(TASK, {
+    id: TASK,
+    work_request_id: WR,
+    title: 'M2 Lifecycle Task',
+    status: 'In Progress',
   });
 });
 
@@ -228,6 +235,7 @@ describe('M2 — R4: Concurrency, Atomic Claim & Retry Safety', () => {
         amount: 300,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        linkedTaskId: TASK,
         receiptS3Key: objectKey,
         receiptFilename: 'race-receipt.pdf',
       }),
@@ -237,6 +245,7 @@ describe('M2 — R4: Concurrency, Atomic Claim & Retry Safety', () => {
         amount: 300,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR,
+        linkedTaskId: TASK,
         receiptS3Key: objectKey,
         receiptFilename: 'race-receipt.pdf',
       }),
@@ -301,6 +310,7 @@ describe('M2 — R4: Concurrency, Atomic Claim & Retry Safety', () => {
       amount: 150,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      linkedTaskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'retry-receipt.pdf',
     });
@@ -340,6 +350,7 @@ describe('M2 — R4: Concurrency, Atomic Claim & Retry Safety', () => {
       amount: 400,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR,
+      linkedTaskId: TASK,
       receiptS3Key: objectKey,
       receiptFilename: 'consume-endpoint.pdf',
     });

@@ -251,7 +251,7 @@ describe('Task Assignment Authorization Deep Verifications', () => {
       expect(mockTables.invoices.get(INVOICE_ID).task_id).toBe(TASK_UNASSIGNED);
     });
 
-    it('allows assigned user to unlink their own task (setting to null)', async () => {
+    it('rejects attempt by assigned user to unlink task to null (TASK_REQUIRED)', async () => {
       mockTables.invoices.set(INVOICE_ID, {
         id: INVOICE_ID,
         entity_id: 'ent-ata',
@@ -276,12 +276,12 @@ describe('Task Assignment Authorization Deep Verifications', () => {
           linkedTaskId: null,
           expectedVersion: 1,
         })
-        .expect(200);
+        .expect(400);
 
-      expect(res.body.data.linked_task_id).toBeNull();
+      expect(res.body.code).toBe('TASK_REQUIRED');
       const saved = mockTables.invoices.get(INVOICE_ID);
-      expect(saved.task_id).toBeNull();
-      expect(saved.linked_task_id).toBeNull();
+      expect(saved.task_id).toBe(TASK_ASSIGNED);
+      expect(saved.linked_task_id).toBe(TASK_ASSIGNED);
     });
   });
 

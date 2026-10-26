@@ -67,6 +67,7 @@ const OWNER_ID = '99999999-9999-4999-8999-999999999999';
 const OTHER_USER_ID = '88888888-8888-4888-8888-888888888888';
 const ENT_ATA = 'ent-ata';
 const WR_ATA = '33333333-3333-4333-8333-333333333333';
+const TASK_ATA = '44444444-4444-4444-8444-444444444444';
 
 let ownerToken;
 let _otherToken;
@@ -102,6 +103,13 @@ beforeEach(() => {
     id: WR_ATA,
     entity_id: ENT_ATA,
     title: 'M2 Challenger Work Request',
+  });
+
+  mockTables.tasks.set(TASK_ATA, {
+    id: TASK_ATA,
+    work_request_id: WR_ATA,
+    title: 'M2 Challenger Task',
+    status: 'In Progress',
   });
 });
 
@@ -311,6 +319,7 @@ describe('Challenger M2 — Suite 2: High-Concurrency Race Conditions & Atomic C
         amount: 100 + i,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
         receiptS3Key: objectKey,
         receiptFilename: 'high_concurrency.pdf',
       })
@@ -343,6 +352,7 @@ describe('Challenger M2 — Suite 2: High-Concurrency Race Conditions & Atomic C
         amount: 200,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
       });
       expect(vRes.status).toBe(201);
       voucherIds.push(vRes.body.data.id);
@@ -395,6 +405,7 @@ describe('Challenger M2 — Suite 2: High-Concurrency Race Conditions & Atomic C
         amount: 150,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
       });
       voucherIds.push(vRes.body.data.id);
     }
@@ -421,6 +432,7 @@ describe('Challenger M2 — Suite 2: High-Concurrency Race Conditions & Atomic C
         amount: 250,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
         receiptS3Key: objectKey,
         receiptFilename: 'mixed_race.pdf',
       })
@@ -505,6 +517,7 @@ describe('Challenger M2 — Suite 2: High-Concurrency Race Conditions & Atomic C
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR_ATA,
+      linkedTaskId: TASK_ATA,
       receiptS3Key: objectKey,
       receiptFilename: 'exploit_double_spend.pdf',
     });
@@ -696,6 +709,7 @@ describe('Challenger M2 — Suite 4: Transactional Rollback & Retry Safety (R4)'
       amount: 100,
       fundSource: 'Firm Fund',
       linkedWorkRequestId: WR_ATA,
+      linkedTaskId: TASK_ATA,
     });
     const voucherId = vRes.body.data.id;
     const initialVersion = vRes.body.data.version || 1;
