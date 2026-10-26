@@ -344,4 +344,209 @@ describe('useSelectableTasks hook', () => {
 
     expect(onSelectTask).toHaveBeenCalledWith('t-alice');
   });
+
+  it('disables processing task with "(Locked: Processing phase not active)" when WR is in pre_processing across all 4 record types (even for Admin)', () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'admin-1',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+      permissions: ['workflow:view', 'workflow:edit'],
+      activeEntity: 'ATA',
+    });
+
+    mockTasks = [
+      createTestTask({
+        id: 't-pre',
+        title: 'Pre-processing Task',
+        status: 'In Progress',
+        phase: 'pre_processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+      createTestTask({
+        id: 't-proc',
+        title: 'Processing Task',
+        status: 'Assigned',
+        phase: 'processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+    ];
+
+    for (const recordType of ['invoice', 'disbursement', 'transmittal', 'document'] as const) {
+      const { result } = renderHook(
+        () =>
+          useSelectableTasks({
+            workRequestId: WR_ID,
+            workRequestPhase: 'pre_processing',
+            recordType,
+          }),
+        { wrapper }
+      );
+
+      const preOpt = result.current.options.find((o) => o.id === 't-pre');
+      const procOpt = result.current.options.find((o) => o.id === 't-proc');
+
+      expect(preOpt?.disabled).toBe(false);
+      expect(preOpt?.isPhaseLocked).toBe(false);
+
+      expect(procOpt?.disabled).toBe(true);
+      expect(procOpt?.isPhaseLocked).toBe(true);
+      expect(procOpt?.label).toBe(
+        'Processing Task — Alice Santos (Locked: Processing phase not active)'
+      );
+    }
+  });
+
+  it('allows pre_processing Completed task for invoice when WR is in processing or quality_assurance, but excludes it for disbursement/document/transmittal', () => {
+    mockTasks = [
+      createTestTask({
+        id: 't-pre-done',
+        title: 'Completed Pre-processing Task',
+        status: 'Completed',
+        phase: 'pre_processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+      createTestTask({
+        id: 't-proc-active',
+        title: 'Active Processing Task',
+        status: 'In Progress',
+        phase: 'processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+    ];
+
+    // Invoice in processing phase: both pre_processing Completed and processing In Progress are selectable
+    const { result: invProc } = renderHook(
+      () =>
+        useSelectableTasks({
+          workRequestId: WR_ID,
+          workRequestPhase: 'processing',
+          recordType: 'invoice',
+        }),
+      { wrapper }
+    );
+    expect(invProc.current.selectableOptions.map((o) => o.id)).toEqual([
+      't-pre-done',
+      't-proc-active',
+    ]);
+
+    // Invoice in quality_assurance phase: both are selectable
+    const { result: invQa } = renderHook(
+      () =>
+        useSelectableTasks({
+          workRequestId: WR_ID,
+          workRequestPhase: 'quality_assurance',
+          recordType: 'invoice',
+        }),
+      { wrapper }
+    );
+    expect(invQa.current.selectableOptions.map((o) => o.id)).toEqual([
+      't-pre-done',
+      't-proc-active',
+    ]);
+
+    // Non-invoice in processing phase: Completed pre_processing task is filtered out (excluded)
+    for (const recordType of ['disbursement', 'document', 'transmittal'] as const) {
+      const { result: nonInv } = renderHook(
+        () =>
+          useSelectableTasks({
+            workRequestId: WR_ID,
+            workRequestPhase: 'processing',
+            recordType,
+          }),
+        { wrapper }
+      );
+      expect(nonInv.current.options.some((o) => o.id === 't-pre-done')).toBe(false);
+      expect(nonInv.current.selectableOptions.map((o) => o.id)).toEqual(['t-proc-active']);
+    }
+  });
+
+  it('disables task with incomplete predecessor in predecessors with "(Locked: Waiting on prerequisite task)"', () => {
+    mockTasks = [
+      createTestTask({
+        id: 't-pred',
+        title: 'Prerequisite Task',
+        status: 'In Progress',
+        phase: 'pre_processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+      createTestTask({
+        id: 't-dep',
+        title: 'Dependent Task',
+        status: 'Assigned',
+        phase: 'pre_processing',
+        predecessors: ['t-pred'],
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+    ];
+
+    const { result } = renderHook(
+      () =>
+        useSelectableTasks({
+          workRequestId: WR_ID,
+          workRequestPhase: 'pre_processing',
+          recordType: 'disbursement',
+        }),
+      { wrapper }
+    );
+
+    const predOpt = result.current.options.find((o) => o.id === 't-pred');
+    const depOpt = result.current.options.find((o) => o.id === 't-dep');
+
+    expect(predOpt?.disabled).toBe(false);
+    expect(depOpt?.disabled).toBe(true);
+    expect(depOpt?.isPrereqLocked).toBe(true);
+    expect(depOpt?.label).toBe(
+      'Dependent Task — Alice Santos (Locked: Waiting on prerequisite task)'
+    );
+  });
+
+  it('triggers blocking state 3 (phase_or_prereq_locked) when user has assigned tasks but all are locked by phase or prerequisite', () => {
+    mockTasks = [
+      createTestTask({
+        id: 't-future',
+        title: 'Future Processing Task',
+        status: 'Assigned',
+        phase: 'processing',
+        assigneeId: USER_ALICE,
+        assigneeName: 'Alice Santos',
+        assignees: [USER_ALICE],
+      }),
+    ];
+
+    const { result } = renderHook(
+      () =>
+        useSelectableTasks({
+          workRequestId: WR_ID,
+          workRequestPhase: 'pre_processing',
+          recordType: 'invoice',
+        }),
+      { wrapper }
+    );
+
+    expect(result.current.blockingReason).toBe('phase_or_prereq_locked');
+    expect(result.current.isPhaseOrPrereqBlocked).toBe(true);
+    expect(result.current.isNoTasksBlocked).toBe(false);
+    expect(result.current.isNotAssignedBlocked).toBe(false);
+    expect(result.current.isBlocked).toBe(true);
+    expect(result.current.blockingMessage).toBe(
+      'No tasks are available in the current phase yet — complete the active phase or prerequisite tasks first.'
+    );
+  });
 });

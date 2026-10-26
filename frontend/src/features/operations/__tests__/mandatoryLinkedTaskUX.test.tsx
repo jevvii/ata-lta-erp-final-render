@@ -7,12 +7,15 @@ import { InvoiceCreateModal } from '@/features/billing/components/InvoiceCreateM
 import { CreateDisbursementModal } from '@/features/disbursements/components/CreateDisbursementModal';
 import { DocumentUploadModal } from '@/features/documents/components/DocumentUploadModal';
 import { TransmittalFormModal } from '@/features/transmittals/components/TransmittalFormModal';
+import { TaskDetailModal } from '@/features/operations/components/TaskDetailModal';
+import type { Task, WorkRequest } from '@/features/operations/api/types';
 
 const CLIENT_ID = '11111111-1111-4111-8111-111111111111';
 const WR_EMPTY = '22222222-2222-4222-8222-000000000000';
 const WR_SINGLE = '22222222-2222-4222-8222-111111111111';
 const WR_MULTI = '22222222-2222-4222-8222-222222222222';
 const WR_UNASSIGNED = '22222222-2222-4222-8222-333333333333';
+const WR_PHASE_LOCKED = '22222222-2222-4222-8222-444444444444';
 
 const USER_STAFF_ID = 'user-staff-id';
 const USER_OTHER_ID = 'user-other-id';
@@ -22,6 +25,7 @@ const TASK_SINGLE = '44444444-4444-4444-8444-111111111111';
 const TASK_MULTI_1 = '44444444-4444-4444-8444-222222222221';
 const TASK_MULTI_2 = '44444444-4444-4444-8444-222222222222';
 const TASK_FOREIGN = '44444444-4444-4444-8444-333333333333';
+const TASK_FUTURE_PHASE = '44444444-4444-4444-8444-444444444444';
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
@@ -120,13 +124,28 @@ function setupMocks() {
               },
             ]);
           }
+          if (url.includes(WR_PHASE_LOCKED)) {
+            return respond([
+              {
+                id: TASK_FUTURE_PHASE,
+                workRequestId: WR_PHASE_LOCKED,
+                title: 'Future Processing Task',
+                status: 'Assigned',
+                phase: 'processing',
+                assigneeId: USER_STAFF_ID,
+                assigneeName: 'Juan Dela Cruz',
+                assignees: [USER_STAFF_ID],
+              },
+            ]);
+          }
         }
 
         return respond([
-          { id: WR_EMPTY, title: 'WR Empty Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress' },
-          { id: WR_SINGLE, title: 'WR Single Task', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress' },
-          { id: WR_MULTI, title: 'WR Multi Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress' },
-          { id: WR_UNASSIGNED, title: 'WR Unassigned', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress' },
+          { id: WR_EMPTY, title: 'WR Empty Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
+          { id: WR_SINGLE, title: 'WR Single Task', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
+          { id: WR_MULTI, title: 'WR Multi Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
+          { id: WR_UNASSIGNED, title: 'WR Unassigned', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
+          { id: WR_PHASE_LOCKED, title: 'WR Phase Locked', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
         ]);
       }
 
@@ -255,6 +274,24 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
       expect(alert).toHaveTextContent(
         /You're not assigned to any task on this work request\. Ask the task owner or an Admin to add you\./i
       );
+
+      const submitBtn = screen.getByTestId('btn-submit-invoice');
+      expect(submitBtn).toBeDisabled();
+    });
+
+    it('shows blocking state 3 (phase_or_prereq_locked) with WR link and disables submit when all assigned tasks are phase/prereq locked', async () => {
+      render(
+        <InvoiceCreateModal isOpen onClose={vi.fn()} prefill={{ workRequestId: WR_PHASE_LOCKED, clientId: CLIENT_ID }} />,
+        { wrapper }
+      );
+
+      const alert = await screen.findByTestId('task-blocking-alert');
+      expect(alert).toHaveTextContent(
+        /No tasks are available in the current phase yet — complete the active phase or prerequisite tasks first\./i
+      );
+      const wrLink = screen.getByTestId('task-blocking-wr-link');
+      expect(wrLink).toHaveAttribute('href', expect.stringContaining(WR_PHASE_LOCKED));
+      expect(wrLink).toHaveTextContent(/Go to Work Request →/i);
 
       const submitBtn = screen.getByTestId('btn-submit-invoice');
       expect(submitBtn).toBeDisabled();
@@ -464,6 +501,90 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
         const taskTrigger = screen.getByTestId('task-select');
         expect(taskTrigger.textContent).toContain('Only Single Task');
       });
+    });
+  });
+
+  describe('5. TaskDetailModal Shortcut Buttons (Q7 Consistency)', () => {
+    it('enables + Invoice on completed pre_processing task when WR is in processing, while disabling + Disbursement, + Transmittal, and Upload Document', async () => {
+      useSessionStore.getState().setSession({
+        user: {
+          id: USER_ADMIN_ID,
+          email: 'admin@ata-lta.ph',
+          name: 'Admin Boss',
+          role: 'Admin',
+          departments: ['Management', 'Accounting', 'Documentation'],
+          entities: ['ATA'],
+        },
+        permissions: [
+          'workflow:view',
+          'workflow:edit',
+          'workflow:task_upload',
+          'billing:create',
+          'billing:edit',
+          'disbursement:create',
+          'disbursement:edit',
+          'transmittal:create',
+          'transmittal:edit',
+          'dms:edit',
+        ],
+        activeEntity: 'ATA',
+      });
+
+      const taskObj: Task = {
+        id: TASK_SINGLE,
+        workRequestId: WR_SINGLE,
+        title: 'Completed Pre-proc Task',
+        description: null,
+        status: 'Completed',
+        phase: 'pre_processing',
+        qaStatus: 'none',
+        phaseEnteredAt: null,
+        assigneeId: USER_STAFF_ID,
+        assigneeName: 'Juan Dela Cruz',
+        assignees: [USER_STAFF_ID],
+        predecessors: [],
+        dueDate: null,
+        requiredLinkType: null,
+        displayOrder: 1,
+        version: 1,
+        createdAt: '',
+        updatedAt: '',
+      };
+
+      const wrObj: WorkRequest = {
+        id: WR_SINGLE,
+        entity: 'ATA',
+        title: 'WR Single Task',
+        description: null,
+        clientId: CLIENT_ID,
+        status: 'In Progress',
+        phase: 'processing',
+        onHold: false,
+        phaseEnteredAt: null,
+        priority: 'Normal',
+        archived: false,
+        requestedBy: null,
+        assignedTo: USER_STAFF_ID,
+        coAssignees: [],
+        dueDate: null,
+        createdAt: '',
+        updatedAt: '',
+        version: 1,
+      };
+
+      render(<TaskDetailModal isOpen onClose={vi.fn()} task={taskObj} workRequest={wrObj} />, {
+        wrapper,
+      });
+
+      const invBtn = await screen.findByTestId('link-invoice-btn');
+      const disbBtn = screen.getByTestId('link-disbursement-btn');
+      const transBtn = screen.getByTestId('link-transmittal-btn');
+      const uploadBtn = screen.getByTestId('task-upload-doc-btn');
+
+      expect(invBtn).not.toBeDisabled();
+      expect(disbBtn).toBeDisabled();
+      expect(transBtn).toBeDisabled();
+      expect(uploadBtn).toBeDisabled();
     });
   });
 });
