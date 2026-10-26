@@ -195,6 +195,31 @@ const toApiTask = (
             ? [row.assignee_id]
             : [];
 
+  // Unified, de-duplicated assignee list (primary first) with display names.
+  // Additive field for task pickers; does not change `assignees` semantics.
+  const assigneeDetails = [];
+  if (row.assignee_id) {
+    assigneeDetails.push({
+      userId: row.assignee_id,
+      user_id: row.assignee_id,
+      userName: row.assignee_name || null,
+      user_name: row.assignee_name || null,
+      isPrimary: true,
+    });
+  }
+  (taskAssignees || []).forEach((ta) => {
+    const taId = ta.userId || ta.user_id;
+    if (taId && !assigneeDetails.some((a) => a.userId === taId)) {
+      assigneeDetails.push({
+        userId: taId,
+        user_id: taId,
+        userName: ta.userName || ta.user_name || null,
+        user_name: ta.userName || ta.user_name || null,
+        isPrimary: false,
+      });
+    }
+  });
+
   return {
     id: row.id,
     workRequestId: row.work_request_id,
@@ -212,6 +237,8 @@ const toApiTask = (
     relational_assignees: row.relational_assignees || resolvedAssignees,
     taskAssignees: taskAssignees,
     task_assignees: taskAssignees,
+    assigneeDetails,
+    assignee_details: assigneeDetails,
     predecessors: row.predecessors || [],
     predecessorDetails: (row.predecessors || []).map((pId) => {
       const p = predMap?.get ? predMap.get(pId) : null;
