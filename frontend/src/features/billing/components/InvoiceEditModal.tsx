@@ -17,6 +17,8 @@ import {
 import { useClients, type ClientSummary } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
+import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import {
   isTaskAssignee,
@@ -67,22 +69,70 @@ export function InvoiceEditModal({
   const originEntity = invoice?.entity_id || effectiveEntity;
 
   const canEditFinancials = isAdmin || invoice?.status === 'Draft';
-  const [printDetails, setPrintDetails] = useState<InvoicePrintDetails>({});
-  const [address, setAddress] = useState('');
+  const [printDetails, setPrintDetails] = useState<InvoicePrintDetails>(() =>
+    invoice?.print_details ? { ...invoice.print_details } : {}
+  );
+  const [address, setAddress] = useState(
+    () => invoice?.address ?? invoice?.clients?.address ?? ''
+  );
 
-  // Form Fields
-  const [clientId, setClientId] = useState('');
-  const [workRequestId, setWorkRequestId] = useState('');
-  const [selectedTaskId, setSelectedTaskId] = useState('');
-  const [originTaskId, setOriginTaskId] = useState('');
-  const [originWrId, setOriginWrId] = useState('');
-  const [storedLinkageError, setStoredLinkageError] = useState<string | null>(null);
-  const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [issueDate, setIssueDate] = useState('');
-  const [dueDate, setDueDate] = useState('');
-  const [notes, setNotes] = useState('');
-  const [terms, setTerms] = useState('');
-  const [currentVersion, setCurrentVersion] = useState<number>(1);
+  const initialTaskInfo = useMemo(() => {
+    if (!invoice) return { taskId: '', linkageError: null as string | null };
+    const rawCanonical = (invoice as { task_id?: string | null }).task_id;
+    const rawLegacy =
+      invoice.linked_task_id ??
+      (invoice as { linkedTaskId?: string | null }).linkedTaskId ??
+      null;
+    const hasCanonical = rawCanonical !== undefined && rawCanonical !== null;
+    const hasLegacy = rawLegacy !== undefined && rawLegacy !== null;
+    if (hasCanonical && hasLegacy) {
+      const c = String(rawCanonical).trim();
+      const l = String(rawLegacy).trim();
+      if (c && l && c !== l) {
+        return {
+          taskId: c,
+          linkageError:
+            'Stored task linkage is corrupt: canonical task_id conflicts with legacy linked_task_id.',
+        };
+      } else if (c === '') {
+        return { taskId: l, linkageError: 'Stored canonical task_id is malformed.' };
+      }
+      return { taskId: c, linkageError: null };
+    } else if (hasCanonical) {
+      const c = String(rawCanonical).trim();
+      return { taskId: c, linkageError: c === '' ? 'Stored canonical task_id is malformed.' : null };
+    } else if (hasLegacy) {
+      const l = String(rawLegacy).trim();
+      return { taskId: l, linkageError: l === '' ? 'Stored legacy linked_task_id is malformed.' : null };
+    }
+    return { taskId: '', linkageError: null };
+  }, [invoice]);
+
+  // Form Fields initialized from invoice prop
+  const [clientId, setClientId] = useState(() => invoice?.client_id || '');
+  const [workRequestId, setWorkRequestId] = useState(
+    () => invoice?.work_request_id || (invoice as { workRequestId?: string })?.workRequestId || ''
+  );
+  const [selectedTaskId, setSelectedTaskId] = useState(() => initialTaskInfo.taskId);
+  const [originTaskId, setOriginTaskId] = useState(() => initialTaskInfo.taskId);
+  const [originWrId, setOriginWrId] = useState(
+    () => invoice?.work_request_id || (invoice as { workRequestId?: string })?.workRequestId || ''
+  );
+  const [storedLinkageError, setStoredLinkageError] = useState<string | null>(
+    () => initialTaskInfo.linkageError
+  );
+  const [invoiceNumber, setInvoiceNumber] = useState(() => invoice?.invoice_number || '');
+  const [issueDate, setIssueDate] = useState(() =>
+    invoice?.issue_date ? invoice.issue_date.slice(0, 10) : ''
+  );
+  const [dueDate, setDueDate] = useState(() =>
+    invoice?.due_date ? invoice.due_date.slice(0, 10) : ''
+  );
+  const [notes, setNotes] = useState(() => invoice?.notes || '');
+  const [terms, setTerms] = useState(() => invoice?.terms || '');
+  const [currentVersion, setCurrentVersion] = useState<number>(() =>
+    typeof invoice?.version === 'number' && invoice.version > 0 ? invoice.version : 1
+  );
   const [formError, setFormError] = useState<string | null>(null);
 
   // Authoritative origin task query (independently scoped with exact entity/WR)
@@ -241,23 +291,23 @@ export function InvoiceEditModal({
     return [];
   }, [workRequestsData]);
 
-  // Work Request Tasks query (entity-scoped, excludes placeholder data)
-  const tasksQuery = useWorkRequestTasks(workRequestId || undefined, {
-    enabled: isOpen && Boolean(workRequestId),
-    entity: effectiveEntity,
+  // Work Request Tasks query & selectability hook
+  const {
+    tasksQuery,
+    options: taskOptions,
+    isBlocked: isTaskBlocked,
+    isNoTasksBlocked,
+    isNotAssignedBlocked,
+  } = useSelectableTasks({
+    workRequestId: workRequestId || undefined,
+    recordType: 'invoice',
+    isOpen,
+    entity: originEntity,
+    currentTaskId: originTaskId,
+    selectedTaskId,
+    onSelectTask: (taskId) => setSelectedTaskId(taskId),
+    isTaskLocked: !canEditFinancials,
   });
-  const tasks = useMemo(() => {
-    if (tasksQuery.isPlaceholderData) return [];
-    const list = tasksQuery.data || [];
-    if (!workRequestId) return [];
-    return list.filter((t) => isTaskOfWorkRequest(t, workRequestId));
-  }, [tasksQuery.isPlaceholderData, tasksQuery.data, workRequestId]);
-
-  const availableTasks = useMemo(() => {
-    if (!workRequestId) return [];
-    if (isAdmin) return tasks;
-    return tasks.filter((t) => isTaskAssignee(currentUser, t));
-  }, [tasks, workRequestId, isAdmin, currentUser]);
 
   const handleClientChange = (newClientId: string) => {
     if (!newClientId) return;
@@ -490,6 +540,11 @@ export function InvoiceEditModal({
       }
     }
 
+    if (workRequestId && !selectedTaskId) {
+      setFormError('A valid linked task is required when a work request is associated.');
+      return;
+    }
+
     const payload: UpdateInvoiceInput = {
       ...(isAdmin ? { printDetails, address } : {}),
       clientId,
@@ -528,7 +583,21 @@ export function InvoiceEditModal({
         );
         return;
       }
-      setFormError((err as Error)?.message || 'Failed to update invoice');
+      const apiErr = err as { code?: string; message?: string };
+      if (apiErr?.code === 'TASK_REQUIRED') {
+        setFormError('A valid linked task is required.');
+      } else if (apiErr?.code === 'TASK_WR_MISMATCH') {
+        setFormError('Task does not belong to work request.');
+      } else if (apiErr?.code === 'TASK_NOT_SELECTABLE') {
+        setFormError('Selected task is not selectable.');
+      } else if (
+        apiErr?.code === 'TASK_ASSIGNMENT_REQUIRED' ||
+        apiErr?.code === 'FORBIDDEN_TASK_ATTACHMENT'
+      ) {
+        setFormError('You must be assigned to this task.');
+      } else {
+        setFormError((err as Error)?.message || 'Failed to update invoice');
+      }
     }
   };
 
@@ -684,12 +753,12 @@ export function InvoiceEditModal({
               htmlFor="edit-invoice-task"
               className="text-xs font-semibold text-[#1E293B] block mb-1"
             >
-              Linked Task (Optional)
+              Linked Task{workRequestId ? '*' : ' (Optional)'}
             </label>
             <Select
               value={selectedTaskId || '__none__'}
               onValueChange={(val) => setSelectedTaskId(val === '__none__' ? '' : val)}
-              disabled={!canEditFinancials || !workRequestId}
+              disabled={!canEditFinancials || !workRequestId || (isTaskBlocked && !originTaskId)}
             >
               <SelectTrigger
                 id="edit-invoice-task"
@@ -698,20 +767,22 @@ export function InvoiceEditModal({
               >
                 <SelectValue
                   placeholder={
-                    !workRequestId ? 'Select work request first...' : 'Select task (optional)...'
+                    !workRequestId ? 'Select work request first...' : 'Select task...'
                   }
                 />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="__none__">None (No linked task)</SelectItem>
-                {selectedTaskId && !availableTasks.some((task) => task.id === selectedTaskId) && (
+                {!workRequestId && (
+                  <SelectItem value="__none__">None (No linked task)</SelectItem>
+                )}
+                {selectedTaskId && !taskOptions.some((task) => task.id === selectedTaskId) && (
                   <SelectItem value={selectedTaskId}>
                     {originTask?.title ? `${originTask.title} (Current)` : selectedTaskId}
                   </SelectItem>
                 )}
-                {availableTasks.map((task) => (
-                  <SelectItem key={task.id} value={task.id}>
-                    {task.title}
+                {taskOptions.map((opt) => (
+                  <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId}>
+                    {opt.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -779,6 +850,12 @@ export function InvoiceEditModal({
             </div>
           </div>
         </div>
+
+        <TaskBlockingAlert
+          isNoTasksBlocked={isNoTasksBlocked}
+          isNotAssignedBlocked={isNotAssignedBlocked}
+          workRequestId={workRequestId}
+        />
 
         {/* 2. Dynamic Line Items Section */}
         <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
@@ -1005,8 +1082,8 @@ export function InvoiceEditModal({
           <Button
             type="submit"
             size="sm"
-            disabled={!canEditFinancials}
-            className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs text-xs cursor-pointer disabled:opacity-50"
+            disabled={!canEditFinancials || Boolean(workRequestId && isTaskBlocked && selectedTaskId !== originTaskId)}
+            className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs text-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="btn-save-invoice-edit"
           >
             Save Changes

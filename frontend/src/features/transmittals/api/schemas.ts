@@ -67,9 +67,7 @@ export const createTransmittalSchema = z
       .nullable(),
     linkedTaskId: z
       .string()
-      .uuid('Linked task ID must be a valid UUID')
-      .optional()
-      .nullable(),
+      .uuid('Linked task ID must be a valid UUID'),
     boardOrder: z.number().int().optional().default(0),
     status: z.never({ message: 'status forgery is prohibited: server assigns initial Draft status' }).optional(),
   })
@@ -114,7 +112,13 @@ export const updateTransmittalSchema = z.object({
     .nullable(),
   boardOrder: z.number().int().optional(),
   expectedVersion: z.number().int().positive().optional(),
-});
+}).refine(
+  (data) => !data.workRequestId || Boolean(data.linkedTaskId),
+  {
+    message: 'Linked task is required when a work request is associated',
+    path: ['linkedTaskId'],
+  }
+);
 
 /**
  * Schema for send action body.

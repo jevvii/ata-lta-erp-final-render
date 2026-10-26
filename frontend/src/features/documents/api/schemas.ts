@@ -47,28 +47,38 @@ export const documentVersionSchema = z.object({
   uploadDate: z.string().min(1),
 });
 
-export const createDocumentSchema = z.object({
-  fileName: z.string().min(1, 'File name is required').max(255),
-  contentType: z.string().min(1).max(100).nullable().optional(),
-  fileSize: z
-    .number()
-    .int()
-    .min(0)
-    .max(
-      MAX_FILE_SIZE_BYTES,
-      `File size exceeds maximum allowed limit of ${MAX_FILE_SIZE_BYTES} bytes`
-    )
-    .nullable()
-    .optional(),
-  originalName: z.string().max(255).optional(),
-  workRequestId: z.string().uuid('Invalid work request ID').nullable().optional(),
-  linkedTaskId: z.string().uuid('Invalid task ID').nullable().optional(),
-  clientId: z.string().uuid('Invalid client ID').nullable().optional(),
-  documentType: z.string().max(100).optional(),
-  category: z.enum(ALL_DOCUMENT_CATEGORIES).optional(),
-  description: z.string().max(2000).optional(),
-  externalUrl: z.string().max(2000).nullable().optional(),
-});
+export const createDocumentSchema = z
+  .object({
+    fileName: z.string().min(1, 'File name is required').max(255),
+    contentType: z.string().min(1).max(100).nullable().optional(),
+    fileSize: z
+      .number()
+      .int()
+      .min(0)
+      .max(
+        MAX_FILE_SIZE_BYTES,
+        `File size exceeds maximum allowed limit of ${MAX_FILE_SIZE_BYTES} bytes`
+      )
+      .nullable()
+      .optional(),
+    originalName: z.string().max(255).optional(),
+    workRequestId: z.string().uuid('Invalid work request ID').nullable().optional(),
+    linkedTaskId: z.string().uuid('Invalid task ID').nullable().optional(),
+    taskId: z.string().uuid('Invalid task ID').nullable().optional(),
+    task_id: z.string().uuid('Invalid task ID').nullable().optional(),
+    clientId: z.string().uuid('Invalid client ID').nullable().optional(),
+    documentType: z.string().max(100).optional(),
+    category: z.enum(ALL_DOCUMENT_CATEGORIES).optional(),
+    description: z.string().max(2000).optional(),
+    externalUrl: z.string().max(2000).nullable().optional(),
+  })
+  .refine(
+    (data) => !data.workRequestId || Boolean(data.linkedTaskId || data.taskId || data.task_id),
+    {
+      message: 'Linked task is required when a work request is selected',
+      path: ['linkedTaskId'],
+    }
+  );
 
 export const updateDocumentSchema = z.object({
   documentType: z.string().max(100).optional(),

@@ -47,12 +47,11 @@ import {
 } from '@/components/ui/select';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
+import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { useCreateTransmittal, useUpdateTransmittal } from '../api/useTransmittals';
 import { DOCUMENT_CATEGORIES } from '../api/schemas';
 import type { Transmittal, CreateTransmittalItemInput } from '../api/types';
-import { useSessionStore } from '@/lib/session';
-import { isTaskAssignee, isUserAdmin } from '@/features/operations/lib/taskScope';
 
 /**
  * Frozen Financial Prefill Contract (UAT2-7-contract-side)
@@ -86,14 +85,6 @@ export function TransmittalFormModal({
   prefill,
 }: TransmittalFormModalProps) {
   const isEditMode = Boolean(transmittalToEdit);
-
-  const user = useSessionStore((state) => state.user);
-  const isAdmin = isUserAdmin(user);
-  const isDocUser = !isAdmin && Boolean(
-    (Array.isArray(user?.departments) &&
-      user.departments.some((d) => String(d).toLowerCase() === 'documentation')) ||
-    String(user?.role || '').toLowerCase() === 'documentation'
-  );
 
   const createMutation = useCreateTransmittal();
   const updateMutation = useUpdateTransmittal();
@@ -130,19 +121,37 @@ export function TransmittalFormModal({
   // Form validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Tasks query for selected work request
-  const { data: tasksData } = useWorkRequestTasks(workRequestId || undefined, {
-    enabled: isOpen && Boolean(workRequestId),
-  });
-  const tasks = React.useMemo(() => tasksData || [], [tasksData]);
+  const isClientLocked = Boolean(!isEditMode && (prefill?.workRequestId || prefill?.clientId));
+  const isWrLocked = Boolean(!isEditMode && prefill?.workRequestId);
+  const isTaskLocked = Boolean(!isEditMode && prefill?.taskId);
 
-  // Filter available tasks: For Documentation users, only tasks where caller is assigned
-  const availableTasks = React.useMemo(() => {
-    if (isDocUser) {
-      return tasks.filter((task) => isTaskAssignee(user, task));
-    }
-    return tasks;
-  }, [tasks, isDocUser, user]);
+  const originTaskId = transmittalToEdit
+    ? (transmittalToEdit.linked_task_id || transmittalToEdit.linkedTaskId || null)
+    : null;
+
+  const {
+    options: taskOptions,
+    isBlocked: isTaskBlocked,
+    isNoTasksBlocked,
+    isNotAssignedBlocked,
+  } = useSelectableTasks({
+    workRequestId: workRequestId || undefined,
+    recordType: 'transmittal',
+    isOpen,
+    currentTaskId: originTaskId,
+    selectedTaskId,
+    onSelectTask: (taskId) => {
+      setSelectedTaskId(taskId);
+      if (errors.selectedTaskId) {
+        setErrors((prev) => {
+          const next = { ...prev };
+          delete next.selectedTaskId;
+          return next;
+        });
+      }
+    },
+    isTaskLocked,
+  });
 
   // Reset or Populate form on open/change
   useEffect(() => {
@@ -216,6 +225,20 @@ export function TransmittalFormModal({
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
     setSelectedTaskId('');
+    if (errors.workRequestId) {
+      setErrors((prev) => {
+        const copy = { ...prev };
+        delete copy.workRequestId;
+        return copy;
+      });
+    }
+    if (errors.selectedTaskId) {
+      setErrors((prev) => {
+        const copy = { ...prev };
+        delete copy.selectedTaskId;
+        return copy;
+      });
+    }
     if (!prefill?.clientId) {
       const matchedWr = workRequests.find((w) => w.id === newWrId);
       if (matchedWr?.client_id) {
@@ -223,10 +246,6 @@ export function TransmittalFormModal({
       }
     }
   };
-
-  const isClientLocked = Boolean(!isEditMode && (prefill?.workRequestId || prefill?.clientId));
-  const isWrLocked = Boolean(!isEditMode && prefill?.workRequestId);
-  const isTaskLocked = Boolean(!isEditMode && prefill?.taskId);
 
   // Line Items Controls
   const handleAddItem = () => {
@@ -293,12 +312,16 @@ export function TransmittalFormModal({
       newErrors.items = 'All document rows must have a valid description';
     }
 
-    if (isDocUser) {
+    if (workRequestId) {
       if (!selectedTaskId) {
-        newErrors.selectedTaskId = 'Task selection is required for Documentation users';
+        newErrors.selectedTaskId = 'A valid linked task is required';
+      } else if (isTaskBlocked && selectedTaskId !== originTaskId) {
+        newErrors.selectedTaskId = isNoTasksBlocked
+          ? 'This work request has no tasks — create one first'
+          : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
       } else {
-        const found = tasks.find((t) => t.id === selectedTaskId);
-        if (found && !isTaskAssignee(user, found)) {
+        const found = taskOptions.find((t) => t.id === selectedTaskId);
+        if (found && found.disabled && found.id !== originTaskId) {
           newErrors.selectedTaskId = 'You are not assigned to this task';
         }
       }
@@ -343,8 +366,17 @@ export function TransmittalFormModal({
         });
       }
       onClose();
-    } catch {
-      // Error handled by BlockingActionModal
+    } catch (err: unknown) {
+      const errCode = (err as { code?: string })?.code;
+      if (errCode === 'TASK_REQUIRED') {
+        setErrors((prev) => ({ ...prev, selectedTaskId: 'A valid linked task is required' }));
+      } else if (errCode === 'TASK_WR_MISMATCH') {
+        setErrors((prev) => ({ ...prev, selectedTaskId: 'Selected task does not belong to the selected work request' }));
+      } else if (errCode === 'TASK_NOT_SELECTABLE') {
+        setErrors((prev) => ({ ...prev, selectedTaskId: 'Selected task is not selectable' }));
+      } else if (errCode === 'TASK_ASSIGNMENT_REQUIRED' || errCode === 'FORBIDDEN_TASK_ATTACHMENT') {
+        setErrors((prev) => ({ ...prev, selectedTaskId: 'You are not assigned to this task' }));
+      }
     }
   };
 
@@ -465,10 +497,10 @@ export function TransmittalFormModal({
                 className="text-xs font-semibold flex items-center gap-1 text-[#1E293B]"
               >
                 <Briefcase className="h-3.5 w-3.5" />
-                Linked Task {isDocUser ? '*' : '(Optional)'}
+                Linked Task {workRequestId ? '*' : '(Optional)'}
               </Label>
               <Select
-                value={selectedTaskId || (isDocUser ? undefined : '__none__')}
+                value={selectedTaskId || '__none__'}
                 onValueChange={(val) => {
                   setSelectedTaskId(val === '__none__' ? '' : val);
                   if (errors.selectedTaskId) {
@@ -479,28 +511,24 @@ export function TransmittalFormModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !workRequestId}
+                disabled={isTaskLocked || !workRequestId || (isTaskBlocked && selectedTaskId !== originTaskId)}
               >
                 <SelectTrigger id="workRequestTask" className="text-xs" data-testid="task-select">
                   <SelectValue
                     placeholder={
                       !workRequestId
                         ? 'Select work request first...'
-                        : isDocUser
-                          ? availableTasks.length === 0
-                            ? 'No assigned tasks available'
-                            : 'Select linked task (required)...'
-                          : 'Select linked task (optional)...'
+                        : 'Select task...'
                     }
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__" disabled={isDocUser}>
-                    None (No linked task)
-                  </SelectItem>
-                  {availableTasks.map((task) => (
-                    <SelectItem key={task.id} value={task.id}>
-                      {task.title}
+                  {!workRequestId && (
+                    <SelectItem value="__none__">None (No linked task)</SelectItem>
+                  )}
+                  {taskOptions.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId}>
+                      {opt.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -511,6 +539,14 @@ export function TransmittalFormModal({
                   {errors.selectedTaskId}
                 </p>
               )}
+            </div>
+
+            <div className="md:col-span-2">
+              <TaskBlockingAlert
+                isNoTasksBlocked={isNoTasksBlocked}
+                isNotAssignedBlocked={isNotAssignedBlocked}
+                workRequestId={workRequestId}
+              />
             </div>
 
             {/* Recipient Person Name */}
@@ -692,7 +728,8 @@ export function TransmittalFormModal({
             </Button>
             <Button
               type="submit"
-              className="h-8 text-xs bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs font-medium"
+              disabled={createMutation.isPending || updateMutation.isPending || Boolean(workRequestId && isTaskBlocked && selectedTaskId !== originTaskId)}
+              className="h-8 text-xs bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="submit-transmittal-btn"
             >
               {isEditMode ? 'Save Changes' : 'Create Transmittal'}

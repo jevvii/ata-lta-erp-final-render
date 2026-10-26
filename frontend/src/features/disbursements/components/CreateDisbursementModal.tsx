@@ -21,8 +21,9 @@ import {
 } from '../api/useDisbursements';
 import { apiRequest, ApiError } from '@/lib/api';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
+import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import {
   isTaskAssignee,
   isRoleAdmin,
@@ -52,6 +53,7 @@ export interface CreateDisbursementModalProps {
   prefill?: FinancialPrefill;
   defaultWorkRequestId?: string;
   defaultClientId?: string;
+  defaultTaskId?: string;
 }
 
 // Keep an uncertain submission blocked across attachment replacement, modal reopen and page refresh.
@@ -121,6 +123,7 @@ export function CreateDisbursementModal({
   prefill,
   defaultWorkRequestId = '',
   defaultClientId = '',
+  defaultTaskId = '',
 }: CreateDisbursementModalProps) {
   const { createWithBlocking, isPending } = useCreateDisbursement();
   const { data: team = [] } = useTeam();
@@ -133,7 +136,7 @@ export function CreateDisbursementModal({
     prefill?.workRequestId || defaultWorkRequestId || ''
   );
   const [clientId, setClientId] = useState(prefill?.clientId || defaultClientId || '');
-  const [selectedTaskId, setSelectedTaskId] = useState(prefill?.taskId || '');
+  const [selectedTaskId, setSelectedTaskId] = useState(prefill?.taskId || defaultTaskId || '');
   const [employeeId, setEmployeeId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
@@ -399,7 +402,7 @@ export function CreateDisbursementModal({
     if (isOpen && !wasOpen) {
       setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
       setClientId(prefill?.clientId || defaultClientId || '');
-      setSelectedTaskId(prefill?.taskId || '');
+      setSelectedTaskId(prefill?.taskId || defaultTaskId || '');
       setEmployeeId('');
       setReceiptFile(null);
       setReceiptFilename('');
@@ -443,6 +446,7 @@ export function CreateDisbursementModal({
     prefill?.taskId,
     defaultWorkRequestId,
     defaultClientId,
+    defaultTaskId,
     linkedWorkRequestId,
     clientId,
     selectedTaskId,
@@ -462,26 +466,27 @@ export function CreateDisbursementModal({
     return undefined;
   }, [activeEntity, selectedWr?.entity]);
 
-  // WR-Task query (UAT2-12: populated dynamically from useWorkRequestTasks with entity scoping)
-  const tasksQuery = useWorkRequestTasks(linkedWorkRequestId || undefined, {
-    enabled: canFetch && Boolean(linkedWorkRequestId),
+  const isWrLocked = Boolean(prefill?.workRequestId);
+  const isTaskLocked = Boolean(prefill?.taskId || defaultTaskId);
+
+  // WR-Task query & selectability hook
+  const {
+    tasksQuery,
+    allWrTasks: tasks,
+    options: taskOptions,
+    isBlocked: isTaskBlocked,
+    isNoTasksBlocked,
+    isNotAssignedBlocked,
+  } = useSelectableTasks({
+    workRequestId: linkedWorkRequestId || undefined,
+    recordType: 'disbursement',
+    isOpen: canFetch,
     entity: resolvedTargetEntity,
+    currentTaskId: prefill?.taskId || defaultTaskId || null,
+    selectedTaskId,
+    onSelectTask: (taskId) => setSelectedTaskId(taskId),
+    isTaskLocked,
   });
-
-  // Exclude placeholder data and tasks without matching parent work request
-  const tasks: Task[] = React.useMemo(() => {
-    if (tasksQuery.isPlaceholderData) return [];
-    const list = tasksQuery.data || [];
-    if (!linkedWorkRequestId) return [];
-    return list.filter((t) => isTaskOfWorkRequest(t, linkedWorkRequestId));
-  }, [tasksQuery.isPlaceholderData, tasksQuery.data, linkedWorkRequestId]);
-
-  // Standalone task options: non-admins only see tasks where they are assigned/co-assigned
-  const availableTasks = React.useMemo(() => {
-    if (!linkedWorkRequestId) return [];
-    if (isAdmin) return tasks;
-    return tasks.filter((t) => isTaskAssignee(currentUser, t));
-  }, [tasks, linkedWorkRequestId, isAdmin, currentUser]);
 
   const targetGenerationRef = React.useRef(0);
   const formSeed = JSON.stringify([
@@ -583,9 +588,6 @@ export function CreateDisbursementModal({
     }
   };
 
-  const isWrLocked = Boolean(prefill?.workRequestId);
-  const isTaskLocked = Boolean(prefill?.taskId);
-
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
 
@@ -614,11 +616,17 @@ export function CreateDisbursementModal({
       }
     }
 
-    if (selectedTaskId.trim()) {
+    if (!selectedTaskId.trim()) {
+      newErrors.selectedTaskId = 'Linked task is required';
+    } else if (isTaskBlocked) {
+      newErrors.selectedTaskId = isNoTasksBlocked
+        ? 'This work request has no tasks — create one first'
+        : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.";
+    } else {
       const trimmedTask = selectedTaskId.trim();
-      if (tasksQuery.isLoading || (tasksQuery.isFetching && tasks.length === 0)) {
+      if (!isTaskLocked && (tasksQuery.isLoading || (tasksQuery.isFetching && tasks.length === 0))) {
         newErrors.selectedTaskId = 'Tasks are still loading. Please wait.';
-      } else {
+      } else if (tasks.length > 0) {
         const foundTask = tasks.find((t) => t.id === trimmedTask);
         if (!foundTask || !isTaskOfWorkRequest(foundTask, linkedWorkRequestId)) {
           newErrors.selectedTaskId = 'Selected task does not belong to the selected work request';
@@ -906,6 +914,17 @@ export function CreateDisbursementModal({
         if (rejected) markPendingCreate(pendingCreateKey, false);
         if (!isStale()) setNeedsCreateReview(!rejected);
 
+        const errCode = (error as { code?: string })?.code;
+        if (errCode === 'TASK_REQUIRED') {
+          setErrors((prev) => ({ ...prev, selectedTaskId: 'A valid linked task is required' }));
+        } else if (errCode === 'TASK_WR_MISMATCH') {
+          setErrors((prev) => ({ ...prev, selectedTaskId: 'Selected task does not belong to the selected work request' }));
+        } else if (errCode === 'TASK_NOT_SELECTABLE') {
+          setErrors((prev) => ({ ...prev, selectedTaskId: 'Selected task is not selectable' }));
+        } else if (errCode === 'TASK_ASSIGNMENT_REQUIRED' || errCode === 'FORBIDDEN_TASK_ATTACHMENT') {
+          setErrors((prev) => ({ ...prev, selectedTaskId: 'You are not assigned to this task' }));
+        }
+
         const isMismatch =
           error instanceof ApiError &&
           (error.status === 403 || error.status === 400) &&
@@ -1046,7 +1065,9 @@ export function CreateDisbursementModal({
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-ink">Linked Task (Optional)</label>
+              <label className="text-xs font-semibold text-ink">
+                Linked Task <span className="text-red-500">*</span>
+              </label>
               <select
                 value={selectedTaskId}
                 onChange={(e) => {
@@ -1059,18 +1080,18 @@ export function CreateDisbursementModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !linkedWorkRequestId}
+                disabled={isTaskLocked || !linkedWorkRequestId || isTaskBlocked}
                 className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
                 data-testid="select-work-request-task"
               >
                 <option value="">
                   {!linkedWorkRequestId
                     ? 'Select a Work Request first...'
-                    : 'None (No linked task)'}
+                    : 'Select a task...'}
                 </option>
-                {availableTasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.title}
+                {taskOptions.map((opt) => (
+                  <option key={opt.id} value={opt.id} disabled={opt.disabled}>
+                    {opt.label}
                   </option>
                 ))}
               </select>
@@ -1081,6 +1102,12 @@ export function CreateDisbursementModal({
               )}
             </div>
           </div>
+
+          <TaskBlockingAlert
+            isNoTasksBlocked={isNoTasksBlocked}
+            isNotAssignedBlocked={isNotAssignedBlocked}
+            workRequestId={linkedWorkRequestId}
+          />
 
           {/* Category & Fund Source */}
           <div className="grid grid-cols-2 gap-3">
@@ -1361,9 +1388,9 @@ export function CreateDisbursementModal({
               type="submit"
               variant="default"
               size="sm"
-              disabled={isPending || isUploadingReceipt || needsCreateReview}
+              disabled={isPending || isUploadingReceipt || needsCreateReview || isTaskBlocked}
               data-testid="submit-create-disbursement-btn"
-              className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse shadow-2xs"
+              className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse shadow-2xs disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isUploadingReceipt
                 ? 'Uploading Receipt...'
