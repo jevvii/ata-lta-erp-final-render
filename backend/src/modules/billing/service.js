@@ -197,19 +197,18 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
   // Normalize aliases once across root data (Correction 3)
   const { effectiveTaskId, effectiveWrId } = normalizeTaskAndParentAliases(data);
 
-  let validatedWrId = effectiveWrId;
-  if (effectiveTaskId) {
-    const authorized = await resolveAndAuthorizeTaskTarget({
-      entityId,
-      user: effectiveUser,
-      userId,
-      targetTaskId: effectiveTaskId,
-      targetWorkRequestId: effectiveWrId,
-      clientId: data.clientId,
-      allowNoTask: true,
-    });
-    validatedWrId = authorized.effectiveWrId;
-  }
+  const authorized = await resolveAndAuthorizeTaskTarget({
+    entityId,
+    user: effectiveUser,
+    userId,
+    targetTaskId: effectiveTaskId,
+    targetWorkRequestId: effectiveWrId,
+    clientId: data.clientId,
+    allowNoTask: false,
+    recordType: 'invoice',
+    enforceSelectability: true,
+  });
+  const validatedWrId = authorized.effectiveWrId;
 
   // Atomic create (Spec 2.3 / R-11): the invoice row and its line items are
   // inserted by invoice_create_transactional() inside a single PostgreSQL
@@ -557,6 +556,8 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     payloadTaskId,
     payloadWrId,
     clientId: data.clientId,
+    recordType: 'invoice',
+    allowNoTask: false,
   });
 
   const effectiveWrId = relinkResult.isLinkageChanged
