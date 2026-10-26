@@ -890,4 +890,398 @@ describe('Mandatory Linked Task Specification Suite', () => {
       ).toBe(true);
     });
   });
+
+  describe('7. Phase & Prerequisite Task Locking', () => {
+    const WR_PHASE_ID = '22222222-2222-4222-8222-222222222299';
+    const TASK_PRE_ACTIVE = '33333333-3333-4333-8333-333333333391';
+    const TASK_PRE_COMPLETED = '33333333-3333-4333-8333-333333333392';
+    const TASK_PROC_ACTIVE = '33333333-3333-4333-8333-333333333393';
+    const TASK_DEPENDENT = '33333333-3333-4333-8333-333333333394';
+
+    beforeEach(() => {
+      mockTables.work_requests.set(WR_PHASE_ID, {
+        id: WR_PHASE_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        title: 'Phased Work Request',
+        status: 'Pre-processing',
+        phase: 'pre_processing',
+        assigned_to: USER_STAFF_ID,
+        co_assignees: [USER_ACCOUNTING_ID],
+        deleted_at: null,
+      });
+
+      mockTables.tasks.set(TASK_PRE_ACTIVE, {
+        id: TASK_PRE_ACTIVE,
+        work_request_id: WR_PHASE_ID,
+        title: 'Pre-processing Active Task',
+        status: 'In Progress',
+        phase: 'pre_processing',
+        predecessors: [],
+        assignee_id: USER_STAFF_ID,
+        deleted_at: null,
+      });
+
+      mockTables.tasks.set(TASK_PRE_COMPLETED, {
+        id: TASK_PRE_COMPLETED,
+        work_request_id: WR_PHASE_ID,
+        title: 'Pre-processing Completed Task',
+        status: 'Completed',
+        phase: 'pre_processing',
+        predecessors: [],
+        assignee_id: USER_STAFF_ID,
+        deleted_at: null,
+      });
+
+      mockTables.tasks.set(TASK_PROC_ACTIVE, {
+        id: TASK_PROC_ACTIVE,
+        work_request_id: WR_PHASE_ID,
+        title: 'Processing Active Task',
+        status: 'Assigned',
+        phase: 'processing',
+        predecessors: [],
+        assignee_id: USER_STAFF_ID,
+        deleted_at: null,
+      });
+
+      mockTables.tasks.set(TASK_DEPENDENT, {
+        id: TASK_DEPENDENT,
+        work_request_id: WR_PHASE_ID,
+        title: 'Dependent Task in Active Phase',
+        status: 'Assigned',
+        phase: 'pre_processing',
+        predecessors: [TASK_PRE_ACTIVE],
+        assignee_id: USER_STAFF_ID,
+        deleted_at: null,
+      });
+    });
+
+    it('rejects Invoice, Disbursement, Transmittal, and Document creation when linking a processing task while WR is in pre_processing (400 TASK_NOT_SELECTABLE)', async () => {
+      const invRes = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          invoiceNumber: `INV-PH-${++serial}`,
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          taskId: TASK_PROC_ACTIVE,
+          issueDate: '2026-10-26',
+          dueDate: '2026-11-26',
+          lineItems: [{ description: 'Future phase invoice', amount: 1500 }],
+        })
+        .expect(400);
+      expect(invRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(invRes.body.detail).toMatch(/future phase/i);
+
+      const disbRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          category: 'Government Fee',
+          description: 'Future phase disbursement',
+          amount: 500,
+          fundSource: 'Firm Fund',
+          linkedWorkRequestId: WR_PHASE_ID,
+          taskId: TASK_PROC_ACTIVE,
+        })
+        .expect(400);
+      expect(disbRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(disbRes.body.detail).toMatch(/phase that is not currently active/i);
+
+      const trRes = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PROC_ACTIVE,
+          items: [{ description: 'Future phase item', quantity: 1 }],
+        })
+        .expect(400);
+      expect(trRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(trRes.body.detail).toMatch(/phase that is not currently active/i);
+
+      const docRes = await request(app)
+        .post('/v1/documents')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          fileName: 'future-phase.pdf',
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PROC_ACTIVE,
+        })
+        .expect(400);
+      expect(docRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(docRes.body.detail).toMatch(/phase that is not currently active/i);
+    });
+
+    it('once WR advances to processing, allows linking a Completed pre_processing task to an Invoice (201), while rejecting pre_processing tasks for Disbursement, Transmittal, and Document (400 TASK_NOT_SELECTABLE)', async () => {
+      mockTables.work_requests.get(WR_PHASE_ID).phase = 'processing';
+      mockTables.work_requests.get(WR_PHASE_ID).status = 'Processing';
+
+      // Invoice on completed pre_processing task succeeds (201)
+      const invRes = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          invoiceNumber: `INV-PH-${++serial}`,
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          taskId: TASK_PRE_COMPLETED,
+          issueDate: '2026-10-26',
+          dueDate: '2026-11-26',
+          lineItems: [{ description: 'Bill completed pre-processing task', amount: 3000 }],
+        })
+        .expect(201);
+      expect(invRes.body.data.linked_task_id).toBe(TASK_PRE_COMPLETED);
+
+      // Disbursement, Transmittal, Document on pre_processing task rejected (even when task status is In Progress)
+      const disbRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          category: 'Government Fee',
+          description: 'Past phase disbursement',
+          amount: 500,
+          fundSource: 'Firm Fund',
+          linkedWorkRequestId: WR_PHASE_ID,
+          taskId: TASK_PRE_ACTIVE,
+        })
+        .expect(400);
+      expect(disbRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(disbRes.body.detail).toMatch(/phase that is not currently active/i);
+
+      const trRes = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PRE_ACTIVE,
+          items: [{ description: 'Past phase item', quantity: 1 }],
+        })
+        .expect(400);
+      expect(trRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(trRes.body.detail).toMatch(/phase that is not currently active/i);
+
+      const docRes = await request(app)
+        .post('/v1/documents')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          fileName: 'past-phase.pdf',
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PRE_ACTIVE,
+        })
+        .expect(400);
+      expect(docRes.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(docRes.body.detail).toMatch(/phase that is not currently active/i);
+    });
+
+    it('rejects linking a task whose prerequisite task is still In Progress (400 TASK_NOT_SELECTABLE) across all 4 modules, and succeeds once prerequisite is Completed', async () => {
+      // 1. Prerequisite TASK_PRE_ACTIVE is still 'In Progress' -> all 4 rejected
+      const invBlocked = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          invoiceNumber: `INV-PREREQ-${++serial}`,
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          taskId: TASK_DEPENDENT,
+          issueDate: '2026-10-26',
+          dueDate: '2026-11-26',
+          lineItems: [{ description: 'Blocked invoice', amount: 1000 }],
+        })
+        .expect(400);
+      expect(invBlocked.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(invBlocked.body.detail).toMatch(/incomplete prerequisite/i);
+
+      const disbBlocked = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          category: 'Government Fee',
+          description: 'Blocked disbursement',
+          amount: 500,
+          fundSource: 'Firm Fund',
+          linkedWorkRequestId: WR_PHASE_ID,
+          taskId: TASK_DEPENDENT,
+        })
+        .expect(400);
+      expect(disbBlocked.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(disbBlocked.body.detail).toMatch(/incomplete prerequisite/i);
+
+      const trBlocked = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_DEPENDENT,
+          items: [{ description: 'Blocked transmittal', quantity: 1 }],
+        })
+        .expect(400);
+      expect(trBlocked.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(trBlocked.body.detail).toMatch(/incomplete prerequisite/i);
+
+      const docBlocked = await request(app)
+        .post('/v1/documents')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          fileName: 'blocked-doc.pdf',
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_DEPENDENT,
+        })
+        .expect(400);
+      expect(docBlocked.body.code).toBe('TASK_NOT_SELECTABLE');
+      expect(docBlocked.body.detail).toMatch(/incomplete prerequisite/i);
+
+      // 2. Mark prerequisite TASK_PRE_ACTIVE as 'Completed' -> all 4 succeed
+      mockTables.tasks.get(TASK_PRE_ACTIVE).status = 'Completed';
+
+      const invOk = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          invoiceNumber: `INV-PREREQ-OK-${++serial}`,
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          taskId: TASK_DEPENDENT,
+          issueDate: '2026-10-26',
+          dueDate: '2026-11-26',
+          lineItems: [{ description: 'Unblocked invoice', amount: 1000 }],
+        })
+        .expect(201);
+      expect(invOk.body.data.linked_task_id).toBe(TASK_DEPENDENT);
+
+      const disbOk = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          category: 'Government Fee',
+          description: 'Unblocked disbursement',
+          amount: 500,
+          fundSource: 'Firm Fund',
+          linkedWorkRequestId: WR_PHASE_ID,
+          taskId: TASK_DEPENDENT,
+        })
+        .expect(201);
+      expect(disbOk.body.data.linked_task_id).toBe(TASK_DEPENDENT);
+
+      const trOk = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_DEPENDENT,
+          items: [{ description: 'Unblocked transmittal', quantity: 1 }],
+        })
+        .expect(201);
+      expect(trOk.body.data.linked_task_id).toBe(TASK_DEPENDENT);
+
+      const docOk = await request(app)
+        .post('/v1/documents')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          fileName: 'unblocked-doc.pdf',
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_DEPENDENT,
+        })
+        .expect(201);
+      expect(docOk.body.data.document.linked_task_id).toBe(TASK_DEPENDENT);
+    });
+
+    it('rejects relinking on update to a phase-locked or prerequisite-locked task (400 TASK_NOT_SELECTABLE), while allowing non-linkage edits when stored task phase is no longer active', async () => {
+      // Create valid records linked to TASK_PRE_ACTIVE while WR is in pre_processing
+      const disbRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          category: 'Government Fee',
+          description: 'Initial pre-processing disb',
+          amount: 500,
+          fundSource: 'Firm Fund',
+          linkedWorkRequestId: WR_PHASE_ID,
+          taskId: TASK_PRE_ACTIVE,
+        })
+        .expect(201);
+      const disbId = disbRes.body.data.id;
+
+      const trRes = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          clientId: CLIENT_ID,
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PRE_ACTIVE,
+          items: [{ description: 'Initial item', quantity: 1 }],
+        })
+        .expect(201);
+      const trId = trRes.body.data.id;
+
+      const docRes = await request(app)
+        .post('/v1/documents')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          fileName: 'initial-doc.pdf',
+          workRequestId: WR_PHASE_ID,
+          linkedTaskId: TASK_PRE_ACTIVE,
+        })
+        .expect(201);
+      const docId = docRes.body.data.document.id;
+
+      // Relinking to future-phase task TASK_PROC_ACTIVE fails with 400 TASK_NOT_SELECTABLE
+      const disbRelinkFuture = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedTaskId: TASK_PROC_ACTIVE, expectedVersion: 1 })
+        .expect(400);
+      expect(disbRelinkFuture.body.code).toBe('TASK_NOT_SELECTABLE');
+
+      const trRelinkFuture = await request(app)
+        .put(`/v1/transmittals/${trId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedTaskId: TASK_PROC_ACTIVE })
+        .expect(400);
+      expect(trRelinkFuture.body.code).toBe('TASK_NOT_SELECTABLE');
+
+      const docRelinkFuture = await request(app)
+        .put(`/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedTaskId: TASK_PROC_ACTIVE })
+        .expect(400);
+      expect(docRelinkFuture.body.code).toBe('TASK_NOT_SELECTABLE');
+
+      // Advance WR to processing; non-linkage edit on disbursement still succeeds (200)
+      mockTables.work_requests.get(WR_PHASE_ID).phase = 'processing';
+      const disbEditOk = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ description: 'Edited description after phase advance', expectedVersion: 1 })
+        .expect(200);
+      expect(disbEditOk.body.data.description).toBe('Edited description after phase advance');
+    });
+  });
 });
