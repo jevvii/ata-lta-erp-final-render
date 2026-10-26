@@ -132,6 +132,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR for Lead Unassign Test',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -237,6 +238,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR to be Completed',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -338,6 +340,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Task Dependencies',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -452,6 +455,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Dual Role Ops Manager Team Member',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -468,6 +472,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Dual Role Ops Admin Team Member',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -484,6 +489,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Non-Ops Manager Member',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -502,6 +508,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Non-Ops Admin Member',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -519,6 +526,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR with Mixed Team Members',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,
@@ -545,6 +553,7 @@ describe('Parcel B1 Adversarial Challenger Suite', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          dueDate: '2026-12-31',
           title: 'WR for Billing Fulfillment Test',
           clientId: CLIENT_ID,
           assignedTo: opsManagerUser.id,

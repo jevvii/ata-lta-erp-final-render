@@ -228,15 +228,15 @@ const Auth = {
     // permission set is the union of the permission sets for each allowed
     // department the user belongs to.
     const granted = new Set();
-    const allowedDepts = new Set(this.DEPARTMENTS);
-    const departments = Array.isArray(this.user.departments) ? this.user.departments : [];
-    const effectiveDepts = departments.filter(dept => allowedDepts.has(dept));
-    if (this.user.role) {
-      const legacyDept = this.user.role === 'Manager' ? 'Management' : this.user.role;
-      if (allowedDepts.has(legacyDept) && this.DEPARTMENT_PERMISSIONS[legacyDept] && !effectiveDepts.includes(legacyDept)) {
-        effectiveDepts.push(legacyDept);
-      }
+    const effectiveDepts = this.effectiveDepartments();
+    if (action === 'billing:request') {
+      const departments = Array.isArray(this.user.departments) ? this.user.departments : [];
+      const hasDoc = String(this.user.role || '').toLowerCase() === 'documentation' ||
+        effectiveDepts.some(d => String(d).toLowerCase() === 'documentation') ||
+        departments.some(d => String(d).toLowerCase() === 'documentation');
+      if (hasDoc) return false;
     }
+
     effectiveDepts.forEach(dept => {
       (this.DEPARTMENT_PERMISSIONS[dept] || []).forEach(p => granted.add(p));
     });
@@ -249,16 +249,19 @@ const Auth = {
 
   effectiveDepartments() {
     if (!this.user) return [];
-    const allowedDepts = new Set(this.DEPARTMENTS);
     const departments = Array.isArray(this.user.departments) ? this.user.departments : [];
-    const effective = departments.filter(dept => allowedDepts.has(dept));
+    const effective = departments
+      .map(dept => this.DEPARTMENTS.find(d => d.toLowerCase() === String(dept).toLowerCase()))
+      .filter(Boolean);
     if (this.user.role) {
-      const legacyDept = this.user.role === 'Manager' ? 'Management' : this.user.role;
-      if (allowedDepts.has(legacyDept) && this.DEPARTMENT_PERMISSIONS[legacyDept] && !effective.includes(legacyDept)) {
-        effective.push(legacyDept);
+      const roleStr = String(this.user.role);
+      const legacyDept = roleStr.toLowerCase() === 'manager' ? 'Management' : roleStr;
+      const canonical = this.DEPARTMENTS.find(d => d.toLowerCase() === legacyDept.toLowerCase());
+      if (canonical && this.DEPARTMENT_PERMISSIONS[canonical] && !effective.includes(canonical)) {
+        effective.push(canonical);
       }
     }
-    return effective;
+    return [...new Set(effective)];
   },
 
   canBypassReview(table) {
@@ -267,7 +270,9 @@ const Auth = {
 
   canApproveChange(table) {
     if (this.user?.role === 'Admin') return true;
-    if ((this.user?.departments || []).includes('Accounting') || this.user?.role === 'Accounting') {
+    const isAccounting = String(this.user?.role || '').toLowerCase() === 'accounting' ||
+      (this.user?.departments || []).some(d => String(d).toLowerCase() === 'accounting');
+    if (isAccounting) {
       if (table === 'invoices' || table === 'disbursements') return true;
     }
     return this.can('approve_change:' + table);
@@ -333,28 +338,13 @@ const Auth = {
 
 
   canViewDisbursement(d) {
-    if (!this.user) return false;
+    if (!this.user || !d) return false;
     const departments = this.user.departments || [];
-    if (this.user.role === 'Admin' || departments.includes('Accounting')) return true;
-    if (['Released', 'Funded', 'Rejected'].includes(d.status)) return true;
-    // Resolve the linked work request from the API cache only.
-    const wr = d.linkedWorkRequestId && window.apiClient?.workRequestCache
-      ? window.apiClient.workRequestCache.getById(d.linkedWorkRequestId)
-      : null;
-
-    // Managerial users can see linked disbursements when they can view the work request.
-    if (this.isManagerial()) {
-      if (d.linkedWorkRequestId) {
-        return wr && this.canViewWr(wr);
-      }
-      return d.requestedBy === this.user.id || d.createdBy === this.user.id;
-    }
-    // Staff users can see WR-linked disbursements if they can view the WR,
-    // or non-linked disbursements they personally requested.
-    if (d.linkedWorkRequestId) {
-      return wr && this.canViewWr(wr);
-    }
-    return d.requestedBy === this.user.id || d.createdBy === this.user.id;
+    const isAccounting = String(this.user.role || '').toLowerCase() === 'accounting' ||
+      departments.some(d => String(d).toLowerCase() === 'accounting') ||
+      this.effectiveDepartments().some(d => String(d).toLowerCase() === 'accounting');
+    if (this.user.role === 'Admin' || isAccounting) return true;
+    return d.createdBy === this.user.id || d.created_by === this.user.id;
   },
 
   switchEntity(entity) {

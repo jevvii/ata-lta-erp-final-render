@@ -281,13 +281,52 @@ describe('InvoiceDetailModal Component', () => {
     });
   });
 
-  it('allows Admin or user with edit permissions to Approve or Reject Pending invoice', async () => {
+  it('restricts Pending invoice approval to Admin only and shows notice banner for non-admin', async () => {
     const pendingInvoice: Invoice = {
       ...mockDetailInvoice,
       status: 'Pending',
     };
 
-    const { wrapper } = createHarness();
+    // 1. Non-admin user (Staff role from beforeEach)
+    const { wrapper: staffWrapper } = createHarness();
+    const { unmount } = render(
+      <InvoiceDetailModal
+        isOpen={true}
+        onClose={vi.fn()}
+        invoiceId="inv-detail-1"
+        initialInvoice={pendingInvoice}
+      />,
+      { wrapper: staffWrapper }
+    );
+
+    // Non-admin should see the read-only notice and NO action buttons
+    expect(screen.getByTestId('invoice-pending-admin-notice')).toBeInTheDocument();
+    expect(screen.getByText(/Pending Admin Approval — Awaiting review and issuance by System Administrator/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('btn-approve-and-issue')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('btn-reject-to-draft')).not.toBeInTheDocument();
+    unmount();
+
+    // 2. Admin user session
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'user-admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Lorein Wong',
+        role: 'Admin',
+        departments: ['Executive'],
+        entities: ['ATA', 'LTA'],
+      },
+      permissions: [
+        'billing:view',
+        'billing:edit',
+        'billing:payments',
+        'billing:edit_client_address',
+        'billing:delete',
+      ],
+      activeEntity: 'ATA',
+    });
+
+    const { wrapper: adminWrapper } = createHarness();
     render(
       <InvoiceDetailModal
         isOpen={true}
@@ -295,13 +334,14 @@ describe('InvoiceDetailModal Component', () => {
         invoiceId="inv-detail-1"
         initialInvoice={pendingInvoice}
       />,
-      { wrapper }
+      { wrapper: adminWrapper }
     );
 
     const approveBtn = screen.getByTestId('btn-approve-and-issue');
     const rejectBtn = screen.getByTestId('btn-reject-to-draft');
     expect(approveBtn).toBeInTheDocument();
     expect(rejectBtn).toBeInTheDocument();
+    expect(screen.queryByTestId('invoice-pending-admin-notice')).not.toBeInTheDocument();
 
     fireEvent.click(rejectBtn);
 
@@ -314,5 +354,35 @@ describe('InvoiceDetailModal Component', () => {
         })
       );
     });
+  });
+
+  it('displays Work Request Requester when work_request creatorName is provided', async () => {
+    const invoiceWithWR: Invoice = {
+      ...mockDetailInvoice,
+      work_request: {
+        id: 'wr-101',
+        title: 'SEC Registration Filing',
+        workOrderNumber: 'WO-2026-001',
+        creatorName: 'Atty. Lorein Wong',
+        creatorEmail: 'lorein@ata-lta.ph',
+      },
+      work_request_title: 'SEC Registration Filing',
+      work_request_creator_name: 'Atty. Lorein Wong',
+    };
+
+    const { wrapper } = createHarness();
+    render(
+      <InvoiceDetailModal
+        isOpen={true}
+        onClose={vi.fn()}
+        invoiceId="inv-detail-1"
+        initialInvoice={invoiceWithWR}
+      />,
+      { wrapper }
+    );
+
+    const requesterEl = screen.getByTestId('invoice-wr-requester');
+    expect(requesterEl).toBeInTheDocument();
+    expect(requesterEl).toHaveTextContent('Work Request Requester: Atty. Lorein Wong');
   });
 });

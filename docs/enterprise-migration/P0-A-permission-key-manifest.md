@@ -29,12 +29,14 @@ Convert the backend's permission data into the single source of truth every late
 | `workflow:transition_request` | Management (Manager), Admin | Managers "Notify Admin" — creates transition request |
 | `workflow:qa_review` | Admin only | Per-task compliance review at QA gate |
 | `retainers:use` | Management, Admin | Managers generate WRs from templates |
-| `retainers:edit` | Admin only | Only admin creates/edits templates |
+| `retainers:edit` | Admin, Manager (role exception) | Admin and role Manager create/edit templates (role-specific exception; Management department staff without role Manager excluded) |
 | `disbursement:approve` | Admin only | New approval gate (see P0-G) |
 | `billing:edit_client_address` | Accounting, Management, Admin | Accounting edits client address on billing |
 | `timelog:view` / `timelog:create` / `timelog:edit_own` | ALL departments + Admin | Dashboard time logging (P0-F) |
 | `timelog:edit_all` | Admin only | Admin correction path |
 | `notifications:view` | every authenticated user | Bell/badges (P0-B) |
+
+> **Note on `retainers:edit`:** Per the RBAC remediation specification, `retainers:edit` is granted to role `Manager` as an explicit role-specific grant. Management department membership alone (e.g. `role: 'Staff', departments: ['Management']`) does NOT grant template editing.
 
 ### 3.2 Key changes to EXISTING grants
 

@@ -389,6 +389,7 @@ describe('Other Templates API & Engine Integration Tests', () => {
         .set('X-Active-Entity', 'ATA')
         .send({
           overrides: {
+            dueDate: '2026-12-31',
             clientId: testClient.id,
             priority: 'High',
             coAssignees: [OTHER_STAFF_ID],
@@ -406,6 +407,7 @@ describe('Other Templates API & Engine Integration Tests', () => {
         .set('X-Active-Entity', 'ATA')
         .send({
           overrides: {
+            dueDate: '2026-12-31',
             clientId: testClient.id,
             assignedTo: MANAGER_ID,
             coAssignees: [],
@@ -460,6 +462,7 @@ describe('Other Templates API & Engine Integration Tests', () => {
         .set('X-Active-Entity', 'ATA')
         .send({
           overrides: {
+            dueDate: '2026-12-31',
             clientId: testClient.id,
             assignedTo: MANAGER_ID,
           },

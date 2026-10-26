@@ -24,7 +24,7 @@ beforeAll(() => {
       try {
         const result = await pool.query('SELECT public.mutate_document_comment($1,$2,$3,$4,$5,$6) AS data',
           [p.p_entity_id, p.p_document_id, p.p_comment_id, p.p_user_id, p.p_text, p.p_action]);
-        const data = result.rows[0].data;
+        const data = { ...mockTables.documents.get(p.p_document_id), ...result.rows[0].data };
         mockTables.documents.set(data.id, data);
         return { data, error: null };
       } catch (error) { return { data: null, error }; }
@@ -34,7 +34,7 @@ beforeAll(() => {
 afterAll(async () => { rpcSpy?.mockRestore(); if (pool) await pool.end(); });
 
 describe('document comment HTTP API', () => {
-  let author, peer, admin, viewer, id, authorId;
+  let author, peer, admin, viewer, id, authorId, peerId, viewerId;
   const call = (method, token, suffix = '', entity = 'ATA') => request(app)[method](`/v1/documents/${id}/comments${suffix}`)
     .set('Authorization', `Bearer ${token}`).set('X-Active-Entity', entity);
   beforeEach(async () => {
@@ -54,12 +54,18 @@ describe('document comment HTTP API', () => {
       return [token, userId];
     };
     [author, authorId] = makeUser('Author', 'Employee');
-    [peer] = makeUser('Peer', 'Employee');
+    [peer, peerId] = makeUser('Peer', 'Employee');
     [admin] = makeUser('Admin', 'Admin');
-    [viewer] = makeUser('Viewer', 'Employee', false);
+    [viewer, viewerId] = makeUser('Viewer', 'Operations', false);
     const created = await request(app).post('/v1/documents').set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA').send({ fileName: 'review.txt' }).expect(201);
     id = created.body.data.document.id;
+    // Keep the standalone document inside a shared project: orphan documents
+    // are intentionally inaccessible to non-admins under project visibility.
+    const wrId = randomUUID();
+    mockTables.work_requests.set(wrId, { id: wrId, entity_id: entityIds.ATA,
+      co_assignees: [authorId, peerId, viewerId], deleted_at: null });
+    mockTables.documents.get(id).work_request_id = wrId;
     if (pool) {
       await pool.query('TRUNCATE documents, users');
       for (const user of mockTables.users.values()) {

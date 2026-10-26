@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 import { Upload, FileText, X } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
 import { DISBURSEMENT_CATEGORIES, FUND_SOURCES } from '../api/schemas';
@@ -291,6 +292,41 @@ export function CreateDisbursementModal({
     e.preventDefault();
     if (!validate()) return;
 
+    // Task B.5: Government Assessment Document Upload & Soft-Warning
+    let resultingS3Key: string | null = null;
+    if (receiptFile) {
+      try {
+        const cleanName = receiptFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const storagePath = `disbursements/receipts/${Date.now()}_${cleanName}`;
+        if (supabase?.storage && typeof supabase.storage.from === 'function') {
+          const bucketName =
+            (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_STORAGE_BUCKET) ||
+            'ata-lta-erp-documents-prod';
+          const { data: uploadData, error: uploadErr } = await supabase.storage
+            .from(bucketName)
+            .upload(storagePath, receiptFile);
+          if (!uploadErr && uploadData?.path) {
+            resultingS3Key = uploadData.path;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to upload receipt attachment to storage:', err);
+      }
+    }
+
+    // Treat document as attached only when persisted to storage with a resulting S3 key,
+    // or when a pre-existing receipt filename was provided without a pending local file upload.
+    const hasReceipt = Boolean(resultingS3Key || (receiptFilename && receiptFilename.trim() && !receiptFile));
+    if (!hasReceipt) {
+      const proceed =
+        typeof window !== 'undefined' && typeof window.confirm === 'function'
+          ? window.confirm('No Government Assessment Document attached. Proceed anyway?')
+          : true;
+      if (proceed === false) {
+        return;
+      }
+    }
+
     // Status Anti-Forgery: Notice that `status` is NEVER defined in payload!
     const effectiveCategory = category === 'Other' && customCategory.trim() ? customCategory.trim() : category;
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -311,6 +347,7 @@ export function CreateDisbursementModal({
       employeeId: validEmployeeId,
       dueDate: dueDate ? dueDate : null,
       notes: notes.trim() ? notes.trim() : null,
+      receiptS3Key: resultingS3Key,
       receiptFilename: effectiveReceiptFilename,
     };
 

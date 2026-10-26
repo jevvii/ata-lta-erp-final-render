@@ -70,6 +70,17 @@ if (!databaseUrl) {
   process.exit(1);
 }
 
+const { createClient } = require('@supabase/supabase-js');
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+const storageBucket = process.env.SUPABASE_STORAGE_BUCKET;
+
+if (!supabaseUrl || !supabaseServiceKey || !storageBucket) {
+  console.error('❌ Missing storage configuration: SUPABASE_URL, SUPABASE_SERVICE_KEY, and SUPABASE_STORAGE_BUCKET are required for remote data cleanup.');
+  process.exit(1);
+}
+
 // Tables to preserve (users, user department relations, reference tables, migration logs)
 const PRESERVED_TABLES = new Set([
   'users',
@@ -80,9 +91,53 @@ const PRESERVED_TABLES = new Set([
   'pgmigrations',
 ]);
 
+async function listAllStorageFiles(supabase, bucket, folder = '') {
+  const limit = 100;
+  let offset = 0;
+  let files = [];
+
+  while (true) {
+    const { data, error } = await supabase.storage.from(bucket).list(folder, {
+      limit,
+      offset,
+      sortBy: { column: 'name', order: 'asc' },
+    });
+
+    if (error) {
+      throw new Error(`Failed to list storage objects in bucket "${bucket}" at path "${folder || '/'}" (offset ${offset}): ${error.message}`);
+    }
+
+    if (!data || data.length === 0) {
+      break;
+    }
+
+    for (const item of data) {
+      const itemPath = folder ? `${folder}/${item.name}` : item.name;
+      if (item.id === null) {
+        const nested = await listAllStorageFiles(supabase, bucket, itemPath);
+        files.push(...nested);
+      } else {
+        files.push(itemPath);
+      }
+    }
+
+    if (data.length < limit) {
+      break;
+    }
+
+    offset += limit;
+  }
+
+  return files;
+}
+
 async function run() {
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
+
+  const supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
   try {
     const { rows: tables } = await client.query(`
@@ -103,24 +158,53 @@ async function run() {
     console.log(`🔒 Preserved tables (${preservedFound.length}):`);
     preservedFound.forEach((t) => console.log(`   - ${t}`));
 
+    const { rows: preservedUsers } = await client.query(`
+      SELECT id, email, name, role
+      FROM users
+      ORDER BY role ASC, email ASC;
+    `);
+    console.log(`\n👤 Preserved user accounts (${preservedUsers.length}):`);
+    preservedUsers.forEach((u) => console.log(`   - ${u.name} <${u.email}> (${u.role})`));
+
     console.log(`\n🧹 Tables to truncate (${tablesToClear.length}):`);
     tablesToClear.forEach((t) => console.log(`   - ${t}`));
 
-    if (!tablesToClear.length) {
-      console.log('\nNo operational tables found to clear.');
+    const storageFiles = await listAllStorageFiles(supabase, storageBucket);
+    console.log(`\n📦 Supabase Storage files in "${storageBucket}" to remove (${storageFiles.length}):`);
+    if (storageFiles.length <= 10) {
+      storageFiles.forEach((f) => console.log(`   - ${f}`));
+    } else {
+      storageFiles.slice(0, 5).forEach((f) => console.log(`   - ${f}`));
+      console.log(`   ... and ${storageFiles.length - 5} more files`);
+    }
+
+    if (!tablesToClear.length && !storageFiles.length) {
+      console.log('\nNo operational data or storage files found to clear.');
       return;
     }
 
     if (!force) {
-      console.log('\n⚠️ DRY RUN COMPLETE. Pass --force to execute truncation.');
+      console.log('\n⚠️ DRY RUN COMPLETE. Pass --force to execute truncation and storage cleanup.');
       return;
     }
 
-    console.log('\nTruncating data tables...');
-    const quotedTables = tablesToClear.map((t) => `"${t}"`).join(', ');
-    await client.query(`TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE;`);
+    if (tablesToClear.length > 0) {
+      console.log('\nTruncating data tables...');
+      const quotedTables = tablesToClear.map((t) => `"${t}"`).join(', ');
+      await client.query(`TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE;`);
+      console.log('   ✅ Tables truncated.');
+    }
 
-    console.log('\n✅ Remote database data successfully cleared (schemas and ALL users preserved).');
+    if (storageFiles.length > 0) {
+      console.log(`\nDeleting ${storageFiles.length} file(s) from storage bucket "${storageBucket}"...`);
+      const { error: storageErr } = await supabase.storage.from(storageBucket).remove(storageFiles);
+      if (storageErr) {
+        throw new Error(`Failed to delete storage files from bucket "${storageBucket}": ${storageErr.message}`);
+      }
+      console.log('   ✅ Storage files deleted.');
+    }
+
+    console.log(`\n✅ ${envArg.toUpperCase()} environment operational data successfully cleared (schemas, tables, and ALL user accounts preserved).`);
   } finally {
     await client.end();
   }

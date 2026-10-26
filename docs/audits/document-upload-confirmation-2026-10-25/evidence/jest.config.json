@@ -1,0 +1,11 @@
+{
+  "rootDir": "../../../..",
+  "testEnvironment": "node",
+  "modulePathIgnorePatterns": ["<rootDir>/worktrees/"],
+  "testMatch": [
+    "<rootDir>/docs/audits/document-upload-confirmation-2026-10-25/evidence/verification.test.js",
+    "<rootDir>/docs/audits/document-upload-confirmation-2026-10-25/evidence/benchmark.js"
+  ],
+  "moduleDirectories": ["node_modules", "<rootDir>/backend/node_modules"],
+  "testTimeout": 20000
+}

@@ -28,7 +28,6 @@ const NEW_KEY_MATRIX = {
 const ADMIN_ONLY_KEYS = [
   'workflow:phase_transition',
   'workflow:qa_review',
-  'retainers:edit',
   'disbursement:approve',
   'timelog:edit_all',
 ];
@@ -38,10 +37,26 @@ describe('P0-A department x key matrix', () => {
     DEPARTMENTS.forEach((dept) => {
       const expected = grantedDepts.includes(dept);
       it(`${dept} ${expected ? 'HAS' : 'lacks'} ${key}`, () => {
+        // retainers:edit is granted by role Manager, not by department alone
+        if (key === 'retainers:edit') {
+          const perms = buildPermissionSet({ role: 'Operations', departments: [dept] });
+          expect(perms.has(key)).toBe(false);
+          return;
+        }
         const role = dept === 'Management' ? 'Manager' : dept;
         const perms = buildPermissionSet({ role, departments: [dept] });
         expect(perms.has(key)).toBe(expected);
       });
+    });
+  });
+
+  it('grants retainers:edit to role Manager but never to department alone', () => {
+    const manager = buildPermissionSet({ role: 'Manager', departments: [] });
+    expect(manager.has('retainers:edit')).toBe(true);
+
+    DEPARTMENTS.forEach((dept) => {
+      const deptStaff = buildPermissionSet({ role: 'Operations', departments: [dept] });
+      expect(deptStaff.has('retainers:edit')).toBe(false);
     });
   });
 

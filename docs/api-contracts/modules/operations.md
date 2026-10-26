@@ -59,7 +59,7 @@ Creates a complete work request graph within a single atomic database transactio
 | `requestedBy` | UUID | No | Requesting user ID |
 | `assignedTo` | UUID \| null | No | Primary assignee user ID |
 | `coAssignees` | array of strings | No | Multi-assignee user UUIDs (defaults to `[]`) |
-| `dueDate` | ISO date string | No | Due date |
+| `dueDate` | ISO date or timestamp string | Yes | Required for creation; valid calendar date (`YYYY-MM-DD`) or ISO timestamp. Missing, null, empty, or invalid dates return `400 VALIDATION_ERROR`. |
 | `priority` | string (max 50) | No | Priority (e.g. `Low`, `Medium`, `High`, `Urgent`) |
 | `idempotency_key` / `idempotencyKey` | string | No | Client idempotency token |
 | `phases` | object (`phasesSchema`) | No | Phase container containing `pre_processing` and `processing` task arrays |

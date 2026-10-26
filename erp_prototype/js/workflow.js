@@ -3712,7 +3712,8 @@ const Workflow = {
       const taskGroup = el('div', { class: 'form-group' });
       taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
       const taskSel = el('select', { name: 'linkedTaskId' });
-      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      const wholeProjectOption = el('option', { value: '', text: '— Whole Project —' });
+      taskSel.appendChild(wholeProjectOption);
       tasks.forEach(t => {
         const opt = el('option', { value: t.id, text: t.title });
         if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
@@ -3974,7 +3975,8 @@ const Workflow = {
       const taskGroup = el('div', { class: 'form-group' });
       taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
       const taskSel = el('select', { name: 'linkedTaskId' });
-      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      const wholeProjectOption = el('option', { value: '', text: '— Whole Project —' });
+      taskSel.appendChild(wholeProjectOption);
       tasks.forEach(t => {
         const opt = el('option', { value: t.id, text: t.title });
         if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
@@ -4263,18 +4265,74 @@ const Workflow = {
     wrGroup.appendChild(el('input', { type: 'hidden', name: 'workRequestId', value: wr.id }));
     form.appendChild(wrGroup);
 
-    // ---------- Task link (optional) ----------
+    // ---------- Task link (optional for non-Doc, required & filtered for Doc) ----------
+    const isDocUser = Auth.user?.role !== 'Admin' && (
+      String(Auth.user?.role || '').toLowerCase() === 'documentation' ||
+      (Auth.user?.departments || []).some(d => String(d).toLowerCase() === 'documentation')
+    );
+    const isTaskAssignee = (t) => {
+      if (!t || !Auth.user?.id) return false;
+      const uid = String(Auth.user.id);
+
+      // Primary assignee ID matches
+      if (t.assigneeId && String(t.assigneeId) === uid) return true;
+      if (t.assignee_id && String(t.assignee_id) === uid) return true;
+      if (t.assignedTo && String(t.assignedTo) === uid) return true;
+      if (t.assigned_to && String(t.assigned_to) === uid) return true;
+
+      // Authoritative relational co-assignee lists
+      const checkEntries = (list) => {
+        if (!Array.isArray(list)) return false;
+        return list.some((entry) => {
+          if (!entry) return false;
+          if (typeof entry === 'string') return entry === uid;
+          if (typeof entry === 'object') {
+            return (
+              (entry.userId && String(entry.userId) === uid) ||
+              (entry.user_id && String(entry.user_id) === uid) ||
+              (entry.id && String(entry.id) === uid)
+            );
+          }
+          return false;
+        });
+      };
+
+      const lists = [
+        t.assignees,
+        t.taskAssignees,
+        t.task_assignees,
+        t.relational_assignees,
+        t.relationalAssignees,
+        t.coAssignees,
+        t.co_assignees,
+      ];
+
+      return lists.some(checkEntries);
+    };
+
     const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id);
-    if (tasks.length > 0) {
-      const taskGroup = el('div', { class: 'form-group' });
+    const availableTasks = isDocUser ? tasks.filter(isTaskAssignee) : tasks;
+
+    if (tasks.length > 0 || isDocUser) {
+      const taskGroup = el('div', { class: 'form-group' + (isDocUser ? ' is-required' : '') });
       taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
       const taskSel = el('select', { name: 'linkedTaskId' });
-      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
-      tasks.forEach(t => {
-        const opt = el('option', { value: t.id, text: t.title });
-        if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
-        taskSel.appendChild(opt);
-      });
+      if (isDocUser) {
+        taskSel.appendChild(el('option', { value: '', text: '— Select an assigned task —' }));
+        availableTasks.forEach(t => {
+          const opt = el('option', { value: t.id, text: t.title });
+          if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
+          taskSel.appendChild(opt);
+        });
+      } else {
+        const wholeProjectOption = el('option', { value: '', text: '— Whole Project —' });
+        taskSel.appendChild(wholeProjectOption);
+        tasks.forEach(t => {
+          const opt = el('option', { value: t.id, text: t.title });
+          if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
+          taskSel.appendChild(opt);
+        });
+      }
       taskGroup.appendChild(taskSel);
       form.appendChild(taskGroup);
     }
@@ -4410,6 +4468,21 @@ const Workflow = {
         return;
       }
 
+      if (isDocUser) {
+        const taskField = form.querySelector('[name="linkedTaskId"]');
+        const selectedTaskId = (taskField?.value || '').trim();
+        const selectedTask = selectedTaskId ? (tasks.find(t => t.id === selectedTaskId) || WorkflowData.getTaskById(selectedTaskId)) : null;
+        if (!selectedTaskId || !selectedTask || !isTaskAssignee(selectedTask)) {
+          if (taskField) {
+            showFieldError(taskField, 'Please select a task. linkedTaskId is required.');
+            focusFirstInvalidField(form);
+          } else {
+            this.showMessage('Validation Error', 'Please select a task. linkedTaskId is required.', 'warning');
+          }
+          return;
+        }
+      }
+
       const restoreSaveBtn = setButtonLoading(saveBtn, 'Creating Transmittal…');
       try {
         const data = Object.fromEntries(new FormData(form).entries());
@@ -4417,7 +4490,9 @@ const Workflow = {
         const record = {
           workRequestId: data.workRequestId,
           clientId: data.clientId,
-          linkedTaskId: data.linkedTaskId || (preselectedTask ? preselectedTask.id : null) || null,
+          linkedTaskId: isDocUser
+            ? (data.linkedTaskId || null)
+            : (data.linkedTaskId || (preselectedTask ? preselectedTask.id : null) || null),
           trackingNumber: data.trackingNumber || await Utils.nextTrackingNumber(recordEntity),
           status: 'Draft',
           items,
@@ -4559,7 +4634,8 @@ const Workflow = {
       const taskGroup = el('div', { class: 'form-group' });
       taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
       const taskSel = el('select', { name: 'linkedTaskId', class: 'form-select' });
-      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      const wholeProjectOption = el('option', { value: '', text: '— Whole Project —' });
+      taskSel.appendChild(wholeProjectOption);
       tasks.forEach(t => {
         const opt = el('option', { value: t.id, text: t.title });
         if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
@@ -4772,10 +4848,19 @@ const Workflow = {
       // 0. Link to Specific Task
       const tasks = WorkflowData.getTasksWhere(t => t.workRequestId === wr.id) || [];
       if (tasks.length > 0) {
-        const taskGroup = el('div', { class: 'form-group' });
+        const isDocUser = Auth.user?.role !== 'Admin' && (
+          String(Auth.user?.role || '').toLowerCase() === 'documentation' ||
+          (Auth.user?.departments || []).some(d => String(d).toLowerCase() === 'documentation')
+        );
+        const taskGroup = el('div', { class: 'form-group' + (isDocUser ? ' is-required' : '') });
         taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
         const taskSel = el('select', { name: 'linkedTaskId', class: 'form-select' });
-        taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+        if (isDocUser) {
+          taskSel.appendChild(el('option', { value: '', text: '— Select an assigned task —' }));
+        } else {
+          const wholeProjectOption = el('option', { value: '', text: '— Whole Project —' });
+          taskSel.appendChild(wholeProjectOption);
+        }
         tasks.forEach(t => {
           const opt = el('option', { value: t.id, text: t.title });
           if (preselectedTask && preselectedTask.id === t.id) opt.selected = true;
@@ -5188,6 +5273,12 @@ const Workflow = {
             contentContainer.innerHTML = '';
             contentContainer.appendChild(this.renderList());
           } else if (this.view === 'templates') {
+            if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
+              this.view = 'list';
+              location.hash = '#operations';
+              Utils.showToast('Access denied: Admin or Manager role required for retainer templates', 'error');
+              return;
+            }
             contentContainer.innerHTML = '';
             contentContainer.appendChild(await this.renderTemplates());
           } else if (this.view === 'task-templates') {
@@ -5473,7 +5564,7 @@ const Workflow = {
       { key: 'list', label: 'Work Requests', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: wrCount }
     ];
 
-    if (Auth.can('workflow:approve')) {
+    if (Auth.user?.role === 'Admin' || Auth.user?.role === 'Manager') {
       tabs.push({ key: 'templates', label: 'Retainer Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount });
     }
 
@@ -8366,7 +8457,7 @@ const Workflow = {
     propsGrid.appendChild(priorityGroup);
 
     // Due Date
-    const dueGroup = el('div', { class: 'notion-prop' });
+    const dueGroup = el('div', { class: 'notion-prop notion-prop--due-date' });
     dueGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Due Date' }));
     dueGroup.appendChild(el('input', {
       type: 'date',
@@ -16005,8 +16096,9 @@ const Workflow = {
   // Retainer Templates
   // ============================================================
   async renderTemplates() {
-    if (!Auth.can('workflow:approve')) {
+    if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
       this.view = 'list';
+      location.hash = '#operations';
       App.handleRoute();
       return el('div');
     }
@@ -16126,8 +16218,9 @@ const Workflow = {
   },
 
   async renderTemplateForm(opts = {}) {
-    if (!Auth.can('workflow:approve')) {
+    if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
       this.view = 'list';
+      location.hash = '#operations';
       App.handleRoute();
       return el('div');
     }

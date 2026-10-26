@@ -16,11 +16,14 @@
 
 export type DisbursementStatus =
   | 'Draft'
+  | 'Submitted'
   | 'Pending'
+  | 'Pending Admin Approval'
   | 'Approved'
   | 'Released'
   | 'Funded'
   | 'Rejected'
+  | 'Archived'
   | 'Cancelled';
 
 export type FundSource = 'Firm Fund' | 'Client Fund';
@@ -147,6 +150,21 @@ export interface Disbursement {
   client_name?: string | null;
   clientName?: string | null;
   audit_logs?: DisbursementAuditLog[];
+  linked_work_request_name?: string | null;
+  linked_work_request_order_number?: string | null;
+  employee_name?: string | null;
+  employeeName?: string | null;
+  requested_by_name?: string | null;
+  requestedByName?: string | null;
+  created_by_name?: string | null;
+  createdByName?: string | null;
+  approved_by_name?: string | null;
+  approvedByName?: string | null;
+  released_by_name?: string | null;
+  releasedByName?: string | null;
+  rejected_by_name?: string | null;
+  rejectedByName?: string | null;
+  edited_by_accounting?: boolean | null;
 }
 
 // ============================================================================

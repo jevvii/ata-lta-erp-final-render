@@ -80,6 +80,7 @@ describe('Adversarial Challenger Suite: PR-2 (challenger_m3)', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Adversarial WR PR-2',
         clientId: client.id,
         entity: 'ATA',

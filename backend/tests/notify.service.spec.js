@@ -131,13 +131,33 @@ describe('notify service (notify.js)', () => {
       );
     });
 
-    it('exports the complete list of 4 frozen notification types', () => {
+    it('exports the complete list of frozen notification types including disbursement.lifecycle', () => {
       expect(FROZEN_NOTIFICATION_TYPES).toEqual([
         'pending_request.resolved',
         'wr.transition_request.received',
         'wr.transition_request.resolved',
         'wr.qa_reroute',
+        'disbursement.lifecycle',
       ]);
+    });
+
+    it('successfully emits disbursement.lifecycle notification', async () => {
+      const payload = {
+        action: 'approved',
+        table_name: 'disbursements',
+        request_id: 'disb-001',
+        entity: 'ATA',
+        disbursement_number: 'DISB-ATA-2026-0001',
+        title: 'Disbursement Approved',
+      };
+
+      await notify([USER_1], 'disbursement.lifecycle', payload);
+
+      const rows = Array.from(mockTables.notifications.values());
+      expect(rows).toHaveLength(1);
+      expect(rows[0].user_id).toBe(USER_1);
+      expect(rows[0].type).toBe('disbursement.lifecycle');
+      expect(rows[0].payload).toEqual(payload);
     });
 
     it('handles multiple recipients and deduplicates user IDs', async () => {

@@ -1,0 +1,29 @@
+{
+  "timestamp": "2026-10-25T12:34:28.000Z",
+  "suite": "docs/audits/document-upload-confirmation-2026-10-25/evidence/reproduction.test.js",
+  "numTotalTests": 4,
+  "numPassedTests": 4,
+  "numFailedTests": 0,
+  "results": [
+    {
+      "test": "F01: fails confirm-upload with 404 'Document not found' when uploading LTA task document in ALL view",
+      "status": "passed",
+      "findings": "Characterizes the exact bug: resolveEntity lacks documents lookup, falls back to user's first entity ('ATA'), causing confirmUpload to query entity_id = 'ent-ata' for an LTA record and return 404 Not Found."
+    },
+    {
+      "test": "F02: document still shows in list queries despite 404 confirm failure",
+      "status": "passed",
+      "findings": "Proves why the document still shows: Step 1 (createDocument) already wrote metadata to DB and Step 2 uploaded binary to cloud storage. List queries do not filter by status = active."
+    },
+    {
+      "test": "F03: download-url preview fails with 409 Conflict because status remains stuck in pending_upload",
+      "status": "passed",
+      "findings": "Shows downstream impact: document remains in pending_upload status, blocking download and inline preview with 409 Conflict."
+    },
+    {
+      "test": "F04: subsequent document mutations (archive, comments) also fail with 404 for LTA records in ALL view",
+      "status": "passed",
+      "findings": "Proves that all document mutation routes (/comments, /archive, /unarchive, /lifecycle, PUT /) suffer from the identical entity resolution omission when active entity is ALL."
+    }
+  ]
+}

@@ -112,6 +112,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
   // =========================================================================
   describe('Challenge 1: Dependency validation rejects invalid values with 400 Bad Request', () => {
     const makePayloadWithDep = (depValue) => ({
+      dueDate: '2026-12-31',
       title: 'Adversarial Dependency Test',
       clientId: testClient.id,
       entity: 'ATA',
@@ -287,6 +288,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
     it('mid-transaction abort during tasks insert rolled back cleanly, retry with same key yields exactly one WR', async () => {
       const idempotencyKey = 'c2-task-fail-key-000000000001';
       const payload = {
+        dueDate: '2026-12-31',
         title: 'Transaction Abort Tasks Test',
         clientId: testClient.id,
         entity: 'ATA',
@@ -407,6 +409,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
     it('mid-transaction abort during task_assignees insert rolled back cleanly, retry succeeds', async () => {
       const idempotencyKey = 'c2-ta-fail-key-000000000002';
       const payload = {
+        dueDate: '2026-12-31',
         title: 'Transaction Abort Assignees Test',
         clientId: testClient.id,
         entity: 'ATA',
@@ -484,6 +487,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
     it('mid-transaction abort with body-only idempotency_key rolled back, retry succeeds, subsequent replay returns cached response', async () => {
       const idempotencyKey = 'c2-body-key-fail-000000000003';
       const payload = {
+        dueDate: '2026-12-31',
         idempotency_key: idempotencyKey,
         title: 'Body Key Failure & Retry Test',
         clientId: testClient.id,
@@ -582,6 +586,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
     it('rejects idempotency key reuse with modified payload with 422 Unprocessable Entity', async () => {
       const idempotencyKey = 'c2-tamper-key-000000000004';
       const originalPayload = {
+        dueDate: '2026-12-31',
         idempotency_key: idempotencyKey,
         title: 'Original Title Payload',
         clientId: testClient.id,
@@ -604,6 +609,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
 
       // 2. Reuse same key with different title
       const modifiedPayload = {
+        dueDate: '2026-12-31',
         ...originalPayload,
         title: 'Tampered Title Payload',
       };
@@ -625,6 +631,7 @@ describe('Adversarial Challenger Suite: PR-1 (challenger_m2_1)', () => {
   describe('Challenge 3: Co-assignees reliably persist and dual-write across all stores', () => {
     it('reliably persists co-assignees in task_assignees, tasks legacy columns, and work_requests.co_assignees', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'Dual-Write Assignment Verification',
         clientId: testClient.id,
         entity: 'ATA',

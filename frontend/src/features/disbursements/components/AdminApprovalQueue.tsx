@@ -8,6 +8,7 @@ import {
   FileText,
   User,
   Building,
+  AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,19 +36,29 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
   const currentUser = useSessionStore((state) => state.user);
   const canApprove = hasPermission(permissions, 'disbursement:approve');
 
-  // Query pending items
-  const { data: response, isLoading } = useDisbursementsList({
+  // Query pending and pending admin approval items
+  const { data: responsePending, isLoading: isLoadingPending } = useDisbursementsList({
     status: 'Pending',
   });
+  const { data: responsePendingAdmin, isLoading: isLoadingPendingAdmin } = useDisbursementsList({
+    status: 'Pending Admin Approval',
+  });
+  const isLoading = isLoadingPending || isLoadingPendingAdmin;
+
   const items = useMemo(() => {
-    const raw = response?.data ?? [];
+    const listPending = responsePending?.data ?? [];
+    const listPendingAdmin = responsePendingAdmin?.data ?? [];
+    const map = new Map<string, Disbursement>();
+    for (const item of listPending) map.set(item.id, item);
+    for (const item of listPendingAdmin) map.set(item.id, item);
+    const raw = Array.from(map.values());
     if (canApprove) return raw;
     return raw.filter((item) => {
       const creator = item.created_by || item.createdBy;
       const emp = item.employee_id || item.employeeId;
       return (creator && creator === currentUser?.id) || (emp && emp === currentUser?.id);
     });
-  }, [response, canApprove, currentUser?.id]);
+  }, [responsePending, responsePendingAdmin, canApprove, currentUser?.id]);
 
   // Mutations
   const { approveWithBlocking } = useApproveDisbursement();
@@ -179,16 +190,39 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
                     <Building className="h-3 w-3 text-slate-400" />
                     {clientName}
                   </span>
-                  {workRequestId && (
+                  {(item.linked_work_request_name || item.linked_work_request_order_number || workRequestId) && (
                     <span className="flex items-center gap-1">
                       <FileText className="h-3 w-3 text-slate-400" />
-                      WR: <span className="font-mono">{workRequestId.slice(0, 8)}...</span>
+                      WR:{' '}
+                      <span className="font-mono">
+                        {item.linked_work_request_name ||
+                          item.linked_work_request_order_number ||
+                          `${(workRequestId || '').slice(0, 8)}...`}
+                      </span>
                     </span>
                   )}
-                  {(item.requested_by || item.requestedBy || item.created_by || item.createdBy) && (
+                  {(item.employee_name ||
+                    item.employeeName ||
+                    item.requested_by_name ||
+                    item.requestedByName ||
+                    item.created_by_name ||
+                    item.createdByName ||
+                    item.requested_by ||
+                    item.requestedBy ||
+                    item.created_by ||
+                    item.createdBy) && (
                     <span className="flex items-center gap-1">
                       <User className="h-3 w-3 text-slate-400" />
-                      {item.requested_by || item.requestedBy || item.created_by || item.createdBy}
+                      {item.employee_name ||
+                        item.employeeName ||
+                        item.requested_by_name ||
+                        item.requestedByName ||
+                        item.created_by_name ||
+                        item.createdByName ||
+                        item.requested_by ||
+                        item.requestedBy ||
+                        item.created_by ||
+                        item.createdBy}
                     </span>
                   )}
                   {(item.receipt_filename || item.receiptFilename) && (
@@ -198,6 +232,27 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
                     </span>
                   )}
                 </div>
+
+                {/* Rejection notice on rejected vouchers */}
+                {item.status === 'Rejected' && (
+                  <div
+                    className="p-2.5 bg-rose-50 border border-rose-200 rounded-md text-xs text-rose-900 space-y-1 mt-2"
+                    data-testid={`rejection-display-${item.id}`}
+                  >
+                    <div className="font-semibold text-rose-800 flex items-center gap-1">
+                      <AlertCircle className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                      <span>Voucher Rejected</span>
+                    </div>
+                    <p className="text-rose-700 pl-4.5">
+                      Reason: {item.rejection_reason || item.rejectionReason || 'No reason specified'}
+                    </p>
+                    <p className="text-[10px] text-rose-600 pl-4.5">
+                      Rejected by: {item.rejected_by_name || item.rejectedByName || item.rejected_by || item.rejectedBy || 'Admin'}
+                      {(item.rejected_at || item.rejectedAt) &&
+                        ` on ${new Date(item.rejected_at || item.rejectedAt || '').toLocaleString()}`}
+                    </p>
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
@@ -213,7 +268,7 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
                       View Details
                     </Button>
                   )}
-                  {canApprove && (
+                  {canApprove && item.status !== 'Rejected' && (
                     <>
                       <Button
                         type="button"

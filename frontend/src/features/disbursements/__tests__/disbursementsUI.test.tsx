@@ -7,6 +7,8 @@ import { AdminApprovalQueue } from '../components/AdminApprovalQueue';
 import { FundsReleaseActions } from '../components/FundsReleaseActions';
 import { DisbursementsTable } from '../components/DisbursementsTable';
 import { DisbursementStatusBadge } from '../components/DisbursementStatusBadge';
+import { DisbursementDetailDrawer } from '../components/DisbursementDetailDrawer';
+import { DisbursementPrintModal } from '../components/DisbursementPrintModal';
 import { useSessionStore, type SessionState } from '@/lib/session';
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import { supabase } from '@/lib/supabase';
@@ -499,6 +501,74 @@ describe('Disbursements UI Components & Integration', () => {
       });
 
       expect(dispatchedBody!.receiptFilename).toBe('receipt.pdf');
+      expect(dispatchedBody!.receiptS3Key).toMatch(/^disbursements\/receipts\/.*receipt\.pdf$/);
+    });
+
+    it('prompts soft-warning when storage upload fails despite selecting a receipt file', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      const storageSpy = vi.spyOn(supabase.storage, 'from').mockReturnValue({
+        upload: vi.fn().mockResolvedValue({ data: null, error: new Error('Storage network unreachable') }),
+        remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+        getPublicUrl: vi.fn().mockReturnValue({ data: { publicUrl: '' } }),
+      } as any);
+
+      let dispatched = false;
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          dispatched = true;
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: { id: 'new-disb' } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: [] }),
+        };
+      });
+
+      const { wrapper } = createHarness();
+      render(
+        <CreateDisbursementModal
+          isOpen={true}
+          onClose={() => {}}
+          defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        />,
+        { wrapper }
+      );
+
+      fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '3500' } });
+      fireEvent.change(screen.getByTestId('textarea-description'), {
+        target: { value: 'Consultancy receipt payment' },
+      });
+
+      const dropzone = screen.getByTestId('receipt-dropzone');
+      const testFile = new File(['dummy-receipt-content'], 'receipt.pdf', { type: 'application/pdf' });
+      fireEvent.drop(dropzone, {
+        dataTransfer: {
+          files: [testFile],
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('receipt.pdf');
+      });
+
+      fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+
+      await waitFor(() => {
+        expect(confirmSpy).toHaveBeenCalledWith(
+          'No Government Assessment Document attached. Proceed anyway?'
+        );
+      });
+      expect(dispatched).toBe(false);
+
+      confirmSpy.mockRestore();
+      storageSpy.mockRestore();
     });
 
     it('allows removing an attached receipt before submission', async () => {
@@ -531,6 +601,52 @@ describe('Disbursements UI Components & Integration', () => {
         expect(screen.queryByTestId('receipt-attached-filename')).not.toBeInTheDocument();
         expect(screen.getByText('Drag and drop receipt here, or browse')).toBeInTheDocument();
       });
+    });
+
+    it('prompts soft-warning when submitting without receipt and cancels when rejected', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      let dispatched = false;
+
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          dispatched = true;
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: { id: 'new-disb' } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: [] }),
+        };
+      });
+
+      const { wrapper } = createHarness();
+      render(
+        <CreateDisbursementModal
+          isOpen={true}
+          onClose={() => {}}
+          defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        />,
+        { wrapper }
+      );
+
+      fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '500' } });
+      fireEvent.change(screen.getByTestId('textarea-description'), {
+        target: { value: 'Courier expenses' },
+      });
+
+      fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        'No Government Assessment Document attached. Proceed anyway?'
+      );
+      expect(dispatched).toBe(false);
+      confirmSpy.mockRestore();
     });
   });
 
@@ -757,6 +873,118 @@ describe('Disbursements UI Components & Integration', () => {
       render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
 
       expect(channelSpy).toHaveBeenCalledWith('cdc_disbursements');
+    });
+
+    it('renders all lifecycle badges with corresponding styling', () => {
+      const statusExpectations = [
+        { status: 'Submitted', expectedClasses: ['bg-blue-100', 'text-blue-800', 'border-blue-300'] },
+        { status: 'Pending Admin Approval', expectedClasses: ['bg-amber-100', 'text-amber-800', 'border-amber-300'] },
+        { status: 'Archived', expectedClasses: ['bg-slate-100', 'text-slate-700', 'border-slate-300'] },
+        { status: 'Released', expectedClasses: ['bg-purple-100', 'text-purple-800', 'border-purple-300'] },
+        { status: 'Funded', expectedClasses: ['bg-emerald-100', 'text-emerald-800', 'border-emerald-300'] },
+        { status: 'Rejected', expectedClasses: ['bg-rose-100', 'text-rose-800', 'border-rose-300'] },
+      ] as const;
+
+      statusExpectations.forEach(({ status, expectedClasses }) => {
+        const { container } = render(<DisbursementStatusBadge status={status} />);
+        const badge = container.querySelector('[data-testid="disbursement-status-badge"]');
+        expect(badge).toBeInTheDocument();
+        expect(badge?.textContent).toBe(status);
+        expectedClasses.forEach((cls) => {
+          expect(badge).toHaveClass(cls);
+        });
+      });
+    });
+  });
+
+  describe('DisbursementDetailDrawer & Governance', () => {
+    it('renders amber Modified by Accounting banner when edited_by_accounting is true', () => {
+      const modifiedItem: Disbursement = {
+        ...mockDisbursements[0]!,
+        id: 'disb-mod-1',
+        entity_id: 'ent-1',
+        edited_by_accounting: true,
+        linked_work_request_name: 'SEC Annual Filing 2026',
+        created_by_name: 'Maria Santos',
+        approved_by_name: 'Atty. Lorein Wong',
+      };
+
+      const { wrapper } = createHarness();
+      render(
+        <DisbursementDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          id="disb-mod-1"
+          initialDisbursement={modifiedItem}
+        />,
+        { wrapper }
+      );
+
+      const banner = screen.getByTestId('modified-by-accounting-banner');
+      expect(banner).toBeInTheDocument();
+      expect(banner).toHaveTextContent(/Modified by Accounting/i);
+      expect(screen.getByText('SEC Annual Filing 2026')).toBeInTheDocument();
+      expect(screen.getByText(/Maria Santos/)).toBeInTheDocument();
+    });
+
+    it('renders rejection details and suppresses submit/approve buttons for rejected voucher', () => {
+      const rejectedItem: Disbursement = {
+        ...mockDisbursements[0]!,
+        id: 'disb-rej-1',
+        entity_id: 'ent-1',
+        status: 'Rejected',
+        rejection_reason: 'Missing official tax invoice from vendor',
+        rejected_by_name: 'Atty. Lorein Wong',
+        rejected_at: '2026-10-11T10:00:00Z',
+      };
+
+      const { wrapper } = createHarness();
+      render(
+        <DisbursementDetailDrawer
+          isOpen={true}
+          onClose={vi.fn()}
+          id="disb-rej-1"
+          initialDisbursement={rejectedItem}
+        />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('drawer-rejection-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-rejection-reason')).toHaveTextContent(
+        'Missing official tax invoice from vendor'
+      );
+      expect(screen.getByText(/By Atty\. Lorein Wong/)).toBeInTheDocument();
+      expect(screen.queryByTestId('drawer-submit-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('drawer-approve-btn')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('DisbursementPrintModal Human-Readable Names', () => {
+    it('renders enriched human-readable names and Work Request name in print voucher', () => {
+      const printDisb: Disbursement = {
+        ...mockDisbursements[0]!,
+        id: 'disb-print-1',
+        entity_id: 'ent-1',
+        status: 'Approved',
+        employee_name: 'Maria Santos',
+        approved_by_name: 'Atty. Lorein Wong',
+        released_by_name: 'Jen Andoga',
+        linked_work_request_name: 'BIR Tax Compromise Docket #889',
+      };
+
+      render(
+        <DisbursementPrintModal
+          isOpen={true}
+          onClose={vi.fn()}
+          disbursement={printDisb}
+        />
+      );
+
+      expect(screen.getByTestId('sig-prepared-by')).toHaveTextContent(/Maria Santos/i);
+      expect(screen.getByTestId('sig-approved-by')).toHaveTextContent(/Atty\. Lorein Wong/i);
+      expect(screen.getByTestId('print-work-request')).toHaveTextContent(
+        'BIR Tax Compromise Docket #889'
+      );
     });
   });
 });

@@ -1,10 +1,10 @@
-# Disbursements API Contract
+# Disbursements API Contract (v2 Redesign)
 
-> **Owner**: Worker-FINPERM (Parcel P0-G)  
-> **Status**: Frozen (Wave 2)  
-> **Date**: 2026-10-03  
+> **Owner**: Backend Team / Authorized Redesign Workstream
+> **Status**: Authorized Redesign v2
+> **Date**: 2026-10-20
 >
-> Downstream modules (P0-H Contract Freeze, P2 Disbursements React Module) depend on these contracts.
+> Downstream modules (Frontend Disbursements Module, P0-H Contract, Accounting & Admin Dashboards) depend on these contracts.
 
 ---
 
@@ -12,63 +12,97 @@
 
 All HTTP endpoints require:
 - `Authorization: Bearer <supabase-jwt>`
-- `X-Active-Entity: ATA|LTA` (or `ALL` for badge counters)
+- `X-Active-Entity: ATA|LTA` (or `ALL` for badge counters and list views where authorized)
+
+### 1.1 Receipt Upload Entity Scoping (RECEIPT-ENTITY-20261021)
+Receipt upload reservation (`POST /v1/disbursements/receipt-uploads`) and completion (`POST /v1/disbursements/receipt-uploads/:uploadId/complete`) routes require an explicit, canonical `X-Active-Entity: ATA|LTA` header matching the target work request.
+- Submissions in consolidated `ALL` contexts with omitted or literal `ALL` headers return HTTP **400 `RECEIPT_ENTITY_REQUIRED`** before storage signing or database writes.
+- Malformed entity headers are rejected with 400 `RECEIPT_ENTITY_REQUIRED` rather than falling back upstream.
+- Single-entity user accounts with omitted header remain defaulted to their single authorized entity.
+- Receipt claim during voucher creation executes atomically via database RPC `receipt_reservation_claim`.
+
+All mutation requests on v2 vouchers require optimistic concurrency control (OCC) via `expectedVersion` (positive non-null integer).
 
 All error responses conform to RFC 7807 `application/problem+json`:
 ```json
 {
   "status": 403,
   "title": "Forbidden",
-  "detail": "Permission disbursement:approve is required"
+  "detail": "Permission disbursement:approve is required",
+  "code": "FORBIDDEN"
 }
 ```
 
 ---
 
-## 2. Disbursement Status Lifecycle
+## 2. Canonical Status Lifecycle (v2)
 
 Disbursement records follow this deterministic lifecycle:
 ```
-                      ┌───────────────┐
-                      │  Staff Create │
-                      └───────┬───────┘
-                              ▼
-┌──────────────┐   submit   ┌─────────┐   approve   ┌──────────┐   release   ┌──────────┐   fund   ┌────────┐
-│    Draft     ├───────────►│ Pending ├────────────►│ Approved ├────────────►│ Released ├─────────►│ Funded │
-└──────────────┘            └────┬────┘             └──────────┘             └──────────┘          └────────┘
-  ▲ (Mgmt/Acct/Admin              │
-     Create)                      │ reject
-                                  ▼
-                            ┌──────────┐
-                            │ Rejected │
-                            └──────────┘
+                ┌────────────────────────────────┐
+                │        Creator (Any Staff)     │
+                └───────────────┬────────────────┘
+                                │ POST /v1/disbursements
+                                ▼
+                       ┌─────────────────┐
+                       │      Draft      │◄───────────────────────────┐
+                       │ review_ready: T │                            │
+                       └────────┬────────┘                            │
+                                │ POST /:id/approve                   │
+                                │ (Admin only; non-self)              │
+                                ▼                                     │
+                       ┌─────────────────┐                            │
+                       │    Approved     │                            │
+                       └────────┬────────┘                            │
+                                │ POST /:id/fund                      │
+                                │ (Accounting/Admin; 4 payment fields)│
+                                ▼                                     │
+                       ┌─────────────────┐   POST /:id/resend_draft   │
+                       │     Funded      ├────────────────────────────┤
+                       └────────┬────────┘   (Admin only;             │
+                                │             review_ready: false)    │
+                                │ POST /:id/release                   │
+                                │ (Admin only; preparer allowed)          │
+                                ▼                                     │
+                       ┌─────────────────┐                            │
+                       │    Released     │                            │
+                       └────────┬────────┘                            │
+                                │ POST /:id/archive                   │
+                                │ (Admin only)                        │
+                                ▼                                     │
+                       ┌─────────────────┐                            │
+                       │    Archived     │                            │
+                       │ archived: true  │                            │
+                       └─────────────────┘                            │
+                                                                      │
+  Rejection Flow:                                                     │
+  - From Draft or Funded: POST /:id/reject ──► [ Rejected ]          │
+  - Resend Draft Flow:                                                │
+    From Rejected: POST /:id/resend_draft ──────────────────┘
 ```
 
-- **Creation Routing (AC-1, R1):**
-  - Staff creators (`HR`, `Operations`, `Documentation`) produce records initialized in `Pending`.
-  - Non-staff creators (`Management`, `Accounting`, `Admin`) produce records initialized in `Draft`.
-  - Client-supplied `status` values on creation are strictly prohibited; status forgery returns HTTP `400 Bad Request`.
-- **Approval Gate (AC-2, R2, R3):**
-  - Only `Admin` holding `disbursement:approve` can approve disbursements.
-  - Transitions strictly from `Pending` → `Approved`.
-  - Approving a disbursement in any status other than `Pending` (including already-`Approved` or `Draft`) returns HTTP `409 Conflict`.
-- **Rejection Flow (AC-3, R2, R5):**
-  - Only `Admin` holding `disbursement:approve` can reject disbursements.
-  - Requires mandatory non-empty `reason` string (trimmed length >= 1; HTTP `400 Bad Request` if missing or whitespace).
-  - Transitions strictly from `Pending` → `Rejected` (rejecting from `Approved` or `Draft` returns HTTP `409 Conflict`).
-  - Stores `rejection_reason`, `rejected_by`, `rejected_at` on the disbursement record.
-  - Emits in-app `pending_request.resolved` notification to the creator (`requested_by`). Notification failures are non-blocking.
+### 2.1 Governance Rules & Invariants
+1. **Creation Routing**: All new v2 vouchers enter `status = 'Draft'` with `lifecycle_version = 2`, `review_ready = true`. Creation status is never role-dependent. Status forgery in creation payload returns HTTP `400 Bad Request`.
+2. **Initial History**: Automatically recorded in `status_history` via database trigger in the creation transaction (`old_status: null, new_status: 'Draft', action: 'create'`).
+3. **Admin Authority & Auditability**:
+   - `Admin` may approve their own ready Draft request. A second Admin is not required for initial approval; attribution, version checks and audit history are still mandatory.
+   - Admin may release a payment they prepared, including their own request. Existing Funded state, persisted instrument fields, expectedVersion, role/entity access and atomic history are still required.
+4. **Funding Gate**: Strict `Accounting` role/department (or `Admin`). Management roles lacking explicit Accounting department membership cannot fund. Requires 4 payment fields: `method`, `bank`, `reference`, `date`.
+5. **Rejection**: Allowed only from `Draft` and `Funded`. Forbidden from `Approved` or `Released`. Requires non-empty `reason` string (1-500 chars).
+6. **Return for Correction (`POST /:id/resend_draft`)**: Transitions from `Rejected` back to `Draft` with `review_ready = false`. Clears previous approval/funding attribution. Actual edit (`PUT /:id`) with content changes flips `review_ready` back to `true`.
+7. **Archival**: Archiving is a flag (`archived: true`), not a status. Only v2 `Released` vouchers can be archived.
+8. **Financial Freeze**: Once `Approved`, financial fields are frozen. Only `Admin` may edit nonfinancial `print_details` on `Released` vouchers.
+9. **Existing-record compatibility**: Previously saved test vouchers retain their saved status, amount, payment attribution and attachments. They remain viewable/printable and stay outside the new financial-action queues. There is no classification status, reconciliation endpoint or review tab. Create a new request to exercise the updated workflow.
 
 ---
 
 ## 3. Endpoints
 
 ### 3.1 Create Disbursement
-
 - **Method**: `POST`
 - **Path**: `/v1/disbursements`
-- **Guard**: `disbursement:create` (granted to all departments per P0-A)
-- **Request Body**:
+- **Guard**: `disbursement:create`
+- **Payload**:
 ```json
 {
   "category": "Transportation",
@@ -78,143 +112,144 @@ Disbursement records follow this deterministic lifecycle:
   "clientId": "11111111-1111-1111-1111-111111111111",
   "linkedWorkRequestId": "33333333-3333-3333-3333-333333333333",
   "linkedTaskId": "44444444-4444-4444-4444-444444444444",
-  "linkedTransmittalId": null,
   "dueDate": "2026-10-31",
   "notes": "Original receipt submitted to admin"
 }
 ```
-*Note: Any client payload including a `status` field is rejected with HTTP 400.*
-
-- **Response (201 Created — Staff creator)**:
+- **Response (201 Created)**:
 ```json
 {
   "data": {
     "id": "c1f54790-21a4-4f9e-a0e2-638bc93a8d11",
-    "disbursement_number": "DISB-ATA-20261003-0001",
+    "disbursement_number": "DISB-ATA-20261020-0001",
     "entity_id": "ent-ata",
     "entity_code": "ATA",
     "category": "Transportation",
     "description": "Travel expenses for client onsite visit",
     "amount": 2500,
     "fund_source": "Firm Fund",
-    "status": "Pending",
-    "requested_by": "user-uuid",
-    "created_by": "user-uuid",
-    "updated_by": "user-uuid",
-    "created_at": "2026-10-03T12:00:00.000Z",
-    "version": 1
-  }
-}
-```
-
-- **Response (201 Created — Management / Accounting / Admin creator)**:
-```json
-{
-  "data": {
-    "id": "c1f54790-21a4-4f9e-a0e2-638bc93a8d11",
     "status": "Draft",
-    "disbursement_number": "DISB-ATA-20261003-0002"
+    "lifecycle_version": 2,
+    "review_ready": true,
+    "archived": false,
+    "version": 1,
+    "created_at": "2026-10-20T01:00:00.000Z"
   }
 }
 ```
-
-- **Error Responses**:
-  - `400 Bad Request`: Validation failure or status forgery attempt (`"Explicit status cannot be set on creation; status forgery is prohibited"`).
-  - `401 Unauthorized`: Missing or invalid bearer token.
-  - `403 Forbidden`: User lacks `disbursement:create`.
 
 ---
 
 ### 3.2 Approve Disbursement
-
 - **Method**: `POST`
 - **Path**: `/v1/disbursements/:id/approve`
-- **Guard**: `disbursement:approve` (strictly Admin only per R3)
-- **Request Body**: empty or `{}`
-- **Response (200 OK)**:
+- **Guard**: `Admin` only (`disbursement:approve`)
+- **Payload**:
 ```json
 {
-  "data": {
-    "id": "c1f54790-21a4-4f9e-a0e2-638bc93a8d11",
-    "disbursement_number": "DISB-ATA-20261003-0001",
-    "status": "Approved",
-    "approved_by": "admin-uuid",
-    "approved_at": "2026-10-03T12:30:00.000Z",
-    "version": 2
-  }
+  "expectedVersion": 1
 }
 ```
-- **Side Effect**: Dispatches non-blocking `pending_request.resolved` notification to `requested_by`.
-- **Error Responses**:
-  - `401 Unauthorized`: Missing authentication.
-  - `403 Forbidden`: User lacks `disbursement:approve` (non-admin caller).
-  - `404 Not Found`: Disbursement does not exist.
-  - `409 Conflict`: Disbursement status is not `Pending` (e.g. already `Approved` or in `Draft`).
+- **Response (200 OK)**: Returns updated voucher with `status = 'Approved'`, `version = 2`, `approved_by`, `approved_at`.
 
 ---
 
-### 3.3 Reject Disbursement
+### 3.3 Fund Disbursement
+- **Method**: `POST`
+- **Path**: `/v1/disbursements/:id/fund`
+- **Guard**: `Accounting` or `Admin` (`disbursement:fund`)
+- **Payload**:
+```json
+{
+  "expectedVersion": 2,
+  "payment_method": "Bank Transfer",
+  "payment_bank": "BDO Corporate",
+  "payment_reference": "BDO-20261020-992",
+  "payment_date": "2026-10-20"
+}
+```
+*(Also accepts camelCase aliases: `paymentMethod`, `paymentBank`, `paymentReference`, `paymentDate`)*
+- **Response (200 OK)**: Returns updated voucher with `status = 'Funded'`, `funded_by`, `funded_at`, and payment details.
 
+---
+
+### 3.4 Release Disbursement
+- **Method**: `POST`
+- **Path**: `/v1/disbursements/:id/release`
+- **Guard**: `Admin` only (`disbursement:mark_released`)
+- **Payload**:
+```json
+{
+  "expectedVersion": 3
+}
+```
+- **Response (200 OK)**: Returns updated voucher with `status = 'Released'`, `released_by`, `released_at`.
+
+---
+
+### 3.5 Reject Disbursement
 - **Method**: `POST`
 - **Path**: `/v1/disbursements/:id/reject`
-- **Guard**: `disbursement:approve` (strictly Admin only per R3)
-- **Request Body**:
+- **Guard**: `Admin` only (`disbursement:approve`)
+- **Payload**:
 ```json
 {
-  "reason": "Exceeds quarterly department budget for onsite visits"
+  "expectedVersion": 1,
+  "reason": "Missing supporting official receipt."
 }
 ```
-- **Validation**: `reason` must be a non-empty, trimmed string (max 500 characters).
-- **Response (200 OK)**:
-```json
-{
-  "data": {
-    "id": "c1f54790-21a4-4f9e-a0e2-638bc93a8d11",
-    "disbursement_number": "DISB-ATA-20261003-0001",
-    "status": "Rejected",
-    "rejected_by": "admin-uuid",
-    "rejected_at": "2026-10-03T12:35:00.000Z",
-    "rejection_reason": "Exceeds quarterly department budget for onsite visits",
-    "version": 2
-  }
-}
-```
-- **Side Effect**: Dispatches non-blocking `pending_request.resolved` notification to `requested_by`.
-- **Error Responses**:
-  - `400 Bad Request`: `reason` is missing, empty, or whitespace-only.
-  - `401 Unauthorized`: Missing authentication.
-  - `403 Forbidden`: User lacks `disbursement:approve` (non-admin caller).
-  - `404 Not Found`: Disbursement does not exist.
-  - `409 Conflict`: Disbursement status is not `Pending` (e.g. attempting to reject from `Approved`, `Draft`, or `Rejected`).
+- **Response (200 OK)**: Returns updated voucher with `status = 'Rejected'`, `rejection_reason`, `rejected_by`, `rejected_at`.
 
 ---
 
-## 4. Notification Integration (`pending_request.resolved`)
-
-On approval or rejection, the resolution event is dispatched to the disbursement creator (`requested_by || created_by`):
-
-- **Type**: `pending_request.resolved`
-- **Payload Schema**:
+### 3.6 Resend Draft (Return for Correction)
+- **Method**: `POST`
+- **Path**: `/v1/disbursements/:id/resend_draft`
+- **Guard**: `Admin` only
+- **Payload**:
 ```json
 {
-  "request_id": "c1f54790-21a4-4f9e-a0e2-638bc93a8d11",
-  "table_name": "disbursements",
-  "outcome": "approved" | "rejected",
-  "reason": "Exceeds quarterly budget allocation",
-  "title": "DISB-ATA-20261003-0001"
+  "expectedVersion": 2,
+  "reason": "Please attach complete breakdown of transportation items."
 }
 ```
-- **Error Behavior**: Dispatched asynchronously via non-blocking try/catch. Notification failure NEVER fails the HTTP approve/reject transaction (Rule R5).
+- **Response (200 OK)**: Returns updated voucher with `status = 'Draft'`, `review_ready = false`, and cleared approval/funding fields.
 
 ---
 
-## 5. Summary of Rules
+### 3.7 Archive & Unarchive
+- **Method**: `POST`
+- **Path**: `/v1/disbursements/:id/archive` and `/v1/disbursements/:id/unarchive`
+- **Guard**: `Admin` only
+- **Payload**:
+```json
+{
+  "expectedVersion": 4,
+  "reason": "Archived after fiscal year reconciliation."
+}
+```
+- **Response (200 OK)**: Returns updated voucher with `archived = true` (or `false`), `archived_at`, `archived_by`.
 
-| Rule | Enforcement | Result on Violation |
-|---|---|---|
-| R1 | Client status forgery rejected | HTTP 400 Bad Request |
-| R2 | Approve/reject valid only from `Pending` | HTTP 409 Conflict |
-| R2 | Rejection reason strictly mandatory | HTTP 400 Bad Request |
-| R3 | `disbursement:approve` held strictly by Admin | HTTP 403 Forbidden |
-| R5 | Notification emission non-blocking | HTTP 200 preserved |
-| R6 | Existing release / fund workflow untouched | Maintained |
+---
+
+### 3.8 Existing saved test vouchers
+
+Existing records can be read and printed using the standard endpoints. No manual classification API is exposed. Their original saved values are preserved. New requests alone enter the current approval/payment queues; older saved records cannot accidentally be interpreted as a fresh payment awaiting release.
+
+---
+
+## 4. Work Queues & Queue Predicates
+
+`GET /v1/disbursements?queue=<queue_name>` supports five server-side filtered queues:
+
+1. `initial_requests`:
+   - `lifecycle_version = 2 AND status = 'Draft' AND review_ready = true AND archived = false`
+2. `ready_for_funding`:
+   - `lifecycle_version = 2 AND status = 'Approved' AND archived = false`
+3. `payment_releases`:
+   - `lifecycle_version = 2 AND status = 'Funded' AND archived = false`
+4. `needs_correction`:
+   - `lifecycle_version = 2 AND status = 'Draft' AND review_ready = false AND archived = false`
+
+
+`GET /v1/disbursements/counts` returns counts for all five queues plus status totals.

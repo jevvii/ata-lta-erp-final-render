@@ -1,40 +1,36 @@
-# Project: Real-Time Caching & CDC Synchronization Remediation (SPEC-REALTIME-SYNC-001)
+# ATA & LTA ERP — System Projects & Architecture Documentation
+
+This repository tracks two major remediation milestones:
+1. **Real-Time Caching & CDC Synchronization Remediation** (Milestones M1–M6, documented in Part 1).
+2. **RBAC & UI Remediation across ERP System** (Lanes A–D & E2E Track, documented in Part 2).
+
+---
+
+# Part 1: Real-Time Caching & CDC Synchronization Remediation
 
 ## Architecture
-The Real-Time Caching and CDC Synchronization architecture resolves multi-user stale cache snapshots and unifies PostgreSQL logical replication with TanStack Query client caches across the ATA/LTA ERP platform:
-1. **PostgreSQL Logical Replication & Supabase Realtime Publication**:
-   - `supabase_realtime` publication expanded to include all collaborative entities: `work_requests`, `tasks`, `operations_requests`, `notifications`, `disbursements`, `invoices`, `transmittals`, `documents`, `task_assignees`.
-   - `REPLICA IDENTITY FULL` configured across all 9 collaborative tables ensuring complete previous row attributes (`payload.old`) during UPDATE and DELETE operations.
-2. **Frontend CDC Normalization & Reconciler Subsystem**:
-   - Dual-case normalization engine (`normalizeCdcPayload`) bridging snake_case PostgreSQL attributes with camelCase API models in TanStack Query.
-   - Comprehensive soft-delete eviction (`deleted_at != null || deletedAt != null` treated as `isDelete`), evicting detail caches, filtering list caches, and removing tasks from phase containers (`patchTaskInPhases`).
-   - Precision query matching (`isTaskListOfTargetWr`) preventing cross-work-request task cache pollution under `listRootKey`.
-   - Cross-domain co-invalidations propagating task mutations to work request details, work request counts, taskRelated queries, and linked financial/transmittal/document records.
-3. **Reactive In-App Notifications Subsystem**:
-   - User-scoped real-time subscription (`user_id=eq.${user.id}`) in `useNotificationRealtimeSync`.
-   - Immediate unread counter increment in `useSessionStore` and cache prepending on notification INSERT.
-   - Live subscription mounted in `NotificationBellPanel.tsx`.
-4. **Reactive Operations Requests & Approvals**:
-   - Real-time subscription for `operations_requests` mounted in `operations.tsx`.
-   - Live badge counters and inbox lists updating on request creation, approval, and rejection.
-5. **Reactive Kanban Board & Task Detail Modal**:
-   - `selectedTask` synchronized with live TanStack tasks query cache in `PhaseKanbanBoard.tsx`.
-   - Gate calculations (`gateInfo`) and phase columns strictly excluding soft-deleted tasks (`!t.deletedAt && !t.deleted_at`).
-   - `TaskDetailModal.tsx` bound to live query `useTaskDetail(task?.workRequestId, task?.id)` with fallback.
-   - Invalidation of `operationsKeys.taskRelated(task.id)` on closure of linked invoice, disbursement, transmittal, and document modals.
+The system comprises a Node.js/Express backend (`Project4_Final-Render` / `backend`) and a React 19 single-page application (`ata-lta-erp-v2` / `frontend`). Database and change data capture (CDC) are powered by Supabase (PostgreSQL with Row Level Security and Realtime logical replication via publication `supabase_realtime`).
+
+Data flow:
+1. Database mutation occurs via backend API (or direct client action where permitted).
+2. PostgreSQL logical replication publishes CDC payload (`INSERT`, `UPDATE`, `DELETE`) to the `supabase_realtime` publication with `REPLICA IDENTITY FULL`.
+3. Frontend client subscribes via `useEntityRealtimeSync` hook over WebSocket channel `entity-sync:${table}:${activeEntity}`.
+4. Payload passes through normalization dictionary producing dual camelCase / snake_case properties.
+5. TanStack Query cache is patched in-place (or invalidated) and relevant cross-entity query keys are co-invalidated.
+6. React UI updates reactively without page reload.
 
 ## Feature Inventory
-| # | Feature | Description | Milestone | Source | Status |
-|---|---------|-------------|-----------|--------|--------|
-| 1 | Backend Realtime Publication Expansion | Idempotently register `operations_requests`, `notifications`, `transmittals`, `documents`, and `task_assignees` to `supabase_realtime` in migration 000061 | M1 | SPEC §4 Parcel 1 | DONE |
-| 2 | Backend Replica Identity Full | Set `REPLICA IDENTITY FULL` on `work_requests`, `tasks`, `operations_requests`, `notifications`, `disbursements`, `invoices`, `transmittals`, `documents`, `task_assignees` | M1 | SPEC §4 Parcel 1 | DONE |
-| 3 | Backend Down Migration Idempotency | Idempotent down migration safely dropping added tables from `supabase_realtime` publication | M1 | SPEC §4 Parcel 1 | DONE |
-| 4 | Backend Migration Unit Tests | Author comprehensive migration unit test suite for migration 000061 matching `migrations_realtime.spec.js` | M1 | Backend Test Harness | DONE |
-| 5 | Dual-Case Normalization Engine | Implement `normalizeCdcTask`, `normalizeCdcWorkRequest`, `normalizeCdcOperationsRequest`, `normalizeCdcNotification`, `normalizeCdcPayload` producing dual camelCase & snake_case properties | M2 | SPEC §4 Parcel 2 | DONE |
-| 6 | Accurate Soft-Delete Eviction | Detect `deleted_at != null || deletedAt != null` as `isDelete = true`, evicting detail cache, filtering list queries, and purging from phase containers | M2 | SPEC §4 Parcel 2 | DONE |
-| 7 | Scoped Task List Query Matcher | Enforce `isTaskListOfTargetWr` so `targetWrId` task mutations do not contaminate sibling WR list caches under `listRootKey` | M2 | SPEC §4 Parcel 2 | DONE |
-| 8 | Task Mutation Query Co-Invalidations | Patch `tasks` and `taskDetail`, invalidate `operationsKeys.workRequestDetail(targetWrId)`, `operationsKeys.workRequestCounts(activeEntity)`, and `operationsKeys.taskRelated(id)` | M2 | SPEC §4 Parcel 2 | DONE |
-| 9 | Cross-Domain Co-Invalidations | `invoices`, `disbursements`, `transmittals`, `documents` invalidate `operationsKeys.taskRelated(taskId)`; `operations_requests` invalidates `requests()`, `requestCounts()`, and `workRequestDetail(wrId)`; `task_assignees` invalidates task queries | M2 | SPEC §4 Parcel 2 | DONE |
+| # | Feature Name | Description | Milestone | Spec Section | Status |
+|---|--------------|-------------|-----------|--------------|--------|
+| 1 | Enable Collaborative Realtime Publication & Replica Identity | Add tables (`operations_requests`, `notifications`, `transmittals`, `documents`, `task_assignees`) to `supabase_realtime` publication with `REPLICA IDENTITY FULL` | M1 | SPEC §4 Parcel 1 | DONE |
+| 2 | Verification Unit Tests for Publication Migration | Automated unit test verifying migration script creates publication tables and sets replica identity | M1 | SPEC §4 Parcel 1 | DONE |
+| 3 | Core CDC Reconciler Overhaul | Rewrite `useEntityRealtimeSync.ts` to implement single-record detail patching, array-item patching, soft-delete eviction, and parent phase container patching | M2 | SPEC §4 Parcel 2 | DONE |
+| 4 | Dual-Case Normalization Engine | Build normalization dictionary (`normalizeCdcTask`, `normalizeCdcWorkRequest`, `normalizeCdcOperationsRequest`, `normalizeCdcNotification`, `normalizeCdcPayload`) ensuring dual camelCase/snake_case keys | M2 | SPEC §4 Parcel 2 | DONE |
+| 5 | Accurate Soft-Delete Eviction | Detect soft-deletes (`deleted_at != null || deletedAt != null`) as `isDelete = true`, evicting detail cache, filtering list queries, and removing embedded task from parent WR | M2 | SPEC §4 Parcel 2 | DONE |
+| 6 | Scoped Task List Query Matcher | Enforce `isTaskListOfTargetWr` so task mutations under `wr-A` never pollute `wr-B` task lists | M2 | SPEC §4 Parcel 2 | DONE |
+| 7 | Task Mutation Cross-Domain Co-Invalidations | When tasks update, co-invalidate `workRequestDetail(wrId)`, `workRequestCounts(entity)`, and `taskRelated(taskId)` | M2 | SPEC §4 Parcel 2 | DONE |
+| 8 | Linked Entity Co-Invalidations | Invoices, disbursements, transmittals, and documents co-invalidate `taskRelated(taskId)` on relevant mutations | M2 | SPEC §4 Parcel 2 | DONE |
+| 9 | Operations Requests Co-Invalidations | Request mutations co-invalidate `requests()`, `requestCounts()`, and parent `workRequestDetail(wrId)` | M2 | SPEC §4 Parcel 2 | DONE |
 | 10 | User-Scoped Realtime Notification Hook | Implement `useNotificationRealtimeSync` hook subscribing to `notifications` filtered by `user_id=eq.${user.id}` | M3 | SPEC §4 Parcel 3 | DONE |
 | 11 | Immediate Unread Counter Store Mutation | Increment `unreadCount` in `useSessionStore` and prepend incoming notification to `dashboardKeys.notifications.all` on INSERT | M3 | SPEC §4 Parcel 3 | DONE |
 | 12 | Notification Bell Panel Live Mount | Mount `useNotificationRealtimeSync` in `NotificationBellPanel.tsx` ensuring instant badge counter increments | M3 | SPEC §4 Parcel 3 | DONE |
@@ -99,38 +95,129 @@ The Real-Time Caching and CDC Synchronization architecture resolves multi-user s
 - Root Key: `dashboardKeys.notifications.all`
 - On INSERT: Immediately increment `unreadCount` in `useSessionStore` and prepend to notifications list.
 
-### 6. P0-B ↔ P0-G (Notify Service Contract)
-- **Signature:** `notify(userIds: string[], type: string, payload: object): Promise<void>`
-- **Frozen Types:**
-  - `pending_request.resolved`: `{ request_id, table_name, outcome: 'approved'|'rejected', reason?, title }`
-  - `wr.transition_request.received`: `{ request_id, work_request_id, wr_title, from_phase, to_phase, requested_by_name }`
-  - `wr.transition_request.resolved`: `{ request_id, work_request_id, outcome, reason?, to_phase }`
-  - `wr.qa_reroute`: `{ work_request_id, wr_title, to_phase, reason, failed_task_ids: [] }`
-- **Error Behavior:** Any DB error inside `notify()` is caught and logged; it resolves cleanly and NEVER throws to the caller. Unknown type throws HTTP 400 AppError.
+---
 
-### 7. P0-C ↔ Downstream (Database Schema)
-- `work_requests.phase` is nullable text, constrained to `('intake', 'pre_processing', 'processing', 'review', 'quality_assurance', 'completed')`.
-- `work_requests.status` CHECK constraint is a superset containing all 10 legacy values plus `'Quality Assurance'`.
-- `tasks.assigned_by` (uuid) and `tasks.assigned_at` (timestamptz) added.
-- `task_assignees` join table created: `(task_id uuid, user_id uuid, assigned_by uuid, assigned_at timestamptz)`.
+# Part 2: RBAC & UI Remediation across ERP System
 
-### 8. P0-G ↔ Downstream (Disbursements & Billing)
-- `POST /v1/disbursements/:id/approve` (guard: `disbursement:approve`, Admin only).
-- `POST /v1/disbursements/:id/reject` (guard: `disbursement:approve`, body: `{ reason: string }`).
-- `PATCH /v1/invoices/:id` (field-level security: body with `address` requires `billing:edit_client_address`).
+## Architecture
+The system comprises a Node.js/Express backend, an enterprise React frontend (`ata-lta-erp-final-enterprise-v2`), and a legacy prototype SPA (`erp_prototype/` in `ata-lta-erp-final-render`).
+Database access utilizes Supabase (PostgreSQL with Row Level Security and service-role admin access in backend services).
+
+Data flow & Enforcement model:
+1. **Server-Side Authorization Authority**: All authorization decisions for Disbursements reads, Invoice Requests, Transmittal operations, and Retainer Template modifications are strictly enforced in backend controllers and services.
+2. **Client Alignment**: React and Prototype UIs reflect server-side permissions to provide clean UX, disable/hide unauthorized triggers, normalize deep links, and gracefully handle any unauthorized attempts.
+3. **Dual Worktree Structure**:
+   - `ata-lta-erp-final-render` (`staging` branch @ `2efa1da`): Backend APIs (`backend/`) and Prototype SPA (`erp_prototype/`).
+   - `ata-lta-erp-final-enterprise-v2` (`enterprise-v2` branch @ `bde5aa2`): Enterprise React frontend (`frontend/`).
+
+---
+
+## Feature Inventory
+Every feature identified during the Survey phase is enumerated here with its assigned milestone:
+
+| # | Feature ID | Feature Name | Description | Milestone | Source |
+|---|---|---|---|---|---|
+| 1 | `F01` | Disbursement Read Creator-Only Filter | For non-Admin/non-Accounting users, `listDisbursements` and `getDisbursementById` strictly require `created_by === caller.id`. Remove status, payee, requester, and WR bypasses. | M1 | Survey / Spec §3, §5 |
+| 2 | `F02` | Disbursement Badge Counts Creator Scoping | `getDisbursementCounts` counts only records where `created_by === caller.id` for non-Admin/non-Accounting users. | M1 | Survey / Spec §3, §5 |
+| 3 | `F03` | Disbursement Own Records Outside WR Membership | Users can view own created disbursements even if `linked_work_request_id` is null or in a WR where user is not a team member. | M1 | Survey / Spec §3, §5 |
+| 4 | `F04` | Related Disbursements Scoping | `getWorkRequestRelated` and `getTaskRelated` in operations service filter disbursements by `created_by === caller.id` for non-Admin/non-Accounting callers. | M1 | Survey / Audit §4 |
+| 5 | `F05` | Invoice Request Documentation Denial | Non-Admin accounts with effective Documentation membership cannot create billing requests (`type: 'billing'`), returning 403 Forbidden. | M2 | Survey / Spec §3, §6 |
+| 6 | `F06` | Transmittal Task Assignment Enforcement | Transmittal create, update, and send require non-Admin Documentation users to be primary or co-assignee on the linked task (`isTaskAssignee`). | M2 | Survey / Spec §3, §6 |
+| 7 | `F07` | Transmittal Blank/Whole-Project Rejection | Submitting a transmittal without a valid task selection is rejected (400 Bad Request) for restricted Documentation users. | M2 | Survey / Spec §3, §6 |
+| 8 | `F08` | Retainer Templates Manager Role Access | Grant `retainers:edit` to role `Manager` in permissions matrix, while department name alone is insufficient and task templates remain Admin-only. | M2 | Survey / Spec §3, §8 |
+| 9 | `F09` | React Invoice Request UI Guard | `canRequestInvoice` returns false for users with Documentation membership. Admin/Accounting direct linking preserved. | M3 | Survey / Spec §3, §6 |
+| 10 | `F10` | React Transmittals UI Assignment & Task Guard | `canLinkTransmittal` requires `isTaskAssignee` for Documentation. `TransmittalFormModal` filters tasks and rejects blank selections. | M3 | Survey / Spec §3, §6 |
+| 11 | `F11` | React Retainer Templates Tab & Deep-Link Guard | Guard `retainer-templates` tab trigger and content to Admin and role Manager. Normalize unauthorized tab URLs to `work-requests`. | M3 | Survey / Spec §3, §7 |
+| 12 | `F12` | React Pending Approvals Tab & Deep-Link Guard | Guard `pending-approvals` tab trigger, content, and queries to users with approval authority. Normalize unauthorized tab URLs to `work-requests`. | M3 | Survey / Spec §3, §7 |
+| 13 | `F13` | React Date Field Layout Verification | Verify Work Request modal date picker layout across viewports (confirmed non-defective in React; keep layout stable). | M3 | Survey / Spec §7 |
+| 14 | `F14` | Prototype Disbursement Read Visibility Alignment | `canViewDisbursement` restricts non-Admin/non-Accounting to `d.createdBy === this.user.id`. Remove status and WR team bypasses. | M4 | Survey / Spec §8 |
+| 15 | `F15` | Prototype Transmittal Modal Whole-Project & Task Guard | Remove "Whole Project" option and filter task dropdown to assigned tasks for Documentation users in transmittal modal. | M4 | Survey / Spec §8 |
+| 16 | `F16` | Prototype Retainer Templates Role Guard | Gating in `workflow.js` updated to allow `Admin` and `Manager` (replacing `workflow:approve`). | M4 | Survey / Spec §8 |
+| 17 | `F17` | Prototype Work Request Datepicker Scoped Styling | Apply scoped CSS rule (`#wr-form .notion-prop--due-date .mdp-wrapper { max-width: 220px; width: 100%; }`) to prevent flex stretching in WR modal. | M4 | Survey / Spec §8, Audit §1 |
+| 18 | `F18` | Cross-Worktree Integration & E2E Test Suite | Comprehensive opaque-box E2E test verification across Tiers 1-4 and adversarial Tier 5, with final evidence report. | M5 | Survey / ORIGINAL_REQUEST |
+
+---
+
+## Milestones
+
+| # | Name | Scope | Dependencies | Status |
+|---|---|---|---|---|
+| E2E | E2E Testing Track | Design and build comprehensive opaque-box test suite across Tiers 1-4, publish TEST_READY.md | none | DONE |
+| M1 | Lane A: Disbursements Backend | F01, F02, F03, F04: Server-side creator-only read enforcement and counts scoping | none | DONE |
+| M2 | Lane B: Billing & Transmittals Backend | F05, F06, F07, F08: Server-side billing request denial, transmittal task assignment, and retainer template permissions | none | DONE |
+| M3 | Lane C: React Frontend | F09, F10, F11, F12, F13: Client-side UI guards, tab normalization, and date field stability | M1, M2 interface contracts | DONE |
+| M4 | Lane D: Prototype UI | F14, F15, F16, F17: Legacy SPA authorization alignment and scoped datepicker CSS fix | M1, M2 interface contracts | DONE |
+| M5 | Final Milestone: Integration & E2E Pass | F18: Pass 100% of E2E test suite (Tiers 1-4), adversarial hardening (Tier 5), and generate Final Evidence Report | M1, M2, M3, M4, E2E | DONE |
+
+---
+
+## Interface Contracts
+
+### 1. Operations Requests (`POST /v1/operations-requests`)
+- **Request Body**: `{ type: 'billing', workRequestId: string, taskId: string, ... }`
+- **Caller Context**: `req.user` with `role` and `departments` array.
+- **Authorization Rule**: If `user.role !== 'Admin'` AND (`user.role === 'Documentation'` OR `user.departments.includes('Documentation')`), return `403 Forbidden`:
+  `{ title: 'Forbidden', detail: 'Documentation users cannot request invoice billing' }`.
+- **Exemptions**: Admin and Accounting can link invoices directly without operations requests.
+
+### 2. Transmittals API (`/v1/transmittals`)
+- **Schema & Entity Derivation**:
+  - The `tasks` table contains no `entity_id` column in the checked-in schema. Entity scope is derived authoritative from `work_requests.entity_id` via the task's parent work request relationship.
+  - Queries must not select `tasks.entity_id`.
+- **Create (`POST /`)**:
+  - `data.linkedTaskId` is mandatory for Documentation users. If missing or blank -> `400 Bad Request` (`detail: 'A valid linked task is required for transmittals'`).
+  - Verify caller is primary or co-assignee via `isUserAssignedToTask(data.linkedTaskId, req.user.id)`. If false -> `403 Forbidden`.
+  - Validate task belongs to the requested work request and matches entity and client boundaries.
+- **Update (`PUT /:id`)**:
+  - Re-verify task assignment for effective `linkedTaskId`. Reject clearing `linkedTaskId` to null for Documentation users.
+- **Send (`POST /:id/send`)**:
+  - Re-verify caller assignment on linked task at send time. If false -> `403 Forbidden`.
+
+### 3. Disbursements API (`/v1/disbursements`)
+- **List (`GET /`) & Detail (`GET /:id`) & Counts (`GET /counts`)**:
+  - If `user.role === 'Admin'` OR `user.role === 'Accounting'` OR `user.departments.includes('Accounting')`: full entity access.
+  - All other users: strictly `created_by === req.user.id`.
+  - No exceptions for `status`, `employee_id` (payee), `requested_by` (requester), `Manager` role, or WR team membership.
+  - Own records do not require `linked_work_request_id` to be in `concernedWrIds`.
+
+### 4. Retainer Templates API (`/v1/operations/templates`, `/retainer-templates`)
+- Access restricted to `user.role === 'Admin'` OR `user.role === 'Manager'`.
+- Granted via `retainers:edit` permission assigned to role `Manager`.
+- Department name `Management` alone without Manager role is insufficient.
+
+---
 
 ## Code Layout
-- Backend:
-  - `backend/migrations/000061_enable_collaborative_realtime_publication.js`: Publication & replica identity migration
-  - `backend/tests/unit/migrations_realtime_collaborative.spec.js`: Migration 000061 unit tests
-  - `backend/src/modules/notifications/`: Notifications module and routes
-  - `backend/src/modules/disbursements/`: Disbursement approvals and routing
-  - `backend/src/modules/operations/`: Operations, tasks, and phase routes
-- Frontend:
-  - `frontend/src/lib/realtime/useEntityRealtimeSync.ts`: Core CDC reconciler, normalizers, soft delete, invalidations
-  - `frontend/src/features/dashboard/api/useNotifications.ts`: `useNotificationRealtimeSync` hook
-  - `frontend/src/features/dashboard/components/NotificationBellPanel.tsx`: Live notification listener mount
-  - `frontend/src/routes/operations.tsx`: Operations requests CDC listener mount
-  - `frontend/src/features/operations/components/PendingApprovalsInbox.tsx`: Reactive approvals inbox
-  - `frontend/src/features/operations/components/PhaseKanbanBoard.tsx`: Reactive task synchronization & soft delete filter
-  - `frontend/src/features/operations/components/TaskDetailModal.tsx`: Live `useTaskDetail` binding & modal close invalidation
+
+### Staging Worktree (`/home/kyle/render-ata-lta-erp-final/ata-lta-erp-final-render`)
+- **Lane A Ownership**:
+  - `backend/src/modules/disbursements/**`
+  - `backend/tests/unit/modules/disbursements/**`
+  - `backend/tests/integration/disbursements.test.js`
+- **Lane B Ownership**:
+  - `backend/src/modules/transmittals/**`
+  - `backend/src/modules/operationsRequests/**`
+  - `backend/tests/unit/modules/transmittals/**`
+  - `backend/tests/integration/transmittals.test.js`
+  - `backend/tests/operationsRequests.test.js`
+- **Lane D Ownership**:
+  - `erp_prototype/js/auth.js`
+  - `erp_prototype/js/workflow.js`
+  - `erp_prototype/js/users.js`
+  - `erp_prototype/css/styles.css`
+- **Shared / Coordinator Files**:
+  - `backend/src/lib/permissions.js`
+  - `backend/src/modules/operations/**`
+  - `backend/src/modules/reports/**`
+- **E2E & Cross-Worktree Test Harness**:
+  - Default self-contained E2E suites: `backend/tests/e2e/tier1-features.test.js`, `tier2-boundaries.test.js`, `tier3-cross-feature.test.js`, `tier4-application-scenarios.test.js` (runnable in isolation with zero sibling dependency).
+  - Opt-in cross-worktree integration: `backend/tests/cross-worktree/` (invoked via `npm run test:cross-worktree`).
+
+### Enterprise-v2 Worktree (`/home/kyle/render-ata-lta-erp-final/ata-lta-erp-final-enterprise-v2`)
+- **Lane C Ownership**:
+  - `frontend/src/features/operations/lib/taskScope.ts`
+  - `frontend/src/features/operations/components/TaskDetailModal.tsx`
+  - `frontend/src/features/operations/components/WorkRequestModal.tsx`
+  - `frontend/src/features/operations/components/TransmittalFormModal.tsx`
+  - `frontend/src/routes/operations.tsx`
+  - `frontend/src/features/operations/__tests__/**`

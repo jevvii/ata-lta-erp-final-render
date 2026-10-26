@@ -1,4 +1,12 @@
-# TEST_READY — Real-Time Caching & CDC Synchronization Remediation Sign-Off
+# TEST_READY — System Verification & Test Sign-Off (ATA/LTA ERP)
+
+This repository tracks two major verification and test readiness sign-offs:
+- **Part 1: Real-Time Caching & CDC Synchronization Remediation Sign-Off**
+- **Part 2: RBAC & UI Remediation Sign-Off**
+
+---
+
+# Part 1: Real-Time Caching & CDC Synchronization Remediation Sign-Off
 
 **Date**: 2026-10-10T15:52:00Z
 **Agent**: `teamwork_preview_test_writer_e2e_1`
@@ -31,8 +39,8 @@ All automated unit, integration, and end-to-end multi-user test suites for the R
 | 2 | Soft-Delete & Scoping Tests | `frontend/src/lib/realtime/__tests__/cdcSoftDeleteAndScope.test.ts` | 22 tests | **PASSED** (100%) |
 | 3 | Notifications Realtime Tests | `frontend/src/features/dashboard/__tests__/notificationRealtime.test.tsx` | 13 tests | **PASSED** (100%) |
 | 4 | Operations Sync & E2E Scenarios | `frontend/src/features/operations/__tests__/operationsRealtimeSync.test.tsx` | 20 tests | **PASSED** (100%) |
-| 5 | Test Infrastructure Framework | `/home/javvii/FreelanceProject/ata-lta-erp-v2/TEST_INFRA.md` | Doc artifact | **DELIVERED** |
-| 6 | Test Readiness Sign-Off | `/home/javvii/FreelanceProject/ata-lta-erp-v2/TEST_READY.md` | Sign-off artifact | **DELIVERED** |
+| 5 | Test Infrastructure Framework | `TEST_INFRA.md` | Doc artifact | **DELIVERED** |
+| 6 | Test Readiness Sign-Off | `TEST_READY.md` | Sign-off artifact | **DELIVERED** |
 
 ---
 
@@ -58,59 +66,44 @@ All automated unit, integration, and end-to-end multi-user test suites for the R
    - Subscribes via `useNotificationRealtimeSync` to table `notifications` filtered by `user_id=eq.${user.id}`.
    - Prepend incoming notification to `dashboardKeys.notifications.all`.
    - Increments `unreadCount` in `useSessionStore` immediately on INSERT.
-   - Live badge counter renders in `NotificationBellPanel.tsx`.
-6. **F-OPS & F-KANBAN (Operations & Kanban Sync)**:
-   - Real-time subscription to `operations_requests` mounted in `operations.tsx`.
-   - Reactive inbox updates in `PendingApprovalsInbox.tsx`.
-   - `selectedTask` synchronization with live query cache in `PhaseKanbanBoard.tsx`.
-   - Soft-deleted tasks excluded from Kanban active view and gate status calculations (`!t.deletedAt && !t.deleted_at`).
-   - `TaskDetailModal.tsx` bound to live task query cache.
-   - Linked child modal closures invalidate `operationsKeys.taskRelated(taskId)`.
-
-### 3.2 Tier 2: Boundary & Corner Cases
-- Null/undefined record resilience, prototype pollution immunity, conflicting mixed key precedence, numeric boundaries (`displayOrder: -1`, `displayOrder: 999999999`), multi-byte unicode and HTML character escaping, unauthenticated user bypass (`user: null`), "99+" badge overflow, and zero-leak channel teardowns on unmount.
-
-### 3.3 Tier 3: Cross-Feature Pairwise Interactions
-- Snake_case payload normalization combined with soft-delete eviction.
-- Scoped task update combined with parent work request detail invalidation.
-- Real-time notification insert combined with instantaneous bell badge counter update and unread filtering toggle.
-- Operations request approval combined with parent work request detail cache invalidation.
-
-### 3.4 Tier 4: Real-World Multi-User Application Scenarios (Spec §5.2)
-- **E2E-RT-1**: User A advances task to `In Progress` in Browser 1 -> Browser 2 Kanban board immediately shifts task card to `In Progress`.
-- **E2E-RT-2**: User A marks task `Completed` in Browser 1 -> Browser 2 immediately shifts card to `Completed` and unlocks advancement gate.
-- **E2E-RT-3**: User A evaluates QA review: marks task `failed` in Browser 1 -> Browser 2 displays red `Failed QA` badge on task card instantly.
-- **E2E-RT-4**: User A triggers phase reroute from QA to `processing` -> Browser 2 shifts work request phase back to `processing` and resets failed task to `In Progress` with `qaStatus: none`.
-- **E2E-RT-5**: User A removes task lead in `TaskDetailModal` -> Browser 2 Kanban card and open `TaskDetailModal` immediately update lead to `Unassigned`.
-- **E2E-RT-6**: User A soft-deletes task in Browser 1 (`deleted_at = now()`) -> Browser 2 removes task card from Kanban board immediately.
-- **E2E-RT-7**: User A links invoice or disbursement to task -> Browser 2 `TaskDetailModal` immediately shows the new linked financial record.
-- **E2E-RT-8**: Admin approves transition request in Browser 1 -> Requester Browser 2 immediately increments notification bell count and removes item from pending tab.
 
 ---
 
-## 4. Verification & Execution Guide
+# Part 2: RBAC & UI Remediation Sign-Off
 
-### 4.1 TypeScript Compilation
-```bash
-cd frontend
-npm run typecheck
-```
-*Result*: Exit code 0, 0 diagnostic errors (`tsc -b`).
+**Date**: 2026-10-19T19:00:00Z
+**Milestone**: PR Readiness Blocker Resolution & Final Verification
+**Status**: **ALL PR BLOCKERS RESOLVED — READY FOR PR MERGE & AUDIT**
 
-### 4.2 Running Real-Time & CDC Test Suites (86 tests)
-```bash
-cd frontend
-npx vitest run \
-  src/lib/realtime/__tests__/cdcNormalization.test.ts \
-  src/lib/realtime/__tests__/cdcSoftDeleteAndScope.test.ts \
-  src/features/dashboard/__tests__/notificationRealtime.test.tsx \
-  src/features/operations/__tests__/operationsRealtimeSync.test.tsx
-```
-*Result*: 4 test files passed, 86 passed, 0 failures.
+---
 
-### 4.3 Running Complete Repository Test Suite
-```bash
-cd frontend
-npm test
-```
-*Result*: 100 test files passed, 1,470 passed, 0 failures, 0 regressions.
+## 1. Executive Summary
+
+All three blockers identified during the independent PR readiness review have been resolved, verified with durable regressions, and re-tested across both worktrees:
+
+1. **Invalid Task Column Resolved**:
+   - In `backend/src/modules/transmittals/service.js`, the query dependency on nonexistent column `tasks.entity_id` was eliminated.
+   - Task entity ownership is authoritative derived through `work_requests.entity_id`.
+   - Schema-aware validation added in `backend/tests/fixtures/supabaseMock.js` (raising PostgreSQL error `42703` if undeclared columns are selected).
+   - Valid assigned/co-assigned transmittals succeed (`201 Created`), while cross-WR hijacking returns `400 Bad Request` with zero persistence.
+2. **Backend Test Portability Established**:
+   - Default backend test suites (`backend/tests/e2e/tier1-features.test.js`, `tier2-boundaries.test.js`, `tier3-cross-feature.test.js`, `tier4-application-scenarios.test.js`) are 100% self-contained and run cleanly without any dependency on the sibling `enterprise-v2` checkout.
+   - Cross-worktree integration testing is decoupled into `backend/tests/cross-worktree/` with its own Jest configuration and run via `npm run test:cross-worktree`, supporting configurable `ENTERPRISE_FRONTEND_PATH`.
+3. **Permission Matrix Parity & Contract Drift Eliminated**:
+   - `retainers:edit` role-specific grant for role `Manager` was documented in `docs/api-contracts/rbac-matrix.md` and `docs/enterprise-migration/P0-A-permission-key-manifest.md`.
+   - Clarified that Management department membership alone (`role: 'Staff', departments: ['Management']`) does NOT grant template editing.
+   - Regenerated canonical markdown table; `backend/tests/permission-matrix.snapshot.spec.js` passes 100%.
+
+---
+
+## 2. Test Execution & Verification Summary
+
+| Suite Category | Executed Command | Result | Pass Rate |
+|---|---|---|---|
+| **Affected Backend Suites** (19 suites) | `PORT=0 npx jest --runInBand --silent tests/unit/modules/disbursements/service.test.js tests/unit/modules/transmittals/service.test.js tests/operationsRequests.test.js tests/integration/disbursements.test.js tests/integration/transmittals.test.js tests/unit/lib/permissions.test.js tests/unit/lib/permissions.matrix.test.js tests/integration/challenger-backend-rbac.adversarial.test.js tests/challenger_iter2_adversarial.test.js tests/challenger_prototype_alignment.test.js tests/e2e/ tests/integration/operations.test.js tests/integration/retainer-generation-scoping.test.js tests/permission-matrix.snapshot.spec.js tests/unit/modules/operations/remediation.test.js src/modules/operations/__tests__/workRequestAssigneeVisibility.test.js` | **19 passed, 0 failed (474 tests)** | 100% |
+| **Self-Contained E2E Suites** (Isolated checkout check) | `ENTERPRISE_FRONTEND_PATH=/tmp/nonexistent-dir PORT=0 npm test -- tests/e2e/` | **4 passed, 0 failed (138 tests)** | 100% |
+| **Opt-In Cross-Worktree Suite** | `npm run test:cross-worktree` | **1 passed, 0 failed (46 tests)** | 100% |
+| **Enterprise React Full Vitest Suite** | `cd frontend && npm test` | **135 files passed, 0 failed (1,994 tests)** | 100% |
+| **Enterprise React Build & Typecheck** | `npm run build` | **Clean exit, 0 errors** | 100% |
+| **Staging Prototype Build** | `npm run build:spa` | **Clean exit, 0 errors** | 100% |
+| **Git Diff Whitespace Check** | `git diff --check` (both worktrees) | **Clean exit, 0 whitespace errors** | 100% |

@@ -345,6 +345,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('X-Active-Entity', 'ATA')
         .send({
           overrides: {
+            dueDate: '2026-12-31',
             priority: 'High',
           },
         });
@@ -410,7 +411,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post(`/v1/operations/retainer-templates/${templateId}/generate`)
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({});
+        .send({ overrides: { dueDate: '2026-12-31' },});
 
       expect(res.status).toBe(201);
       expect(res.body.data.id).toBeDefined();
@@ -430,7 +431,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post(`/v1/operations/templates/${templateId}/generate`)
         .set('Authorization', `Bearer ${opsToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({});
+        .send({ overrides: { dueDate: '2026-12-31' },});
 
       expect(res.status).toBe(403);
       expect(res.body.title).toMatch(/forbidden/i);
@@ -473,6 +474,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           // missing period_label
         });
 
@@ -487,6 +489,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
 
@@ -511,6 +514,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
       expect(firstRes.status).toBe(201);
@@ -521,6 +525,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
 
@@ -546,6 +551,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
       expect(res1.status).toBe(201);
@@ -556,6 +562,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2027',
         });
       expect(res2.status).toBe(201);
@@ -593,6 +600,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('X-Active-Entity', 'ATA')
         .set('Idempotency-Key', idempotencyKey)
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
 
@@ -607,6 +615,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('X-Active-Entity', 'ATA')
         .set('Idempotency-Key', idempotencyKey)
         .send({
+          overrides: { dueDate: '2026-12-31' },
           period_label: 'FY-2026',
         });
 
@@ -632,7 +641,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post('/v1/operations/templates/non-existent-uuid/generate')
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ period_label: 'FY-2026' });
+        .send({ overrides: { dueDate: '2026-12-31' }, period_label: 'FY-2026' });
 
       expect(res.status).toBe(404);
       expect(res.body.title).toMatch(/not found/i);
@@ -652,7 +661,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post(`/v1/operations/templates/${templateId}/generate`)
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({});
+        .send({ overrides: { dueDate: '2026-12-31' },});
 
       expect(res.status).toBe(404);
     });
@@ -671,7 +680,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post(`/v1/operations/templates/${templateId}/generate`)
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({});
+        .send({ overrides: { dueDate: '2026-12-31' },});
 
       expect(res.status).toBe(404);
     });
@@ -691,7 +700,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .post(`/v1/operations/templates/${templateId}/generate`)
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({});
+        .send({ overrides: { dueDate: '2026-12-31' },});
 
       expect(res.status).toBe(201);
       expect(res.body.data.title).toBe('Ad-hoc Retainer');

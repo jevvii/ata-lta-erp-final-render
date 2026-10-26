@@ -11,6 +11,18 @@ const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
 const { checkAdvancementGate, PHASE_SEQUENCE, PHASE_STATUS_MAP } = require('../operations/service');
 const { notify } = require('../../services/notify');
 const { resolveEntityCode } = require('../../lib/entityResolver');
+const {
+  normalizeTaskAndParentAliases,
+  resolveAndAuthorizeTaskTarget,
+} = require('../../lib/taskAssignment');
+const {
+  getUserConcernedWorkRequestIds,
+  fetchInPages,
+} = require('../../lib/userScope');
+const {
+  filterValidProjectRecords,
+  validateRecordProjectLinkage,
+} = require('../../lib/projectLinkage');
 
 /**
  * List operations requests for the active entity.
@@ -19,7 +31,7 @@ const { resolveEntityCode } = require('../../lib/entityResolver');
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listRequests = async ({ entityId, filters = {} }) => {
+const listRequests = async ({ entityId, filters = {}, user }) => {
   const {
     status,
     type,
@@ -31,42 +43,46 @@ const listRequests = async ({ entityId, filters = {} }) => {
     limit = 50,
   } = filters;
 
-  let query = supabaseAdmin
-    .from('operations_requests')
-    .select('*', { count: 'exact' });
-
-  if (status) {
-    query = query.eq('status', status);
-  } else {
-    query = query.or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin && user) {
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
   }
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
+  const allRows = await fetchInPages(() => {
+    let q = supabaseAdmin.from('operations_requests').select('*');
+    if (status) {
+      q = q.eq('status', status);
+    } else {
+      q = q.or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
+    }
 
-  if (type) query = query.eq('type', type);
-  if (workRequestId) query = query.eq('work_request_id', workRequestId);
-  if (clientId) query = query.eq('client_id', clientId);
-  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
-  if (requestedBy) query = query.eq('requested_by', requestedBy);
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+
+    if (type) q = q.eq('type', type);
+    if (workRequestId) q = q.eq('work_request_id', workRequestId);
+    if (clientId) q = q.eq('client_id', clientId);
+    if (linkedTaskId) q = q.eq('linked_task_id', linkedTaskId);
+    if (requestedBy) q = q.eq('requested_by', requestedBy);
+    return q.order('created_at', { ascending: false });
+  });
+
+  const validRows = await filterValidProjectRecords(allRows || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
 
   const offset = (page - 1) * limit;
-  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
-
-  const { data, error, count } = await query;
-
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: `Failed to fetch operations requests: ${error.message || String(error)}`,
-    });
-  }
-
-  const parsed = (data || []).map(parseRequestPayload);
+  const pageRows = validRows.slice(offset, offset + limit);
+  const parsed = pageRows.map(parseRequestPayload);
   const enriched = await batchEnrichRequests(parsed);
-  return { data: enriched, count: count || 0 };
+  return { data: enriched, count: validRows.length };
 };
 
 /**
@@ -249,19 +265,47 @@ const inFlightRequests = new Map();
  * @param {object} params.data
  * @returns {Promise<object>}
  */
-const createRequest = async ({ entityId, userId, data }) => {
+const createRequest = async ({ entityId, userId, user, data }) => {
   const reqType =
     data.type === 'wr_phase_transition' || data.request_type === 'wr_phase_transition'
       ? 'wr_phase_transition'
       : (data.type || data.request_type);
 
-  const targetWorkRequestId =
-    data.payload?.work_request_id ||
-    data.payload?.workRequestId ||
-    data.workRequestId ||
-    data.work_request_id;
+  const isFinancialOrDoc = ['billing', 'disbursement', 'transmittal'].includes(reqType);
 
-  const dedupeKey = `${entityId}:${userId}:${reqType}:${targetWorkRequestId || ''}:${data.linkedTaskId || ''}`;
+  let targetWorkRequestId = null;
+  let targetTaskId = null;
+
+  if (isFinancialOrDoc) {
+    const normalized = normalizeTaskAndParentAliases(data);
+    targetWorkRequestId = normalized.effectiveWrId !== undefined ? normalized.effectiveWrId : null;
+    targetTaskId = normalized.effectiveTaskId !== undefined ? normalized.effectiveTaskId : null;
+
+    if (targetTaskId) {
+      const authorized = await resolveAndAuthorizeTaskTarget({
+        entityId,
+        user,
+        userId,
+        targetTaskId,
+        targetWorkRequestId,
+        clientId: data.clientId || data.client_id,
+        allowNoTask: true,
+      });
+      targetWorkRequestId = authorized.effectiveWrId;
+    }
+  } else {
+    // Retain existing phase-transition semantics (Correction 5)
+    targetWorkRequestId =
+      data.payload?.work_request_id ||
+      data.payload?.workRequestId ||
+      data.workRequestId ||
+      data.work_request_id ||
+      null;
+    targetTaskId = data.linkedTaskId || data.linked_task_id || null;
+  }
+
+  const finalWrId = targetWorkRequestId;
+  const dedupeKey = `${entityId}:${userId}:${reqType}:${finalWrId || 'NONE'}:${targetTaskId || 'NONE'}`;
 
   if (inFlightRequests.has(dedupeKey)) {
     return inFlightRequests.get(dedupeKey);
@@ -280,8 +324,18 @@ const createRequest = async ({ entityId, userId, data }) => {
         .eq('status', 'pending')
         .gte('created_at', fiveSecondsAgo);
 
-      if (targetWorkRequestId) dupQuery = dupQuery.eq('work_request_id', targetWorkRequestId);
-      if (data.linkedTaskId) dupQuery = dupQuery.eq('linked_task_id', data.linkedTaskId);
+      // Require exact null filters for missing task AND missing parent in dedupe (Bug 1)
+      if (finalWrId) {
+        dupQuery = dupQuery.eq('work_request_id', finalWrId);
+      } else {
+        dupQuery = dupQuery.is('work_request_id', null);
+      }
+
+      if (targetTaskId) {
+        dupQuery = dupQuery.eq('linked_task_id', targetTaskId);
+      } else {
+        dupQuery = dupQuery.is('linked_task_id', null);
+      }
 
       const { data: existingDups } = await dupQuery.limit(1);
       if (existingDups && existingDups.length > 0) {
@@ -293,7 +347,7 @@ const createRequest = async ({ entityId, userId, data }) => {
       let targetWr = null;
 
       if (reqType === 'wr_phase_transition') {
-        if (!targetWorkRequestId) {
+        if (!finalWrId) {
           throw new AppError({
             statusCode: 400,
             title: 'Bad Request',
@@ -304,7 +358,7 @@ const createRequest = async ({ entityId, userId, data }) => {
         const { data: wr, error: wrErr } = await supabaseAdmin
           .from('work_requests')
           .select('id, title, entity_id, client_id, status, phase, requested_by')
-          .eq('id', targetWorkRequestId)
+          .eq('id', finalWrId)
           .is('deleted_at', null)
           .maybeSingle();
 
@@ -312,7 +366,7 @@ const createRequest = async ({ entityId, userId, data }) => {
           throw new AppError({
             statusCode: 404,
             title: 'Not Found',
-            detail: `Work request ${targetWorkRequestId} not found`,
+            detail: `Work request ${finalWrId} not found`,
           });
         }
 
@@ -349,7 +403,7 @@ const createRequest = async ({ entityId, userId, data }) => {
 
         // Validate advancement gate (§3.4)
         await checkAdvancementGate({
-          workRequestId: targetWorkRequestId,
+          workRequestId: finalWrId,
           fromPhase,
           toPhase,
         });
@@ -360,7 +414,7 @@ const createRequest = async ({ entityId, userId, data }) => {
           ? JSON.stringify({
               from_phase: fromPhase,
               to_phase: toPhase,
-              work_request_id: targetWorkRequestId,
+              work_request_id: finalWrId,
               user_notes: data.notes || null,
             })
           : (data.notes || null);
@@ -368,9 +422,9 @@ const createRequest = async ({ entityId, userId, data }) => {
       const row = {
         entity_id: entityId || (targetWr ? targetWr.entity_id : null),
         type: reqType,
-        work_request_id: targetWorkRequestId || null,
+        work_request_id: finalWrId || null,
         client_id: (targetWr ? targetWr.client_id : null) || data.clientId || data.client_id || null,
-        linked_task_id: data.linkedTaskId || data.linked_task_id || null,
+        linked_task_id: targetTaskId || null,
         requested_by: userId,
         amount: data.amount ?? null,
         status: 'pending',
@@ -446,7 +500,7 @@ const createRequest = async ({ entityId, userId, data }) => {
  * @param {string} params.id
  * @returns {Promise<object>}
  */
-const getRequestById = async ({ entityId, id }) => {
+const getRequestById = async ({ entityId, id, user, internal = false }) => {
   let query = supabaseAdmin
     .from('operations_requests')
     .select('*')
@@ -475,6 +529,13 @@ const getRequestById = async ({ entityId, id }) => {
     });
   }
 
+  await validateRecordProjectLinkage({
+    record: data,
+    entityId,
+    user,
+    internal,
+  });
+
   const parsed = parseRequestPayload(data);
   const [enriched] = await batchEnrichRequests([parsed]);
   return enriched;
@@ -490,7 +551,7 @@ const getRequestById = async ({ entityId, id }) => {
  * @returns {Promise<object>}
  */
 const updateRequest = async ({ entityId, id, userId, data }) => {
-  const existing = await getRequestById({ entityId, id });
+  const existing = await getRequestById({ entityId, id, internal: true });
   const targetEntityId = entityId && entityId !== 'ALL' ? entityId : existing.entity_id;
 
   if (existing.status !== 'pending') {
@@ -810,7 +871,7 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
  * @returns {Promise<object>}
  */
 const deleteRequest = async ({ entityId, id }) => {
-  const existing = await getRequestById({ entityId, id });
+  const existing = await getRequestById({ entityId, id, internal: true });
   const targetEntityId = entityId && entityId !== 'ALL' ? entityId : existing.entity_id;
 
   let deleteQuery = supabaseAdmin
@@ -853,28 +914,53 @@ const deleteRequest = async ({ entityId, id }) => {
  * @returns {Promise<object>}
  */
 const getCounts = async ({ entityId, user }) => {
-  const baseQuery = () => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) return { total: 0, pending: 0, fulfilled: 0, rejected: 0, awaitingFulfillment: 0 };
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { total: 0, pending: 0, fulfilled: 0, rejected: 0, awaitingFulfillment: 0 };
+    }
+  }
+
+  const allRows = await fetchInPages(() => {
     let q = supabaseAdmin
       .from('operations_requests')
-      .select('*', { count: 'exact', head: true })
+      .select('id, status, work_request_id, linked_task_id')
       .or('status.eq.pending,status.eq.fulfilled,status.eq.rejected');
     if (entityId && entityId !== 'ALL') {
       q = q.eq('entity_id', entityId);
     }
-    return q;
-  };
-
-  const runCount = async (query) => {
-    const { count, error } = await query;
-    if (error) {
-      throw new AppError({
-        statusCode: 500,
-        title: 'Database Error',
-        detail: 'Failed to count operations requests',
-      });
+    if (!isAdmin && concernedWrIds) {
+      q = q.in('work_request_id', concernedWrIds);
     }
-    return count || 0;
-  };
+    return q;
+  });
+
+  const taskIds = Array.from(new Set(allRows.map((r) => r.linked_task_id).filter(Boolean)));
+  let taskMap = new Map();
+  if (taskIds.length > 0) {
+    const tasks = await fetchInPages(() =>
+      supabaseAdmin.from('tasks').select('id, work_request_id, deleted_at').in('id', taskIds)
+    );
+    taskMap = new Map((tasks || []).map((t) => [t.id, t]));
+  }
+
+  const allowedSet = concernedWrIds ? new Set(concernedWrIds) : null;
+  const validRows = allRows.filter((r) => {
+    let effectiveWrId = r.work_request_id;
+    if (r.linked_task_id) {
+      const task = taskMap.get(r.linked_task_id);
+      if (!task || task.deleted_at) return false;
+      if (r.work_request_id && task.work_request_id !== r.work_request_id) return false;
+      effectiveWrId = task.work_request_id;
+    }
+    if (!isAdmin) {
+      if (!effectiveWrId || !allowedSet || !allowedSet.has(effectiveWrId)) return false;
+    }
+    return true;
+  });
 
   const canFulfill = (() => {
     if (!user) return false;
@@ -885,15 +971,17 @@ const getCounts = async ({ entityId, user }) => {
     return hasPermission(permissions, 'workflow:edit');
   })();
 
-  const [total, pending, fulfilled, rejected, awaitingFulfillment] = await Promise.all([
-    runCount(baseQuery()),
-    runCount(baseQuery().eq('status', 'pending')),
-    runCount(baseQuery().eq('status', 'fulfilled')),
-    runCount(baseQuery().eq('status', 'rejected')),
-    canFulfill ? runCount(baseQuery().eq('status', 'pending')) : Promise.resolve(0),
-  ]);
+  const pendingCount = validRows.filter((r) => r.status === 'pending').length;
+  const fulfilledCount = validRows.filter((r) => r.status === 'fulfilled').length;
+  const rejectedCount = validRows.filter((r) => r.status === 'rejected').length;
 
-  return { total, pending, fulfilled, rejected, awaitingFulfillment };
+  return {
+    total: validRows.length,
+    pending: pendingCount,
+    fulfilled: fulfilledCount,
+    rejected: rejectedCount,
+    awaitingFulfillment: canFulfill ? pendingCount : 0,
+  };
 };
 
 module.exports = {

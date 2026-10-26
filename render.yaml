@@ -39,6 +39,8 @@ projects:
                 value: production
               - key: LOG_LEVEL
                 value: info
+              - key: RESERVATION_STORE_DRIVER
+                value: database
               - key: FRONTEND_URL
                 value: https://ata-lta-erp-spa-staging.onrender.com # Replace "staging" with "uat" for uat
               - fromGroup: erp-staging-secrets

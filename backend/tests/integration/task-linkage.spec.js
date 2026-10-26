@@ -293,7 +293,7 @@ describe('Invoice and Disbursement Task Linkage & Validation (UAT2-6/12)', () =>
         .put(`/v1/disbursements/${disbId}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ taskId: nonExistentTaskId });
+        .send({ taskId: nonExistentTaskId, expectedVersion: 1 });
       expect(notFoundRes.status).toBe(400);
       expect(notFoundRes.body.code).toBe('TASK_NOT_FOUND');
 
@@ -302,7 +302,7 @@ describe('Invoice and Disbursement Task Linkage & Validation (UAT2-6/12)', () =>
         .put(`/v1/disbursements/${disbId}`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ taskId: task2Id });
+        .send({ taskId: task2Id, expectedVersion: 1 });
       expect(mismatchRes.status).toBe(400);
       expect(mismatchRes.body.code).toBe('TASK_WR_MISMATCH');
     });

@@ -66,6 +66,15 @@ export interface Invoice {
   clients?: ClientSnapshot;
   line_items?: InvoiceLineItem[];
   payments?: InvoicePayment[];
+  work_request?: {
+    id: string;
+    title: string;
+    workOrderNumber?: string | null;
+    creatorName?: string | null;
+    creatorEmail?: string | null;
+  } | null;
+  work_request_title?: string | null;
+  work_request_creator_name?: string | null;
 }
 
 export interface InvoiceFilters {

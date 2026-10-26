@@ -1,0 +1,63 @@
+{
+  "checkedAt": "2026-10-25T12:32:00.000Z",
+  "environment": "configured backend/.env.staging Supabase project",
+  "readOnly": true,
+  "summary": {
+    "totalActiveDocuments": 2,
+    "totalDeletedDocuments": 0,
+    "statusCounts": {
+      "pending_upload": 2,
+      "active": 0
+    },
+    "entityCounts": {
+      "16749820-0129-44a8-9435-a6013d07a370 (LTA)": 2,
+      "e83dc90b-d9b5-4854-8adf-7fe21c2e6822 (ATA)": 0
+    }
+  },
+  "records": [
+    {
+      "id": "2deabc18-31a7-4419-80c3-e0a854864d7d",
+      "original_name": "a_house_in_the_snow.png",
+      "file_name": "client-documents",
+      "status": "pending_upload",
+      "entity_id": "16749820-0129-44a8-9435-a6013d07a370",
+      "entity_code": "LTA",
+      "work_request_id": "ca85bc39-2afb-48b7-b754-44e821d4a105",
+      "linked_task_id": "480ef431-2f33-404c-9c62-192603da267c",
+      "uploader_id": "455f521b-e301-4b98-9b01-870b67adbd49",
+      "uploader_name": "Loida Delgaco",
+      "uploader_email": "loida@ata-lta.ph",
+      "uploader_role": "Operations",
+      "uploader_entities": ["ATA", "LTA"],
+      "created_at": "2026-10-25T12:05:28.262244+00:00",
+      "storage_bucket": "ata-lta-erp-documents-staging",
+      "storage_path": "entities/LTA/clients/a7351026-3e02-4b63-a9ec-6a57abb20667/documents/2deabc18-31a7-4419-80c3-e0a854864d7d/client-documents",
+      "storage_object_verified": true,
+      "storage_object_name": "client-documents",
+      "storage_object_updated_at": "2026-10-25T12:05:29.489Z",
+      "issue_manifestation": "Shows as 'Document not found' (404) during confirm-upload, but metadata row and storage binary both persist; listed in UI as pending_upload; download/preview fails with 409 Conflict."
+    },
+    {
+      "id": "d18ef320-fb30-48c8-b7bf-5e74fa08270b",
+      "original_name": "a_moon_over_a_mountain.png",
+      "file_name": "a_moon_over_a_mountain.png",
+      "status": "pending_upload",
+      "entity_id": "16749820-0129-44a8-9435-a6013d07a370",
+      "entity_code": "LTA",
+      "work_request_id": "ca85bc39-2afb-48b7-b754-44e821d4a105",
+      "linked_task_id": "480ef431-2f33-404c-9c62-192603da267c",
+      "uploader_id": "455f521b-e301-4b98-9b01-870b67adbd49",
+      "uploader_name": "Loida Delgaco",
+      "uploader_email": "loida@ata-lta.ph",
+      "uploader_role": "Operations",
+      "uploader_entities": ["ATA", "LTA"],
+      "created_at": "2026-10-23T22:15:58.043689+00:00",
+      "storage_bucket": "ata-lta-erp-documents-staging",
+      "storage_path": "entities/LTA/clients/a7351026-3e02-4b63-a9ec-6a57abb20667/documents/d18ef320-fb30-48c8-b7bf-5e74fa08270b/a_moon_over_a_mountain.png",
+      "storage_object_verified": true,
+      "storage_object_name": "a_moon_over_a_mountain.png",
+      "storage_object_updated_at": "2026-10-23T22:15:59.140Z",
+      "issue_manifestation": "Prior historical instance of identical confirm-upload failure; binary exists in cloud storage, metadata exists in database, but record remains stuck in pending_upload due to entity resolution fallback mismatch."
+    }
+  ]
+}

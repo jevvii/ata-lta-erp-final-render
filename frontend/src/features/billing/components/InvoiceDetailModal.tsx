@@ -11,6 +11,7 @@ import {
   Send,
   CheckCircle,
   XCircle,
+  Clock,
 } from 'lucide-react';
 import {
   Dialog,
@@ -265,6 +266,14 @@ export function InvoiceDetailModal({
               <p className="text-xs text-slate-500 mt-0.5">
                 Created {invoice.created_at?.slice(0, 10)} • Due {invoice.due_date?.slice(0, 10)}
               </p>
+              {(invoice.work_request?.creatorName || invoice.work_request_creator_name) && (
+                <p className="text-xs text-slate-600 mt-0.5" data-testid="invoice-wr-requester">
+                  Work Request Requester:{' '}
+                  <span className="font-semibold text-slate-800">
+                    {invoice.work_request?.creatorName || invoice.work_request_creator_name}
+                  </span>
+                </p>
+              )}
             </div>
 
             {/* Quick Actions Bar */}
@@ -610,28 +619,38 @@ export function InvoiceDetailModal({
               </Button>
             )}
 
-            {invoice.status === 'Pending' && (isAdmin || canEdit) && (
-              <>
-                <Button
-                  size="sm"
-                  onClick={() => handleTransitionStatus('Sent')}
-                  className="text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1 cursor-pointer"
-                  data-testid="btn-approve-and-issue"
+            {invoice.status === 'Pending' && (
+              isAdmin ? (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => handleTransitionStatus('Sent')}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1 cursor-pointer"
+                    data-testid="btn-approve-and-issue"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>Approve & Issue (Sent)</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleTransitionStatus('Draft')}
+                    className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 gap-1 cursor-pointer"
+                    data-testid="btn-reject-to-draft"
+                  >
+                    <XCircle className="w-3.5 h-3.5" />
+                    <span>Reject / Return to Draft</span>
+                  </Button>
+                </>
+              ) : (
+                <div
+                  className="flex items-center gap-1.5 text-xs text-amber-800 bg-amber-50 px-3 py-1.5 rounded-md border border-amber-200"
+                  data-testid="invoice-pending-admin-notice"
                 >
-                  <CheckCircle className="w-3.5 h-3.5" />
-                  <span>Approve & Issue (Sent)</span>
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleTransitionStatus('Draft')}
-                  className="text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 gap-1 cursor-pointer"
-                  data-testid="btn-reject-to-draft"
-                >
-                  <XCircle className="w-3.5 h-3.5" />
-                  <span>Reject / Return to Draft</span>
-                </Button>
-              </>
+                  <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  <span>Pending Admin Approval — Awaiting review and issuance by System Administrator</span>
+                </div>
+              )
             )}
 
             {canEdit && (

@@ -208,7 +208,26 @@ describe('/v1/documents', () => {
 
   it('allows workflow:task_upload permission users to create and confirm upload', async () => {
     // Operations role only has workflow:task_upload and dms:view, not dms:edit
+    const opsUserId = '00000000-0000-4000-a000-000000000888';
+    const wrId = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const taskId = 'bbbbbbbb-2222-4222-8222-222222222222';
+
+    mockTables.work_requests.set(wrId, {
+      id: wrId,
+      entity_id: 'ent-ata',
+      title: 'Ops Project',
+      status: 'In Progress',
+      assigned_to: opsUserId,
+    });
+    mockTables.tasks.set(taskId, {
+      id: taskId,
+      work_request_id: wrId,
+      assignee_id: opsUserId,
+      deleted_at: null,
+    });
+
     const token = registerUser({
+      id: opsUserId,
       email: 'ops@ata-lta.ph',
       name: 'Ops Staff',
       role: 'Operations',
@@ -219,7 +238,7 @@ describe('/v1/documents', () => {
       .post('/v1/documents')
       .set('Authorization', `Bearer ${token}`)
       .set('X-Active-Entity', 'ATA')
-      .send(validDocument)
+      .send({ ...validDocument, linkedTaskId: taskId, workRequestId: wrId })
       .expect(201);
 
     const docId = created.body.data.document.id;
@@ -487,4 +506,30 @@ describe('/v1/documents', () => {
     expect(listRes.body.data[0].work_request_title).toBe('Tax Compliance 2026');
     expect(listRes.body.data[0].linked_task_title).toBe('Prepare BIR 1702');
   });
+  describe('Uploaded previews in consolidated view', () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    let token;
+    beforeEach(() => {
+      token = registerUser({ email: 'preview-admin@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA', 'LTA'] });
+      mockTables.documents.set(id, {
+        id, entity_id: 'ent-lta', status: 'active', storage_path: 'lta/preview.pdf',
+        file_name: 'preview.pdf', original_name: 'Preview.pdf', content_type: 'application/pdf', deleted_at: null,
+      });
+    });
+    it.each(['ALL', undefined])('returns a signed preview URL for LTA with entity %s', async (entity) => {
+      const req = request(app).get(`/v1/documents/${id}/download-url`).set('Authorization', `Bearer ${token}`);
+      if (entity) req.set('X-Active-Entity', entity);
+      const res = await req.expect(200);
+      expect(res.body.data.url).toBeTruthy();
+      expect(res.body.data.fileName).toBe('Preview.pdf');
+    });
+    it('retains explicit entity and consolidated-access restrictions', async () => {
+      await request(app).get(`/v1/documents/${id}/download-url`)
+        .set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').expect(404);
+      const restricted = registerUser({ email: 'restricted-preview@ata-lta.ph', name: 'Admin', role: 'Admin', entities: ['ATA'] });
+      await request(app).get(`/v1/documents/${id}/download-url`)
+        .set('Authorization', `Bearer ${restricted}`).set('X-Active-Entity', 'ALL').expect(403);
+    });
+  });
+
 });

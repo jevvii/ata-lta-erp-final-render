@@ -103,6 +103,7 @@ describe('P0-D: Phase-Lock Guards, Prerequisite Gates & Phase Routing Operations
       .set('Authorization', `Bearer ${adminToken}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Phase Routing Integration WR',
         clientId: client.id,
         entity: 'ATA',

@@ -267,6 +267,23 @@ export class MockSupabaseClient {
   getChannel(name: string): MockRealtimeChannel | undefined {
     return this.channels.get(name);
   }
+
+  private _storageMock = {
+    from: (bucket: string) => ({
+      upload: async (path: string, _file: unknown) => ({
+        data: { path, id: path, fullPath: `${bucket}/${path}` },
+        error: null,
+      }),
+      remove: async (paths: string[]) => ({ data: paths, error: null }),
+      getPublicUrl: (path: string) => ({
+        data: { publicUrl: `https://storage.mock/${bucket}/${path}` },
+      }),
+    }),
+  };
+
+  get storage() {
+    return this._storageMock;
+  }
 }
 
 /**

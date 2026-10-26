@@ -12280,6 +12280,11 @@ tbody tr * {
   gap: 6px;
 }
 
+#wr-form .notion-prop--due-date .mdp-wrapper {
+  max-width: 220px;
+  width: 100%;
+}
+
 .notion-prop label {
   display: flex;
   align-items: center;
@@ -13032,6 +13037,7 @@ tbody tr * {
 .side-pane-form-content .notion-prop {
   margin: 0;
 }
+
 
 .side-pane-form-content .form-group {
   margin: 0 0 20px;

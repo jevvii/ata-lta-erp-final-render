@@ -253,21 +253,20 @@ const App = {
           ? (await PendingChanges.getPendingForUser(Auth.user.id))
           : [];
 
-        const departments = Auth.user?.departments || [];
-        const hasOperations = departments.includes('Operations');
-        const hasManagement = departments.includes('Management');
+        const departments = (Auth.user?.departments || []).map(d => String(d).toLowerCase());
+        const hasOperations = departments.includes('operations');
+        const hasManagement = departments.includes('management');
         const showRequestsTab = hasOperations || hasManagement;
 
         const myReqsPending = showRequestsTab ? (opsCounts?.data?.pending || 0) : 0;
         let approvalsCount = 0;
-        const canSeePending = Auth.isManagerial() || (Auth.user?.departments || []).includes('Accounting') || Auth.user?.role === 'Accounting';
+        const canSeePending = Auth.isManagerial() || departments.includes('accounting') || String(Auth.user?.role || '').toLowerCase() === 'accounting';
         if (canSeePending && typeof Users !== 'undefined' && typeof Users.getPendingCategories === 'function') {
           const categories = Users.getPendingCategories();
           approvalsCount = Object.values(categories).reduce((sum, arr) => sum + (arr || []).length, 0);
         }
         let accountingReqsCount = 0;
-        const userDepts = Auth.user?.departments || [];
-        const needsPending = userDepts.includes('Accounting') || userDepts.includes('Documentation') || userDepts.includes('Management') || Auth.user?.role === 'Manager';
+        const needsPending = departments.includes('accounting') || departments.includes('documentation') || departments.includes('management') || String(Auth.user?.role || '').toLowerCase() === 'manager';
         if (needsPending && typeof Users !== 'undefined' && typeof Users.countPendingRequests === 'function') {
           accountingReqsCount = await Users.countPendingRequests();
         }
@@ -772,8 +771,14 @@ const App = {
         Workflow.view = 'form';
         Workflow.editingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
       } else if (pathParts[1] === 'templateForm') {
-        Workflow.view = 'templateForm';
-        Workflow.templateEditingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+        if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
+          Workflow.view = 'list';
+          location.hash = '#operations';
+          Utils.showToast('Access denied: Admin or Manager role required for retainer templates', 'error');
+        } else {
+          Workflow.view = 'templateForm';
+          Workflow.templateEditingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+        }
       } else if (pathParts[1] === 'taskTemplateForm') {
         if (Auth.user?.role !== 'Admin') {
           Workflow.view = 'list';
@@ -795,7 +800,13 @@ const App = {
           Workflow.view = 'task-templates';
         }
       } else if (tabParam === 'templates') {
-        Workflow.view = 'templates';
+        if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
+          Workflow.view = 'list';
+          location.hash = '#operations';
+          Utils.showToast('Access denied: Admin or Manager role required for retainer templates', 'error');
+        } else {
+          Workflow.view = 'templates';
+        }
       } else if (tabParam === 'archive') {
         Workflow.view = 'archive';
       } else if (!Workflow.view || Workflow.view === 'detail' || Workflow.view === 'form' || Workflow.view === 'templateForm' || Workflow.view === 'taskTemplateForm' || Workflow.view === 'addTask') {

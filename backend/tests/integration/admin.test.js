@@ -233,6 +233,7 @@ describe('/v1/admin', () => {
       parent_record_id: null,
       proposed_data: {
         title: 'New Proposed Work Request',
+        dueDate: '2026-12-31',
         clientId: 'c1111111-1111-1111-1111-111111111111',
         tasks: [
           {

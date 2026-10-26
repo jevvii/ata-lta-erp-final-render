@@ -52,6 +52,13 @@ const requireWorkflowEditOrTaskAssignee = async (req, res, next) => {
       });
     }
 
+    // Completion updates carry only item IDs and booleans, never checklist content.
+    const completionKeys = new Set(['checklistCompletions', 'expectedVersion']);
+    if (req.body?.checklistCompletions !== undefined &&
+        Object.keys(req.body).every((key) => completionKeys.has(key))) {
+      return next();
+    }
+
     // 3. User IS assigned to task:
     // May ONLY update status (and optional expectedVersion / version).
     // If other fields are in req.body -> 403 Forbidden ("Assignees may only update task status")

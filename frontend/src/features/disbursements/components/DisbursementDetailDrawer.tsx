@@ -14,6 +14,7 @@ import {
   DollarSign,
   Receipt,
   AlertCircle,
+  AlertTriangle,
   Clock,
   CheckCircle2,
   Send,
@@ -43,15 +44,18 @@ import {
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ApiError } from '@/lib/api';
+import type { Disbursement } from '../api/types';
 
 export interface DisbursementDetailDrawerProps {
-  id: string | null;
+  id?: string | null;
+  initialDisbursement?: Disbursement | null;
   isOpen: boolean;
   onClose: () => void;
 }
 
 export function DisbursementDetailDrawer({
   id,
+  initialDisbursement,
   isOpen,
   onClose,
 }: DisbursementDetailDrawerProps) {
@@ -62,9 +66,12 @@ export function DisbursementDetailDrawer({
   const canApprove = hasPermission(permissions, 'disbursement:approve') || isAdmin;
   const canRelease = hasPermission(permissions, 'disbursement:mark_released');
 
-  const { data: item, isLoading } = useDisbursementDetail(id ?? undefined, {
-    enabled: isOpen && Boolean(id),
+  const effectiveId = id || initialDisbursement?.id;
+  const { data: fetchedItem, isLoading: isFetching } = useDisbursementDetail(effectiveId ?? undefined, {
+    enabled: isOpen && Boolean(effectiveId) && !initialDisbursement,
   });
+  const item = fetchedItem || initialDisbursement;
+  const isLoading = !item && isFetching;
   const voucher = item;
 
   const { submitWithBlocking } = useSubmitDisbursement();
@@ -205,14 +212,28 @@ export function DisbursementDetailDrawer({
                 <p className="text-xs text-rose-800 whitespace-pre-wrap pl-5" data-testid="drawer-rejection-reason">
                   {item.rejection_reason || item.rejectionReason || 'No reason specified.'}
                 </p>
-                {(item.rejected_by || item.rejectedBy || item.rejected_at || item.rejectedAt) && (
+                {(item.rejected_by_name || item.rejected_by || item.rejectedBy || item.rejected_at || item.rejectedAt) && (
                   <div className="text-[10px] text-rose-600 pl-5">
-                    By {item.rejected_by || item.rejectedBy || 'Admin'} on{' '}
+                    By {item.rejected_by_name || item.rejected_by || item.rejectedBy || 'Admin'} on{' '}
                     {item.rejected_at || item.rejectedAt
                       ? new Date(item.rejected_at || item.rejectedAt || '').toLocaleString()
                       : 'N/A'}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Modified by Accounting Alert Banner */}
+            {(item.edited_by_accounting || item.notes?.includes('Edited by Accounting')) && (
+              <div
+                className="p-3 bg-amber-50 border border-amber-200 rounded-md flex items-center gap-2 text-xs text-amber-900"
+                data-testid="modified-by-accounting-banner"
+              >
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <div>
+                  <span className="font-semibold block">Modified by Accounting:</span>
+                  <span>Financial amounts or details were adjusted during voucher preparation.</span>
+                </div>
               </div>
             )}
 
@@ -233,7 +254,9 @@ export function DisbursementDetailDrawer({
                 <span className="text-slate-500 block text-[11px]">Linked Work Request</span>
                 <span className="font-mono text-slate-800 flex items-center gap-1">
                   <FileText className="h-3 w-3 text-slate-400" />
-                  {workRequestId ? `${workRequestId.slice(0, 18)}...` : 'None'}
+                  {item.linked_work_request_name ||
+                    item.linked_work_request_order_number ||
+                    (workRequestId ? `${workRequestId.slice(0, 18)}...` : 'None')}
                 </span>
               </div>
               <div className="space-y-1">
@@ -330,7 +353,17 @@ export function DisbursementDetailDrawer({
                   <span>
                     Created by{' '}
                     <span className="font-medium text-slate-800">
-                      {item.requested_by || item.requestedBy || item.created_by || item.createdBy || 'User'}
+                      {item.created_by_name ||
+                        item.createdByName ||
+                        item.requested_by_name ||
+                        item.requestedByName ||
+                        item.employee_name ||
+                        item.employeeName ||
+                        item.requested_by ||
+                        item.requestedBy ||
+                        item.created_by ||
+                        item.createdBy ||
+                        'User'}
                     </span>{' '}
                     on {new Date(item.created_at || item.createdAt || '').toLocaleString()}
                   </span>
@@ -341,7 +374,11 @@ export function DisbursementDetailDrawer({
                     <span>
                       Approved by{' '}
                       <span className="font-medium text-slate-800">
-                        {item.approved_by || item.approvedBy || 'Admin'}
+                        {item.approved_by_name ||
+                          item.approvedByName ||
+                          item.approved_by ||
+                          item.approvedBy ||
+                          'Admin'}
                       </span>{' '}
                       on {new Date(item.approved_at || item.approvedAt || '').toLocaleString()}
                     </span>
@@ -353,7 +390,11 @@ export function DisbursementDetailDrawer({
                     <span>
                       Released by{' '}
                       <span className="font-medium text-slate-800">
-                        {item.released_by || item.releasedBy || 'Accounting'}
+                        {item.released_by_name ||
+                          item.releasedByName ||
+                          item.released_by ||
+                          item.releasedBy ||
+                          'Accounting'}
                       </span>{' '}
                       on {new Date(item.released_at || item.releasedAt || '').toLocaleString()}
                     </span>
@@ -365,6 +406,24 @@ export function DisbursementDetailDrawer({
                     <span>
                       Funded and reconciled on{' '}
                       {new Date(item.funded_at || item.fundedAt || '').toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {(item.status === 'Rejected' || item.rejected_at || item.rejectedAt) && (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />
+                    <span>
+                      Rejected by{' '}
+                      <span className="font-medium text-slate-800">
+                        {item.rejected_by_name ||
+                          item.rejectedByName ||
+                          item.rejected_by ||
+                          item.rejectedBy ||
+                          'Admin'}
+                      </span>{' '}
+                      {item.rejected_at || item.rejectedAt
+                        ? `on ${new Date(item.rejected_at || item.rejectedAt || '').toLocaleString()}`
+                        : ''}
                     </span>
                   </div>
                 )}
@@ -402,8 +461,8 @@ export function DisbursementDetailDrawer({
                 )
               )}
 
-              {/* Pending -> Approve / Reject */}
-              {item.status === 'Pending' && canApprove && (
+              {/* Pending / Pending Admin Approval -> Approve / Reject */}
+              {(item.status === 'Pending' || item.status === 'Pending Admin Approval') && canApprove && (
                 <>
                   <Button
                     type="button"

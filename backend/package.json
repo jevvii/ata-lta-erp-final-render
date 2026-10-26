@@ -15,11 +15,13 @@
     "start:prod": "node scripts/run.js prod",
     "start:main": "node scripts/run.js main",
     "test": "PORT=0 jest",
+    "test:cross-worktree": "PORT=0 jest --config tests/cross-worktree/jest.config.js --runInBand",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "format": "prettier --write \"src/**/*.js\" \"tests/**/*.js\"",
+    "cleanup:receipts": "node src/scripts/cleanupOrphanReceipts.js",
     "migrate": "node-pg-migrate",
     "migrate:up": "node-pg-migrate up",
     "migrate:down": "node-pg-migrate down",
@@ -69,6 +71,10 @@
     "roots": [
       "tests",
       "src"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "<rootDir>/tests/cross-worktree/"
     ],
     "collectCoverageFrom": [
       "src/**/*.js",

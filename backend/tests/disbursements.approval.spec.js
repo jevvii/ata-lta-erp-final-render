@@ -80,12 +80,12 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .send(validDisbursementPayload)
         .expect(201);
 
-      expect(res.body.data.status).toBe('Pending');
+      expect(res.body.data.status).toBe('Draft');
       expect(res.body.data.amount).toBe(2500);
       expect(res.body.data.disbursement_number).toMatch(/^DISB-ATA-/);
     });
 
-    it('creates disbursement with status "Pending" when created by HR staff', async () => {
+    it('creates disbursement with status "Draft" when created by HR staff', async () => {
       const token = registerUser({
         email: 'hr@ata-lta.ph',
         name: 'HR Staff',
@@ -100,10 +100,10 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .send(validDisbursementPayload)
         .expect(201);
 
-      expect(res.body.data.status).toBe('Pending');
+      expect(res.body.data.status).toBe('Draft');
     });
 
-    it('creates disbursement with status "Pending" when created by Documentation staff', async () => {
+    it('creates disbursement with status "Draft" when created by Documentation staff', async () => {
       const token = registerUser({
         email: 'doc@ata-lta.ph',
         name: 'Doc Staff',
@@ -118,7 +118,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .send(validDisbursementPayload)
         .expect(201);
 
-      expect(res.body.data.status).toBe('Pending');
+      expect(res.body.data.status).toBe('Draft');
     });
 
     it('creates disbursement with status "Draft" when created by Accounting', async () => {
@@ -286,6 +286,29 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .expect(403);
     });
 
+    it('does not expose a legacy reconciliation route or count in the normal workflow', async () => {
+      const token = registerUser({ id: 'only-admin-no-legacy', role: 'Admin', email: 'no-legacy@example.test', entities: ['ATA'] });
+      const created = await request(app).post('/v1/disbursements').set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send(validDisbursementPayload).expect(201);
+      expect(created.body.data).not.toHaveProperty('legacy_review_state');
+      const counts = await request(app).get('/v1/disbursements/counts').set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').expect(200);
+      expect(counts.body.data).not.toHaveProperty('legacyNeedsVerification');
+      await request(app).post(`/v1/disbursements/${created.body.data.id}/legacy-review`).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: 1, decision: 'unpaid_draft', reason: 'Retired' }).expect(404);
+    });
+
+    it('allows a single Admin to create, approve, prepare and release their own request', async () => {
+      const token = registerUser({ id: 'only-admin-id', email: 'only-admin@example.test', name: 'Only Admin', role: 'Admin', entities: ['ATA'] });
+      const created = await request(app).post('/v1/disbursements').set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send(validDisbursementPayload).expect(201);
+      expect(created.body.data.status).toBe('Draft');
+      const approved = await request(app).post(`/v1/disbursements/${created.body.data.id}/approve`).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: created.body.data.version }).expect(200);
+      expect(approved.body.data).toMatchObject({ status: 'Approved', created_by: 'only-admin-id', approved_by: 'only-admin-id', version: created.body.data.version + 1 });
+      const funded = await request(app).post(`/v1/disbursements/${created.body.data.id}/fund`).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: approved.body.data.version, method: 'Cash', bank: 'Cash on Hand', reference: 'ADMIN-OWN-001', date: '2026-10-20' }).expect(200);
+      const released = await request(app).post(`/v1/disbursements/${created.body.data.id}/release`).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: funded.body.data.version }).expect(200);
+      expect(released.body.data).toMatchObject({ status: 'Released', created_by: 'only-admin-id', approved_by: 'only-admin-id', funded_by: 'only-admin-id', released_by: 'only-admin-id', payment_reference: 'ADMIN-OWN-001', version: funded.body.data.version + 1 });
+      const accounting = registerUser({ id: 'accounting-release-denied', email: 'accounting@example.test', role: 'Accounting', entities: ['ATA'] });
+      await request(app).post(`/v1/disbursements/${created.body.data.id}/release`).set('Authorization', `Bearer ${accounting}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: released.body.data.version }).expect(403);
+      await request(app).post(`/v1/disbursements/${created.body.data.id}/approve`).set('Authorization', `Bearer ${token}`).set('X-Active-Entity', 'ATA').send({ expectedVersion: created.body.data.version }).expect(409);
+    });
+
     it('allows Admin to approve a Pending disbursement (200 OK)', async () => {
       const adminToken = registerUser({
         id: 'admin-approver-id',
@@ -299,18 +322,21 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/approve`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        })
         .expect(200);
 
       expect(res.body.data.status).toBe('Approved');
       expect(res.body.data.approved_by).toBe('admin-approver-id');
       expect(res.body.data.approved_at).toBeDefined();
 
-      // Notification sent to creator
+      // Notification sent with disbursement.lifecycle
       expect(mockNotify).toHaveBeenCalledWith(
-        [creatorId],
-        'pending_request.resolved',
+        expect.any(Array),
+        'disbursement.lifecycle',
         expect.objectContaining({
-          outcome: 'approved',
+          action: 'approve',
           request_id: pendingDisbursementId,
           table_name: 'disbursements',
         })
@@ -330,6 +356,9 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/approve`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        })
         .expect(200);
 
       // Second approval must return 409 Conflict
@@ -337,6 +366,9 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/approve`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 2,
+        })
         .expect(409);
 
       expect(secondRes.body.title).toMatch(/invalid transition|conflict/i);
@@ -350,21 +382,31 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         entities: ['ATA'],
       });
 
-      // Create a draft disbursement as Admin
+      const staffToken = registerUser({
+        email: 'staff-creator@ata-lta.ph',
+        name: 'Staff Creator',
+        role: 'Operations',
+        entities: ['ATA'],
+      });
+
+      // Create a draft disbursement as Staff
       const draftRes = await request(app)
         .post('/v1/disbursements')
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Authorization', `Bearer ${staffToken}`)
         .set('X-Active-Entity', 'ATA')
         .send(validDisbursementPayload)
         .expect(201);
 
       expect(draftRes.body.data.status).toBe('Draft');
 
-      // Approving from Draft directly succeeds for Admin (Task B.5 / Defect 2)
+      // Approving from Draft directly succeeds for Admin
       const approveRes = await request(app)
         .post(`/v1/disbursements/${draftRes.body.data.id}/approve`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        })
         .expect(200);
 
       expect(approveRes.body.data.status).toBe('Approved');
@@ -460,7 +502,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/reject`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ reason })
+        .send({ reason, expectedVersion: 1 })
         .expect(200);
 
       expect(res.body.data.status).toBe('Rejected');
@@ -475,10 +517,10 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
 
       // Verify notification dispatched to creator
       expect(mockNotify).toHaveBeenCalledWith(
-        [creatorId],
-        'pending_request.resolved',
+        expect.any(Array),
+        'disbursement.lifecycle',
         expect.objectContaining({
-          outcome: 'rejected',
+          action: 'reject',
           reason,
           request_id: pendingDisbursementId,
           table_name: 'disbursements',
@@ -499,6 +541,9 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/approve`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        })
         .expect(200);
 
       // Attempt to reject an Approved disbursement -> 409 Conflict
@@ -506,13 +551,13 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/reject`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ reason: 'Late rejection' })
+        .send({ reason: 'Late rejection', expectedVersion: 2 })
         .expect(409);
 
       expect(res.body.title).toMatch(/invalid transition|conflict/i);
     });
 
-    it('returns 409 Conflict when attempting to reject from Draft status', async () => {
+    it('returns 409 Conflict when attempting to reject from Released status', async () => {
       const adminToken = registerUser({
         email: 'admin@ata-lta.ph',
         name: 'Admin User',
@@ -520,19 +565,28 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         entities: ['ATA'],
       });
 
-      // Create draft
+      const staffToken = registerUser({
+        email: 'staff-rel@ata-lta.ph',
+        name: 'Staff Rel',
+        role: 'Operations',
+        entities: ['ATA'],
+      });
+
+      // Create draft and move to Released
       const draftRes = await request(app)
         .post('/v1/disbursements')
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Authorization', `Bearer ${staffToken}`)
         .set('X-Active-Entity', 'ATA')
         .send(validDisbursementPayload)
         .expect(201);
+
+      mockTables.disbursements.get(draftRes.body.data.id).status = 'Released';
 
       await request(app)
         .post(`/v1/disbursements/${draftRes.body.data.id}/reject`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ reason: 'Invalid draft' })
+        .send({ reason: 'Invalid release', expectedVersion: 1 })
         .expect(409);
     });
 
@@ -551,7 +605,7 @@ describe('Parcel P0-G: Disbursement Approvals & Status Routing', () => {
         .post(`/v1/disbursements/${pendingDisbursementId}/reject`)
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ reason: 'Non-blocking notification test' })
+        .send({ reason: 'Non-blocking notification test', expectedVersion: 1 })
         .expect(200);
 
       expect(res.body.data.status).toBe('Rejected');

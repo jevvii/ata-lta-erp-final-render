@@ -96,6 +96,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('integration: POST /v1/operations/work-requests creates exactly 50 tasks for 50 tokens', async () => {
         const fiftyTasks = Array.from({ length: 50 }, (_, i) => `Audit Step ${i + 1}`).join(', ');
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR with Exactly 50 Tokenized Tasks',
           clientId: testClient.id,
           entity: 'ATA',
@@ -175,6 +176,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
         ).join('; ');
 
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR with 51 Tokens in Single Task',
           clientId: testClient.id,
           entity: 'ATA',
@@ -220,6 +222,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
         ).join(', ');
 
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR with Cumulative 51 Tokens Across Tasks',
           clientId: testClient.id,
           entity: 'ATA',
@@ -289,6 +292,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
       it('integration: creates single task when input contains periods without spaces', async () => {
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR Period Without Space Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -345,6 +349,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
       it('integration: POST /v1/operations/work-requests handles consecutive delimiters cleanly', async () => {
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR Consecutive Delimiters Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -401,6 +406,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
       it('integration: preserves Unicode text in created work request tasks and respects period-without-space', async () => {
         const payload = {
+          dueDate: '2026-12-31',
           title: 'WR Unicode Audit: Peña & 鈴木',
           clientId: testClient.id,
           entity: 'ATA',
@@ -442,6 +448,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('header-key: 10 concurrent identical requests do NOT create duplicate records', async () => {
         const idempotencyKey = '11112222-3333-4444-5555-666677778888';
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Concurrent Idempotency Stress Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -500,6 +507,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('body-key: 5 concurrent identical requests with body idempotency_key do NOT create duplicate records', async () => {
         const idempotencyKey = '99998888-7777-6666-5555-444433332222';
         const payload = {
+          dueDate: '2026-12-31',
           idempotency_key: idempotencyKey,
           title: 'Concurrent Body Key Stress Test',
           clientId: testClient.id,
@@ -548,6 +556,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('header-key: re-using same key with different title returns 422 Unprocessable Entity', async () => {
         const idempotencyKey = 'aaaaaaaa-bbbb-4444-cccc-dddddddddddd';
         const originalPayload = {
+          dueDate: '2026-12-31',
           title: 'Original Title Work Request',
           clientId: testClient.id,
           entity: 'ATA',
@@ -580,6 +589,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
         // 2. Mismatched request with DIFFERENT title but SAME key
         const mismatchedPayload = {
+          dueDate: '2026-12-31',
           ...originalPayload,
           title: 'Tampered Different Title Work Request',
         };
@@ -605,6 +615,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('header-key: re-using same key with different task graph returns 422', async () => {
         const idempotencyKey = 'bbbbbbbb-cccc-4444-dddd-eeeeeeeeeeee';
         const originalPayload = {
+          dueDate: '2026-12-31',
           title: 'Task Structure Sensitivity Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -634,6 +645,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
         // Mismatched task structure
         const mismatchedPayload = {
+          dueDate: '2026-12-31',
           ...originalPayload,
           phases: {
             pre_processing: {
@@ -669,6 +681,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('body-key: re-using body idempotency_key with different payload returns 422', async () => {
         const idempotencyKey = 'cccccccc-dddd-4444-eeee-ffffffffffff';
         const originalPayload = {
+          dueDate: '2026-12-31',
           idempotency_key: idempotencyKey,
           title: 'Body Key Payload A',
           clientId: testClient.id,
@@ -686,6 +699,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
         // Second call with different title but SAME idempotency_key in body
         const mismatchedPayload = {
+          dueDate: '2026-12-31',
           idempotency_key: idempotencyKey,
           title: 'Body Key Payload B (Mismatched)',
           clientId: testClient.id,
@@ -708,6 +722,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
       it('subsequent request with identical payload returns Idempotent-Replay header and byte-identical graph', async () => {
         const idempotencyKey = 'dddddddd-eeee-4444-ffff-000000000000';
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Exact Replay Verification',
           clientId: testClient.id,
           entity: 'ATA',
@@ -756,6 +771,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
     describe('2.4 Additional Adversarial Stress Tests', () => {
       it('rejects malformed Idempotency-Key (empty string) with 422 ERR_INVALID_IDEMPOTENCY_KEY', async () => {
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Empty Key Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -774,6 +790,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
 
       it('rejects excessively long Idempotency-Key (> 255 chars) with 422 ERR_INVALID_IDEMPOTENCY_KEY', async () => {
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Too Long Key Test',
           clientId: testClient.id,
           entity: 'ATA',
@@ -796,6 +813,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
         const twentyFiveProc = Array.from({ length: 25 }, (_, i) => `Proc Task ${i + 1}`).join(', ');
 
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Split Phase Exactly 50 Tasks',
           clientId: testClient.id,
           entity: 'ATA',
@@ -826,6 +844,7 @@ describe('Empirical Adversarial Challenge Suite: PR-1 Tokenizer & Idempotency (c
         const twentySixProc = Array.from({ length: 26 }, (_, i) => `Proc Task ${i + 1}`).join(', ');
 
         const payload = {
+          dueDate: '2026-12-31',
           title: 'Split Phase 51 Tasks Exceeded',
           clientId: testClient.id,
           entity: 'ATA',

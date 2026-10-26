@@ -17,6 +17,8 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('./fixture
 
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const ACCOUNTING_USER_ID = '22222222-2222-4222-8222-222222222222';
+const OPERATIONS_USER_ID = '44444444-4444-4444-8444-444444444444';
 
 const ORIGINAL_CLIENT_RECORD = {
   id: CLIENT_ID,
@@ -53,6 +55,7 @@ const seedData = () => {
     client_id: CLIENT_ID,
     title: 'Acme Annual Audit',
     status: 'In Progress',
+    co_assignees: [ACCOUNTING_USER_ID, OPERATIONS_USER_ID],
   });
 };
 
@@ -75,6 +78,7 @@ describe('Parcel P0-G: Billing Field-Level Security & Client Immutability', () =
     });
 
     accountingToken = registerUser({
+      id: ACCOUNTING_USER_ID,
       email: 'accounting@ata-lta.ph',
       name: 'Accounting User',
       role: 'Accounting',
@@ -82,6 +86,7 @@ describe('Parcel P0-G: Billing Field-Level Security & Client Immutability', () =
     });
 
     operationsToken = registerUser({
+      id: OPERATIONS_USER_ID,
       email: 'operations@ata-lta.ph',
       name: 'Operations User',
       role: 'Operations',

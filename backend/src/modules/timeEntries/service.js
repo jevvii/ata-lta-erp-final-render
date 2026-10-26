@@ -56,7 +56,26 @@ const mapLegacyEntry = (row) => ({
   id: row.id, user_id: row.user_id, task_id: row.task_id,
   entry_date: row.date, duration_minutes: Math.round(Number(row.hours) * 60),
   note: row.note || null, created_at: row.created_at, updated_at: row.created_at,
+  user_name: row.worker_name || null,
 });
+
+// Resolve identities only after entry visibility has been scoped. Batch the lookup
+// for large lists and keep historical entries readable if a profile is missing.
+const withLoggerProfiles = async (entries) => {
+  const userIds = [...new Set(entries.map((entry) => entry.user_id).filter(Boolean))];
+  const profiles = new Map();
+  for (let index = 0; index < userIds.length; index += 100) {
+    const { data, error } = await supabaseAdmin.from('users').select('id, name, role')
+      .in('id', userIds.slice(index, index + 100));
+    databaseError(error);
+    (data || []).forEach((profile) => profiles.set(profile.id, profile));
+  }
+  return entries.map((entry) => ({
+    ...entry,
+    user_name: profiles.get(entry.user_id)?.name || entry.user_name || null,
+    user_role: profiles.get(entry.user_id)?.role || null,
+  }));
+};
 
 const readEntries = async ({ table, dateColumn, userId, filters, taskIds }) => {
   if (taskIds && !taskIds.length) return [];
@@ -258,8 +277,9 @@ const listTimeEntries = async ({ user, userPermissions, entityId, filters = {} }
     readEntries({ table: 'task_time_logs', dateColumn: 'date', userId, filters, taskIds }),
   ]);
   // Unattributed/zero-duration legacy placeholders are not employee time entries.
-  return [...entries, ...legacy.filter((row) => row.user_id && row.date && Number(row.hours) > 0)
+  const visibleEntries = [...entries, ...legacy.filter((row) => row.user_id && row.date && Number(row.hours) > 0)
     .map(mapLegacyEntry)].sort((a, b) => b.entry_date.localeCompare(a.entry_date) || a.id.localeCompare(b.id));
+  return withLoggerProfiles(visibleEntries);
 };
 
 /**

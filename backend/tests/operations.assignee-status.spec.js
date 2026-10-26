@@ -92,6 +92,7 @@ describe('UAT2-9: Assignee Task Status Mutation', () => {
       title: 'Pre-processing Task',
       status: 'Assigned',
       phase: 'pre_processing',
+      version: 1,
       assignee_id: staffUser.id,
       assignee_name: staffUser.name,
       deleted_at: null,
@@ -110,6 +111,7 @@ describe('UAT2-9: Assignee Task Status Mutation', () => {
       title: 'Processing Task',
       status: 'Assigned',
       phase: 'processing',
+      version: 1,
       assignee_id: staffUser.id,
       assignee_name: staffUser.name,
       deleted_at: null,
@@ -128,6 +130,7 @@ describe('UAT2-9: Assignee Task Status Mutation', () => {
       title: 'Legacy Assigned Task',
       status: 'Assigned',
       phase: 'pre_processing',
+      version: 1,
       assignee_id: staffUser.id,
       assignee_name: staffUser.name,
       deleted_at: null,
@@ -306,5 +309,79 @@ describe('UAT2-9: Assignee Task Status Mutation', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.detail).toBe('One of permissions [workflow:edit] is required');
+  });
+
+  describe('Accounting assignees on regular tasks (no Billing type required)', () => {
+    let accountingToken;
+
+    beforeEach(() => {
+      accountingToken = registerUser({
+        id: staffUser.id,
+        email: 'assigned-accounting@ata-lta.ph',
+        name: 'Assigned Accountant',
+        role: 'Accounting',
+        departments: ['Accounting'],
+        entities: ['ATA'],
+      });
+      mockTables.tasks.get(TASK_PRE_ID).required_link_type = null;
+      mockTables.tasks.get(TASK_LEGACY_ID).required_link_type = null;
+    });
+
+    test.each(['primary', 'co-assignee'])('%s can start, complete, and reopen an assigned regular task', async (assignment) => {
+      const taskId = assignment === 'primary' ? TASK_LEGACY_ID : TASK_PRE_ID;
+      if (assignment === 'co-assignee') {
+        mockTables.tasks.get(taskId).assignee_id = '77777777-7777-7777-7777-777777777777';
+      }
+
+      for (const status of ['In Progress', 'Completed', 'In Progress']) {
+        const res = await request(app)
+          .patch(`/v1/operations/work-requests/${WR_ID}/tasks/${taskId}`)
+          .set('Authorization', `Bearer ${accountingToken}`)
+          .set('X-Active-Entity', 'ATA')
+          .send({ status })
+          .expect(200);
+
+        expect(res.body.data.status).toBe(status);
+        expect(mockTables.tasks.get(taskId).status).toBe(status);
+      }
+    });
+
+    test('cannot update an unassigned task even when on its work request team', async () => {
+      mockTables.work_requests.get(WR_ID).co_assignees = [staffUser.id];
+      mockTables.tasks.get(TASK_LEGACY_ID).assignee_id = '77777777-7777-7777-7777-777777777777';
+      await request(app)
+        .patch(`/v1/operations/work-requests/${WR_ID}/tasks/${TASK_LEGACY_ID}`)
+        .set('Authorization', `Bearer ${accountingToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ status: 'Completed' })
+        .expect(403);
+      expect(mockTables.tasks.get(TASK_LEGACY_ID).status).toBe('Assigned');
+    });
+
+    test('status access does not grant general task editing', async () => {
+      await request(app)
+        .patch(`/v1/operations/work-requests/${WR_ID}/tasks/${TASK_LEGACY_ID}`)
+        .set('Authorization', `Bearer ${accountingToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ status: 'Completed', title: 'Unauthorized edit' })
+        .expect(403);
+      expect(mockTables.tasks.get(TASK_LEGACY_ID).title).toBe('Legacy Assigned Task');
+      expect(mockTables.tasks.get(TASK_LEGACY_ID).status).toBe('Assigned');
+    });
+
+    test.each([
+      ['inactive phase', { phase: 'processing' }, 409, 'WORK_REQUEST_PHASE_NOT_ACTIVE'],
+      ['completed work request', { status: 'Completed' }, 400, 'COMPLETED_WR_LOCKED'],
+    ])('preserves the %s lock', async (_label, parentPatch, statusCode, code) => {
+      Object.assign(mockTables.work_requests.get(WR_ID), parentPatch);
+      const res = await request(app)
+        .patch(`/v1/operations/work-requests/${WR_ID}/tasks/${TASK_LEGACY_ID}`)
+        .set('Authorization', `Bearer ${accountingToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ status: 'Completed' })
+        .expect(statusCode);
+      expect(res.body.code).toBe(code);
+      expect(mockTables.tasks.get(TASK_LEGACY_ID).status).toBe('Assigned');
+    });
   });
 });

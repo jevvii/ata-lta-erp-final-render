@@ -7,6 +7,7 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const { concurrencyConflict, resolveExpectedVersion } = require('../../lib/concurrency');
 const { randomUUID } = require('crypto');
+const { isUserEntitledToEntity } = require('../../lib/userScope');
 
 /**
  * Map a database row to the API client shape.
@@ -174,6 +175,9 @@ const listClients = async ({
     query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
   }
 
+  // Client master records are shared within the authorized entity. Project
+  // membership scopes work requests and their records, not the client directory.
+
   if (isPaginated) {
     const offset = (pageNum - 1) * limitNum;
     query = query.range(offset, offset + limitNum - 1);
@@ -338,6 +342,8 @@ const getClientById = async ({
   entityId,
   allowCrossEntity = false,
   includeArchived = false,
+  user,
+  internal = false,
 }) => {
   let query = supabaseAdmin.from('clients').select('*').eq('id', id);
 
@@ -366,6 +372,11 @@ const getClientById = async ({
   }
 
   if (!data) return null;
+
+  if (!internal && user) {
+    const entitled = await isUserEntitledToEntity(data.entity_id, user);
+    if (!entitled) return null;
+  }
 
   const [related, entityCode] = await Promise.all([
     loadRelated([id]),

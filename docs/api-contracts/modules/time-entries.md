@@ -122,6 +122,11 @@ Lists time entries with date range and task filters. Scoped to the caller's own 
 | `task_id` | UUID | No | Filter by specific task |
 | `user_id` | UUID | No | Filter by user (Admin only; non-admins forced to self) |
 
+List responses include nullable `user_name` and `user_role` fields, resolved from
+the logger's profile after entry visibility is scoped. Legacy logs use their saved
+worker name if the profile is unavailable. No additional profile fields are
+exposed. `entry_date` is the work date; `created_at` is the logged timestamp.
+
 ---
 
 ### 2.4 `PATCH /v1/time-entries/:id`

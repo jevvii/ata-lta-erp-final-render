@@ -25,11 +25,14 @@ export const DISBURSEMENT_CATEGORIES = [
 
 export const DISBURSEMENT_STATUSES = [
   'Draft',
+  'Submitted',
   'Pending',
+  'Pending Admin Approval',
   'Approved',
   'Released',
   'Funded',
   'Rejected',
+  'Archived',
   'Cancelled',
 ] as const;
 

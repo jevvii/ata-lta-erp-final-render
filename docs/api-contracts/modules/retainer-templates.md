@@ -96,7 +96,7 @@ Generates a complete phase-model work request from the template, recording a gen
 | Field | Type | Required | Description |
 | :--- | :--- | :---: | :--- |
 | `period_label` / `periodLabel` | string (trimmed, 1–50) | No | Unique recurrence label for the period (e.g. `FY-2026`) |
-| `overrides` | object | No | Override properties applied to the generated work request |
+| `overrides` | object | Yes | Override properties applied to the generated work request; must include a due date |
 
 #### `overrides` Object Schema
 | Field | Type | Required | Description |
@@ -107,7 +107,7 @@ Generates a complete phase-model work request from the template, recording a gen
 | `priority` | string (max 50) | No | Priority override |
 | `assignedTo` / `assigned_to` | UUID | No | Primary assignee override |
 | `coAssignees` / `co_assignees` | array of strings | No | Multi-assignee override |
-| `dueDate` / `due_date` | ISO date string | No | Due date override |
+| `dueDate` / `due_date` | ISO date or timestamp string | Yes (one alias) | Required due date for both retainer and other template generation. Missing, null, empty, or invalid dates return `400 VALIDATION_ERROR`. |
 
 #### Response (201 Created)
 Returns generated work request object with embedded `generation` metadata containing `period_label`, `template_id`, and `generated_at`.

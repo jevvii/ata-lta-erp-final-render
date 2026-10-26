@@ -308,7 +308,11 @@ const remove = async (req, res, next) => {
 const listTasks = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const data = await operationsService.listTasks({ workRequestId: req.params.wrId, entityId });
+    const data = await operationsService.listTasks({
+      workRequestId: req.params.wrId,
+      entityId,
+      user: req.user,
+    });
     res.status(200).json({ data });
   } catch (err) {
     next(err);
@@ -395,6 +399,7 @@ const removeTask = async (req, res, next) => {
       workRequestId: req.params.wrId,
       taskId,
       entityId,
+      user: req.user,
     });
     if (!removed) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });
@@ -418,7 +423,11 @@ const removeTask = async (req, res, next) => {
 const getRelated = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const related = await operationsService.getWorkRequestRelated({ id: req.params.id, entityId });
+    const related = await operationsService.getWorkRequestRelated({
+      id: req.params.id,
+      entityId,
+      caller: req.user,
+    });
     res.status(200).json({ data: related });
   } catch (err) {
     next(err);
@@ -428,7 +437,11 @@ const getRelated = async (req, res, next) => {
 const getTaskRelated = async (req, res, next) => {
   try {
     const entityId = req.entityUUID;
-    const related = await operationsService.getTaskRelated({ id: req.params.id, entityId });
+    const related = await operationsService.getTaskRelated({
+      id: req.params.id,
+      entityId,
+      caller: req.user,
+    });
     res.status(200).json({ data: related });
   } catch (err) {
     next(err);
@@ -441,6 +454,7 @@ const listRetainerTemplates = async (req, res, next) => {
     const data = await operationsService.listRetainerTemplates({
       entityId,
       type: req.query.type,
+      user: req.user,
     });
     res.status(200).json({ data });
   } catch (err) {
@@ -618,6 +632,7 @@ const getTask = async (req, res, next) => {
       workRequestId: req.params.wrId,
       taskId: req.params.taskId || req.params.id,
       entityId,
+      user: req.user,
     });
     if (!task) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Task not found' });

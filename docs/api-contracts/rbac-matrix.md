@@ -14,8 +14,8 @@ The system enforces Role-Based Access Control (RBAC) via concrete permission key
 
 ### Resolution Rules (`buildPermissionSet`):
 1. **Department Unions:** Effective permissions for a user are computed as the union of permissions associated with their assigned departments (`Management`, `Accounting`, `Operations`, `Documentation`, `HR`).
-2. **Legacy Role Mapping:** A user with role `Manager` maps to `Management`. For staff roles matching department names, the role assignment grants that department's permissions.
-3. **Admin Super-User:** Users with role `Admin` automatically inherit all department permissions across all departments plus Admin-only operational capabilities (`workflow:phase_transition`, `workflow:qa_review`, `retainers:edit`, `disbursement:approve`, `timelog:edit_all`, `users:manage`, `clients:edit`, `transmittal:approve`).
+2. **Legacy Role Mapping & Role-Specific Exceptions:** A user with role `Manager` maps to `Management`. In addition, role `Manager` receives an explicit role-specific grant for `retainers:edit`. **Important:** Management department membership alone (e.g. `role: 'Staff', departments: ['Management']`) does NOT grant template editing; `retainers:edit` is restricted strictly to role `Manager` and role `Admin`. For staff roles matching department names, the role assignment grants that department's permissions.
+3. **Admin Super-User:** Users with role `Admin` automatically inherit all department permissions across all departments plus Admin-only operational capabilities (`workflow:phase_transition`, `workflow:qa_review`, `disbursement:approve`, `timelog:edit_all`, `users:manage`, `clients:edit`, `transmittal:approve`) and the shared Admin/Manager template capability (`retainers:edit`).
 4. **Data Scoping:** Departments and entities scope record visibility, but do NOT override permission key requirements.
 
 ### Wildcard Semantics for Frontend Consumers:
@@ -61,7 +61,7 @@ The system enforces Role-Based Access Control (RBAC) via concrete permission key
 | `dms:view` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `notifications:view` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `reports:view` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `retainers:edit` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `retainers:edit` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `retainers:use` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `timelog:create` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `timelog:edit_all` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |

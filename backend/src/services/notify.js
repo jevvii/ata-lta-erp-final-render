@@ -14,6 +14,7 @@ const FROZEN_NOTIFICATION_TYPES = [
   'wr.transition_request.received',
   'wr.transition_request.resolved',
   'wr.qa_reroute',
+  'disbursement.lifecycle',
 ];
 
 /**

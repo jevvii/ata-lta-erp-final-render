@@ -186,6 +186,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('successfully creates WR graph (201) with tokenized tasks and dual-written assignees', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'Q3 Tax Compliance Filing',
         clientId: testClient.id,
         entity: 'ATA',
@@ -275,6 +276,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects dependency "0" with 400 Bad Request and field error', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Invalid Dependency Zero',
         clientId: testClient.id,
         entity: 'ATA',
@@ -305,6 +307,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects dependency ["0"] array with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Invalid Dependency Array Zero',
         clientId: testClient.id,
         entity: 'ATA',
@@ -335,6 +338,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects dependency null inside array [null] with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Null Inside Dependency Array',
         clientId: testClient.id,
         entity: 'ATA',
@@ -365,6 +369,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects dependency [null, "task1"] with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Null and Valid Task Inside Dependency Array',
         clientId: testClient.id,
         entity: 'ATA',
@@ -401,6 +406,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects empty string dependency "" with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Empty String Dependency',
         clientId: testClient.id,
         entity: 'ATA',
@@ -431,6 +437,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects unknown local_id dependency with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Unknown Local ID Dependency',
         clientId: testClient.id,
         entity: 'ATA',
@@ -461,6 +468,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects circular dependencies with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Circular Dependency',
         clientId: testClient.id,
         entity: 'ATA',
@@ -497,6 +505,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('deduplicates user IDs in assignees array before inserting into task_assignees', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Duplicate Assignees in Task',
         clientId: testClient.id,
         entity: 'ATA',
@@ -532,6 +541,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects duplicate explicit local_id across tasks with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Duplicate Explicit Local IDs',
         clientId: testClient.id,
         entity: 'ATA',
@@ -566,6 +576,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('rejects sibling local_id collisions within the request with 400 Bad Request', async () => {
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR with Sibling Local ID Collision',
         clientId: testClient.id,
         entity: 'ATA',
@@ -620,6 +631,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
       };
 
       const payload = {
+        dueDate: '2026-12-31',
         title: 'WR Mid Transaction Failure Test',
         clientId: testClient.id,
         entity: 'ATA',
@@ -666,6 +678,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
     it('replays identical response with Idempotent-Replay header and creates no duplicate records', async () => {
       const idempotencyKey = '77777777-8888-4444-9999-000000000001';
       const payload = {
+        dueDate: '2026-12-31',
         idempotency_key: idempotencyKey,
         title: 'Idempotency Test Work Request',
         clientId: testClient.id,
@@ -724,6 +737,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
     it('honors client-supplied idempotency_key in request body without header', async () => {
       const idempotencyKey = '88888888-9999-4444-aaaa-bbbbbbbbbbbb';
       const payload = {
+        dueDate: '2026-12-31',
         idempotency_key: idempotencyKey,
         title: 'Body Key Idempotency Test',
         clientId: testClient.id,
@@ -772,6 +786,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
     it('allows retry with same Idempotency-Key after mid-transaction failure and succeeds', async () => {
       const idempotencyKey = '99999999-aaaa-4444-bbbb-cccccccccccc';
       const payload = {
+        dueDate: '2026-12-31',
         idempotency_key: idempotencyKey,
         title: 'Retry After Failure Test',
         clientId: testClient.id,
@@ -859,6 +874,7 @@ describe('P0-D PR-1: Operations Creation Pipeline & Tokenizer Rework', () => {
 
     it('maintains compatibility with legacy request bodies without phases', async () => {
       const legacyPayload = {
+        dueDate: '2026-12-31',
         title: 'Legacy Annual Compilation',
         clientId: testClient.id,
         entity: 'ATA',

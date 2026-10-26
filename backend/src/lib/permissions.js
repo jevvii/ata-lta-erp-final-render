@@ -173,20 +173,23 @@ const hasPermission = (granted, required) => {
  */
 const buildPermissionSet = ({ role, departments = [] }) => {
   const granted = new Set();
-  const allowedDepts = new Set(DEPARTMENTS);
 
-  // Ignore any disallowed department assignments (e.g. legacy rows in the DB).
-  const effectiveDepts = departments.filter((dept) => allowedDepts.has(dept));
+  // Ignore any disallowed department assignments (e.g. legacy rows in the DB), matching case-insensitively.
+  const effectiveDepts = departments
+    .map((dept) => DEPARTMENTS.find((d) => d.toLowerCase() === String(dept).toLowerCase()))
+    .filter(Boolean);
 
   // Map legacy role names to their department equivalents, but only if allowed.
   const legacyDept = role === 'Manager' ? 'Management' : role;
+  const canonicalLegacyDept = legacyDept
+    ? DEPARTMENTS.find((d) => d.toLowerCase() === String(legacyDept).toLowerCase())
+    : null;
   if (
-    legacyDept &&
-    allowedDepts.has(legacyDept) &&
-    DEPARTMENT_PERMISSIONS[legacyDept] &&
-    !effectiveDepts.includes(legacyDept)
+    canonicalLegacyDept &&
+    DEPARTMENT_PERMISSIONS[canonicalLegacyDept] &&
+    !effectiveDepts.includes(canonicalLegacyDept)
   ) {
-    effectiveDepts.push(legacyDept);
+    effectiveDepts.push(canonicalLegacyDept);
   }
 
   effectiveDepts.forEach((dept) => {
@@ -210,7 +213,21 @@ const buildPermissionSet = ({ role, departments = [] }) => {
     granted.add('timelog:edit_all');
   }
 
+  // Manager role receives retainers:edit permission (explicit role check, not department name alone)
+  if (role === 'Manager') {
+    granted.add('retainers:edit');
+  }
+
   return granted;
+};
+
+const ROLE_PERMISSIONS = {
+  Manager: Array.from(buildPermissionSet({ role: 'Manager' })),
+  Admin: Array.from(buildPermissionSet({ role: 'Admin' })),
+  Accounting: Array.from(buildPermissionSet({ role: 'Accounting' })),
+  Operations: Array.from(buildPermissionSet({ role: 'Operations' })),
+  Documentation: Array.from(buildPermissionSet({ role: 'Documentation' })),
+  HR: Array.from(buildPermissionSet({ role: 'HR' })),
 };
 
 module.exports = {
@@ -218,6 +235,7 @@ module.exports = {
   STAFF_ROLES,
   DEPARTMENTS,
   DEPARTMENT_PERMISSIONS,
+  ROLE_PERMISSIONS,
   buildPermissionSet,
   hasPermission,
 };

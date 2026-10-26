@@ -414,6 +414,7 @@ describe('/v1/operations-requests', () => {
       .set('Authorization', `Bearer ${managerToken}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         clientId: CLIENT_ID,
         title: 'Manager Project Request',
         phases: {
@@ -524,5 +525,115 @@ describe('/v1/operations-requests', () => {
     expect(listItem.clients.code).toBe('ACM-001');
     expect(listItem.work_requests.tasks.some((t) => t.id === taskId)).toBe(true);
     expect(listItem.requester.email).toBe('UAT-admin-enrich@ata-lta.ph');
+  });
+
+  describe('Billing request policy enforcement (F05)', () => {
+    it('denies billing request for Documentation-only user with 403 Forbidden', async () => {
+      const docToken = registerUser({
+        id: 'doc-only-user',
+        email: 'doc-billing@ata-lta.ph',
+        name: 'Doc Billing Staff',
+        role: 'Documentation',
+        entities: ['ATA'],
+      });
+
+      const res = await request(app)
+        .post('/v1/operations-requests')
+        .set('Authorization', `Bearer ${docToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          type: 'billing',
+          workRequestId: WORK_REQUEST_ID,
+          clientId: CLIENT_ID,
+          notes: 'Request invoice for audit task',
+        })
+        .expect(403);
+
+      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.body.detail).toBe('Documentation users cannot request invoice billing');
+    });
+
+    it('denies billing request for multi-department Documentation+Operations user with 403 Forbidden', async () => {
+      const multiId = 'multi-doc-ops-user';
+      const multiToken = registerUser({
+        id: multiId,
+        email: 'multi-doc-ops@ata-lta.ph',
+        name: 'Multi Doc Ops Staff',
+        role: 'Operations',
+        entities: ['ATA'],
+      });
+      // Attach both departments
+      mockTables.users.get(multiId).user_departments = [
+        { departments: { name: 'Operations' } },
+        { departments: { name: 'Documentation' } },
+      ];
+
+      const res = await request(app)
+        .post('/v1/operations-requests')
+        .set('Authorization', `Bearer ${multiToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          type: 'billing',
+          workRequestId: WORK_REQUEST_ID,
+          clientId: CLIENT_ID,
+          notes: 'Multi-dept billing request',
+        })
+        .expect(403);
+
+      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.body.detail).toBe('Documentation users cannot request invoice billing');
+    });
+
+    it('allows Operations-only user without Documentation to create billing request', async () => {
+      const opsId = 'ops-only-user';
+      const opsToken = registerUser({
+        id: opsId,
+        email: 'ops-only@ata-lta.ph',
+        name: 'Ops Only Staff',
+        role: 'Operations',
+        entities: ['ATA'],
+      });
+      mockTables.users.get(opsId).user_departments = [{ departments: { name: 'Operations' } }];
+
+      const res = await request(app)
+        .post('/v1/operations-requests')
+        .set('Authorization', `Bearer ${opsToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          type: 'billing',
+          workRequestId: WORK_REQUEST_ID,
+          clientId: CLIENT_ID,
+          notes: 'Operations billing request',
+        })
+        .expect(201);
+
+      expect(res.body.data.type).toBe('billing');
+      expect(res.body.data.status).toBe('pending');
+    });
+
+    it('allows Admin to create billing operations request and preserves direct linking', async () => {
+      const adminToken = registerUser({
+        id: 'admin-billing-user',
+        email: 'admin-billing@ata-lta.ph',
+        name: 'Admin Billing',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const res = await request(app)
+        .post('/v1/operations-requests')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          type: 'billing',
+          workRequestId: WORK_REQUEST_ID,
+          clientId: CLIENT_ID,
+          notes: 'Admin billing request',
+        })
+        .expect(201);
+
+      expect(res.body.data.type).toBe('billing');
+      expect(res.body.data.status).toBe('pending');
+    });
   });
 });

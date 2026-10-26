@@ -246,14 +246,17 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       expect(DISBURSEMENT_CATEGORIES).toContain('Transportation');
     });
 
-    it('defines 7 contract lifecycle statuses', () => {
+    it('defines 10 contract lifecycle statuses', () => {
       expect(DISBURSEMENT_STATUSES).toEqual([
         'Draft',
+        'Submitted',
         'Pending',
+        'Pending Admin Approval',
         'Approved',
         'Released',
         'Funded',
         'Rejected',
+        'Archived',
         'Cancelled',
       ]);
     });

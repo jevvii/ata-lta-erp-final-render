@@ -60,6 +60,21 @@ The operations workflow progresses sequentially through four explicit lifecycle 
 - **Phase Immutability**: Task `phase` is assigned at creation from its section (`pre_processing` or `processing`) and is permanently immutable. Any update payload containing a `phase` property returns HTTP `400 Bad Request` (`code: 'TASK_PHASE_IMMUTABLE'`).
 - **Prerequisite Gate**: A `processing` task cannot transition out of `Draft` or `Assigned` (e.g. to `In Progress`, `For Review`, `Completed`) while any active `pre_processing` task of the same work request is not `Completed`. Attempting such transition returns HTTP `409 Conflict` (`code: 'PHASE_PREREQUISITE'`).
 
+### Task deletion protection (2026-10-26)
+
+Task deletion requires `workflow:edit` and applies the same checks to all route aliases, including `/v1/tasks/:taskId`:
+
+| Condition | Response |
+| --- | --- |
+| Parent status is `Completed` or phase is `completion` | `400 COMPLETED_WR_LOCKED` |
+| Task phase precedes the parent's current phase | `409 PAST_PHASE_TASK_LOCKED` |
+| Task has active uploaded documents, invoices, disbursements (including receipts), or transmittals | `409 TASK_HAS_DOCUMENTS` |
+| Parent phase or linked documents cannot be verified | `500` and no deletion |
+
+Document protection returns: “You cannot delete this task because it has documents/receipts.” It applies to Admins too. Soft-deleted records do not count; financial linkage uses canonical `task_id`, falling back to `linked_task_id` only when `task_id` is null. Work-request-wide records without a task link do not block unrelated tasks.
+
+Task list, detail, and embedded work request task responses expose `hasDocuments: boolean`, covering uploaded files and linked financial/transmittal records. The frontend disables removal and shows the reason in both the board and work request edit form. The API rechecks protection on every deletion.
+
 ### 2.3 Assignment Dual-Write Discipline (F4 Transition Window)
 During the transition window before P3 cutover:
 1. Join assignments are inserted into `task_assignees` with attribution (`assigned_by = req.user.id`, `assigned_at = now()`).

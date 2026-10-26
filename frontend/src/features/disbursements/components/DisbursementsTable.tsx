@@ -256,6 +256,11 @@ export function DisbursementsTable({
                         <p className="text-[11px] text-slate-400">
                           {new Date(item.created_at || item.createdAt || '').toLocaleDateString()}
                           {item.client_name ? ` • ${item.client_name}` : ''}
+                          {item.linked_work_request_name
+                            ? ` • ${item.linked_work_request_name}`
+                            : item.linked_work_request_order_number
+                            ? ` • ${item.linked_work_request_order_number}`
+                            : ''}
                         </p>
                       </div>
                     </TableCell>
