@@ -81,6 +81,7 @@ export function NotificationBellPanel() {
   };
 
   const handleNotificationClick = async (item: NotificationItem) => {
+    const originalUserId = useSessionStore.getState().user?.id;
     // 1. Mark as read if not already read
     if (!item.readAt) {
       try {
@@ -89,6 +90,8 @@ export function NotificationBellPanel() {
         console.warn('[NotificationBellPanel] Mark read failed:', err);
       }
     }
+
+    if (useSessionStore.getState().user?.id !== originalUserId) return;
 
     // 2. Perform deep-link navigation based on payload ids
     setIsOpen(false);
@@ -132,6 +135,19 @@ export function NotificationBellPanel() {
         break;
       }
 
+      case 'disbursement.lifecycle': {
+        const session = useSessionStore.getState();
+        const entity = String(p.entity || '').toUpperCase();
+        if (session.user?.entities?.includes(entity)) session.setActiveEntity(entity);
+        const reqId = p.request_id || p.requestId;
+        if (reqId) {
+          navigate(`/disbursements?disbursementId=${encodeURIComponent(String(reqId))}`);
+        } else {
+          navigate('/disbursements');
+        }
+        break;
+      }
+
       default:
         navigate('/dashboard');
         break;
@@ -142,7 +158,7 @@ export function NotificationBellPanel() {
     switch (type) {
       case 'wr.transition_request.received':
         return (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]">
             <ArrowRightCircle className="h-4 w-4" />
           </div>
         );
@@ -150,13 +166,13 @@ export function NotificationBellPanel() {
         const outcome = String(payload.outcome || '').toLowerCase();
         if (outcome === 'approved') {
           return (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]">
               <CheckCircle2 className="h-4 w-4" />
             </div>
           );
         }
         return (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#DC2626]">
             <XCircle className="h-4 w-4" />
           </div>
         );
@@ -164,7 +180,7 @@ export function NotificationBellPanel() {
       case 'pending_request.resolved': {
         const resourceType = String(payload.resourceType || payload.resource_type || '').toLowerCase();
         return (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]">
             {resourceType === 'disbursement' ? (
               <Wallet className="h-4 w-4" />
             ) : (
@@ -175,13 +191,42 @@ export function NotificationBellPanel() {
       }
       case 'wr.qa_reroute':
         return (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]">
             <AlertTriangle className="h-4 w-4" />
           </div>
         );
+      case 'disbursement.lifecycle': {
+        const action = String(payload.action || '').toLowerCase();
+        if (['approve', 'approved', 'release', 'released'].includes(action)) {
+          return (
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+              <CheckCircle2 className="h-4 w-4" />
+            </div>
+          );
+        }
+        if (action === 'fund' || action === 'funded') {
+          return (
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+              <Wallet className="h-4 w-4" />
+            </div>
+          );
+        }
+        if (['reject', 'rejected', 'resend_draft', 'returned_for_correction'].includes(action)) {
+          return (
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600">
+              <XCircle className="h-4 w-4" />
+            </div>
+          );
+        }
+        return (
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-purple-100 text-purple-600">
+            <Wallet className="h-4 w-4" />
+          </div>
+        );
+      }
       default:
         return (
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-600">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#475569]">
             <Clock className="h-4 w-4" />
           </div>
         );
@@ -206,6 +251,12 @@ export function NotificationBellPanel() {
       }
       case 'wr.qa_reroute':
         return `QA Reroute Rework: ${String(wrTitle)}`;
+      case 'disbursement.lifecycle': {
+        const action = String(p.action || 'updated');
+        const disbNum = p.disbursement_number || p.disbursementNumber || 'Voucher';
+        const label: Record<string, string> = { create: 'New request', corrected: 'Corrected request', approve: 'Budget approved', fund: 'Payment prepared', release: 'Payment released', reject: 'Rejected', resend_draft: 'Returned for correction' };
+        return `${String(disbNum)} — ${label[action] || action.replace(/_/g, ' ')}`;
+      }
       default:
         return 'Notification';
     }
@@ -232,6 +283,16 @@ export function NotificationBellPanel() {
       }
       case 'wr.qa_reroute':
         return `Reason: ${String(p.reason || 'QA failed tasks reopened')}`;
+      case 'disbursement.lifecycle': {
+        const reason = p.reason;
+        if (reason) {
+          return `Reason: ${String(reason)}`;
+        }
+        const action = String(p.action || 'updated').replace(/_/g, ' ');
+        const entity = p.entity ? `[${String(p.entity)}] ` : '';
+        const disbNum = p.disbursement_number || p.disbursementNumber || '';
+        return `${entity}${disbNum ? `${disbNum}: ` : ''}${action}.`;
+      }
       default:
         return '';
     }
@@ -254,16 +315,16 @@ export function NotificationBellPanel() {
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-lg text-[#1e293b] hover:bg-[#f0f1f3] transition-colors cursor-pointer"
+        className="relative flex h-9 w-9 items-center justify-center rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] transition-colors cursor-pointer"
         aria-label="Notifications"
         aria-expanded={isOpen}
         data-testid="notification-bell-btn"
       >
-        <Bell className="h-5 w-5 text-[#1e293b]" />
+        <Bell className="h-5 w-5 text-[#1E293B]" />
         {unreadCount > 0 && (
           <span
             data-testid="unread-badge"
-            className="absolute -top-1 -right-1 flex min-w-5 h-5 items-center justify-center rounded-full bg-[#ef4444] px-1 text-[11px] font-bold text-white shadow-xs"
+            className="absolute -top-1 -right-1 flex min-w-5 h-5 items-center justify-center rounded-[6px] bg-[#DC2626] px-1 text-xs tabular-nums font-bold text-[#FFFFFF] border-[#E2E8F0]"
           >
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
@@ -273,15 +334,15 @@ export function NotificationBellPanel() {
       {/* Flyout Panel */}
       {isOpen && (
         <div
-          className="absolute right-0 mt-2 w-96 rounded-xl border border-slate-200 bg-white shadow-xl z-50 overflow-hidden flex flex-col max-h-[520px]"
+          className="absolute right-0 mt-2 w-96 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float z-50 overflow-hidden flex flex-col max-h-[520px]"
           data-testid="notifications-dropdown"
         >
           {/* Header */}
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+          <div className="p-3.5 border-b border-[#E2E8F0] flex items-center justify-between bg-[#F8FAFC]">
             <div className="flex items-center gap-2">
-              <h3 className="text-xs font-bold text-slate-900">Notifications</h3>
+              <h3 className="text-xs tabular-nums font-bold tracking-normal text-[#1E293B]">Notifications</h3>
               {unreadCount > 0 && (
-                <Badge variant="default" className="text-[10px] px-1.5 py-0.2 bg-blue-600">
+                <Badge variant="default" className="text-xs tabular-nums px-1.5 py-0.5 rounded-[8px] border-[#E2E8F0] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs">
                   {unreadCount} unread
                 </Badge>
               )}
@@ -295,7 +356,7 @@ export function NotificationBellPanel() {
                   size="xs"
                   onClick={handleMarkAllRead}
                   disabled={markAllReadMutation.isPending}
-                  className="text-[11px] text-slate-600 hover:text-blue-600 h-7 gap-1"
+                  className="text-xs rounded-[6px] text-[#475569] hover:text-[#1E293B] hover:bg-[#E2E8F0] h-7 gap-1 cursor-pointer"
                   data-testid="mark-all-read-btn"
                 >
                   <CheckCheck className="h-3.5 w-3.5" />
@@ -306,14 +367,14 @@ export function NotificationBellPanel() {
           </div>
 
           {/* Filters Bar */}
-          <div className="px-3.5 py-1.5 border-b border-slate-100 flex items-center gap-2 text-xs bg-white">
+          <div className="px-3.5 py-1.5 border-b border-[#E2E8F0] flex items-center gap-2 text-xs bg-[#F8FAFC]">
             <button
               type="button"
               onClick={() => setFilterUnreadOnly(false)}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+              className={`px-2 py-0.5 rounded-[6px] text-xs  transition-colors cursor-pointer ${
                 !filterUnreadOnly
-                  ? 'bg-slate-100 text-slate-900 font-semibold'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs font-semibold'
+                  : 'text-[#475569] hover:text-[#1E293B]'
               }`}
               data-testid="filter-all-btn"
             >
@@ -322,10 +383,10 @@ export function NotificationBellPanel() {
             <button
               type="button"
               onClick={() => setFilterUnreadOnly(true)}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
+              className={`px-2 py-0.5 rounded-[6px] text-xs  transition-colors cursor-pointer ${
                 filterUnreadOnly
-                  ? 'bg-slate-100 text-slate-900 font-semibold'
-                  : 'text-slate-500 hover:text-slate-800'
+                  ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs font-semibold'
+                  : 'text-[#475569] hover:text-[#1E293B]'
               }`}
               data-testid="filter-unread-btn"
             >
@@ -334,16 +395,16 @@ export function NotificationBellPanel() {
           </div>
 
           {/* Notifications List */}
-          <div className="flex-1 overflow-y-auto divide-y divide-slate-100" data-testid="notifications-list">
+          <div className="flex-1 overflow-y-auto divide-y divide-[#CBD5E1]" data-testid="notifications-list">
             {isLoading ? (
               <div className="p-4 space-y-3">
-                <div className="h-12 bg-slate-100 animate-pulse rounded-md" />
-                <div className="h-12 bg-slate-100 animate-pulse rounded-md" />
-                <div className="h-12 bg-slate-100 animate-pulse rounded-md" />
+                <div className="h-12 bg-[#F8FAFC] animate-pulse rounded-[8px] border-[#E2E8F0]" />
+                <div className="h-12 bg-[#F8FAFC] animate-pulse rounded-[8px] border-[#E2E8F0]" />
+                <div className="h-12 bg-[#F8FAFC] animate-pulse rounded-[8px] border-[#E2E8F0]" />
               </div>
             ) : displayedNotifications.length === 0 ? (
               <div
-                className="py-10 text-center text-xs text-slate-400"
+                className="py-10 text-center text-xs text-[#475569]"
                 data-testid="no-notifications-message"
               >
                 {filterUnreadOnly
@@ -359,8 +420,8 @@ export function NotificationBellPanel() {
                   <div
                     key={item.id}
                     onClick={() => handleNotificationClick(item)}
-                    className={`p-3 text-left transition-colors cursor-pointer flex items-start gap-3 hover:bg-slate-50 ${
-                      isUnread ? 'bg-blue-50/40' : 'bg-white'
+                    className={`p-3 text-left transition-colors cursor-pointer flex items-start gap-3 hover:bg-[#F8FAFC] ${
+                      isUnread ? 'bg-[#FFFFFF] border-l-2 border-l-[#1D4ED8]' : 'bg-[#FFFFFF]'
                     }`}
                     data-testid={`notification-item-${item.id}`}
                   >
@@ -370,28 +431,28 @@ export function NotificationBellPanel() {
                       <div className="flex items-start justify-between gap-1">
                         <span
                           className={`text-xs leading-snug line-clamp-1 ${
-                            isUnread ? 'font-bold text-slate-900' : 'font-medium text-slate-700'
+                            isUnread ? 'font-bold text-[#1E293B]' : 'font-medium text-[#475569]'
                           }`}
                         >
                           {getTitle(item)}
                         </span>
                         {isUnread && (
                           <span
-                            className="h-2 w-2 rounded-full bg-blue-600 shrink-0 mt-1"
+                            className="h-2 w-2 rounded-[6px] bg-[#DC2626] shrink-0 mt-1"
                             data-testid="unread-dot"
                           />
                         )}
                       </div>
 
-                      <p className="text-[11px] text-slate-500 line-clamp-2">
+                      <p className="text-xs text-[#475569] line-clamp-2">
                         {getMessage(item)}
                       </p>
 
-                      <div className="flex items-center justify-between pt-1">
-                        <span className="text-[10px] text-slate-400 font-mono">
+                      <div className="flex items-center justify-between pt-1 text-xs text-[#475569]">
+                        <span>
                           {formatRelativeTime(item.createdAt)}
                         </span>
-                        <span className="text-[10px] text-blue-600 font-medium flex items-center gap-0.5 hover:underline">
+                        <span className="text-[#1E293B] font-medium flex items-center gap-0.5 hover:underline">
                           View details <ExternalLink className="h-2.5 w-2.5" />
                         </span>
                       </div>

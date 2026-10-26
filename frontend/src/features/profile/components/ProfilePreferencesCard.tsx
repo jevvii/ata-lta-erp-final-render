@@ -96,7 +96,7 @@ export function ProfilePreferencesCard({ profile, isLoading = false }: ProfilePr
   };
 
   return (
-    <Card className="border border-border/80 shadow-sm" data-testid="profile-preferences-card">
+    <Card className="border-border/80 shadow-none" data-testid="profile-preferences-card">
       <CardHeader>
         <CardTitle className="text-lg font-bold text-foreground">Preferences</CardTitle>
         <CardDescription>Customize your display settings and interface behaviors.</CardDescription>
@@ -108,7 +108,7 @@ export function ProfilePreferencesCard({ profile, isLoading = false }: ProfilePr
             <div className="space-y-1.5">
               <label
                 htmlFor="profile-theme-select"
-                className="text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+                className="text-xs font-semibold text-muted-foreground tracking-normal"
               >
                 Theme
               </label>
@@ -147,7 +147,7 @@ export function ProfilePreferencesCard({ profile, isLoading = false }: ProfilePr
             <div className="space-y-1.5">
               <label
                 htmlFor="profile-default-view-select"
-                className="text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+                className="text-xs font-semibold text-muted-foreground tracking-normal"
               >
                 Default List View
               </label>
@@ -186,7 +186,7 @@ export function ProfilePreferencesCard({ profile, isLoading = false }: ProfilePr
             <div className="space-y-1.5">
               <label
                 htmlFor="profile-default-form-view-select"
-                className="text-xs font-semibold text-muted-foreground uppercase tracking-wider"
+                className="text-xs font-semibold text-muted-foreground tracking-normal"
               >
                 Default Form View
               </label>
@@ -215,7 +215,7 @@ export function ProfilePreferencesCard({ profile, isLoading = false }: ProfilePr
 
           {statusMessage && (
             <div
-              className={`flex items-center gap-2 text-xs p-2.5 rounded-lg border ${
+              className={`flex items-center gap-2 text-xs p-2.5 rounded-[8px] border ${
                 statusMessage.type === 'error'
                   ? 'text-destructive bg-destructive/10 border-destructive/20'
                   : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20'

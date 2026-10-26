@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, renderHook } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -13,16 +13,44 @@ import {
 import ReportsPage from '@/routes/reports';
 import { useSessionStore } from '@/lib/session';
 import { apiRequest } from '@/lib/api';
+import { DateInput } from '@/components/ui/date-input';
+import {
+  formatCurrency,
+  formatCount,
+  formatManilaDate,
+  formatDate,
+  formatMonth,
+  formatDateRange,
+  escapeCsvCell,
+} from '../utils/formatters';
+import {
+  useDailyReport,
+  useWeeklyReport,
+  useMonthlyPending,
+  useAgingReport,
+} from '../api/useReports';
 
 vi.mock('@/lib/api', () => ({
   apiRequest: vi.fn(),
 }));
+
+function createHookWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: Infinity, staleTime: Infinity },
+    },
+  });
+
+  return ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+}
 
 function createHarness(initialEntries = ['/reports']) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: Infinity, staleTime: Infinity },
     },
+
   });
 
   const wrapper = ({ children }: { children: React.ReactNode }) =>
@@ -464,6 +492,150 @@ describe('Reports UI Components & Route Testing', () => {
       // Aging tab is rendered and active
       expect(screen.getByTestId('tab-trigger-aging')).toBeInTheDocument();
       expect(screen.getByTestId('aging-report-tab')).toBeInTheDocument();
+    });
+  });
+
+  describe('Formatters & Utility Functions', () => {
+    describe('formatCurrency', () => {
+      it('strictly separates missing data (—) from genuine zero (₱0.00)', () => {
+        expect(formatCurrency(0)).toBe('₱0.00');
+        expect(formatCurrency('0')).toBe('₱0.00');
+        expect(formatCurrency(0.0)).toBe('₱0.00');
+        expect(formatCurrency(undefined)).toBe('—');
+        expect(formatCurrency(null)).toBe('—');
+        expect(formatCurrency('')).toBe('—');
+        expect(formatCurrency(NaN)).toBe('—');
+        expect(formatCurrency('invalid-amount')).toBe('—');
+      });
+
+      it('formats positive and negative amounts correctly', () => {
+        expect(formatCurrency(1250000)).toBe('₱1,250,000.00');
+        expect(formatCurrency('12500.50')).toBe('₱12,500.50');
+        expect(formatCurrency(-1250.5)).toBe('-₱1,250.50');
+        expect(formatCurrency('-99.99')).toBe('-₱99.99');
+      });
+
+      it('supports custom fallback string', () => {
+        expect(formatCurrency(null, { fallback: 'N/A' })).toBe('N/A');
+        expect(formatCurrency(undefined, { fallback: '0.00' })).toBe('0.00');
+      });
+    });
+
+    describe('formatCount', () => {
+      it('strictly separates missing data (—) from genuine zero (0)', () => {
+        expect(formatCount(0)).toBe('0');
+        expect(formatCount('0')).toBe('0');
+        expect(formatCount(undefined)).toBe('—');
+        expect(formatCount(null)).toBe('—');
+        expect(formatCount('')).toBe('—');
+        expect(formatCount(NaN)).toBe('—');
+      });
+
+      it('formats positive integers with locale separators', () => {
+        expect(formatCount(42)).toBe('42');
+        expect(formatCount(1234567)).toBe('1,234,567');
+      });
+    });
+
+    describe('formatManilaDate and formatDate', () => {
+      it('formats calendar-only YYYY-MM-DD directly without UTC day shifts', () => {
+        expect(formatManilaDate('2026-10-17')).toBe('Oct 17, 2026');
+        expect(formatManilaDate('2026-01-05')).toBe('Jan 5, 2026');
+        expect(formatDate('2026-12-31')).toBe('Dec 31, 2026');
+      });
+
+      it('returns placeholder for missing date strings', () => {
+        expect(formatManilaDate(undefined)).toBe('—');
+        expect(formatManilaDate(null)).toBe('—');
+        expect(formatManilaDate('')).toBe('—');
+      });
+    });
+
+    describe('formatMonth and formatDateRange', () => {
+      it('formats YYYY-MM to full Month Year', () => {
+        expect(formatMonth('2026-10')).toBe('October 2026');
+        expect(formatMonth('2026-01')).toBe('January 2026');
+        expect(formatMonth(null)).toBe('—');
+      });
+
+      it('formats date ranges with en-dash', () => {
+        expect(formatDateRange('2026-10-12', '2026-10-18')).toBe('Oct 12, 2026 – Oct 18, 2026');
+        expect(formatDateRange(null, null)).toBe('—');
+      });
+    });
+
+    describe('escapeCsvCell formula injection protection', () => {
+      it('neutralizes spreadsheet formula injection trigger characters (=, +, -, @, \\t, \\r)', () => {
+        expect(escapeCsvCell('=SUM(A1:B2)')).toBe(`"'=SUM(A1:B2)"`);
+        expect(escapeCsvCell('+12345')).toBe(`"'+12345"`);
+        expect(escapeCsvCell('-12500')).toBe(`"'-12500"`);
+        expect(escapeCsvCell('@COMMAND')).toBe(`"'@COMMAND"`);
+        expect(escapeCsvCell('\tcmd')).toBe(`"'\tcmd"`);
+        expect(escapeCsvCell('\rcmd')).toBe(`"'\rcmd"`);
+      });
+
+      it('safely quotes plain text and escapes double quotes', () => {
+        expect(escapeCsvCell('Simple Text')).toBe('"Simple Text"');
+        expect(escapeCsvCell('Text with "Quotes"')).toBe('"Text with ""Quotes"""');
+        expect(escapeCsvCell(null)).toBe('""');
+        expect(escapeCsvCell(undefined)).toBe('""');
+      });
+    });
+  });
+
+  describe('Detail Report Query Gating with activeEntity === "ALL"', () => {
+    it('disables useDailyReport when activeEntity is ALL', () => {
+      useSessionStore.setState({ activeEntity: 'ALL' });
+      const { result } = renderHook(() => useDailyReport('2026-10-04'), {
+        wrapper: createHookWrapper(),
+      });
+      expect(result.current.fetchStatus).toBe('idle');
+      expect(apiRequest).not.toHaveBeenCalled();
+    });
+
+    it('disables useWeeklyReport when activeEntity is ALL', () => {
+      useSessionStore.setState({ activeEntity: 'ALL' });
+      const { result } = renderHook(() => useWeeklyReport('2026-10-04'), {
+        wrapper: createHookWrapper(),
+      });
+      expect(result.current.fetchStatus).toBe('idle');
+      expect(apiRequest).not.toHaveBeenCalled();
+    });
+
+    it('disables useMonthlyPending when activeEntity is ALL', () => {
+      useSessionStore.setState({ activeEntity: 'ALL' });
+      const { result } = renderHook(() => useMonthlyPending('2026-10'), {
+        wrapper: createHookWrapper(),
+      });
+      expect(result.current.fetchStatus).toBe('idle');
+      expect(apiRequest).not.toHaveBeenCalled();
+    });
+
+    it('disables useAgingReport when activeEntity is ALL', () => {
+      useSessionStore.setState({ activeEntity: 'ALL' });
+      const { result } = renderHook(() => useAgingReport(), {
+        wrapper: createHookWrapper(),
+      });
+      expect(result.current.fetchStatus).toBe('idle');
+      expect(apiRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DateInput Styling & Contract Integrity', () => {
+    it('applies font-sans, default 36px height, and minimum widths for date and month types', () => {
+      const { container, rerender } = render(
+        <DateInput value="2026-10-17" onValueChange={() => {}} aria-label="Test Date" />
+      );
+      const root = container.firstChild as HTMLElement;
+      expect(root.className).toContain('font-sans');
+      expect(root.className).toContain('h-9');
+      expect(root.className).toContain('sm:min-w-[176px]');
+
+      rerender(
+        <DateInput type="month" value="2026-10" onValueChange={() => {}} aria-label="Test Month" />
+      );
+      const monthRoot = container.firstChild as HTMLElement;
+      expect(monthRoot.className).toContain('sm:min-w-[184px]');
     });
   });
 });

@@ -339,7 +339,7 @@ export function BlockingActionModal() {
         <DialogPrimitive.Content
           className={cn(
             'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%]',
-            'gap-4 rounded-xl border border-[#f0f0f5] bg-white p-6 shadow-2xl duration-200',
+            'gap-4 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-6 shadow-float',
             'focus:outline-none'
           )}
           onPointerDownOutside={(e) => e.preventDefault()}
@@ -356,28 +356,28 @@ export function BlockingActionModal() {
           {status === 'loading' && (
             <div className="flex flex-col items-center text-center py-4 space-y-4" aria-busy="true">
               <div className="relative flex items-center justify-center p-3">
-                <Loader2 className="h-10 w-10 animate-spin text-[#2563eb]" />
+                <Loader2 className="h-10 w-10 animate-spin text-[#1E293B]" />
               </div>
               <div className="space-y-1">
-                <DialogPrimitive.Title className="text-lg font-semibold text-[#1e293b]">
+                <DialogPrimitive.Title className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
                   {title}
                 </DialogPrimitive.Title>
-                <DialogPrimitive.Description className="text-sm text-[#64748b] leading-relaxed">
+                <DialogPrimitive.Description className="text-xs text-[#475569] leading-relaxed">
                   {message}
                 </DialogPrimitive.Description>
               </div>
 
               {progress && (
                 <div className="w-full space-y-1.5 pt-2">
-                  <div className="flex justify-between text-xs text-[#64748b]">
+                  <div className="flex justify-between text-xs text-[#475569]">
                     <span>{progress.label || 'Progress'}</span>
-                    <span>
+                    <span className="tabular-nums font-bold text-[#1E293B]">
                       {progress.current} / {progress.total}
                     </span>
                   </div>
-                  <div className="h-1.5 w-full bg-[#f1f5f9] rounded-full overflow-hidden">
+                  <div className="h-2 w-full bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] overflow-hidden">
                     <div
-                      className="h-full bg-[#2563eb] transition-all duration-300"
+                      className="h-full bg-[#1D4ED8] transition-all duration-300"
                       style={{
                         width: `${Math.min(100, (progress.current / progress.total) * 100)}%`,
                       }}
@@ -391,21 +391,21 @@ export function BlockingActionModal() {
           {/* 2. SUCCESS STATE */}
           {status === 'success' && (
             <div className="flex flex-col items-center text-center py-2 space-y-4">
-              <div className="rounded-full bg-emerald-50 p-3 text-emerald-600">
-                <CheckCircle2 className="h-10 w-10" />
+              <div className="rounded-[8px] border-[#E2E8F0] bg-[#1D4ED8] p-3 text-[#FFFFFF]">
+                <CheckCircle2 className="h-10 w-10 text-[#FFFFFF]" />
               </div>
               <div className="space-y-1">
-                <DialogPrimitive.Title className="text-lg font-semibold text-[#1e293b]">
+                <DialogPrimitive.Title className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
                   {successTitle || 'Operation Successful'}
                 </DialogPrimitive.Title>
-                <DialogPrimitive.Description className="text-sm text-[#64748b]">
+                <DialogPrimitive.Description className="text-xs text-[#475569]">
                   {typeof successMessage === 'function'
                     ? 'Completed successfully.'
                     : successMessage || 'The action was persisted successfully.'}
                 </DialogPrimitive.Description>
               </div>
               <div className="w-full pt-2">
-                <Button className="w-full" onClick={close} data-testid="blocking-action-ok-btn">
+                <Button className="w-full text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs" onClick={close} data-testid="blocking-action-ok-btn">
                   OK
                 </Button>
               </div>
@@ -415,10 +415,10 @@ export function BlockingActionModal() {
           {/* 3. ERROR STATE (RFC 7807 Verbatim Surfacing) */}
           {status === 'error' && error && (
             <div className="space-y-4">
-              <div className="flex items-start justify-between gap-3 border-b border-[#f1f5f9] pb-3">
+              <div className="flex items-start justify-between gap-3 border-b border-[#E2E8F0] pb-3">
                 <div className="flex items-center gap-2">
-                  <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
-                  <DialogPrimitive.Title className="text-base font-semibold text-[#1e293b]">
+                  <AlertCircle className="h-5 w-5 text-[#DC2626] shrink-0" />
+                  <DialogPrimitive.Title className="text-base font-semibold uppercase tracking-tight text-[#1E293B]">
                     {error.title || 'Action Failed'}
                   </DialogPrimitive.Title>
                 </div>
@@ -427,7 +427,7 @@ export function BlockingActionModal() {
                   <Badge
                     variant="destructive"
                     data-testid="error-code-badge"
-                    className="font-mono text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 shrink-0"
+                    className="text-xs font-bold tracking-normal px-2 py-0.5 shrink-0 rounded-[6px] bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs"
                   >
                     {error.code}
                   </Badge>
@@ -435,10 +435,10 @@ export function BlockingActionModal() {
               </div>
 
               {/* Body message container displaying error.detail verbatim */}
-              <div className="rounded-lg bg-red-50/60 border border-red-200/80 p-3.5">
+              <div className="rounded-[6px] bg-[#FEF2F2] border-[#FCA5A5] p-3.5">
                 <p
                   data-testid="error-detail-body"
-                  className="text-sm text-red-950 font-medium leading-relaxed break-words whitespace-pre-wrap"
+                  className="text-xs text-[#DC2626] font-medium leading-relaxed break-words whitespace-pre-wrap"
                 >
                   {error.detail}
                 </p>
@@ -446,17 +446,18 @@ export function BlockingActionModal() {
 
               {/* Technical context for status code */}
               {error.status && (
-                <div className="text-xs text-[#94a3b8] flex justify-between px-1">
+                <div className="text-xs text-[#475569] flex justify-between px-1">
                   <span>HTTP Status: {error.status}</span>
                   {error.code && <span>Code: {error.code}</span>}
                 </div>
               )}
 
               {/* Recovery Action Buttons */}
-              <div className="flex items-center justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E2E8F0]">
                 <Button
                   variant="outline"
                   size="sm"
+                  className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
                   data-testid="error-dismiss-btn"
                   onClick={() => {
                     if (onDismiss) onDismiss();
@@ -469,6 +470,7 @@ export function BlockingActionModal() {
                   <Button
                     variant="default"
                     size="sm"
+                    className="text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
                     data-testid="error-retry-btn"
                     onClick={async () => {
                       close();

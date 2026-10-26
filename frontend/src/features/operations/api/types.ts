@@ -138,9 +138,20 @@ export interface ChecklistItem {
   completed: boolean;
   assigneeId?: string | null;
   assigneeName?: string | null;
-  dependsOn?: string | null;
+  dependsOn?: string | string[] | null;
   periodYear?: string | null;
   timeLogs?: TaskTimeLog[];
+}
+
+export interface ChecklistItemInput {
+  id?: string | null;
+  text: string;
+  completed?: boolean;
+  category?: string | null;
+  assigneeId?: string | null;
+  assigneeName?: string | null;
+  dependsOn?: string | string[] | null;
+  periodYear?: string | null;
 }
 
 export interface ChecklistItemData {
@@ -218,6 +229,7 @@ export interface Task {
   checklist?: ChecklistItem[];
   timeLogs?: TaskTimeLog[];
   taskDocuments?: TaskDocumentAttachment[];
+  hasDocuments?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -257,6 +269,8 @@ export interface WorkRequest {
   assigned_to_name?: string | null;
   coAssignees: string[];
   dueDate: string | null;
+  work_order_number?: string | null;
+  workOrderNumber?: string | null;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -342,6 +356,7 @@ export interface RetainerTemplateTask {
   depends_on_local_id?: string | null;
   dependsOnLocalId?: string | null;
   requiredLinkType?: string | null;
+  required_link_type?: string | null;
   dueDate?: string | null;
   due_date?: string | null;
   checklist?: ChecklistItemData[];
@@ -461,6 +476,9 @@ export interface CreatePhaseTaskInput {
   localId?: string | null;
   status?: string | null;
   dueDate?: string | null;
+  requiredLinkType?: string | null;
+  required_link_type?: string | null;
+  checklist?: ChecklistItemInput[];
 }
 
 export type PhaseTaskInput = CreatePhaseTaskInput;
@@ -484,14 +502,15 @@ export interface CreateWorkRequestInput {
   requestedBy?: string;
   assignedTo?: string | null;
   coAssignees?: string[];
-  dueDate?: string | null;
+  dueDate: string;
   priority?: Priority;
   idempotency_key?: string | null;
   idempotencyKey?: string | null;
   phases?: CreateWorkRequestPhasesInput | null;
 }
 
-export interface UpdateWorkRequestInput extends Partial<Omit<CreateWorkRequestInput, 'phases'>> {
+export interface UpdateWorkRequestInput extends Partial<Omit<CreateWorkRequestInput, 'phases' | 'dueDate'>> {
+  dueDate?: string | null;
   archived?: boolean;
   status?: WorkRequestStatus;
   expectedVersion?: number;
@@ -507,13 +526,7 @@ export interface CreateTaskInput {
   assignees?: string[];
   dueDate?: string | null;
   displayOrder?: number;
-  checklist?: Array<{
-    text: string;
-    category?: string | null;
-    completed?: boolean;
-    assigneeId?: string | null;
-    periodYear?: string | null;
-  }>;
+  checklist?: ChecklistItemInput[];
   timeLogs?: Array<{
     date: string;
     hours: number;
@@ -538,14 +551,8 @@ export interface UpdateTaskInput {
   dueDate?: string | null;
   displayOrder?: number;
   expectedVersion?: number;
-  checklist?: Array<{
-    id?: string | null;
-    text: string;
-    category?: string | null;
-    completed?: boolean;
-    assigneeId?: string | null;
-    periodYear?: string | null;
-  }>;
+  checklist?: ChecklistItemInput[];
+  checklistCompletions?: Array<{ id: string; completed: boolean }>;
   timeLogs?: Array<{
     date: string;
     hours: number;
@@ -613,6 +620,9 @@ export interface RetainerGenerateTaskOverride {
   dependsOn?: string | null;
   dueDate?: string | null;
   due_date?: string | null;
+  requiredLinkType?: string | null;
+  required_link_type?: string | null;
+  checklist?: ChecklistItemData[];
 }
 
 export interface RetainerGenerateOverrides {
@@ -719,6 +729,7 @@ export interface OperationsRequestFilters {
 
 export interface OperationsCounts {
   all: number;
+  active?: number;
   pre_processing: number;
   processing: number;
   quality_assurance: number;
@@ -751,12 +762,15 @@ export type WorkRequestListResponse = ApiResponse<WorkRequest[]>;
 export type WorkRequestDetailResponse = ApiResponse<WorkRequest>;
 export type WorkRequestCountsResponse = ApiResponse<OperationsCounts>;
 
+export interface WorkRequestRelatedData {
+  invoices?: TaskRelatedInvoice[];
+  disbursements?: TaskRelatedDisbursement[];
+  transmittals?: TaskRelatedTransmittal[];
+  documents?: DmsDocument[];
+}
+
 export interface WorkRequestRelatedResponse {
-  data: {
-    workRequest: WorkRequest;
-    relatedRequests?: OperationsRequest[];
-    documents?: DmsDocument[];
-  };
+  data: WorkRequestRelatedData;
 }
 
 export type OperationsRequestListResponse = ApiResponse<OperationsRequest[]>;
@@ -771,4 +785,75 @@ export interface ApiErrorResponse {
     name: string;
     reason: string;
   }>;
+}
+
+export interface TaskRelatedInvoice {
+  id: string;
+  task_id?: string | null;
+  taskId?: string | null;
+  linked_task_id?: string | null;
+  linkedTaskId?: string | null;
+  work_request_id?: string | null;
+  workRequestId?: string | null;
+  entity_id?: string | null;
+  entityId?: string | null;
+  invoice_number?: string;
+  invoiceNumber?: string;
+  amount?: number;
+  total?: number;
+  balance?: number;
+  status?: string;
+  created_at?: string;
+  client_name?: string | null;
+  clientName?: string | null;
+  clients?: { name?: string; id?: string } | null;
+}
+
+export interface TaskRelatedDisbursement {
+  id: string;
+  task_id?: string | null;
+  taskId?: string | null;
+  linked_task_id?: string | null;
+  linkedTaskId?: string | null;
+  linked_work_request_id?: string | null;
+  linkedWorkRequestId?: string | null;
+  work_request_id?: string | null;
+  workRequestId?: string | null;
+  entity_id?: string | null;
+  entityId?: string | null;
+  disbursement_number?: string;
+  disbursementNumber?: string;
+  category?: string;
+  description?: string;
+  amount?: number;
+  status?: string;
+  created_at?: string;
+  clients?: { name: string } | null;
+}
+
+export interface TaskRelatedTransmittal {
+  id: string;
+  linked_task_id?: string | null;
+  linkedTaskId?: string | null;
+  task_id?: string | null;
+  taskId?: string | null;
+  work_request_id?: string | null;
+  workRequestId?: string | null;
+  entity_id?: string | null;
+  entityId?: string | null;
+  transmittal_number?: string;
+  transmittalNumber?: string;
+  tracking_number?: string;
+  trackingNumber?: string;
+  recipient_name?: string;
+  recipientName?: string;
+  status?: string;
+  created_at?: string;
+  clients?: { name: string } | null;
+}
+
+export interface TaskRelatedRecords {
+  invoices: TaskRelatedInvoice[];
+  disbursements: TaskRelatedDisbursement[];
+  transmittals: TaskRelatedTransmittal[];
 }

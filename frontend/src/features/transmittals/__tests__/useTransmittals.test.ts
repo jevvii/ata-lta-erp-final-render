@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import React from 'react';
 import {
   useTransmittalsList,
@@ -157,6 +157,21 @@ describe('Transmittals Data Layer & Zero Optimistic Updates Doctrine', () => {
       expect(result.current.data?.tracking_number).toBe('TR-ATA-2026-0001');
       expect(result.current.data?.items).toHaveLength(1);
     });
+  });
+
+  it('does not retry a missing detail on failure or window focus, but allows manual retry', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found', json: async () => ({ detail: 'Transmittal not found' }) });
+    const { wrapper, queryClient } = createWrapper();
+    const { result, unmount } = renderHook(() => useTransmittalDetail('missing'), { wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    await act(async () => { await result.current.refetch(); });
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    unmount();
+    queryClient.clear();
+    focusManager.setFocused(undefined);
   });
 
   describe('3. useTransmittalCounts', () => {

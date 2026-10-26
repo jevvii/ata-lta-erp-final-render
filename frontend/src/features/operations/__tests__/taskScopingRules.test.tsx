@@ -142,6 +142,17 @@ describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
     expect(canMutateTaskStatus(userAccountingTeam, mockTask)).toBe(false);
   });
 
+  it.each([null, 'billing', 'invoice', 'document', 'disbursement', 'transmittal'])(
+    'allows Accounting primary and co-assignees to update status for task type %s',
+    (requiredLinkType) => {
+      const accounting = { ...userAccountingTeam, id: 'emp-assigned-1' };
+      const task = { ...mockTask, requiredLinkType } as Task;
+      expect(canMutateTaskStatus(accounting, task)).toBe(true);
+      expect(canMutateTaskStatus({ ...accounting, id: 'emp-assigned-2', role: 'Accounting', departments: [] }, task)).toBe(true);
+      expect(canMutateTaskStatus(userAccountingTeam, task)).toBe(false);
+    }
+  );
+
   it('requires assignment for time logging, including Admins', () => {
     expect(canLogTaskTime(userAssignedStaff, mockTask)).toBe(true);
     expect(canLogTaskTime(userAdmin, mockTask)).toBe(false);
@@ -149,36 +160,89 @@ describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
     expect(canLogTaskTime(userAccountingTeam, mockTask)).toBe(false);
   });
 
-  it('enforces document upload permissions (only assigned employee or Admin)', () => {
+  it('enforces document upload permissions (only assigned employee or Admin; Accounting only on assigned billing tasks)', () => {
     expect(canUploadTaskDocument(userAssignedStaff, mockTask)).toBe(true);
     expect(canUploadTaskDocument(userAdmin, mockTask)).toBe(true);
     expect(canUploadTaskDocument(userUnassignedManager, mockTask)).toBe(false);
     expect(canUploadTaskDocument(userDocTeam, mockTask)).toBe(false);
+
+    // Accounting user assigned to non-billing task -> denied
+    const userAcctAssigned: UserProfile = {
+      ...userAccountingTeam,
+      id: 'emp-assigned-1',
+    };
+    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: null })).toBe(false);
+    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'documents' })).toBe(false);
+
+    // Accounting user assigned to billing task -> allowed
+    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'billing' })).toBe(true);
+    // Unassigned Accounting user on billing task -> denied
+    expect(canUploadTaskDocument(userAccountingTeam, { ...mockTask, requiredLinkType: 'billing' })).toBe(false);
   });
 
-  it('enforces billing invoice permissions (Admin, assigned, Accounting in WR; others request)', () => {
+  it('enforces billing invoice permissions (Admin direct; Accounting only on assigned billing tasks; non-Admin Doc denied; others request)', () => {
     // Direct link
     expect(canLinkInvoice(userAdmin, mockTask, mockWr, [mockTask])).toBe(true);
     expect(canLinkInvoice(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true);
-    expect(canLinkInvoice(userAccountingTeam, mockTask, mockWr, [mockTask])).toBe(true);
+    // Unassigned Accounting user on WR is NOT allowed to link invoice
+    expect(canLinkInvoice(userAccountingTeam, mockTask, mockWr, [mockTask])).toBe(false);
+    expect(canLinkInvoice(userAccountingTeam, { ...mockTask, requiredLinkType: 'billing' }, mockWr, [mockTask])).toBe(false);
+    // Assigned Accounting user on non-billing task is NOT allowed to link invoice
+    const userAcctAssigned: UserProfile = {
+      ...userAccountingTeam,
+      id: 'emp-assigned-1',
+    };
+    expect(canLinkInvoice(userAcctAssigned, { ...mockTask, requiredLinkType: null }, mockWr, [mockTask])).toBe(false);
+    expect(canLinkInvoice(userAcctAssigned, { ...mockTask, requiredLinkType: 'documents' }, mockWr, [mockTask])).toBe(false);
+    // Assigned Accounting user on billing task IS allowed to link invoice
+    expect(canLinkInvoice(userAcctAssigned, { ...mockTask, requiredLinkType: 'billing' }, mockWr, [mockTask])).toBe(true);
     expect(canLinkInvoice(userUnassignedManager, mockTask, mockWr, [mockTask])).toBe(false);
 
     // Request from accounting
     expect(canRequestInvoice(userUnassignedManager, mockTask, mockWr, [mockTask])).toBe(false); // Unassigned manager not in WR
     expect(canRequestInvoice(userAccountingTeam, mockTask, mockWr, [mockTask])).toBe(false); // Accounting links directly
     expect(canRequestInvoice(userAdmin, mockTask, mockWr, [mockTask])).toBe(false); // Admin links directly
+
+    // Documentation users strictly denied invoice requests
+    expect(canRequestInvoice(userDocTeam, mockTask, mockWr, [mockTask])).toBe(false);
+
+    // Documentation user assigned to task is still denied invoice request
+    const userDocAssigned: UserProfile = {
+      ...userDocTeam,
+      id: 'emp-assigned-1',
+    };
+    expect(canRequestInvoice(userDocAssigned, mockTask, mockWr, [mockTask])).toBe(false);
+
+    // Multi-department user with Documentation + Operations is still denied invoice request
+    const userDocAndOps: UserProfile = {
+      ...userAssignedStaff,
+      departments: ['Operations', 'Documentation'],
+    };
+    expect(canRequestInvoice(userDocAndOps, mockTask, mockWr, [mockTask])).toBe(false);
+
+    // Assigned staff without Documentation CAN request invoice
+    expect(canRequestInvoice(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true);
   });
 
-  it('enforces transmittal permissions (Admin, assigned, Documentation in WR; others request)', () => {
+  it('enforces transmittal permissions (Admin and assigned can link; Doc requires task assignee, no WR fallback)', () => {
     // Direct link
     expect(canLinkTransmittal(userAdmin, mockTask, mockWr, [mockTask])).toBe(true);
     expect(canLinkTransmittal(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true);
-    expect(canLinkTransmittal(userDocTeam, mockTask, mockWr, [mockTask])).toBe(true);
+    // Unassigned Documentation user in WR is NOT allowed (no WR fallback)
+    expect(canLinkTransmittal(userDocTeam, mockTask, mockWr, [mockTask])).toBe(false);
     expect(canLinkTransmittal(userUnassignedManager, mockTask, mockWr, [mockTask])).toBe(false);
+
+    // Assigned Documentation user CAN link transmittal
+    const userDocAssigned: UserProfile = {
+      ...userDocTeam,
+      id: 'emp-assigned-1',
+    };
+    expect(canLinkTransmittal(userDocAssigned, mockTask, mockWr, [mockTask])).toBe(true);
 
     // Request from documentation
     expect(canRequestTransmittal(userDocTeam, mockTask, mockWr, [mockTask])).toBe(false); // Doc links directly
     expect(canRequestTransmittal(userAdmin, mockTask, mockWr, [mockTask])).toBe(false); // Admin links directly
+    expect(canRequestTransmittal(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true); // Assigned staff can request transmittal
   });
 
   it('enforces disbursement permissions (Admin or assigned employee with permission)', () => {
@@ -263,6 +327,82 @@ describe('TaskDetailModal UI Scoping Integration', () => {
     expect(screen.getByTestId('task-upload-doc-btn')).toBeInTheDocument();
   });
 
+  it.each(['Draft', 'Assigned'] as const)('offers both status actions for an owned %s task', (status) => {
+    useSessionStore.getState().setSession({
+      user: userAssignedStaff,
+      permissions: ['workflow:view', 'workflow:edit'],
+      activeEntity: 'ATA',
+    });
+    render(<TaskDetailModal isOpen onClose={vi.fn()} task={{ ...mockTask, status }} workRequest={mockWr} />,
+      { wrapper: createWrapper() });
+    const start = screen.getByTestId('task-status-inprogress-btn');
+    const complete = screen.getByTestId('task-toggle-status-btn');
+    expect(start).toHaveTextContent('Mark In Progress');
+    expect(complete).toHaveTextContent('Mark Completed');
+    expect(start.parentElement).toBe(complete.parentElement);
+  });
+
+  it.each([
+    ['primary', 'Assigned', 'In Progress', 'task-status-inprogress-btn'],
+    ['primary', 'Assigned', 'Completed', 'task-toggle-status-btn'],
+    ['co-assignee', 'Assigned', 'In Progress', 'task-status-inprogress-btn'],
+    ['co-assignee', 'In Progress', 'Completed', 'task-toggle-status-btn'],
+    ['primary', 'Completed', 'In Progress', 'task-toggle-status-btn'],
+  ] as const)('Accounting %s changes a regular task from %s to %s', async (assignment, status, nextStatus, buttonId) => {
+    useSessionStore.getState().setSession({
+      user: { ...userAccountingTeam, id: assignment === 'primary' ? 'emp-assigned-1' : 'emp-assigned-2' },
+      permissions: ['workflow:view'],
+      activeEntity: 'ATA',
+    });
+    const task = { ...mockTask, status, requiredLinkType: null };
+    const onTaskUpdated = vi.fn();
+    const originalFetch = vi.mocked(global.fetch).getMockImplementation()!;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      if ((!init?.method || init.method === 'GET') && String(input).endsWith('/operations/work-requests/wr-scope-1/tasks/task-scope-1')) {
+        return new Response(JSON.stringify({ data: { ...task, checklist: [] } }), { status: 200 });
+      }
+      if (init?.method === 'PATCH') {
+        return new Response(JSON.stringify({ data: { ...task, status: nextStatus } }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    });
+    render(<TaskDetailModal isOpen onClose={vi.fn()} task={task} workRequest={mockWr} onTaskUpdated={onTaskUpdated} />,
+      { wrapper: createWrapper() });
+    await waitFor(() => expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled());
+    if (status === 'Assigned') {
+      expect(screen.getByTestId('task-status-inprogress-btn')).toBeEnabled();
+      expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled();
+    }
+    fireEvent.click(screen.getByTestId(buttonId));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledWith(expect.objectContaining({ status: nextStatus })));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/operations/work-requests/wr-scope-1/tasks/task-scope-1'),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
+    );
+    expect(screen.queryByTestId('edit-task-description-btn')).not.toBeInTheDocument();
+  });
+
+  it.each(['unassigned', 'completed work request', 'inactive phase'] as const)(
+    'preserves Accounting status restrictions for %s', (condition) => {
+      useSessionStore.getState().setSession({
+        user: { ...userAccountingTeam, id: condition === 'unassigned' ? userAccountingTeam.id : 'emp-assigned-1' },
+        permissions: ['workflow:view'],
+        activeEntity: 'ATA',
+      });
+      const wr = { ...mockWr, ...(condition === 'completed work request' ? { status: 'Completed' as const } : {}),
+        ...(condition === 'inactive phase' ? { phase: 'pre_processing' as const } : {}) };
+      render(<TaskDetailModal isOpen onClose={vi.fn()} task={{ ...mockTask, status: 'Assigned' }} workRequest={wr} />,
+        { wrapper: createWrapper() });
+      if (condition === 'inactive phase') {
+        expect(screen.getByTestId('task-status-inprogress-btn')).toBeDisabled();
+        expect(screen.getByTestId('task-toggle-status-btn')).toBeDisabled();
+      } else {
+        expect(screen.queryByTestId('task-status-inprogress-btn')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('task-toggle-status-btn')).not.toBeInTheDocument();
+      }
+    }
+  );
+
   it('HIDES status, log time, and upload buttons for unassigned manager', async () => {
     useSessionStore.getState().setSession({
       user: userUnassignedManager,
@@ -305,7 +445,7 @@ describe('TaskDetailModal UI Scoping Integration', () => {
         patchedData = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ data: { ...mockTask, status: 'Completed' } }), { status: 200 });
       }
-      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      return new Response(JSON.stringify({ data: url.endsWith('/operations/work-requests/wr-scope-1/tasks/task-scope-1') ? { ...mockTask, checklist: [] } : [] }), { status: 200 });
     });
 
     render(
@@ -326,7 +466,8 @@ describe('TaskDetailModal UI Scoping Integration', () => {
     expect(screen.getByTestId('link-disbursement-btn')).toBeInTheDocument();
     expect(screen.getByTestId('link-transmittal-btn')).toBeInTheDocument();
 
-    // Trigger Admin status change
+    // Trigger Admin status change after the authoritative checklist read.
+    await waitFor(() => expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled());
     fireEvent.click(screen.getByTestId('task-toggle-status-btn'));
     await waitFor(() => {
       expect(patchedData).toEqual({ status: 'Completed' });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { renderHook } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -55,7 +55,17 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-001');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: 'admin-1',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
   });
 
   afterEach(() => {
@@ -64,7 +74,34 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting();
+    vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('recreates an unexpectedly closed channel without losing mounted subscribers, and cancels teardown recovery', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const remove = vi.spyOn(supabase, 'removeChannel');
+    const first = renderHook(() => useEntityRealtimeSync({ table: 'tasks' }), { wrapper: createWrapper() });
+    const second = renderHook(() => useEntityRealtimeSync({ table: 'tasks' }), { wrapper: createWrapper() });
+    await act(async () => { await Promise.resolve(); });
+    const old = supabase.channel('cdc_tasks') as unknown as MockRealtimeChannel;
+    old.emitStatus('CHANNEL_ERROR', Object.assign(new Error('socket closed: 1001'), { cause: { code: 1001, wasClean: true } }));
+    expect(warn).not.toHaveBeenCalled();
+    old.emitStatus('CLOSED');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(remove).toHaveBeenCalledWith(old);
+    expect(getActiveChannelRegistrySizeForTesting()).toBe(1);
+    const replacement = supabase.channel('cdc_tasks') as unknown as MockRealtimeChannel;
+    expect(replacement).not.toBe(old);
+    first.unmount();
+    expect(getActiveChannelRegistrySizeForTesting()).toBe(1);
+    replacement.emitStatus('CLOSED');
+    second.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(getActiveChannelRegistrySizeForTesting()).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   describe('Adversarial Test 1: Guard 2 Version Check for UPDATE vs INSERT', () => {
@@ -351,7 +388,7 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
   });
 
   describe('Adversarial Test 4: Channel Error Eviction from activeChannelRegistry', () => {
-    it('evicts channel from activeChannelRegistry upon CHANNEL_ERROR', () => {
+    it('retains channel subscribers during SDK recovery upon CHANNEL_ERROR', () => {
       expect(getActiveChannelRegistrySizeForTesting()).toBe(0);
 
       renderHook(
@@ -368,8 +405,8 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
       // Simulate channel error event from Supabase subscription
       channel.emitStatus('CHANNEL_ERROR', new Error('Connection refused'));
 
-      // Channel should be evicted from registry so next mount gets fresh channel
-      expect(getActiveChannelRegistrySizeForTesting()).toBe(0);
+      // Mounted listeners must survive transport errors.
+      expect(getActiveChannelRegistrySizeForTesting()).toBe(1);
     });
   });
 });

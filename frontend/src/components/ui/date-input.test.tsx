@@ -140,7 +140,17 @@ describe('shared Material UI date input', () => {
       target: { value: '' },
     });
     await waitFor(() =>
-      expect(screen.getByLabelText('Report date', { selector: 'input' })).toHaveValue('2026-10-11')
+      expect(screen.getByLabelText('Report date', { selector: 'input' })).toHaveValue('10/11/2026')
     );
+  });
+
+  it('displays and accepts MM/DD/YYYY formatted dates while emitting canonical YYYY-MM-DD', () => {
+    const onChange = vi.fn();
+    render(<Field value="2026-04-19" onValueChange={onChange} />);
+    const input = screen.getByLabelText('Date', { selector: 'input' });
+    expect(input).toHaveValue('04/19/2026');
+    fireEvent.change(input, { target: { value: '12/25/2026' } });
+    expect(onChange).toHaveBeenLastCalledWith('2026-12-25');
+    expect(input).toHaveValue('12/25/2026');
   });
 });

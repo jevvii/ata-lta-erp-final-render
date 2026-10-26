@@ -1,3 +1,4 @@
+import type { DisbursementPrintDetails } from '@/lib/disbursementDocument';
 /**
  * TypeScript Domain Models & Interface Contracts for Disbursements (Module #4)
  *
@@ -61,6 +62,7 @@ export interface DisbursementAuditLog {
   action: string;
   actor_id?: string | null;
   actor_name?: string | null;
+  actor_role?: string | null;
   previous_status?: string | null;
   new_status?: string | null;
   details?: Record<string, unknown> | null;
@@ -68,6 +70,7 @@ export interface DisbursementAuditLog {
 }
 
 export interface Disbursement {
+  print_details?: DisbursementPrintDetails | null;
   id: string;
   disbursement_number?: string | null;
   disbursementNumber?: string | null;
@@ -150,6 +153,17 @@ export interface Disbursement {
   client_name?: string | null;
   clientName?: string | null;
   audit_logs?: DisbursementAuditLog[];
+  lifecycle_version?: number;
+  lifecycleVersion?: number;
+  review_ready?: boolean;
+  reviewReady?: boolean;
+  funded_by_name?: string | null;
+  funded_by_role?: string | null;
+  fundedByName?: string | null;
+  payment_processed_by_name?: string | null;
+  paymentProcessedByName?: string | null;
+  lifecycle_history?: DisbursementLifecycleEvent[];
+  lifecycleHistory?: DisbursementLifecycleEvent[];
   linked_work_request_name?: string | null;
   linked_work_request_order_number?: string | null;
   employee_name?: string | null;
@@ -157,15 +171,50 @@ export interface Disbursement {
   requested_by_name?: string | null;
   requestedByName?: string | null;
   created_by_name?: string | null;
+  created_by_role?: string | null;
   createdByName?: string | null;
   approved_by_name?: string | null;
+  approved_by_role?: string | null;
   approvedByName?: string | null;
   released_by_name?: string | null;
+  released_by_role?: string | null;
   releasedByName?: string | null;
   rejected_by_name?: string | null;
+  rejected_by_role?: string | null;
   rejectedByName?: string | null;
   edited_by_accounting?: boolean | null;
 }
+
+export interface DisbursementLifecycleEvent {
+  id?: string;
+  disbursement_id?: string;
+  disbursementId?: string;
+  from_status?: string | null;
+  fromStatus?: string | null;
+  to_status?: string | null;
+  toStatus?: string | null;
+  action?: string;
+  actor_id?: string | null;
+  actorId?: string | null;
+  actor_name?: string | null;
+  actorName?: string | null;
+  actor_role?: string | null;
+  actorRole?: string | null;
+  reason?: string | null;
+  details?: Record<string, unknown> | null;
+  created_at: string;
+  createdAt?: string;
+  old_status?: string | null;
+  new_status?: string | null;
+  timestamp?: string | null;
+  notes?: string | null;
+}
+
+export type DisbursementQueue =
+  | 'initial_requests'
+  | 'payment_releases'
+  | 'ready_for_funding'
+  | 'needs_correction';
 
 // ============================================================================
 // 3. Disbursement Template Entity
@@ -210,6 +259,7 @@ export interface DisbursementFilters {
   linkedTransmittalId?: string;
   search?: string;
   archived?: boolean | string;
+  queue?: 'initial_requests' | 'payment_releases' | 'ready_for_funding' | 'needs_correction';
   page?: number;
   limit?: number;
 }
@@ -245,6 +295,7 @@ export interface CreateDisbursementInput {
  * Payload for PUT /v1/disbursements/:id
  */
 export interface UpdateDisbursementInput {
+  printDetails?: DisbursementPrintDetails;
   category?: DisbursementCategory | string;
   description?: string;
   amount?: number;
@@ -268,6 +319,7 @@ export interface UpdateDisbursementInput {
  */
 export interface RejectDisbursementInput {
   reason: string;
+  expectedVersion?: number;
 }
 
 /**
@@ -275,9 +327,100 @@ export interface RejectDisbursementInput {
  */
 export interface ReleasePaymentInput {
   method?: string;
-  reference?: string;
-  bank?: string;
+  reference?: string | null;
+  bank?: string | null;
   date?: string;
+  expectedVersion?: number;
+}
+
+export interface ReleaseDisbursementInput {
+  expectedVersion: number;
+}
+
+/**
+ * Payload for POST /v1/disbursements/:id/approve
+ */
+export interface ApproveDisbursementInput {
+  expectedVersion: number;
+  method?: string;
+  reference?: string | null;
+  bank?: string | null;
+  date?: string;
+}
+
+/**
+ * Payload for POST /v1/disbursements/:id/fund
+ */
+export interface FundDisbursementInput {
+  method: string;
+  bank: string;
+  reference: string;
+  date: string;
+  expectedVersion: number;
+}
+
+/**
+ * Payload for POST /v1/disbursements/:id/resend_draft
+ */
+export interface ResendDraftInput {
+  expectedVersion: number;
+}
+
+/**
+ * Payload for PATCH /v1/disbursements/:id/payment-details
+ */
+export interface UpdatePaymentDetailsInput {
+  method: string;
+  reference?: string | null;
+  bank?: string | null;
+  date: string;
+  expectedVersion: number;
+}
+
+/**
+ * Pre-signed receipt upload types
+ */
+export interface CreateReceiptUploadReservationInput {
+  filename: string;
+  contentType: 'application/pdf' | 'image/png' | 'image/jpeg' | string;
+  size: number;
+}
+
+/**
+ * Receipt & Voucher Target Entity Transport Options
+ * Canonical entity transport: X-Active-Entity: ATA|LTA
+ */
+export interface ReceiptTargetOptions {
+  entity?: 'ATA' | 'LTA';
+}
+
+export interface UploadReceiptOptions extends ReceiptTargetOptions {
+  isCurrent?: () => boolean;
+}
+
+export type CreateDisbursementOptions = ReceiptTargetOptions;
+
+export type CreateDisbursementMutationArg =
+  | CreateDisbursementInput
+  | {
+      data: CreateDisbursementInput;
+      entity?: 'ATA' | 'LTA';
+    };
+
+export interface ReceiptUploadReservation {
+  uploadId: string;
+  uploadUrl: string;
+  objectKey: string;
+  expiresAt: string;
+}
+
+export interface ReceiptUrlData {
+  status?: 'unavailable';
+  reason?: string;
+  url?: string;
+  filename?: string;
+  contentType?: string;
+  expiresAt?: string;
 }
 
 /**
@@ -301,11 +444,12 @@ export interface CreateDisbursementTemplateInput {
 
 export interface DisbursementListResponse {
   data: Disbursement[];
-  meta: {
+  meta?: {
     total: number;
     page: number;
     limit: number;
   };
+  count?: number;
 }
 
 export interface DisbursementDetailResponse {
@@ -318,6 +462,10 @@ export interface DisbursementCounts {
   rejected: number;
   awaitingRelease: number;
   pending?: number;
+  initialRequests?: number;
+  paymentReleases?: number;
+  readyForFunding?: number;
+  needsCorrection?: number;
 }
 
 export interface DisbursementCountsResponse {

@@ -5,4 +5,5 @@ export * from './RecordPaymentModal';
 export * from './PrintPreviewModal';
 export * from './AgingReportTab';
 export * from './InvoiceArchiveTab';
+export * from './InvoiceEditModal';
 export * from './ViewModeToggle';

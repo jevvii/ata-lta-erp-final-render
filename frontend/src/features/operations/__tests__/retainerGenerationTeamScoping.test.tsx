@@ -165,6 +165,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
     await waitFor(() => {
       expect(submitBtn).not.toBeDisabled();
     });
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -172,6 +173,17 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
         'Manager is required to generate work requests.'
       );
     });
+  });
+
+  it('requires a due date before generating work requests', async () => {
+    const { wrapper } = createHarness();
+    render(<RetainerGenerateModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+    await waitFor(() => expect(screen.getByTestId('template-select')).not.toBeDisabled());
+    await openAndSelect(screen.getByTestId('template-select'), /Annual Corporate Retainer/);
+    await openAndSelect(screen.getByTestId('assigner-primary-select'), /Maria Santos/);
+    fireEvent.submit(screen.getByTestId('due-date-input').closest('form')!);
+    expect(await screen.findByTestId('generate-error')).toHaveTextContent('Due date is required');
+    expect(vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).includes('/generate'))).toBe(false);
   });
 
   it('strictly scopes task assignee dropdowns to projectTeam', async () => {
@@ -225,6 +237,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // Task 1 still has Carlos (unmapped)
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -261,6 +274,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // 4. Submit
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -308,6 +322,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // 4. Submit
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -341,6 +356,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // Submit
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -378,6 +394,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // Submit
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
@@ -420,6 +437,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
 
     // 4. Submit
     const submitBtn = screen.getByTestId('generate-submit-btn');
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {

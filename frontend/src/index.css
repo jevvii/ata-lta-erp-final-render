@@ -1,90 +1,366 @@
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/geist-sans/700.css";
+@import "@fontsource/geist-mono/400.css";
+@import "@fontsource/geist-mono/500.css";
+@import "@fontsource/geist-mono/600.css";
+@import "@fontsource/newsreader/400.css";
+@import "@fontsource/newsreader/600.css";
+
 @import "tailwindcss";
 
 @theme {
-  --color-ata: #2563eb;
-  --color-lta: #475569;
-  --color-bg-app: #f4f6fb;
-  --color-surface: #ffffff;
-  --color-panel: #ffffff;
-  --color-bg-muted: #f0f1f3;
-  --color-bg-light: #fafafa;
-  --color-bg-hover: #f0f1f3;
-  --color-bg-subtle: #f8fafc;
-  --color-text-base: #2d2d3f;
-  --color-text-main: #1e293b;
-  --color-text-muted: #9494a0;
-  --color-border-subtle: #f0f0f5;
-  --color-primary: #2563eb;
-  --color-primary-dark: #1d4ed8;
-  --color-primary-light: #eef1ff;
-  --color-danger: #ef4444;
-  --color-success: #10b981;
-  --color-warning: #fbbf24;
-  --font-sans: 'Poppins', 'Inter', system-ui, -apple-system, sans-serif;
-  --radius-sm: 12px;
-  --radius-md: 12px;
+  /* Tier 1 Primitives (Tailwind Theme) */
+  --color-slate-50: #F8FAFC;
+  --color-slate-100: #F1F5F9;
+  --color-slate-200: #E2E8F0;
+  --color-slate-300: #CBD5E1;
+  --color-slate-400: #94A3B8;
+  --color-slate-500: #64748B;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1E293B;
+  --color-slate-900: #0F172A;
+
+  --color-blue-50: #EFF6FF;
+  --color-blue-100: #DBEAFE;
+  --color-blue-200: #BFDBFE;
+  --color-blue-300: #93C5FD;
+  --color-blue-600: #2563EB;
+  --color-blue-700: #1D4ED8;
+  --color-blue-800: #1E40AF;
+  --color-blue-900: #1E3A8A;
+
+  --color-sky-50: #F0F9FF;
+  --color-sky-200: #BAE6FD;
+  --color-sky-300: #7DD3FC;
+  --color-sky-700: #0369A1;
+  --color-sky-800: #075985;
+
+  --color-emerald-50: #F0FDF4;
+  --color-emerald-300: #86EFAC;
+  --color-emerald-800: #166534;
+
+  --color-amber-50: #FEFCE8;
+  --color-amber-300: #FDE047;
+  --color-amber-800: #854D0E;
+
+  --color-red-50: #FEF2F2;
+  --color-red-300: #FCA5A5;
+  --color-red-600: #DC2626;
+  --color-red-800: #991B1B;
+
+  /* Tier 2 Semantics (Tailwind Theme) */
+  --color-canvas: #F8FAFC;
+  --color-bg-app: #F8FAFC;
+  --color-sidebar: #F1F5F9;
+  --color-bg-subtle: #F1F5F9;
+  --color-bg-muted: #E2E8F0;
+  --color-surface: #FFFFFF;
+  --color-panel: #FFFFFF;
+  --color-bg-light: #FFFFFF;
+  --color-hover: #E2E8F0;
+  --color-bg-hover: #E2E8F0;
+  --color-selected: #DBEAFE;
+  --color-surface-selected: #DBEAFE;
+  --color-ink: #0F172A;
+  --color-text-main: #0F172A;
+  --color-text-base: #0F172A;
+  --color-strong: #0F172A;
+  --color-text-secondary: #334155;
+  --color-muted: #475569;
+  --color-text-muted: #475569;
+  --color-placeholder: #64748B;
+  --color-text-placeholder: #64748B;
+  --color-inverse: #FFFFFF;
+  --color-text-inverse: #FFFFFF;
+  --color-border: #CBD5E1;
+  --color-border-subtle: #CBD5E1;
+  --color-border-strong: #94A3B8;
+  --color-control-border: #64748B;
+
+  /* Sticky Note Palette (Tailwind Theme) */
+  --color-sticky-canary-bg: #FEFCE8;
+  --color-sticky-canary-border: #FDE047;
+  --color-sticky-canary-tape: #CA8A04;
+  --color-sticky-canary-ink: #713F12;
+
+  --color-sticky-sky-bg: #F0F9FF;
+  --color-sticky-sky-border: #BAE6FD;
+  --color-sticky-sky-tape: #0284C7;
+  --color-sticky-sky-ink: #075985;
+
+  --color-sticky-rose-bg: #FFF1F2;
+  --color-sticky-rose-border: #FECDD3;
+  --color-sticky-rose-tape: #E11D48;
+  --color-sticky-rose-ink: #991B1B;
+
+  --color-sticky-mint-bg: #F0FDF4;
+  --color-sticky-mint-border: #86EFAC;
+  --color-sticky-mint-tape: #166534;
+  --color-sticky-mint-ink: #166534;
+
+  --color-focus: #1D4ED8;
+  --color-primary: #1D4ED8;
+  --color-primary-hover: #1E40AF;
+  --color-primary-dark: #1E40AF;
+  --color-primary-light: #EFF6FF;
+  --color-accent-solid: #1D4ED8;
+  --color-accent-solid-hover: #1E40AF;
+  --color-accent-subtle: #EFF6FF;
+  --color-accent: #1D4ED8;
+
+  --color-ata: #1E3A8A;
+  --color-lta: #0369A1;
+  --color-entity-lta: #0369A1;
+
+  --color-success: #166534;
+  --color-success-surface: #F0FDF4;
+  --color-success-border: #86EFAC;
+
+  --color-warning: #854D0E;
+  --color-warning-surface: #FEFCE8;
+  --color-warning-border: #FDE047;
+
+  --color-danger: #991B1B;
+  --color-danger-solid: #DC2626;
+  --color-danger-surface: #FEF2F2;
+  --color-danger-border: #FCA5A5;
+
+  --color-info: #075985;
+  --color-info-surface: #F0F9FF;
+  --color-info-border: #7DD3FC;
+
+  --color-chart: #1D4ED8;
+
+  /* Workspace & Multi-Pane Tokens */
+  --row-height-compact: 40px;
+  --row-height-default: 48px;
+  --pane-detail-width: 480px;
+  --pane-detail-collapsed: 48px;
+  --pane-rail-width: 128px;
+  --viewer-bg: #F1F5F9;
+  --deadline-track: #E2E8F0;
+  --color-viewer-bg: #F1F5F9;
+  --color-deadline-track: #E2E8F0;
+
+  /* Typography */
+  --font-sans: 'Geist Sans', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-display: 'Geist Sans', 'Inter', system-ui, sans-serif;
+
+  /* Concentric Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 12px;
   --radius-pill: 999px;
-  --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.03);
-  --shadow-card: 0 15px 35px rgba(0, 0, 0, 0.04);
-  --shadow-float: 0 20px 50px rgba(0, 0, 0, 0.15);
-  --shadow-primary: 0 8px 20px rgba(37, 99, 235, 0.35);
+
+  /* Soft Shadows */
+  --shadow-soft: 0px 1px 2px 0px rgba(15, 23, 42, 0.04);
+  --shadow-card: 0px 0px 0px 1px rgba(15, 23, 42, 0.04), 0px 1px 2px -1px rgba(15, 23, 42, 0.05), 0px 2px 4px 0px rgba(15, 23, 42, 0.03);
+  --shadow-float: 0px 0px 0px 1px rgba(15, 23, 42, 0.06), 0px 10px 25px -5px rgba(15, 23, 42, 0.08), 0px 4px 10px -2px rgba(15, 23, 42, 0.04);
+  --shadow-primary: 0px 1px 2px 0px rgba(29, 78, 216, 0.15);
 }
 
 :root {
-  --color-ata: #2563eb;
-  --color-lta: #475569;
-  --color-bg: #f4f6fb;
-  --color-surface: #ffffff;
-  --color-panel: #ffffff;
-  --color-bg-muted: #f0f1f3;
-  --color-bg-light: #fafafa;
-  --color-bg-hover: #f0f1f3;
-  --color-bg-subtle: #f8fafc;
-  --color-text: #2d2d3f;
-  --color-text-main: #1e293b;
-  --color-text-muted: #9494a0;
-  --color-border: #f0f0f5;
-  --color-primary: #2563eb;
-  --color-primary-dark: #1d4ed8;
-  --color-primary-light: #eef1ff;
-  --color-primary-alpha: rgba(37, 99, 235, 0.08);
-  --color-danger: #ef4444;
-  --color-success: #10b981;
-  --color-warning: #fbbf24;
-  --color-blue: #3b82f6;
-  --color-indigo: #6366f1;
-  --color-teal: #14b8a6;
-  --color-orange: #f97316;
-  --color-purple: #a855f7;
-  --color-green: #22c55e;
-  --color-yellow: #eab308;
-  --color-cyan: #06b6d4;
-  --color-red: #ef4444;
-  --font-sans: "Poppins", "Inter", system-ui, -apple-system, sans-serif;
-  --radius-sm: 12px;
-  --radius-md: 12px;
+  /* Tier 1 Primitives (CSS Variables) */
+  --slate-50: #F8FAFC;
+  --slate-100: #F1F5F9;
+  --slate-200: #E2E8F0;
+  --slate-300: #CBD5E1;
+  --slate-400: #94A3B8;
+  --slate-500: #64748B;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1E293B;
+  --slate-900: #0F172A;
+
+  --blue-50: #EFF6FF;
+  --blue-100: #DBEAFE;
+  --blue-200: #BFDBFE;
+  --blue-300: #93C5FD;
+  --blue-600: #2563EB;
+  --blue-700: #1D4ED8;
+  --blue-800: #1E40AF;
+  --blue-900: #1E3A8A;
+
+  --sky-50: #F0F9FF;
+  --sky-200: #BAE6FD;
+  --sky-300: #7DD3FC;
+  --sky-700: #0369A1;
+  --sky-800: #075985;
+
+  --emerald-50: #F0FDF4;
+  --emerald-300: #86EFAC;
+  --emerald-800: #166534;
+
+  --amber-50: #FEFCE8;
+  --amber-300: #FDE047;
+  --amber-800: #854D0E;
+
+  --red-50: #FEF2F2;
+  --red-300: #FCA5A5;
+  --red-600: #DC2626;
+  --red-800: #991B1B;
+
+  /* Tier 2 Semantic Role Tokens */
+  --color-canvas: var(--slate-50);
+  --color-bg-app: var(--slate-50);
+  --color-bg: var(--slate-50);
+
+  --color-sidebar: var(--slate-100);
+  --color-bg-subtle: var(--slate-100);
+  --color-bg-muted: var(--slate-200);
+
+  --color-surface: #FFFFFF;
+  --color-panel: #FFFFFF;
+  --color-bg-light: #FFFFFF;
+
+  --color-hover: var(--slate-200);
+  --color-bg-hover: var(--slate-200);
+
+  --color-selected: var(--blue-100);
+  --color-surface-selected: var(--blue-100);
+
+  --color-ink: var(--slate-900);
+  --color-text: var(--slate-900);
+  --color-text-main: var(--slate-900);
+  --color-text-base: var(--slate-900);
+  --color-strong: var(--slate-900);
+
+  --color-text-secondary: var(--slate-700);
+  --color-muted: var(--slate-600);
+  --color-text-muted: var(--slate-600);
+  --color-placeholder: var(--slate-500);
+  --color-text-placeholder: var(--slate-500);
+  --color-inverse: #FFFFFF;
+  --color-text-inverse: #FFFFFF;
+
+  --color-border: var(--slate-300);
+  --color-border-subtle: var(--slate-300);
+  --color-border-strong: var(--slate-400);
+  --color-control-border: var(--slate-500);
+
+  /* Sticky Note Palette (CSS Variables) */
+  --color-sticky-canary-bg: #FEFCE8;
+  --color-sticky-canary-border: #FDE047;
+  --color-sticky-canary-tape: #CA8A04;
+  --color-sticky-canary-ink: #713F12;
+
+  --color-sticky-sky-bg: #F0F9FF;
+  --color-sticky-sky-border: #BAE6FD;
+  --color-sticky-sky-tape: #0284C7;
+  --color-sticky-sky-ink: #075985;
+
+  --color-sticky-rose-bg: #FFF1F2;
+  --color-sticky-rose-border: #FECDD3;
+  --color-sticky-rose-tape: #E11D48;
+  --color-sticky-rose-ink: #991B1B;
+
+  --color-sticky-mint-bg: #F0FDF4;
+  --color-sticky-mint-border: #86EFAC;
+  --color-sticky-mint-tape: #166534;
+  --color-sticky-mint-ink: #166534;
+
+  --color-focus: var(--blue-700);
+  --color-primary: var(--blue-700);
+  --color-primary-hover: var(--blue-800);
+  --color-primary-dark: var(--blue-800);
+  --color-primary-light: var(--blue-50);
+  --color-primary-alpha: rgba(29, 78, 216, 0.08);
+  --color-accent-solid: var(--blue-700);
+  --color-accent-solid-hover: var(--blue-800);
+  --color-accent-subtle: var(--blue-50);
+  --color-accent: var(--blue-700);
+
+  --color-ata: var(--blue-900);
+  --color-lta: var(--sky-700);
+  --color-entity-lta: var(--sky-700);
+
+  --color-success: var(--emerald-800);
+  --color-success-surface: var(--emerald-50);
+  --color-success-border: var(--emerald-300);
+
+  --color-warning: var(--amber-800);
+  --color-warning-surface: var(--amber-50);
+  --color-warning-border: var(--amber-300);
+
+  --color-danger: var(--red-800);
+  --color-danger-solid: var(--red-600);
+  --color-danger-surface: var(--red-50);
+  --color-danger-border: var(--red-300);
+
+  --color-info: var(--sky-800);
+  --color-info-surface: var(--sky-50);
+  --color-info-border: var(--sky-300);
+
+  --color-chart: var(--blue-700);
+
+  /* Extended legacy color tokens */
+  --color-blue: var(--blue-700);
+  --color-indigo: var(--blue-900);
+  --color-teal: var(--emerald-800);
+  --color-orange: var(--amber-800);
+  --color-purple: var(--slate-700);
+  --color-green: var(--emerald-800);
+  --color-yellow: var(--amber-800);
+  --color-cyan: var(--sky-800);
+  --color-red: var(--red-600);
+
+  /* Typography */
+  --font-sans: 'Geist Sans', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-display: 'Geist Sans', 'Inter', system-ui, sans-serif;
+
+  /* Concentric Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 12px;
   --radius-pill: 999px;
-  --spacing-xs: 6px;
-  --spacing-sm: 12px;
-  --spacing-md: 20px;
-  --spacing-lg: 32px;
-  --spacing-xl: 40px;
-  --sidebar-width: 200px;
+
+  /* Spacing */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --sidebar-width: 232px;
   --sidebar-collapsed-width: 56px;
-  --shadow-soft: 0 10px 40px rgba(0, 0, 0, 0.03);
-  --shadow-card: 0 15px 35px rgba(0, 0, 0, 0.04);
-  --shadow-float: 0 20px 50px rgba(0, 0, 0, 0.15);
-  --shadow-primary: 0 8px 20px rgba(37, 99, 235, 0.35);
+
+  /* Workspace & Multi-Pane Tokens */
+  --row-height-compact: 40px;
+  --row-height-default: 48px;
+  --pane-detail-width: 480px;
+  --pane-detail-collapsed: 48px;
+  --pane-rail-width: 128px;
+  --viewer-bg: var(--slate-100);
+  --deadline-track: var(--slate-200);
+  --color-viewer-bg: var(--slate-100);
+  --color-deadline-track: var(--slate-200);
+
+  /* Soft Shadows */
+  --shadow-soft: 0px 1px 2px 0px rgba(15, 23, 42, 0.04);
+  --shadow-card: 0px 0px 0px 1px rgba(15, 23, 42, 0.04), 0px 1px 2px -1px rgba(15, 23, 42, 0.05), 0px 2px 4px 0px rgba(15, 23, 42, 0.03);
+  --shadow-float: 0px 0px 0px 1px rgba(15, 23, 42, 0.06), 0px 10px 25px -5px rgba(15, 23, 42, 0.08), 0px 4px 10px -2px rgba(15, 23, 42, 0.04);
+  --shadow-primary: 0px 1px 2px 0px rgba(29, 78, 216, 0.15);
+
+  /* Motion & Button Specs */
+  --press-scale: 0.96;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
   --btn-font-size: 0.875rem;
   --btn-font-size-sm: 0.8125rem;
   --btn-font-size-xs: 0.75rem;
   --btn-font-weight: 500;
   --btn-font-weight-emphasis: 600;
-  --btn-letter-spacing: 0.025em;
+  --btn-letter-spacing: -0.01em;
   --btn-line-height: 1.43;
   --link-font-weight: 400;
   --link-font-weight-nav: 500;
@@ -93,10 +369,57 @@
 
 body {
   font-family: var(--font-sans);
-  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.55;
+  letter-spacing: -0.006em;
+  color: var(--color-ink);
   background-color: var(--color-bg);
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   margin: 0;
   padding: 0;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Tap highlight reset */
+button,
+[role="button"],
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Content image outline rule per better-ui */
+img:not([alt*="logo" i]):not([src*="logo" i]) {
+  outline: 1px solid oklch(0 0 0 / 0.1);
+  outline-offset: -1px;
+}
+
+/* Reduced motion global overrides */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* DatePicker popup font inheritance & styling */
+.erp-date-picker-popup,
+.erp-date-picker-popup * {
+  font-family: var(--font-sans) !important;
+}
+
+.erp-date-picker-popup .MuiPaper-root {
+  border-radius: var(--radius-md) !important;
+  border: 1px solid var(--color-border) !important;
+  box-shadow: var(--shadow-float) !important;
+  background-color: var(--color-surface) !important;
+  color: var(--color-ink) !important;
+  overscroll-behavior: contain;
 }

@@ -54,7 +54,17 @@ describe('Adversarial Challenger: Normalization & Soft-Delete Stress Harness', (
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-norm-del');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: 'admin-1',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
     vi.restoreAllMocks();
   });
 

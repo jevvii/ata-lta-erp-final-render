@@ -37,15 +37,17 @@ function createHarness() {
   return { queryClient, wrapper };
 }
 
-const mockPendingDisbursement: Disbursement = {
-  id: 'disb-pending-1',
+const mockDraftDisbursement: Disbursement = {
+  id: 'disb-draft-1',
   disbursement_number: 'DISB-ATA-20261004-901',
   entity_id: 'ent-1',
   category: 'Transportation',
   description: 'Urgent courier filing fee',
   amount: 450,
   fund_source: 'Firm Fund',
-  status: 'Pending',
+  status: 'Draft',
+  lifecycle_version: 2,
+  review_ready: true,
   linked_work_request_id: '11111111-1111-1111-1111-111111111111',
   version: 1,
   created_at: new Date().toISOString(),
@@ -61,21 +63,24 @@ const mockApprovedDisbursement: Disbursement = {
   amount: 1500,
   fund_source: 'Client Fund',
   status: 'Approved',
+  lifecycle_version: 2,
   linked_work_request_id: '11111111-1111-1111-1111-111111111111',
   version: 1,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
 };
 
-const mockReleasedDisbursement: Disbursement = {
-  id: 'disb-released-1',
+const mockFundedDisbursement: Disbursement = {
+  id: 'disb-funded-1',
   disbursement_number: 'DISB-ATA-20261004-903',
   entity_id: 'ent-1',
   category: 'Professional Fee',
   description: 'Notary fee',
   amount: 800,
   fund_source: 'Firm Fund',
-  status: 'Released',
+  status: 'Funded',
+  lifecycle_version: 2,
+  funded_by: 'u-other-preparer',
   linked_work_request_id: '11111111-1111-1111-1111-111111111111',
   version: 1,
   created_at: new Date().toISOString(),
@@ -131,6 +136,8 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         canCreate: true,
         canApprove: true,
         canMarkReleased: true,
+        canAccessQueue: true,
+        queueTitle: /Admin Approval Queue/i,
       },
       {
         role: 'Manager',
@@ -142,7 +149,8 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         ],
         canCreate: true,
         canApprove: false,
-        canMarkReleased: true,
+        canMarkReleased: false,
+        canAccessQueue: false,
       },
       {
         role: 'Accounting',
@@ -154,9 +162,12 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         canCreate: true,
         canApprove: false,
         canMarkReleased: false,
+        canAccessQueue: true,
+        queueTitle: /Accounting Funds Tracking/i,
       },
       {
-        role: 'Accounting (with mark_released grant)',
+        role: 'Accounting',
+        label: 'Accounting (with mark_released grant)',
         permissions: [
           'disbursement:view',
           'disbursement:create',
@@ -165,7 +176,9 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         ],
         canCreate: true,
         canApprove: false,
-        canMarkReleased: true,
+        canMarkReleased: false,
+        canAccessQueue: true,
+        queueTitle: /Accounting Funds Tracking/i,
       },
       {
         role: 'Operations',
@@ -173,6 +186,7 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         canCreate: true,
         canApprove: false,
         canMarkReleased: false,
+        canAccessQueue: false,
       },
       {
         role: 'Documentation',
@@ -180,6 +194,7 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         canCreate: true,
         canApprove: false,
         canMarkReleased: false,
+        canAccessQueue: false,
       },
       {
         role: 'HR',
@@ -187,11 +202,12 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         canCreate: true,
         canApprove: false,
         canMarkReleased: false,
+        canAccessQueue: false,
       },
     ];
 
-    rolesConfig.forEach(({ role, permissions, canCreate, canApprove, canMarkReleased }) => {
-      it(`enforces RBAC rules for role: "${role}" correctly in UI components`, async () => {
+    rolesConfig.forEach(({ role, label, permissions, canCreate, canMarkReleased, canAccessQueue, queueTitle }) => {
+      it(`enforces RBAC rules for role: "${label || role}" correctly in UI components`, async () => {
         useSessionStore.getState().setSession({
           user: {
             id: `u-${role}`,
@@ -232,23 +248,23 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
 
         // 2. Check AdminApprovalQueue gating
         render(<AdminApprovalQueue />, { wrapper });
-        if (canApprove) {
+        if (canAccessQueue) {
           expect(screen.getByTestId('admin-approval-queue')).toBeInTheDocument();
-          expect(screen.getByText(/Admin Approval Queue/i)).toBeInTheDocument();
+          expect(screen.getByText(queueTitle!)).toBeInTheDocument();
         } else {
-          expect(screen.getByTestId('admin-approval-queue')).toBeInTheDocument();
-          expect(screen.getByText(/My Submitted Approvals/i)).toBeInTheDocument();
+          expect(screen.getByTestId('admin-approval-queue-unauthorized')).toBeInTheDocument();
+          expect(screen.getByText(/Access Restricted/i)).toBeInTheDocument();
         }
         unmount();
 
-        // 3. Check FundsReleaseActions for Approved status
+        // 3. Check FundsReleaseActions for Funded status (Admin only in v2)
         const { container } = render(
-          <FundsReleaseActions disbursement={mockApprovedDisbursement} />,
+          <FundsReleaseActions disbursement={mockFundedDisbursement} />,
           { wrapper }
         );
         if (canMarkReleased) {
           expect(
-            screen.getByTestId(`release-btn-${mockApprovedDisbursement.id}`)
+            screen.getByTestId('action-release-btn')
           ).toBeInTheDocument();
         } else {
           expect(container.firstChild).toBeNull();
@@ -281,12 +297,12 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
 
     it('DisbursementDetailDrawer conditionally gates Approve/Reject and Release/Fund actions', async () => {
       global.fetch = vi.fn().mockImplementation(async (url: string) => {
-        if (url.includes('/disbursements/disb-pending-1')) {
+        if (url.includes('/disbursements/disb-draft-1')) {
           return {
             ok: true,
             status: 200,
             headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: mockPendingDisbursement }),
+            json: async () => ({ data: mockDraftDisbursement }),
           };
         }
         if (url.includes('/disbursements/disb-approved-1')) {
@@ -297,12 +313,12 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
             json: async () => ({ data: mockApprovedDisbursement }),
           };
         }
-        if (url.includes('/disbursements/disb-released-1')) {
+        if (url.includes('/disbursements/disb-funded-1')) {
           return {
             ok: true,
             status: 200,
             headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: mockReleasedDisbursement }),
+            json: async () => ({ data: mockFundedDisbursement }),
           };
         }
         return {
@@ -329,25 +345,25 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         activeEntity: 'ATA',
       });
 
-      // Pending item: Staff should NOT see approve/reject buttons
+      // Draft item: Staff should NOT see approve/reject buttons
       const { unmount: unmount1 } = render(
-        <DisbursementDetailDrawer id="disb-pending-1" isOpen={true} onClose={() => {}} />,
+        <DisbursementDetailDrawer id="disb-draft-1" isOpen={true} onClose={() => {}} />,
         { wrapper }
       );
       await waitFor(() => {
         expect(screen.getByText('Urgent courier filing fee')).toBeInTheDocument();
       });
-      expect(screen.queryByTestId('drawer-approve-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('drawer-direct-approve-btn')).not.toBeInTheDocument();
       expect(screen.queryByTestId('drawer-reject-btn')).not.toBeInTheDocument();
       unmount1();
 
-      // Approved item: Staff should NOT see release button
+      // Funded item: Staff should NOT see release button
       const { unmount: unmount2 } = render(
-        <DisbursementDetailDrawer id="disb-approved-1" isOpen={true} onClose={() => {}} />,
+        <DisbursementDetailDrawer id="disb-funded-1" isOpen={true} onClose={() => {}} />,
         { wrapper }
       );
       await waitFor(() => {
-        expect(screen.getByText('BIR 0605 renewal fee')).toBeInTheDocument();
+        expect(screen.getByText('Notary fee')).toBeInTheDocument();
       });
       expect(screen.queryByTestId('drawer-release-btn')).not.toBeInTheDocument();
       unmount2();
@@ -370,20 +386,20 @@ describe('Adversarial Stress Test: RBAC, Modals, and UI Boundaries', () => {
         activeEntity: 'ATA',
       });
 
-      // Pending item: Admin MUST see approve and reject buttons
+      // Draft item: Admin MUST see approve and reject buttons
       const { unmount: unmount3 } = render(
-        <DisbursementDetailDrawer id="disb-pending-1" isOpen={true} onClose={() => {}} />,
+        <DisbursementDetailDrawer id="disb-draft-1" isOpen={true} onClose={() => {}} />,
         { wrapper }
       );
       await waitFor(() => {
-        expect(screen.getByTestId('drawer-approve-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('drawer-direct-approve-btn')).toBeInTheDocument();
         expect(screen.getByTestId('drawer-reject-btn')).toBeInTheDocument();
       });
       unmount3();
 
-      // Approved item: Admin MUST see release button
+      // Funded item: Admin MUST see release button
       const { unmount: unmount4 } = render(
-        <DisbursementDetailDrawer id="disb-approved-1" isOpen={true} onClose={() => {}} />,
+        <DisbursementDetailDrawer id="disb-funded-1" isOpen={true} onClose={() => {}} />,
         { wrapper }
       );
       await waitFor(() => {

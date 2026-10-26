@@ -4,13 +4,25 @@ import { apiRequest, ApiError } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
 import { broadcastEntityChange } from '@/lib/tabSync';
 import { operationsKeys } from './queryKeys';
+import { filterTaskRelatedRecords } from '../lib/taskScope';
 import type {
   Task,
   CreateTaskInput,
   UpdateTaskInput,
   TaskTimeLogInput,
   TaskStatus,
+  TaskRelatedRecords,
+  TaskRelatedInvoice,
+  TaskRelatedDisbursement,
+  TaskRelatedTransmittal,
 } from './types';
+
+export type {
+  TaskRelatedRecords,
+  TaskRelatedInvoice,
+  TaskRelatedDisbursement,
+  TaskRelatedTransmittal,
+};
 
 // ============================================================================
 // Queries
@@ -18,14 +30,18 @@ import type {
 
 export function useWorkRequestTasks(
   workRequestId: string | undefined,
-  options?: { enabled?: boolean }
+  options?: { enabled?: boolean; entity?: string | null }
 ) {
   return useQuery({
-    queryKey: operationsKeys.tasks(workRequestId ?? ''),
-    queryFn: async () => {
+    queryKey: operationsKeys.tasks(workRequestId ?? '', options?.entity),
+    queryFn: async ({ signal }) => {
       if (!workRequestId) throw new Error('Work request ID is required');
+      const searchParams = new URLSearchParams();
+      if (options?.entity) searchParams.append('entity', options.entity);
+      const queryStr = searchParams.toString();
       const res = await apiRequest<{ data: Task[] }>(
-        `/operations/work-requests/${workRequestId}/tasks`
+        `/operations/work-requests/${workRequestId}/tasks${queryStr ? `?${queryStr}` : ''}`,
+        { signal }
       );
       return res.data;
     },
@@ -41,13 +57,15 @@ export function useTaskDetail(
   options?: { enabled?: boolean }
 ) {
   const queryClient = useQueryClient();
+  const activeEntity = useSessionStore((state) => state.activeEntity);
 
   return useQuery({
     queryKey: operationsKeys.taskDetail(workRequestId ?? '', taskId ?? ''),
-    queryFn: async () => {
+    queryFn: async ({ signal }): Promise<Task | null> => {
       if (!workRequestId || !taskId) throw new Error('IDs are required');
       const res = await apiRequest<{ data: Task | Task[] }>(
-        `/operations/work-requests/${workRequestId}/tasks/${taskId}`
+        `/operations/work-requests/${workRequestId}/tasks/${taskId}`,
+        { signal }
       );
       if (Array.isArray(res?.data)) {
         return (res.data.find((t) => t?.id === taskId) || res.data[0] || null) as Task | null;
@@ -57,63 +75,32 @@ export function useTaskDetail(
     enabled: Boolean(workRequestId && taskId) && (options?.enabled ?? true),
     // Instant feel: seed from the work request's task list cache while the
     // detail fetch completes. Placeholder never persists into the cache.
-    placeholderData: () => {
+    placeholderData: (_prev): Task | undefined => {
       if (!workRequestId || !taskId) return undefined;
-      const tasks = queryClient.getQueryData<Task[]>(operationsKeys.tasks(workRequestId));
+      const tasks = queryClient.getQueryData<Task[]>(operationsKeys.tasks(workRequestId, activeEntity));
       return tasks?.find((t) => t.id === taskId);
     },
   });
-}
-
-export interface TaskRelatedRecords {
-  invoices: Array<{
-    id: string;
-    invoice_number?: string;
-    invoiceNumber?: string;
-    amount?: number;
-    status?: string;
-    created_at?: string;
-    clients?: { name: string } | null;
-  }>;
-  disbursements: Array<{
-    id: string;
-    disbursement_number?: string;
-    disbursementNumber?: string;
-    category?: string;
-    description?: string;
-    amount?: number;
-    status?: string;
-    created_at?: string;
-    clients?: { name: string } | null;
-  }>;
-  transmittals: Array<{
-    id: string;
-    transmittal_number?: string;
-    transmittalNumber?: string;
-    tracking_number?: string;
-    trackingNumber?: string;
-    recipient_name?: string;
-    recipientName?: string;
-    status?: string;
-    created_at?: string;
-    clients?: { name: string } | null;
-  }>;
 }
 
 export function useTaskRelated(
   taskId: string | undefined,
   options?: { enabled?: boolean }
 ) {
+  const activeEntity = useSessionStore((state) => state.activeEntity);
+
   return useQuery({
-    queryKey: ['operations', 'tasks', taskId, 'related'],
-    queryFn: async () => {
+    queryKey: operationsKeys.taskRelated(taskId ?? '', activeEntity),
+    queryFn: async ({ signal }) => {
       if (!taskId) throw new Error('Task ID is required');
       const res = await apiRequest<{ data: TaskRelatedRecords }>(
-        `/operations/tasks/${taskId}/related`
+        `/operations/tasks/${taskId}/related`,
+        { signal }
       );
-      return res.data;
+      return res.data ?? { invoices: [], disbursements: [], transmittals: [] };
     },
     enabled: Boolean(taskId) && (options?.enabled ?? true),
+    select: (data) => filterTaskRelatedRecords(data, taskId),
   });
 }
 

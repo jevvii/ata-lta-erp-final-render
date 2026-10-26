@@ -39,16 +39,16 @@ const COLUMNS: ColumnConfig[] = [
     id: 'Draft',
     title: 'Draft',
     icon: Clock,
-    badgeBg: 'bg-slate-100',
-    badgeText: 'text-slate-700',
-    headerBorder: 'border-slate-300',
+    badgeBg: 'bg-[#F8FAFC]',
+    badgeText: 'text-[#1E293B]',
+    headerBorder: 'border-[#E2E8F0]',
   },
   {
     id: 'Sent',
     title: 'Sent',
     icon: Send,
-    badgeBg: 'bg-blue-50',
-    badgeText: 'text-blue-700',
+    badgeBg: 'bg-[#F8FAFC]',
+    badgeText: 'text-[#1E293B]',
     headerBorder: 'border-blue-400',
   },
   {
@@ -198,8 +198,8 @@ export function TransmittalKanbanBoard({
         return (
           <div
             key={col.id}
-            className={`flex flex-col rounded-xl bg-slate-50 border border-slate-200 transition-colors ${
-              isDragOver ? 'ring-2 ring-blue-500 bg-blue-50/20' : ''
+            className={`flex flex-col rounded-[6px] bg-[#F8FAFC] border-[#E2E8F0] transition-colors ${
+              isDragOver ? 'ring-2 ring-blue-500 bg-[#F8FAFC]/20' : ''
             }`}
             data-testid={`kanban-column-${col.id.toLowerCase()}`}
             onDragOver={(e) => handleColumnDragOver(e, col.id)}
@@ -211,8 +211,8 @@ export function TransmittalKanbanBoard({
               className={`p-4 border-b bg-white rounded-t-xl flex items-center justify-between border-t-4 ${col.headerBorder}`}
             >
               <div className="flex items-center gap-2">
-                <Icon className="h-4 w-4 text-slate-600" />
-                <h3 className="font-semibold text-slate-900 text-sm">{col.title}</h3>
+                <Icon className="h-4 w-4 text-[#475569]" />
+                <h3 className="font-semibold text-[#1E293B] text-sm">{col.title}</h3>
               </div>
               <Badge
                 variant="secondary"
@@ -226,15 +226,15 @@ export function TransmittalKanbanBoard({
             {/* Cards container */}
             <div className="p-3 flex-1 flex flex-col gap-3 min-h-[350px]">
               {isLoading && items.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-400">Loading transmittals...</div>
+                <div className="py-12 text-center text-xs text-[#475569]">Loading transmittals...</div>
               ) : items.length === 0 ? (
                 <div
-                  className="flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-200 rounded-lg text-center text-slate-400"
+                  className="flex-1 flex flex-col items-center justify-center p-6 border-2 border-dashed border-[#E2E8F0] rounded-[6px] text-center text-[#475569]"
                   data-testid={`empty-column-${col.id.toLowerCase()}`}
                 >
-                  <Icon className="h-6 w-6 stroke-1 text-slate-300 mb-2" />
+                  <Icon className="h-6 w-6 stroke-1 text-[#94A3B8] mb-2" />
                   <p className="text-xs font-medium">No transmittals</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Drag cards here</p>
+                  <p className="text-xs text-[#475569] mt-0.5">Drag cards here</p>
                 </div>
               ) : (
                 items.map((item) => (

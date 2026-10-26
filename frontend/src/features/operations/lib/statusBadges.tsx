@@ -41,36 +41,36 @@ export function getPhaseBadgeInfo(phase?: string | null): PhaseBadgeInfo {
     case 'pre_processing':
       return {
         label: 'Pre-processing',
-        badgeClass: 'bg-sky-50 text-sky-700 border-sky-200/80 shadow-2xs',
-        dotClass: 'bg-sky-500',
+        badgeClass: 'bg-[#EEF2FF] text-[#3730A3] border-[#C7D2FE]',
+        dotClass: 'bg-[#4F46E5]',
         Icon: Layers,
       };
     case 'processing':
       return {
         label: 'Processing',
-        badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200/80 shadow-2xs',
-        dotClass: 'bg-indigo-500',
+        badgeClass: 'bg-[#EFF6FF] text-[#1E40AF] border-[#93C5FD]',
+        dotClass: 'bg-[#2563EB]',
         Icon: Zap,
       };
     case 'quality_assurance':
       return {
         label: 'Quality Assurance',
-        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200/80 shadow-2xs',
-        dotClass: 'bg-amber-500',
+        badgeClass: 'bg-[#FEFCE8] text-[#854D0E] border-[#FDE047]',
+        dotClass: 'bg-[#D97706]',
         Icon: ShieldCheck,
       };
     case 'completion':
       return {
         label: 'Completion',
-        badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200/80 shadow-2xs',
-        dotClass: 'bg-emerald-500',
+        badgeClass: 'bg-[#F0FDF4] text-[#166534] border-[#86EFAC]',
+        dotClass: 'bg-[#16A34A]',
         Icon: CheckCircle2,
       };
     default:
       return {
         label: (phase || 'Unknown').replace('_', ' '),
-        badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
-        dotClass: 'bg-slate-400',
+        badgeClass: 'bg-[#F8FAFC] text-[#475569] border-[#E2E8F0]',
+        dotClass: 'bg-[#64748B]',
         Icon: Clock,
       };
   }

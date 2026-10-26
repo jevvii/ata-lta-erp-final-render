@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -64,7 +65,7 @@ import { operationsKeys } from '../api/queryKeys';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
-import { isUserAdmin } from '../lib/taskScope';
+import { isUserAdmin, isTaskAssignee } from '../lib/taskScope';
 import { useEntityRealtimeSync } from '@/lib/realtime';
 import type { ApiError } from '@/lib/api';
 import {
@@ -93,8 +94,16 @@ export function WorkRequestList({
   // View mode: Table vs Compact Card List
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
-  // Side Peek state (UAT-GEN2)
-  const [peekWrId, setPeekWrId] = useState<string | null>(null);
+  // Side Peek state (UAT-GEN2), synced with URL search params
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlPeekWrId = searchParams.get('peekWrId');
+  const [peekWrId, setPeekWrId] = useState<string | null>(() => urlPeekWrId || null);
+
+  useEffect(() => {
+    if (urlPeekWrId && urlPeekWrId !== peekWrId) {
+      setPeekWrId(urlPeekWrId);
+    }
+  }, [urlPeekWrId, peekWrId]);
 
   // Filters State
   const [searchInput, setSearchInput] = useState('');
@@ -177,14 +186,22 @@ export function WorkRequestList({
       // Assignee Filter (Task B.10: Multi-dimensional)
       if (assigneeFilter !== 'all') {
         if (assigneeFilter === 'unassigned') {
-          if (wr.assignedTo) return false;
+          if (wr.assignedTo || (wr as { assigned_to?: string }).assigned_to) return false;
         } else {
-          const isManager = wr.assignedTo === assigneeFilter;
-          const isCoAssignee = Array.isArray(wr.coAssignees) && wr.coAssignees.includes(assigneeFilter);
-          const isTaskAssignee = Array.isArray(wr.tasks) && wr.tasks.some((t) =>
-            t.assigneeId === assigneeFilter || (Array.isArray(t.assignees) && t.assignees.includes(assigneeFilter))
-          );
-          if (!isManager && !isCoAssignee && !isTaskAssignee) return false;
+          const isManager =
+            wr.assignedTo === assigneeFilter ||
+            (wr as { assigned_to?: string }).assigned_to === assigneeFilter;
+          const coAssignees =
+            wr.coAssignees ||
+            (wr as { co_assignees?: unknown }).co_assignees;
+          const isCoAssignee =
+            Array.isArray(coAssignees) && coAssignees.includes(assigneeFilter);
+          const isAssignedToTask =
+            Array.isArray(wr.tasks) &&
+            wr.tasks.some((t) =>
+              isTaskAssignee({ id: assigneeFilter } as { id: string; email: string; name: string; role: string; departments: string[]; entities: string[] }, t)
+            );
+          if (!isManager && !isCoAssignee && !isAssignedToTask) return false;
         }
       }
 
@@ -386,12 +403,12 @@ export function WorkRequestList({
   return (
     <div className="space-y-4" data-testid="work-request-list">
       {/* 1. Header Toolbar */}
-      <div className="p-4 bg-white border border-slate-200 rounded-lg space-y-3">
+      <div className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] space-y-3">
         {/* Search, View Switcher & Action Button */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           {/* Search Input with Debounce */}
           <div className="flex-1 relative max-w-md">
-            <Search className="h-4 w-4 absolute left-3 top-2.5 text-slate-400" />
+            <Search className="h-4 w-4 absolute left-3 top-2.5 text-[#475569]" />
             <Input
               value={searchInput}
               onChange={(e) => {
@@ -399,14 +416,14 @@ export function WorkRequestList({
                 setPage(1);
               }}
               placeholder="Search work requests, clients, tasks..."
-              className="h-9 pl-9 text-xs bg-slate-50 focus:bg-white"
+              className="h-9 pl-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]"
               data-testid="wr-search-input"
             />
             {searchInput && (
               <button
                 type="button"
                 onClick={() => setSearchInput('')}
-                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                className="absolute right-2.5 top-2.5 text-[#475569] hover:text-[#1E293B]"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -416,13 +433,14 @@ export function WorkRequestList({
           {/* Right Toolbar: View Switcher & New Request */}
           <div className="flex items-center gap-2">
             {/* View Switcher: Table vs Cards */}
-            <div className="flex items-center border border-slate-200 rounded-md p-0.5 bg-slate-50">
+            <div className="flex items-center border-[#E2E8F0] rounded-[6px] p-0 bg-[#F8FAFC] divide-x divide-[#CBD5E1]">
               <Button
                 type="button"
                 variant={viewMode === 'table' ? 'default' : 'ghost'}
                 size="icon-xs"
                 onClick={() => setViewMode('table')}
                 title="Table View"
+                className={`rounded-[6px] ${viewMode === 'table' ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-transparent text-[#1E293B] hover:bg-[#E2E8F0]'}`}
                 data-testid="view-mode-table"
               >
                 <TableIcon className="h-3.5 w-3.5" />
@@ -433,6 +451,7 @@ export function WorkRequestList({
                 size="icon-xs"
                 onClick={() => setViewMode('cards')}
                 title="Card List View"
+                className={`rounded-[6px] ${viewMode === 'cards' ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-transparent text-[#1E293B] hover:bg-[#E2E8F0]'}`}
                 data-testid="view-mode-cards"
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
@@ -445,7 +464,7 @@ export function WorkRequestList({
                 type="button"
                 size="sm"
                 onClick={onCreateNew}
-                className="text-xs font-semibold gap-1.5"
+                className="text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs gap-1.5"
                 data-testid="new-wr-btn"
               >
                 <Plus className="h-4 w-4" /> New Work Request
@@ -455,8 +474,8 @@ export function WorkRequestList({
         </div>
 
         {/* Filter Group */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 text-xs">
-          <span className="text-slate-400 font-medium flex items-center gap-1 text-[11px]">
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-[#E2E8F0] text-xs">
+          <span className="text-[#475569] font-bold tracking-normal flex items-center gap-1 text-xs">
             <Filter className="h-3 w-3" /> Filters:
           </span>
 
@@ -468,15 +487,15 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-28 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-28 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Phase" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Phases</SelectItem>
-              <SelectItem value="pre_processing">Pre-processing</SelectItem>
-              <SelectItem value="processing">Processing</SelectItem>
-              <SelectItem value="quality_assurance">Quality Assurance</SelectItem>
-              <SelectItem value="completion">Completion</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">All Phases</SelectItem>
+              <SelectItem value="pre_processing" className="text-xs">Pre-processing</SelectItem>
+              <SelectItem value="processing" className="text-xs">Processing</SelectItem>
+              <SelectItem value="quality_assurance" className="text-xs">Quality Assurance</SelectItem>
+              <SelectItem value="completion" className="text-xs">Completion</SelectItem>
             </SelectContent>
           </Select>
 
@@ -488,23 +507,23 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-28 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-28 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">All Statuses</SelectItem>
               {WORK_REQUEST_STATUS_OPTIONS.map((st) => (
-                <SelectItem key={st} value={st}>
+                <SelectItem key={st} value={st} className="text-xs">
                   {st}
                 </SelectItem>
               ))}
-              <SelectItem value="Draft">Draft</SelectItem>
-              <SelectItem value="Pre-processing">Pre-processing</SelectItem>
-              <SelectItem value="Processing">Processing</SelectItem>
-              <SelectItem value="For Review">For Review</SelectItem>
-              <SelectItem value="Disbursement">Disbursement</SelectItem>
-              <SelectItem value="On Hold">On Hold</SelectItem>
-              <SelectItem value="Cancelled">Cancelled</SelectItem>
+              <SelectItem value="Draft" className="text-xs">Draft</SelectItem>
+              <SelectItem value="Pre-processing" className="text-xs">Pre-processing</SelectItem>
+              <SelectItem value="Processing" className="text-xs">Processing</SelectItem>
+              <SelectItem value="For Review" className="text-xs">For Review</SelectItem>
+              <SelectItem value="Disbursement" className="text-xs">Disbursement</SelectItem>
+              <SelectItem value="On Hold" className="text-xs">On Hold</SelectItem>
+              <SelectItem value="Cancelled" className="text-xs">Cancelled</SelectItem>
             </SelectContent>
           </Select>
 
@@ -516,15 +535,15 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-24 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-24 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Priority" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Priorities</SelectItem>
-              <SelectItem value="Urgent">Urgent</SelectItem>
-              <SelectItem value="High">High</SelectItem>
-              <SelectItem value="Normal">Normal</SelectItem>
-              <SelectItem value="Low">Low</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">All Priorities</SelectItem>
+              <SelectItem value="Urgent" className="text-xs">Urgent</SelectItem>
+              <SelectItem value="High" className="text-xs">High</SelectItem>
+              <SelectItem value="Normal" className="text-xs">Normal</SelectItem>
+              <SelectItem value="Low" className="text-xs">Low</SelectItem>
             </SelectContent>
           </Select>
 
@@ -536,13 +555,13 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-32 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-32 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Client" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Clients</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">All Clients</SelectItem>
               {clients.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
+                <SelectItem key={c.id} value={c.id} className="text-xs">
                   {c.name}
                 </SelectItem>
               ))}
@@ -557,14 +576,14 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-28 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-28 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Assignee" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Assignees</SelectItem>
-              <SelectItem value="unassigned">— Unassigned —</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">All Assignees</SelectItem>
+              <SelectItem value="unassigned" className="text-xs">— Unassigned —</SelectItem>
               {team.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
+                <SelectItem key={m.id} value={m.id} className="text-xs">
                   {m.name}
                 </SelectItem>
               ))}
@@ -581,7 +600,7 @@ export function WorkRequestList({
                 setAssigneeFilter(assigneeFilter === user.id ? 'all' : user.id);
                 setPage(1);
               }}
-              className="h-7 text-[11px] gap-1 shrink-0"
+              className={`h-7 text-xs tracking-normal font-bold gap-1 shrink-0 rounded-[8px] border-[#E2E8F0] ${assigneeFilter === user.id ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC]'}`}
               data-testid="assigned-to-me-btn"
             >
               <User className="h-3 w-3" />
@@ -597,16 +616,16 @@ export function WorkRequestList({
               setPage(1);
             }}
           >
-            <SelectTrigger className="h-7 text-[11px] w-auto min-w-28 bg-slate-50">
+            <SelectTrigger className="h-7 text-xs w-auto min-w-28 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
               <SelectValue placeholder="Due Date" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Any Date</SelectItem>
-              <SelectItem value="overdue">Overdue</SelectItem>
-              <SelectItem value="today">Due Today</SelectItem>
-              <SelectItem value="this_week">Due This Week</SelectItem>
-              <SelectItem value="this_month">Due This Month</SelectItem>
-              <SelectItem value="no_date">No Date Set</SelectItem>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+              <SelectItem value="all" className="text-xs">Any Date</SelectItem>
+              <SelectItem value="overdue" className="text-xs">Overdue</SelectItem>
+              <SelectItem value="today" className="text-xs">Due Today</SelectItem>
+              <SelectItem value="this_week" className="text-xs">Due This Week</SelectItem>
+              <SelectItem value="this_month" className="text-xs">Due This Month</SelectItem>
+              <SelectItem value="no_date" className="text-xs">No Date Set</SelectItem>
             </SelectContent>
           </Select>
 
@@ -617,7 +636,7 @@ export function WorkRequestList({
               variant="ghost"
               size="xs"
               onClick={handleClearFilters}
-              className="text-xs text-blue-600 hover:text-blue-800 h-7 px-2"
+              className="text-xs tracking-normal text-[#DC2626] hover:text-[#1E293B] h-7 px-2"
               data-testid="clear-filters-btn"
             >
               Clear filters
@@ -629,17 +648,17 @@ export function WorkRequestList({
       {/* 2. Bulk Actions Bar (conditional) */}
       {selectedIds.size > 0 && (
         <div
-          className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-xs text-blue-900"
+          className="p-3 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] flex items-center justify-between text-xs text-[#1E293B]"
           data-testid="bulk-actions-bar"
         >
-          <div className="flex items-center gap-2 font-semibold">
+          <div className="flex items-center gap-2 font-bold tracking-normal">
             <span>{selectedIds.size} work requests selected</span>
             <Button
               type="button"
               variant="ghost"
               size="xs"
               onClick={() => setSelectedIds(new Set())}
-              className="text-blue-700 hover:text-blue-900 text-xs h-6 px-1.5"
+              className="text-[#1E293B] hover:text-[#DC2626] text-xs uppercase h-6 px-1.5"
             >
               Deselect all
             </Button>
@@ -650,7 +669,7 @@ export function WorkRequestList({
               variant="outline"
               size="xs"
               onClick={handleBulkArchive}
-              className="bg-white text-xs gap-1"
+              className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] text-xs tracking-normal font-bold gap-1"
               data-testid="bulk-archive-btn"
             >
               <Archive className="h-3 w-3" /> Archive Completed
@@ -661,7 +680,7 @@ export function WorkRequestList({
                 variant="destructive"
                 size="xs"
                 onClick={handleBulkCancel}
-                className="text-xs gap-1"
+                className="rounded-[6px] bg-[#DC2626] hover:bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs tracking-normal font-bold gap-1"
                 data-testid="bulk-cancel-btn"
               >
                 <Ban className="h-3 w-3" /> Cancel Selected
@@ -673,18 +692,18 @@ export function WorkRequestList({
 
       {/* 3. Main View Area (Table vs Cards) */}
       {isLoading ? (
-        <div className="p-12 text-center text-xs text-slate-400 bg-white border border-slate-200 rounded-lg">
+        <div className="p-12 text-center text-xs tracking-normal text-[#475569] bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
           Loading operations work requests...
         </div>
       ) : paginatedRequests.length === 0 ? (
         /* Empty States: Filtered vs Zero Total */
-        <div className="p-12 text-center bg-white border border-slate-200 rounded-lg space-y-3">
+        <div className="p-12 text-center bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] space-y-3">
           {hasActiveFilters ? (
             <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-slate-800">
+              <h4 className="text-sm font-bold tracking-normal text-[#1E293B]">
                 No work requests match your filters
               </h4>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-[#475569]">
                 Try adjusting your search criteria or clearing all active filters.
               </p>
               <Button
@@ -692,15 +711,15 @@ export function WorkRequestList({
                 variant="outline"
                 size="sm"
                 onClick={handleClearFilters}
-                className="mt-2 text-xs"
+                className="mt-2 text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
               >
                 Clear all filters
               </Button>
             </div>
           ) : (
             <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-slate-800">No work requests yet</h4>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              <h4 className="text-sm font-bold tracking-normal text-[#1E293B]">No work requests yet</h4>
+              <p className="text-xs text-[#475569] max-w-sm mx-auto">
                 Create your first work request to start tracking client deliverables and phase progress.
               </p>
               {canEdit && onCreateNew && (
@@ -708,7 +727,7 @@ export function WorkRequestList({
                   type="button"
                   size="sm"
                   onClick={onCreateNew}
-                  className="mt-2 text-xs font-semibold gap-1"
+                  className="mt-2 text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs gap-1"
                 >
                   <Plus className="h-4 w-4" /> Add Work Request
                 </Button>
@@ -718,10 +737,10 @@ export function WorkRequestList({
         </div>
       ) : viewMode === 'table' ? (
         /* TABLE VIEW */
-        <div className="border border-slate-200 rounded-lg bg-white overflow-hidden shadow-xs">
+        <div className="border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] overflow-hidden shadow-none">
           <Table>
             <TableHeader>
-              <TableRow className="bg-slate-50 hover:bg-slate-50">
+              <TableRow className="bg-[#F8FAFC] border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
                 <TableHead className="w-10 text-center">
                   <input
                     type="checkbox"
@@ -730,18 +749,18 @@ export function WorkRequestList({
                       paginatedRequests.every((r) => selectedIds.has(r.id))
                     }
                     onChange={handleSelectAllOnPage}
-                    className="rounded text-blue-600"
+                    className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] focus:ring-0"
                     aria-label="Select all on page"
                   />
                 </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700 w-1/3">
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] w-1/3">
                   Work Request
                 </TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Client</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Priority</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Phase & Status</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Due Date</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700 text-right">
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B]">Client</TableHead>
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B]">Priority</TableHead>
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B]">Phase & Status</TableHead>
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B]">Due Date</TableHead>
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] text-right">
                   Actions
                 </TableHead>
               </TableRow>
@@ -755,8 +774,8 @@ export function WorkRequestList({
                   <TableRow
                     key={wr.id}
                     onMouseEnter={() => prefetchWorkRequestDetail(wr.id)}
-                    className={`hover:bg-slate-50/70 transition-colors ${
-                      isSelected ? 'bg-blue-50/40' : ''
+                    className={`hover:bg-[#E2E8F0] transition-none border-b border-[#E2E8F0] ${
+                      isSelected ? 'bg-[#F8FAFC]' : ''
                     }`}
                     data-testid={`wr-row-${wr.id}`}
                   >
@@ -766,35 +785,35 @@ export function WorkRequestList({
                         type="checkbox"
                         checked={isSelected}
                         onChange={() => handleToggleSelectRow(wr.id)}
-                        className="rounded text-blue-600"
+                        className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] focus:ring-0"
                         aria-label={`Select ${wr.title}`}
                       />
                     </TableCell>
 
                     {/* Title & Badges */}
-                    <TableCell className="font-medium text-xs text-slate-900">
+                    <TableCell className="font-medium text-xs text-[#1E293B]">
                       <div className="flex flex-col space-y-1">
                         <div className="flex items-center gap-2">
                           <span
                             onClick={() => setPeekWrId(wr.id)}
-                            className="font-semibold text-slate-900 hover:text-blue-600 cursor-pointer"
+                            className="font-bold text-[#1E293B] hover:text-[#1D4ED8] cursor-pointer"
                           >
                             {wr.title}
                           </span>
                           {/* Blocker Badge with Tooltip */}
                           {blocker.hasBlockers && (
                             <span
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100/70 border border-amber-300 rounded px-1.5 py-0.2 cursor-help"
+                              className="inline-flex items-center gap-1 text-xs font-bold uppercase text-[#DC2626] bg-[#FEF2F2] border-[#FCA5A5] rounded-[6px] px-1.5 py-0.2 cursor-help"
                               title={`Incomplete Gate Tasks:\n${blocker.taskTitles.join('\n')}`}
                               data-testid={`blocker-badge-${wr.id}`}
                             >
-                              <AlertTriangle className="h-3 w-3 text-amber-600" />
+                              <AlertTriangle className="h-3 w-3 text-[#DC2626]" />
                               {blocker.count} blocker{blocker.count > 1 ? 's' : ''}
                             </span>
                           )}
                         </div>
                         {wr.description && (
-                          <span className="text-[11px] text-slate-500 truncate max-w-sm">
+                          <span className="text-xs text-[#475569] truncate max-w-sm">
                             {wr.description}
                           </span>
                         )}
@@ -802,9 +821,9 @@ export function WorkRequestList({
                     </TableCell>
 
                     {/* Client & Entity */}
-                    <TableCell className="text-xs text-slate-700">
+                    <TableCell className="text-xs text-[#1E293B]">
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium">
+                        <span className="font-bold">
                           {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
                         </span>
                         <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
@@ -839,43 +858,40 @@ export function WorkRequestList({
                         return (
                           <div className="flex flex-col gap-1 items-start">
                             <span
-                              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${phaseInfo.badgeClass}`}
-                              title={`Phase: ${phaseInfo.label}`}
-                            >
-                              <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
-                              <PhaseIcon className="w-3 h-3 shrink-0" />
-                              <span>{phaseInfo.label}</span>
-                            </span>
+    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] border text-xs font-semibold ${phaseInfo.badgeClass}`}
+    title={`Phase: ${phaseInfo.label}`}
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
+    <PhaseIcon className="w-3 h-3 shrink-0" />
+    <span>{phaseInfo.label}</span>
+  </span>
                             {isAdmin ? (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                   <button
-                                    type="button"
-                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-all cursor-pointer hover:shadow-xs ${statusInfo.badgeClass}`}
-                                    title="Change Work Request Status (Admin)"
-                                  >
-                                    <span className={`w-1 h-1 rounded-full ${statusInfo.dotClass}`} />
-                                    <StatusIcon className="w-2.5 h-2.5 shrink-0" />
-                                    <span>{statusInfo.label}</span>
-                                    <ChevronDown className="w-2.5 h-2.5 ml-0.5 opacity-60" />
-                                  </button>
+    type="button"
+    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] border text-xs font-semibold ${statusInfo.badgeClass} transition-none cursor-pointer hover:opacity-85`}
+    title="Change Work Request Status (Admin)"
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
+    <StatusIcon className="w-2.5 h-2.5 shrink-0" />
+    <span>{statusInfo.label}</span>
+    <ChevronDown className="w-2.5 h-2.5 ml-0.5 opacity-60" />
+  </button>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent
                                   align="start"
-                                  className="w-56 p-1 bg-white shadow-lg border border-slate-200 rounded-lg max-h-80 overflow-y-auto z-50"
+                                  className="w-56 p-1 bg-[#FFFFFF] shadow-float border-[#E2E8F0] rounded-[6px] max-h-80 overflow-y-auto z-50"
                                 >
-                                  <DropdownMenuLabel className="text-[10px] uppercase font-bold text-slate-500 px-2 py-1">
+                                  <DropdownMenuLabel className="text-xs uppercase font-bold text-[#1E293B] px-2 py-1">
                                     Set Status (Admin)
                                   </DropdownMenuLabel>
-                                  <DropdownMenuSeparator className="my-1 bg-slate-100" />
+                                  <DropdownMenuSeparator className="my-1 bg-[#1D4ED8]" />
                                   {WORK_REQUEST_STATUS_OPTIONS.map((opt) => (
                                     <DropdownMenuItem
                                       key={opt}
                                       onClick={async () => {
                                         try {
-                                          // Optimistic-with-rollback: the chip flips
-                                          // instantly; on failure caches restore and
-                                          // the verbatim error toasts.
                                           await statusOptimistic({
                                             id: wr.id,
                                             status: opt,
@@ -896,22 +912,21 @@ export function WorkRequestList({
                                           toast.error(e instanceof Error ? e.message : 'Update failed');
                                         }
                                       }}
-                                      className={`text-xs px-2 py-1.5 cursor-pointer flex items-center justify-between hover:bg-slate-50 ${
-                                        wr.status === opt ? 'font-bold bg-slate-100' : ''
+                                      className={`text-xs  uppercase px-2 py-1.5 cursor-pointer flex items-center justify-between rounded-[6px] hover:bg-[#F8FAFC] ${
+                                        wr.status === opt ? 'font-bold bg-[#F8FAFC]' : ''
                                       }`}
                                     >
                                       <span>{opt}</span>
-                                      {wr.status === opt && <Check className="w-3 h-3 text-emerald-600" />}
+                                      {wr.status === opt && <Check className="w-3 h-3 text-[#1E293B]" />}
                                     </DropdownMenuItem>
                                   ))}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             ) : (
                               <span
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusInfo.badgeClass}`}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[6px]  tracking-normal text-xs font-bold border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]`}
                                 title={`Status: ${statusInfo.label}`}
                               >
-                                <span className={`w-1 h-1 rounded-full ${statusInfo.dotClass}`} />
                                 <StatusIcon className="w-2.5 h-2.5 shrink-0" />
                                 <span>{statusInfo.label}</span>
                               </span>
@@ -922,21 +937,21 @@ export function WorkRequestList({
                     </TableCell>
 
                     {/* Due Date */}
-                    <TableCell className="text-xs text-slate-600">
+                    <TableCell className="text-xs tabular-nums text-[#1E293B]">
                       {wr.dueDate ? (
                         <span
                           className={
                             new Date(wr.dueDate) < new Date() &&
                             wr.status !== 'Completed' &&
                             wr.status !== 'Cancelled'
-                              ? 'text-red-600 font-semibold'
+                              ? 'text-[#DC2626] font-bold'
                               : ''
                           }
                         >
                           {new Date(wr.dueDate).toLocaleDateString()}
                         </span>
                       ) : (
-                        <span className="text-slate-400 italic">No date</span>
+                        <span className="text-[#475569] italic">No date</span>
                       )}
                     </TableCell>
 
@@ -950,7 +965,7 @@ export function WorkRequestList({
                           size="icon-xs"
                           onClick={() => setPeekWrId(wr.id)}
                           title="View Details"
-                          className="text-slate-500 hover:text-slate-900"
+                          className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                           data-testid={`action-view-${wr.id}`}
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -964,7 +979,7 @@ export function WorkRequestList({
                             size="icon-xs"
                             onClick={() => onEdit(wr)}
                             title="Edit Work Request"
-                            className="text-slate-500 hover:text-blue-600"
+                            className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                             data-testid={`action-edit-${wr.id}`}
                           >
                             <Edit className="h-3.5 w-3.5" />
@@ -979,7 +994,7 @@ export function WorkRequestList({
                             size="icon-xs"
                             onClick={() => handleDirectAdvance(wr)}
                             title="Advance Phase"
-                            className="text-blue-600 hover:text-blue-800"
+                            className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                             data-testid={`action-advance-${wr.id}`}
                           >
                             <ArrowRight className="h-3.5 w-3.5" />
@@ -1000,7 +1015,7 @@ export function WorkRequestList({
                               })
                             }
                             title="Archive"
-                            className="text-slate-500 hover:text-amber-700"
+                            className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                             data-testid={`action-archive-${wr.id}`}
                           >
                             <Archive className="h-3.5 w-3.5" />
@@ -1023,7 +1038,7 @@ export function WorkRequestList({
                                 })
                               }
                               title="Cancel Work Request"
-                              className="text-slate-400 hover:text-red-600"
+                              className="h-7 w-7 p-0 rounded-[6px] text-[#DC2626] hover:bg-[#F8FAFC] hover:border hover:border-[#FCA5A5]"
                               data-testid={`action-cancel-${wr.id}`}
                             >
                               <Ban className="h-3.5 w-3.5" />
@@ -1046,18 +1061,18 @@ export function WorkRequestList({
             return (
               <div
                 key={wr.id}
-                className="p-4 bg-white border border-slate-200 rounded-lg space-y-3 hover:border-slate-300 transition-colors shadow-xs"
+                className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] space-y-3 hover:bg-[#F8FAFC] transition-none shadow-none"
                 data-testid={`wr-card-${wr.id}`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-1">
                     <h4
                       onClick={() => setPeekWrId(wr.id)}
-                      className="font-bold text-xs text-slate-900 hover:text-blue-600 cursor-pointer line-clamp-1"
+                      className="font-bold text-xs text-[#1E293B] hover:text-[#1D4ED8] cursor-pointer line-clamp-1"
                     >
                       {wr.title}
                     </h4>
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                    <div className="flex items-center gap-1.5 text-xs text-[#475569]">
                       <Building className="h-3 w-3" />
                       <span className="truncate max-w-40">
                         {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
@@ -1092,21 +1107,21 @@ export function WorkRequestList({
                     return (
                       <>
                         <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${phaseInfo.badgeClass}`}
-                          title={`Phase: ${phaseInfo.label}`}
-                        >
-                          <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
-                          <PhaseIcon className="w-3 h-3 shrink-0" />
-                          <span>{phaseInfo.label}</span>
-                        </span>
-                        <span
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${statusInfo.badgeClass}`}
-                          title={`Status: ${statusInfo.label}`}
-                        >
-                          <span className={`w-1 h-1 rounded-full ${statusInfo.dotClass}`} />
-                          <StatusIcon className="w-2.5 h-2.5 shrink-0" />
-                          <span>{statusInfo.label}</span>
-                        </span>
+    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] border text-xs font-semibold ${phaseInfo.badgeClass}`}
+    title={`Phase: ${phaseInfo.label}`}
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
+    <PhaseIcon className="w-3 h-3 shrink-0" />
+    <span>{phaseInfo.label}</span>
+  </span>
+  <span
+    className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] border text-xs font-semibold ${statusInfo.badgeClass}`}
+    title={`Status: ${statusInfo.label}`}
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
+    <StatusIcon className="w-2.5 h-2.5 shrink-0" />
+    <span>{statusInfo.label}</span>
+  </span>
                       </>
                     );
                   })()}
@@ -1115,19 +1130,19 @@ export function WorkRequestList({
                 {/* Blocker Alert */}
                 {blocker.hasBlockers && (
                   <div
-                    className="p-1.5 bg-amber-50 border border-amber-200 rounded text-[11px] text-amber-800 flex items-center gap-1.5"
+                    className="p-1.5 bg-[#FEF2F2] border-[#FCA5A5] rounded-[6px] text-xs text-[#DC2626] flex items-center gap-1.5"
                     title={`Incomplete:\n${blocker.taskTitles.join('\n')}`}
                   >
-                    <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                    <AlertTriangle className="h-3.5 w-3.5 text-[#DC2626] shrink-0" />
                     <span>{blocker.count} incomplete gate blocker(s)</span>
                   </div>
                 )}
 
                 {/* Footer Metadata & Actions */}
-                <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
-                  <div className="flex items-center gap-2 text-slate-500 text-[11px]">
+                <div className="flex items-center justify-between pt-2 border-t border-[#E2E8F0] text-xs tabular-nums">
+                  <div className="flex items-center gap-2 text-[#475569]">
                     {wr.dueDate && (
-                      <span className="flex items-center gap-1">
+                      <span className="flex items-center gap-1 tabular-nums">
                         <Calendar className="h-3 w-3" />
                         {new Date(wr.dueDate).toLocaleDateString()}
                       </span>
@@ -1141,6 +1156,7 @@ export function WorkRequestList({
                         variant="ghost"
                         size="icon-xs"
                         onClick={() => onEdit(wr)}
+                        className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                       >
                         <Edit className="h-3.5 w-3.5" />
                       </Button>
@@ -1151,7 +1167,7 @@ export function WorkRequestList({
                         variant="ghost"
                         size="icon-xs"
                         onClick={() => handleDirectAdvance(wr)}
-                        className="text-blue-600"
+                        className="h-7 w-7 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                       >
                         <ArrowRight className="h-3.5 w-3.5" />
                       </Button>
@@ -1165,23 +1181,23 @@ export function WorkRequestList({
       )}
 
       {/* 4. Pagination Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-2 py-3 text-xs text-slate-500" data-testid="wr-pagination">
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-2 py-3 text-xs text-[#475569] border-t border-[#E2E8F0]" data-testid="wr-pagination">
         <div>
           Showing{' '}
-          <span className="font-semibold text-slate-700">
+          <span className="font-bold text-[#1E293B] tabular-nums">
             {totalItems === 0 ? 0 : (page - 1) * pageSize + 1}
           </span>{' '}
           to{' '}
-          <span className="font-semibold text-slate-700">
+          <span className="font-bold text-[#1E293B] tabular-nums">
             {Math.min(page * pageSize, totalItems)}
           </span>{' '}
-          of <span className="font-semibold text-slate-700">{totalItems}</span> work requests
+          of <span className="font-bold text-[#1E293B] tabular-nums">{totalItems}</span> work requests
         </div>
 
         <div className="flex items-center gap-3">
           {/* Page size select */}
           <div className="flex items-center gap-1.5">
-            <span>Per page:</span>
+            <span className="uppercase font-bold">Per page:</span>
             <Select
               value={String(pageSize)}
               onValueChange={(val) => {
@@ -1189,14 +1205,14 @@ export function WorkRequestList({
                 setPage(1);
               }}
             >
-              <SelectTrigger className="h-7 w-16 text-xs bg-white">
+              <SelectTrigger className="h-7 w-16 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="10">10</SelectItem>
-                <SelectItem value="25">25</SelectItem>
-                <SelectItem value="50">50</SelectItem>
-                <SelectItem value="100">100</SelectItem>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                <SelectItem value="10" className="text-xs">10</SelectItem>
+                <SelectItem value="25" className="text-xs">25</SelectItem>
+                <SelectItem value="50" className="text-xs">50</SelectItem>
+                <SelectItem value="100" className="text-xs">100</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1210,10 +1226,11 @@ export function WorkRequestList({
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(p - 1, 1))}
               aria-label="Previous Page"
+              className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] disabled:opacity-40"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
-            <span className="px-2 text-xs font-medium text-slate-700">
+            <span className="px-2 text-xs font-bold text-[#1E293B] tabular-nums">
               Page {page} of {totalPages}
             </span>
             <Button
@@ -1223,6 +1240,7 @@ export function WorkRequestList({
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
               aria-label="Next Page"
+              className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] disabled:opacity-40"
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
@@ -1250,7 +1268,19 @@ export function WorkRequestList({
       <WorkRequestSidePeek
         isOpen={Boolean(peekWrId)}
         workRequestId={peekWrId}
-        onClose={() => setPeekWrId(null)}
+        onClose={() => {
+          setPeekWrId(null);
+          if (searchParams.has('peekWrId')) {
+            setSearchParams(
+              (prev) => {
+                const next = new URLSearchParams(prev);
+                next.delete('peekWrId');
+                return next;
+              },
+              { replace: true }
+            );
+          }
+        }}
         onEdit={onEdit}
         onViewInBoard={onViewDetails}
       />

@@ -21,6 +21,7 @@ import { documentKeys } from '@/features/documents/api/queryKeys';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { billingKeys } from '@/features/billing/api/queryKeys';
 import { disbursementKeys } from '@/features/disbursements/api/queryKeys';
+import { transmittalKeys } from '@/features/transmittals/api/queryKeys';
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys';
 import { resolveEntityUUID, resolveEntityCodeFromUUID } from './tenantResolver';
 
@@ -424,8 +425,10 @@ export function triggerAssignedTasksCoInvalidation(
   oldRecord?: Record<string, unknown> | null,
   isDelete?: boolean
 ): void {
-  const currentUserId = useSessionStore.getState().user?.id;
+  const currentUser = useSessionStore.getState().user;
+  const currentUserId = currentUser?.id;
   if (!currentUserId) return;
+  const isAdmin = String(currentUser?.role || '').toLowerCase() === 'admin';
 
   if (table === 'tasks') {
     const newAssignee = record?.assignee_id ?? record?.assigneeId;
@@ -440,14 +443,14 @@ export function triggerAssignedTasksCoInvalidation(
       (Array.isArray(oldRecord?.assignees) &&
         oldRecord.assignees.some((a) => isMatchingUserId(a, currentUserId)));
 
-    if (matchesNew || matchesOld) {
+    if (isAdmin || matchesNew || matchesOld) {
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.assignedTasks.all });
     }
   } else if (table === 'task_assignees') {
     const newUserId = record?.user_id ?? record?.userId;
     const oldUserId = oldRecord?.user_id ?? oldRecord?.userId;
 
-    if (isMatchingUserId(newUserId, currentUserId) || isMatchingUserId(oldUserId, currentUserId)) {
+    if (isAdmin || isMatchingUserId(newUserId, currentUserId) || isMatchingUserId(oldUserId, currentUserId)) {
       void queryClient.invalidateQueries({ queryKey: dashboardKeys.assignedTasks.all });
     }
   } else if (table === 'work_requests') {
@@ -726,6 +729,34 @@ export function findWrIdForTaskFromCache(queryClient: QueryClient, taskId: strin
   return undefined;
 }
 
+function invalidateAllProjectProtectedCaches(queryClient: QueryClient, activeEntity?: string | null) {
+  // Cancel in-flight scope reads so revoked data cannot be restored
+  void queryClient.cancelQueries({ queryKey: operationsKeys.all });
+  void queryClient.cancelQueries({ queryKey: billingKeys.all });
+  void queryClient.cancelQueries({ queryKey: disbursementKeys.all });
+  void queryClient.cancelQueries({ queryKey: transmittalKeys.all });
+  void queryClient.cancelQueries({ queryKey: documentKeys.all });
+  void queryClient.cancelQueries({ queryKey: dashboardKeys.assignedTasks.all });
+  void queryClient.cancelQueries({ queryKey: dashboardKeys.timeEntries.all });
+  void queryClient.cancelQueries({ queryKey: ['operations', 'time-entries'] });
+  void queryClient.cancelQueries({ queryKey: ['operations', 'requests'] });
+
+  // Invalidate so authorized views refetch via backend permissions
+  void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+  void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+  void queryClient.invalidateQueries({ queryKey: disbursementKeys.all });
+  void queryClient.invalidateQueries({ queryKey: transmittalKeys.all });
+  void queryClient.invalidateQueries({ queryKey: documentKeys.all });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.assignedTasks.all });
+  void queryClient.invalidateQueries({ queryKey: dashboardKeys.timeEntries.all });
+  void queryClient.invalidateQueries({ queryKey: ['operations', 'time-entries'] });
+  void queryClient.invalidateQueries({ queryKey: ['operations', 'requests'] });
+  if (activeEntity) {
+    void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+    void queryClient.invalidateQueries({ queryKey: operationsKeys.requestCounts(activeEntity) });
+  }
+}
+
 /**
  * Core event handler for PostgreSQL CDC payloads.
  * Returns true if event was processed, false if dropped by one of the guards.
@@ -834,7 +865,10 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       : useSessionStore.getState().activeEntity;
   const targetUUID = options.activeEntityUUID || resolveEntityUUID(activeEntity);
 
-  if (activeEntity !== 'ALL') {
+  if (options.table === 'task_assignees') {
+    // task_assignees has no entity_id column in its relational schema (task_id, user_id, assigned_at).
+    // Never discard mounted assignment events via tenant entity guards.
+  } else if (activeEntity !== 'ALL') {
     // Preserve explicit null values; do not coalesce null into undefined
     const recordEntityId =
       incomingRecord.entity_id !== undefined
@@ -866,10 +900,14 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
 
       const recordCode =
         recordEntity ||
-        (recordEntityId != null ? resolveEntityCodeFromUUID(String(recordEntityId)) : undefined);
+        (recordEntityId != null
+          ? (String(recordEntityId).trim().toUpperCase() === 'ATA' || String(recordEntityId).trim().toUpperCase() === 'LTA'
+              ? String(recordEntityId).trim().toUpperCase()
+              : resolveEntityCodeFromUUID(String(recordEntityId)))
+          : undefined);
       const recordUUID =
-        (recordEntityId != null ? String(recordEntityId) : undefined) ||
-        (recordEntity != null ? resolveEntityUUID(String(recordEntity)) : undefined);
+        (recordEntityId != null && String(recordEntityId).includes('-') ? String(recordEntityId) : undefined) ||
+        (recordCode != null ? resolveEntityUUID(String(recordCode)) : undefined);
 
       // 1. UUID matching: Case-insensitive and trimmed (RFC 4122 compliance)
       const matchesUUID = Boolean(
@@ -897,7 +935,7 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
   // =========================================================================
   // Query Keys & Soft-Delete Detection (Pre-Guard 2)
   // =========================================================================
-  let detailKey = options.detailQueryKey
+  const detailKey = options.detailQueryKey
     ? options.detailQueryKey(id, incomingRecord as T)
     : getDefaultDetailQueryKey(options.table, id, incomingRecord);
   const listRootKey = options.listRootKey ?? getDefaultListRootKey(options.table);
@@ -1022,6 +1060,16 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       const matchingQueries = queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
         queryKey: listRootKey,
       });
+      if (options.table === 'disbursements') {
+        matchingQueries.push(
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-queue'],
+          }),
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-status'],
+          })
+        );
+      }
       let deletedUnreadNotification = false;
       for (const [qKey, listData] of matchingQueries) {
         if (!listData) continue;
@@ -1153,6 +1201,62 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         triggerTaskCoInvalidations(queryClient, targetWrId, id, activeEntity);
       }
     }
+
+    if (options.table === 'task_assignees') {
+      invalidateAllProjectProtectedCaches(queryClient, activeEntity);
+    }
+  } else if (
+    String(useSessionStore.getState().user?.role || '').trim().toLowerCase() !== 'admin' &&
+    ['work_requests', 'tasks', 'invoices', 'disbursements', 'transmittals', 'documents', 'time_entries', 'task_time_logs', 'operations_requests', 'task_assignees'].includes(options.table)
+  ) {
+    // 360° Shared Project Team Visibility Rule (F01–F10, Directive 3):
+    // For non-admin users (and null users), raw CDC INSERT/UPDATE payloads must NOT be injected directly into query caches.
+    // Instead, invalidate queries so TanStack Query refetches freshly authorized data through backend authorization.
+    if (detailKey) {
+      void queryClient.invalidateQueries({ queryKey: detailKey });
+    }
+    if (listRootKey) {
+      void queryClient.invalidateQueries({ queryKey: listRootKey });
+    }
+    if (options.table === 'disbursements') {
+      void queryClient.invalidateQueries({ queryKey: ['disbursements', 'all-for-queue'] });
+      void queryClient.invalidateQueries({ queryKey: ['disbursements', 'all-for-status'] });
+    }
+    if (options.table === 'tasks') {
+      let targetWrId = (
+        payloadObj.new?.work_request_id ??
+        payloadObj.new?.workRequestId ??
+        incomingRecord.work_request_id ??
+        incomingRecord.workRequestId
+      ) as string | undefined;
+      if (!targetWrId) {
+        targetWrId = findWrIdForTaskFromCache(queryClient, id);
+      }
+      if (targetWrId) {
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(targetWrId) });
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(targetWrId) });
+      }
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(id) });
+    }
+    if (options.table === 'work_requests') {
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(id) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestRelated(id) });
+    }
+
+    // Check for assignment changes on work_requests, tasks, or task_assignees
+    const isWrAssignmentChange =
+      options.table === 'work_requests' &&
+      ((payloadObj.new?.assigned_to ?? payloadObj.new?.assignedTo) !== (payloadObj.old?.assigned_to ?? payloadObj.old?.assignedTo) ||
+        JSON.stringify(payloadObj.new?.co_assignees ?? payloadObj.new?.coAssignees) !== JSON.stringify(payloadObj.old?.co_assignees ?? payloadObj.old?.coAssignees));
+
+    const isTaskAssignmentChange =
+      options.table === 'tasks' &&
+      ((payloadObj.new?.assignee_id ?? payloadObj.new?.assigneeId) !== (payloadObj.old?.assignee_id ?? payloadObj.old?.assigneeId) ||
+        JSON.stringify(payloadObj.new?.assignees) !== JSON.stringify(payloadObj.old?.assignees));
+
+    if (isWrAssignmentChange || isTaskAssignmentChange || options.table === 'task_assignees') {
+      invalidateAllProjectProtectedCaches(queryClient, activeEntity);
+    }
   } else if (isInsert) {
     // Populate detail cache
     if (detailKey && payloadObj.new) {
@@ -1171,6 +1275,16 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       const matchingQueries = queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
         queryKey: listRootKey,
       });
+      if (options.table === 'disbursements') {
+        matchingQueries.push(
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-queue'],
+          }),
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-status'],
+          })
+        );
+      }
 
       // Deduplication check: for notifications, verify whether notification ID already exists in query list
       let alreadyExistsInList = false;
@@ -1289,6 +1403,16 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       const matchingQueries = queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
         queryKey: listRootKey,
       });
+      if (options.table === 'disbursements') {
+        matchingQueries.push(
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-queue'],
+          }),
+          ...queryClient.getQueriesData<GenericListResponse | GenericEntityRecord[]>({
+            queryKey: ['disbursements', 'all-for-status'],
+          })
+        );
+      }
       let transitionedToRead = false;
       for (const [qKey, listData] of matchingQueries) {
         if (!listData) continue;
@@ -1490,6 +1614,7 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
 interface ChannelSubscriptionEntry {
   channel: ReturnType<typeof supabase.channel>;
   subscribers: Set<(payload: unknown) => void>;
+  reconnectTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -1523,6 +1648,7 @@ const activeChannelRegistry = new Map<string, ChannelSubscriptionEntry>();
  * Testing helper to reset channel registry state between test suites.
  */
 export function clearChannelRegistryForTesting(): void {
+  for (const entry of activeChannelRegistry.values()) clearTimeout(entry.reconnectTimer);
   activeChannelRegistry.clear();
   processedNotificationEvents.clear();
 }
@@ -1567,59 +1693,64 @@ export function useEntityRealtimeSync<T = Record<string, unknown>>(
     let entry = activeChannelRegistry.get(registryKey);
 
     if (!entry) {
-      // First component subscribing: create Supabase channel and bind single listener
-      const channel = supabase.channel(channelName);
+      const subscribers = new Set<(payload: unknown) => void>();
+      let reconnectAttempt = 0;
+      const connect = () => {
+        // First component subscribing: create Supabase channel and bind single listener
+        const channel = supabase.channel(channelName);
 
-      channel.on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: options.table,
-          ...(options.filter ? { filter: options.filter } : {}),
-        },
-        (payload) => {
-          const currentEntry = activeChannelRegistry.get(registryKey);
-          if (currentEntry) {
-            for (const subCallback of currentEntry.subscribers) {
-              try {
-                subCallback(payload);
-              } catch (err) {
-                console.error('[Realtime] Error in subscriber callback:', err);
+        channel.on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: options.table,
+            ...(options.filter ? { filter: options.filter } : {}),
+          },
+          (payload) => {
+            const currentEntry = activeChannelRegistry.get(registryKey);
+            if (currentEntry?.channel === channel) {
+              for (const subCallback of currentEntry.subscribers) {
+                try {
+                  subCallback(payload);
+                } catch (err) {
+                  console.error('[Realtime] Error in subscriber callback:', err);
+                }
               }
             }
           }
-        }
-      );
+        );
 
-      channel.subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          const errObj = err as { message?: string; cause?: { code?: number; wasClean?: boolean } } | undefined;
-          const isCleanClose =
-            status === 'CLOSED' &&
-            (errObj?.cause?.code === 1000 ||
-              errObj?.cause?.code === 1001 ||
-              errObj?.cause?.wasClean === true ||
-              errObj?.message?.includes('socket closed: 1000') ||
-              errObj?.message?.includes('socket closed: 1001'));
-
-          if (!isCleanClose) {
-            console.warn(`[Realtime] Subscription error (${status}) on ${options.table}:`, err);
-            // Evict dead channel from activeChannelRegistry so subsequent mounts establish a fresh channel
-            const currentEntry = activeChannelRegistry.get(registryKey);
-            if (currentEntry && currentEntry.channel === channel) {
-              activeChannelRegistry.delete(registryKey);
-              void supabase.removeChannel(channel);
-            }
+        const newEntry: ChannelSubscriptionEntry = { channel, subscribers };
+        activeChannelRegistry.set(registryKey, newEntry);
+        channel.subscribe((status, err) => {
+          // Ignore late callbacks from channels intentionally removed/replaced.
+          if (activeChannelRegistry.get(registryKey) !== newEntry) return;
+          if (status === 'SUBSCRIBED') {
+            clearTimeout(newEntry.reconnectTimer);
+            newEntry.reconnectTimer = undefined;
+            reconnectAttempt = 0;
+            return;
           }
-        }
-      });
-
-      entry = {
-        channel,
-        subscribers: new Set(),
+          const error = err as { message?: string; cause?: { code?: number; wasClean?: boolean } } | undefined;
+          const cleanClose = error?.cause?.wasClean || [1000, 1001].includes(error?.cause?.code ?? 0) || /socket closed: 100[01]/.test(error?.message || '');
+          if ((status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') && !cleanClose) {
+            console.warn(`[Realtime] Subscription error (${status}) on ${options.table}:`, err);
+          }
+          // Transport errors/timeouts are retried by the SDK. Removing the channel
+          // here destroys its subscribers and prevents that automatic recovery.
+          if (status === 'CLOSED' && !newEntry.reconnectTimer) {
+            newEntry.reconnectTimer = setTimeout(() => {
+              if (activeChannelRegistry.get(registryKey) !== newEntry || !subscribers.size) return;
+              void supabase.removeChannel(channel).then(() => {
+                if (subscribers.size && activeChannelRegistry.get(registryKey) === newEntry) connect();
+              });
+            }, Math.min(1000 * 2 ** reconnectAttempt++, 30000));
+          }
+        });
+        return newEntry;
       };
-      activeChannelRegistry.set(registryKey, entry);
+      entry = connect();
     }
 
     // Register this component's callback
@@ -1627,12 +1758,13 @@ export function useEntityRealtimeSync<T = Record<string, unknown>>(
 
     // Teardown: unregister callback and remove channel ONLY when last subscriber unmounts
     return () => {
+      entry.subscribers.delete(handlePayload);
       const currentEntry = activeChannelRegistry.get(registryKey);
       if (currentEntry) {
-        currentEntry.subscribers.delete(handlePayload);
 
         if (currentEntry.subscribers.size === 0) {
           activeChannelRegistry.delete(registryKey);
+          clearTimeout(currentEntry.reconnectTimer);
           void supabase.removeChannel(currentEntry.channel);
         }
       }

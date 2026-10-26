@@ -254,6 +254,23 @@ describe('Notifications API & NotificationBellPanel (notifications@2.0.0)', () =
       });
     });
 
+    it('renders a lifecycle event and opens its voucher under an authorized entity', async () => {
+      useSessionStore.setState((state) => ({ user: { ...state.user!, entities: ['ATA', 'LTA'] }, activeEntity: 'ATA' }));
+      vi.spyOn(api, 'apiRequest').mockResolvedValue({
+        data: [{ id: 'disb-note', user_id: 'user-1', type: 'disbursement.lifecycle', payload: {
+          request_id: 'voucher-1', entity: 'LTA', action: 'fund', disbursement_number: 'DISB-LTA-001',
+        }, read_at: '2026-10-20T10:00:00Z', created_at: '2026-10-20T09:00:00Z' }],
+        meta: { unread_count: 0 },
+      });
+      render(<NotificationBellPanel />, { wrapper: createWrapper() });
+      fireEvent.click(screen.getByTestId('notification-bell-btn'));
+      const note = await screen.findByTestId('notification-item-disb-note');
+      expect(note).toHaveTextContent('Payment prepared');
+      fireEvent.click(note);
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/disbursements?disbursementId=voucher-1'));
+      expect(useSessionStore.getState().activeEntity).toBe('LTA');
+    });
+
     it('navigates to board view with wrId for QA reroute notification', async () => {
       vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: api.RequestOptions) => {
         if (path.includes('/notifications') && options?.method === 'POST') {

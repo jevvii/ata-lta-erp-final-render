@@ -40,7 +40,18 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-harness');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger-realtime',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -273,7 +284,18 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
   describe('Harness 2: Entity Matching & Tenant Isolation Edge Cases', () => {
     it('handles tenant matching case-insensitively across mixed case entities', () => {
       // User is on 'ATA'
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger-realtime',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       // Incoming payload with lowercase entity 'ata'
       const payloadLower = {
@@ -315,7 +337,18 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
       const lowerUUID = '123e4567-e89b-12d3-a456-426614174000';
       const upperUUID = '123E4567-E89B-12D3-A456-426614174000';
 
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger-realtime',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       // Case A: exact match
       const payloadExact = {
@@ -358,7 +391,18 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
     });
 
     it('probes behaviour when payload contains entity_id: null', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger-realtime',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       const payload = {
         eventType: 'UPDATE',
@@ -385,7 +429,18 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
     });
 
     it('gracefully allows tables without entity fields such as tasks', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-challenger-realtime',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       const taskWithoutEntity = {
         eventType: 'UPDATE',

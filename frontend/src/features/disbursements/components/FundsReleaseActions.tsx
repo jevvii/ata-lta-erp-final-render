@@ -1,5 +1,4 @@
-import { DateInput } from '@/components/ui/date-input';
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -9,21 +8,21 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { DollarSign, CheckCheck } from 'lucide-react';
-import {
-  useReleaseDisbursement,
-  useFundDisbursement,
-} from '../api/useDisbursements';
+import { DollarSign, CreditCard, ShieldAlert, AlertCircle } from 'lucide-react';
+import { useReleaseDisbursement } from '../api/useDisbursements';
+import { FundDisbursementModal } from './FundDisbursementModal';
 import { useSessionStore } from '@/lib/session';
-import { hasPermission } from '@/lib/permissions';
-import type { Disbursement, ReleasePaymentInput } from '../api/types';
+import { isConcurrencyConflictError } from '@/components/common/ConflictResolutionModal';
+import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
+import type { Disbursement } from '../api/types';
+import { useLiveModalContext } from '../lib/useLiveModalContext';
 
 export interface ReleaseFundsModalProps {
   isOpen: boolean;
   disbursement: Disbursement | null;
   onClose: () => void;
   onSuccess?: () => void;
+  onConflict?: (err: unknown) => void;
 }
 
 export function ReleaseFundsModal({
@@ -31,134 +30,194 @@ export function ReleaseFundsModal({
   disbursement,
   onClose,
   onSuccess,
+  onConflict,
 }: ReleaseFundsModalProps) {
-  const { releaseWithBlocking, isPending } = useReleaseDisbursement();
+  const { releaseWithBlocking } = useReleaseDisbursement();
+  const currentUser = useSessionStore((state) => state.user);
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
 
-  const [method, setMethod] = useState('Bank Transfer');
-  const [reference, setReference] = useState('');
-  const [bank, setBank] = useState('');
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0] ?? '');
+  const { captureContext, contextKey } = useLiveModalContext({
+    isOpen,
+    disbursementId: disbursement?.id,
+    version: disbursement?.version,
+  });
 
-  const resetForm = () => {
-    setMethod('Bank Transfer');
-    setReference('');
-    setBank('');
-    setDate(new Date().toISOString().split('T')[0] ?? '');
+  useEffect(() => {
+    isSubmittingRef.current = false;
+    setIsSubmitting(false);
+  }, [contextKey]);
+
+  if (!isOpen || !disbursement) return null;
+
+  const isInvalidLifecycle = disbursement.lifecycle_version !== 2;
+  const isMissingVersion = typeof disbursement.version !== 'number' || disbursement.version < 1;
+
+  const isAdmin = currentUser?.role === 'Admin';
+
+  const canSubmit = !isSubmitting && isAdmin && !isInvalidLifecycle && !isMissingVersion;
+
+  const validate = (): boolean => {
+    if (isInvalidLifecycle) {
+      setError(
+        'This saved voucher is view-only. Create a new request to use the current workflow.'
+      );
+      return false;
+    }
+    if (isMissingVersion) {
+      setError('Voucher version metadata is missing or invalid.');
+      return false;
+    }
+    if (!isAdmin) {
+      setError('Only Admin can release a disbursement.');
+      return false;
+    }
+    setError('');
+    return true;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!disbursement) return;
+    if (isSubmittingRef.current) return;
+    if (!validate()) return;
 
-    const payload: ReleasePaymentInput = {
-      method: method.trim() || undefined,
-      reference: reference.trim() || undefined,
-      bank: bank.trim() || undefined,
-      date: date || undefined,
-    };
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    const { startId, startVersion, isStale } = captureContext();
 
     try {
+      // In v2, release sends ONLY expectedVersion. Prepared payment details are immutable during sanction.
       await releaseWithBlocking({
-        id: disbursement.id,
-        data: payload,
+        id: startId!,
+        expectedVersion: startVersion!,
       });
-      resetForm();
+
+      if (isStale()) return;
+
       onClose();
       if (onSuccess) onSuccess();
-    } catch {
-      // Handled via BlockingActionModal
+    } catch (err: unknown) {
+      if (isStale()) return;
+
+      if (isConcurrencyConflictError(err)) {
+        useBlockingModalStore.getState().close();
+        onClose();
+        if (onConflict) {
+          onConflict(err);
+          return;
+        }
+      }
+      setError(
+        err instanceof Error ? err.message : 'Failed to sanction payment release. Please retry.'
+      );
+    } finally {
+      if (!isStale()) {
+        isSubmittingRef.current = false;
+        setIsSubmitting(false);
+      }
     }
   };
 
-  if (!disbursement) return null;
+  const disbNumber =
+    disbursement.disbursement_number ||
+    disbursement.disbursementNumber ||
+    `DISB-${disbursement.id.slice(0, 8)}`;
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent
-        className="max-w-md p-6 space-y-4"
-        data-testid="release-funds-modal"
-      >
+    <Dialog open={isOpen} onOpenChange={(open) => !open && !isSubmitting && onClose()}>
+      <DialogContent className="max-w-md p-6 space-y-4" data-testid="release-funds-modal">
         <DialogHeader>
-          <DialogTitle className="text-base font-bold text-slate-900">
-            Release Funds for Payment
+          <DialogTitle className="text-base font-bold text-ink flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-primary" />
+            <span>Sanction Payment Release</span>
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
-            Record payment details to transition disbursement{' '}
-            <span className="font-mono font-semibold text-slate-800">
-              {disbursement.disbursement_number ||
-                disbursement.disbursementNumber ||
-                disbursement.id}
-            </span>{' '}
-            from Approved to Released.
+          <DialogDescription className="text-xs text-muted">
+            Confirm and sanction actual payment handover / check release for voucher{' '}
+            <span className="tabular-nums font-semibold text-ink">{disbNumber}</span>.
+            Sanctioning release records actual execution and handover to the recipient.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-3" data-testid="release-funds-form">
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-md text-xs space-y-1">
+          <div className="p-3 bg-canvas border border-border rounded-[6px] text-xs space-y-1">
             <div className="flex justify-between">
-              <span className="text-slate-500">Amount to Release:</span>
-              <span className="font-bold text-slate-900">
+              <span className="text-muted">Amount to Release:</span>
+              <span className="font-bold text-ink" data-testid="release-amount">
                 ₱{disbursement.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500">Fund Source:</span>
-              <span className="font-semibold text-blue-700">
+              <span className="text-muted">Fund Source:</span>
+              <span className="font-semibold text-ink">
                 {disbursement.fund_source || disbursement.fundSource}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Category:</span>
+              <span className="font-medium text-ink">{disbursement.category}</span>
+            </div>
+          </div>
+
+          {/* Prepared payment instrument details (read-only) */}
+          <div className="p-3 bg-primary-light/60 border border-blue-300 rounded-[6px] space-y-2 text-xs">
+            <div className="flex items-center gap-1.5 font-semibold text-ink">
+              <CreditCard className="h-4 w-4 text-primary" />
+              <span>Prepared Payment Instrument</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-primary-hover pt-1 border-t border-border">
+              <div>
+                <span className="text-muted block">Method:</span>
+                <span className="font-semibold" data-testid="prep-method">
+                  {disbursement.payment_method || disbursement.paymentMethod || 'N/A'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted block">Reference:</span>
+                <span className="font-semibold tabular-nums" data-testid="prep-reference">
+                  {disbursement.payment_reference || disbursement.paymentReference || 'N/A'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted block">Bank / Source:</span>
+                <span className="font-semibold" data-testid="prep-bank">
+                  {disbursement.payment_bank || disbursement.paymentBank || 'N/A'}
+                </span>
+              </div>
+              <div>
+                <span className="text-muted block">Prepared Date:</span>
+                <span className="font-semibold" data-testid="prep-date">
+                  {disbursement.payment_date || disbursement.paymentDate || 'N/A'}
+                </span>
+              </div>
+            </div>
+            {(disbursement.funded_by_name || disbursement.payment_processed_by_name) && (
+              <div className="text-xs text-muted pt-1 border-t border-border">
+                <span>
+                  Prepared by:{' '}
+                  {disbursement.funded_by_name || disbursement.payment_processed_by_name}
+                </span>
+              </div>
+            )}
+            <div className="flex items-center gap-1 text-xs text-muted pt-1 border-t border-border">
+              <ShieldAlert className="h-3 w-3 shrink-0" />
+              <span>
+                Prepared instrument is locked. Release records actual payment handover without
+                replacing details.
               </span>
             </div>
           </div>
 
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Payment Method</label>
-            <select
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-              className="w-full text-xs p-2 border rounded-md bg-white border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              data-testid="select-release-method"
+          {error && (
+            <div
+              className="p-2.5 bg-danger-surface border border-danger-border rounded-[6px] text-xs text-danger flex items-center gap-1.5"
+              role="alert"
             >
-              <option value="Bank Transfer">Bank Transfer</option>
-              <option value="Check">Check</option>
-              <option value="Cash">Cash</option>
-              <option value="GCash / Maya">GCash / Maya</option>
-              <option value="Other">Other</option>
-            </select>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
-              Payment Reference / Check Number
-            </label>
-            <Input
-              type="text"
-              placeholder="e.g. CHK-2026-9021 or Ref # 882910"
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              data-testid="input-release-reference"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Bank / Institution</label>
-            <Input
-              type="text"
-              placeholder="e.g. BDO, BPI, Metrobank"
-              value={bank}
-              onChange={(e) => setBank(e.target.value)}
-              data-testid="input-release-bank"
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">Release Date</label>
-            <DateInput
-              aria-label="Release date"
-              type="date"
-              value={date}
-              onValueChange={(value) => setDate(value)}
-              data-testid="input-release-date"
-            />
-          </div>
+              <AlertCircle className="h-4 w-4 text-danger-solid shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
           <DialogFooter className="flex items-center justify-end gap-2 pt-2">
             <Button
@@ -166,7 +225,7 @@ export function ReleaseFundsModal({
               variant="ghost"
               size="sm"
               onClick={onClose}
-              disabled={isPending}
+              disabled={isSubmitting}
               className="text-xs"
             >
               Cancel
@@ -175,11 +234,11 @@ export function ReleaseFundsModal({
               type="submit"
               variant="default"
               size="sm"
-              disabled={isPending}
+              disabled={!canSubmit}
               data-testid="submit-release-funds-btn"
-              className="text-xs font-semibold bg-purple-600 hover:bg-purple-700 text-white"
+              className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isPending ? 'Processing...' : 'Confirm Release'}
+              {isSubmitting ? 'Sanctioning...' : 'Sanction Release'}
             </Button>
           </DialogFooter>
         </form>
@@ -193,65 +252,83 @@ export interface FundsReleaseActionsProps {
   onSuccess?: () => void;
 }
 
-export function FundsReleaseActions({
-  disbursement,
-  onSuccess,
-}: FundsReleaseActionsProps) {
-  const permissions = useSessionStore((state) => state.permissions);
-  const canMarkReleased = hasPermission(permissions, 'disbursement:mark_released');
+export function FundsReleaseActions({ disbursement, onSuccess }: FundsReleaseActionsProps) {
+  const currentUser = useSessionStore((state) => state.user);
+  const isAdmin = currentUser?.role === 'Admin';
+  const isAccounting = Boolean(
+    currentUser?.role === 'Accounting' || currentUser?.departments?.includes('Accounting')
+  );
 
-  const { fundWithBlocking } = useFundDisbursement();
   const [isReleaseModalOpen, setIsReleaseModalOpen] = useState(false);
+  const [isFundModalOpen, setIsFundModalOpen] = useState(false);
 
-  if (!canMarkReleased) {
+  // Legacy records have no financial actions
+  if (disbursement.lifecycle_version === 1) {
     return null;
   }
 
-  const handleFund = async () => {
-    try {
-      await fundWithBlocking(disbursement.id);
-      if (onSuccess) onSuccess();
-    } catch {
-      // Handled via BlockingActionModal
-    }
-  };
+  const canShowFund = disbursement.status === 'Approved' && (isAdmin || isAccounting);
+  const canShowRelease = disbursement.status === 'Funded' && isAdmin;
+
+  if (!canShowFund && !canShowRelease) {
+    return null;
+  }
 
   return (
-    <div className="inline-flex items-center gap-1.5" data-testid="funds-release-actions">
-      {disbursement.status === 'Approved' && (
-        <>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setIsReleaseModalOpen(true)}
-            className="text-xs h-7 text-purple-700 border-purple-200 hover:bg-purple-50"
-            data-testid={`release-btn-${disbursement.id}`}
-          >
-            <DollarSign className="h-3.5 w-3.5 mr-1" />
-            Release Funds
-          </Button>
-          <ReleaseFundsModal
-            isOpen={isReleaseModalOpen}
-            disbursement={disbursement}
-            onClose={() => setIsReleaseModalOpen(false)}
-            onSuccess={onSuccess}
-          />
-        </>
-      )}
-
-      {disbursement.status === 'Released' && (
+    <div className="flex items-center gap-2" data-testid="funds-release-actions">
+      {/* Approved -> Prepare Payment (Accounting or Admin) */}
+      {canShowFund && (
         <Button
           type="button"
-          variant="outline"
           size="sm"
-          onClick={handleFund}
-          className="text-xs h-7 text-emerald-700 border-emerald-200 hover:bg-emerald-50"
-          data-testid={`fund-btn-${disbursement.id}`}
+          onClick={() => setIsFundModalOpen(true)}
+          className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse"
+          data-testid="action-fund-btn"
         >
-          <CheckCheck className="h-3.5 w-3.5 mr-1" />
-          Mark Funded
+          <DollarSign className="h-3.5 w-3.5 mr-1" />
+          Prepare Payment
         </Button>
+      )}
+
+      {/* Funded -> Sanction Payment Release (Admin only, including the preparer) */}
+      {disbursement.status === 'Funded' && isAdmin && (
+        <Button
+          type="button"
+          size="sm"
+          title="Sanction payment release"
+          onClick={() => setIsReleaseModalOpen(true)}
+          className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse disabled:opacity-50 disabled:cursor-not-allowed"
+          data-testid="action-release-btn"
+        >
+          <DollarSign className="h-3.5 w-3.5 mr-1" />
+          Sanction Release
+        </Button>
+      )}
+
+      {/* Fund Modal */}
+      {isFundModalOpen && (
+        <FundDisbursementModal
+          isOpen={isFundModalOpen}
+          disbursement={disbursement}
+          onClose={() => setIsFundModalOpen(false)}
+          onSuccess={() => {
+            setIsFundModalOpen(false);
+            if (onSuccess) onSuccess();
+          }}
+        />
+      )}
+
+      {/* Release Modal */}
+      {isReleaseModalOpen && (
+        <ReleaseFundsModal
+          isOpen={isReleaseModalOpen}
+          disbursement={disbursement}
+          onClose={() => setIsReleaseModalOpen(false)}
+          onSuccess={() => {
+            setIsReleaseModalOpen(false);
+            if (onSuccess) onSuccess();
+          }}
+        />
       )}
     </div>
   );

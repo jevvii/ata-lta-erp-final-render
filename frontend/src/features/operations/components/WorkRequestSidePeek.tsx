@@ -25,6 +25,9 @@ import {
   FileSpreadsheet,
   FileImage,
   FileCode,
+  Receipt,
+  CreditCard,
+  Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,6 +44,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   useWorkRequestDetail,
   useWorkRequestMutations,
+  useWorkRequestRelated,
 } from '../api/useWorkRequests';
 import { useWorkRequestTasks } from '../api/useTasks';
 import { useDocuments, useDocumentDownloadUrl } from '../api/useDocuments';
@@ -104,33 +108,155 @@ export function WorkRequestSidePeek({
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
 
+  const activeEntity = useSessionStore((state) => state.activeEntity);
+
+  // Scope owner tracking (Directive 1, Final Review):
+  // Guard against entity or account switching while sidepeek is open.
+  const [peekScopeOwner, setPeekScopeOwner] = useState<{
+    id: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(() => {
+    if (isOpen && workRequestId) {
+      return {
+        id: workRequestId,
+        entity: activeEntity,
+        userId: user?.id ?? null,
+      };
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (isOpen && workRequestId) {
+      setPeekScopeOwner((prev) => {
+        if (!prev || prev.id !== workRequestId) {
+          return {
+            id: workRequestId,
+            entity: activeEntity,
+            userId: user?.id ?? null,
+          };
+        }
+        return prev;
+      });
+    } else if (!isOpen) {
+      setPeekScopeOwner(null);
+    }
+  }, [isOpen, workRequestId, activeEntity, user?.id]);
+
+  const isPeekScopeStale = Boolean(
+    peekScopeOwner &&
+      (peekScopeOwner.entity !== activeEntity ||
+        peekScopeOwner.userId !== (user?.id ?? null))
+  );
+
+  useEffect(() => {
+    if (isPeekScopeStale && isOpen) {
+      onClose?.();
+    }
+  }, [isPeekScopeStale, isOpen, onClose]);
+
   // Fetch work request detail
   const {
-    data: workRequest,
+    data: rawWorkRequest,
     isLoading: isLoadingWr,
+    isError: isWrError,
+    isPlaceholderData: isWrPlaceholder,
+    error: wrError,
   } = useWorkRequestDetail(workRequestId || '', {
-    enabled: Boolean(isOpen && workRequestId),
+    enabled: Boolean(isOpen && workRequestId && !isPeekScopeStale),
   });
+
+  // Stable denied scope tracking (Directive 1 & Coordinator Interim Review):
+  // Preserve access-lost state even when query cache is invalidated or cleared,
+  // until the targeted workRequestId, entity, or user account changes.
+  const [deniedScope, setDeniedScope] = useState<{
+    id: string;
+    entity: string | null;
+    userId: string | null;
+  } | null>(null);
+
+  const isScopeMatch = Boolean(
+    deniedScope &&
+    deniedScope.id === workRequestId &&
+    deniedScope.entity === activeEntity &&
+    deniedScope.userId === (user?.id ?? null)
+  );
+
+  const isCurrentWrErrorDenied = Boolean(
+    isWrError &&
+      ((wrError as { status?: number })?.status === 403 ||
+        (wrError as { status?: number })?.status === 404 ||
+        String(wrError?.message || '').includes('403') ||
+        String(wrError?.message || '').includes('404'))
+  );
+
+  const isWrDenied = Boolean(isScopeMatch || isCurrentWrErrorDenied);
+
+  // Suppress confidential child queries when access is denied or scope is stale
+  const canFetchChildren = Boolean(isOpen && workRequestId && !isWrDenied && !isPeekScopeStale);
+
+  // Support restored membership on fresh successful authorized read (Directive 2):
+  // When genuinely fresh, non-null matching record arrives without error, clear the denied latch.
+  useEffect(() => {
+    if (rawWorkRequest && rawWorkRequest.id === workRequestId && !isWrError && !isWrPlaceholder && deniedScope) {
+      setDeniedScope(null);
+    }
+  }, [rawWorkRequest, workRequestId, isWrError, isWrPlaceholder, deniedScope]);
+
+  // When access denial is observed, record denied scope and purge confidential data
+  useEffect(() => {
+    if (isCurrentWrErrorDenied && workRequestId) {
+      setDeniedScope({
+        id: workRequestId,
+        entity: activeEntity,
+        userId: user?.id ?? null,
+      });
+
+      // Cancel in-flight queries and overwrite WR detail cache with null
+      // CRITICAL: Never call queryClient.removeQueries on workRequestDetail(workRequestId),
+      // as removing the driving query resets the active observer to an indefinite 'loading' state.
+      void queryClient.cancelQueries({ queryKey: operationsKeys.workRequestDetail(workRequestId) });
+      queryClient.setQueryData(operationsKeys.workRequestDetail(workRequestId), null);
+      queryClient.removeQueries({ queryKey: operationsKeys.tasks(workRequestId), exact: false });
+      queryClient.removeQueries({ queryKey: operationsKeys.workRequestRelated(workRequestId), exact: false });
+    }
+  }, [isCurrentWrErrorDenied, workRequestId, activeEntity, user?.id, queryClient]);
+
+  // If work request was denied, do not hold onto stale/observer data
+  const workRequest = isWrDenied ? null : rawWorkRequest;
 
   const { statusOptimistic, isStatusOptimisticPending: isUpdatingWr } = useWorkRequestMutations();
 
-  // Fetch tasks
+  // Fetch tasks (suppressed when WR is denied)
   const {
     data: tasks = [],
     isLoading: isLoadingTasks,
   } = useWorkRequestTasks(workRequestId || '', {
-    enabled: Boolean(isOpen && workRequestId),
+    enabled: canFetchChildren,
   });
 
-  // Fetch documents
+  // Fetch documents (suppressed when WR is denied)
   const { data: rawDocs, isLoading: isLoadingDocs } = useDocuments(
     workRequestId ? { workRequestId } : undefined,
-    { enabled: Boolean(isOpen && workRequestId) }
+    { enabled: canFetchChildren }
   );
 
   const documents = useMemo(() => {
     return Array.isArray(rawDocs) ? rawDocs : rawDocs?.data ?? [];
   }, [rawDocs]);
+
+  // Fetch WR-level related records: 360° Shared Project Team Visibility (Directive 4)
+  const {
+    data: wrRelatedData,
+    isLoading: isLoadingWrRelated,
+  } = useWorkRequestRelated(workRequestId || '', {
+    enabled: canFetchChildren,
+  });
+
+  const relatedInvoices = useMemo(() => wrRelatedData?.invoices || [], [wrRelatedData]);
+  const relatedDisbursements = useMemo(() => wrRelatedData?.disbursements || [], [wrRelatedData]);
+  const relatedTransmittals = useMemo(() => wrRelatedData?.transmittals || [], [wrRelatedData]);
 
   // Fetch team directory for name resolution (UAT2-5)
   const { data: rawTeam } = useTeam();
@@ -271,7 +397,67 @@ export function WorkRequestSidePeek({
     return Math.round((completedTasksCount / tasks.length) * 100);
   }, [completedTasksCount, tasks.length]);
 
-  if (!isOpen || !workRequestId) return null;
+  if (!isOpen || !workRequestId || isPeekScopeStale) return null;
+
+  if (isWrDenied) {
+    return (
+      <div
+        className="fixed inset-0 z-50 overflow-hidden"
+        data-testid="wr-side-peek"
+        aria-label="Work Request Side Peek"
+        role="region"
+      >
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity duration-200"
+          onClick={onClose}
+          aria-hidden="true"
+          data-testid="side-peek-backdrop"
+        />
+
+        <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10 z-50">
+          <div className="w-screen max-w-2xl md:max-w-3xl bg-[#FFFFFF] shadow-2xl border-l border-[#E2E8F0] flex flex-col h-full animate-in slide-in-from-right duration-200 text-[#1E293B]">
+            <div className="px-6 py-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
+              <h2 className="text-sm font-bold text-[#1E293B]">Work Request</h2>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={onClose}
+                className="text-[#475569] hover:text-[#1E293B] rounded-[6px]"
+                data-testid="side-peek-close-btn"
+                aria-label="Close Side Peek"
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div
+              className="flex-1 overflow-y-auto p-12 flex flex-col items-center justify-center text-center space-y-3"
+              data-testid="wr-access-lost"
+            >
+              <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-[#475569] mb-1">
+                <Lock className="w-5 h-5" />
+              </div>
+              <h3 className="text-sm font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs leading-relaxed">
+                You are not an assigned member of this project team, or access has been revoked.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+                className="text-xs rounded-[6px] border-[#E2E8F0] mt-2"
+                data-testid="access-lost-close-btn"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -290,10 +476,10 @@ export function WorkRequestSidePeek({
         />
 
         {/* Slide-out Drawer Panel */}
-        <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10">
-          <div className="w-screen max-w-2xl md:max-w-3xl bg-white shadow-2xl border-l border-slate-200 flex flex-col h-full animate-in slide-in-from-right duration-200 text-slate-800">
+        <div className="fixed inset-y-0 right-0 max-w-full flex pl-6 sm:pl-10 z-50">
+          <div className="w-screen max-w-2xl md:max-w-3xl bg-[#FFFFFF] shadow-2xl border-l border-[#E2E8F0] flex flex-col h-full animate-in slide-in-from-right duration-200 text-[#1E293B]">
             {/* Header: Notion-style Breadcrumb & Actions */}
-            <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/80 backdrop-blur-sm flex items-start justify-between gap-4">
+            <div className="px-6 py-4 border-b border-[#E2E8F0] bg-[#F8FAFC] flex items-start justify-between gap-4">
               <div className="space-y-2 flex-1 min-w-0">
                 {/* Meta badges & Notion-like status dropdown */}
                 <div className="flex flex-wrap items-center gap-2">
@@ -302,7 +488,7 @@ export function WorkRequestSidePeek({
                       <Badge
                         variant={workRequest.entity === 'LTA' ? 'lta' : 'ata'}
                         size="compact"
-                        className="font-bold tracking-wider"
+                        className="font-bold tracking-wider rounded-[6px] text-xs"
                       >
                         {workRequest.entity}
                       </Badge>
@@ -315,7 +501,7 @@ export function WorkRequestSidePeek({
                               : 'secondary'
                         }
                         size="compact"
-                        className="font-medium"
+                        className="font-medium rounded-[6px] text-xs"
                       >
                         {workRequest.priority} Priority
                       </Badge>
@@ -326,12 +512,12 @@ export function WorkRequestSidePeek({
                         const PhaseIcon = phaseInfo.Icon;
                         return (
                           <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${phaseInfo.badgeClass}`}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] text-xs font-semibold border ${phaseInfo.badgeClass}`}
                             data-testid="side-peek-phase"
                           >
                             <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
                             <PhaseIcon className="w-3.5 h-3.5 shrink-0" />
-                            <span>Phase: {workRequest.phase.replace('_', ' ')}</span>
+                            <span>Phase: {workRequest.phase ? workRequest.phase.replace('_', ' ') : phaseInfo.label}</span>
                           </span>
                         );
                       })()}
@@ -346,14 +532,13 @@ export function WorkRequestSidePeek({
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <button
-                                  type="button"
-                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer hover:shadow-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/30 ${statusInfo.badgeClass}`}
+    type="button"
+    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] text-xs font-semibold border ${statusInfo.badgeClass} cursor-pointer hover:opacity-90 focus:outline-none`}
                                   data-testid="side-peek-status"
                                   data-admin-status-dropdown="true"
                                   title="Change Work Request Status (Admin: Unconstrained)"
                                   disabled={isUpdatingWr}
                                 >
-                                  <span className={`w-2 h-2 rounded-full ${statusInfo.dotClass}`} />
                                   <StatusIcon className="w-3.5 h-3.5 shrink-0" />
                                   <span>{statusInfo.label}</span>
                                   <ChevronDown className="w-3.5 h-3.5 ml-0.5 opacity-70" />
@@ -361,15 +546,15 @@ export function WorkRequestSidePeek({
                               </DropdownMenuTrigger>
                               <DropdownMenuContent
                                 align="start"
-                                className="w-64 p-1.5 bg-white shadow-xl border border-slate-200 rounded-lg max-h-96 overflow-y-auto z-50"
+                                className="w-64 p-1.5 bg-[#FFFFFF] shadow-float border-[#E2E8F0] rounded-[6px] max-h-96 overflow-y-auto z-50"
                               >
-                                <DropdownMenuLabel className="text-[11px] font-bold uppercase tracking-wider text-slate-500 px-2 py-1 flex items-center justify-between">
+                                <DropdownMenuLabel className="text-xs font-bold tracking-normal text-[#475569] px-2 py-1 flex items-center justify-between">
                                   <span>Set Work Request Status</span>
-                                  <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded font-normal">
+                                  <span className="text-xs text-[#FFFFFF] bg-[#1D4ED8] px-1.5 py-0.5 rounded-[6px] font-normal">
                                     Admin Free Change
                                   </span>
                                 </DropdownMenuLabel>
-                                <DropdownMenuSeparator className="my-1 bg-slate-100" />
+                                <DropdownMenuSeparator className="my-1 bg-[#1D4ED8]" />
                                 {WORK_REQUEST_STATUS_OPTIONS.map((statusOption) => {
                                   const optInfo = getStatusBadgeInfo(statusOption);
                                   const OptIcon = optInfo.Icon;
@@ -379,19 +564,18 @@ export function WorkRequestSidePeek({
                                     <DropdownMenuItem
                                       key={statusOption}
                                       onClick={() => handleStatusChange(statusOption)}
-                                      className={`flex items-center justify-between px-2.5 py-2 text-xs rounded-md cursor-pointer transition-colors ${
+                                      className={`flex items-center justify-between px-2.5 py-2 text-xs rounded-[6px] cursor-pointer  ${
                                         isCurrent
-                                          ? 'bg-slate-100 font-bold text-slate-900'
-                                          : 'text-slate-700 hover:bg-slate-50'
+                                          ? 'bg-[#1D4ED8] font-bold text-[#FFFFFF]'
+                                          : 'text-[#1E293B] hover:bg-[#F8FAFC]'
                                       }`}
                                       data-testid={`status-option-${statusOption}`}
                                     >
                                       <div className="flex items-center gap-2">
-                                        <span className={`w-2 h-2 rounded-full ${optInfo.dotClass}`} />
-                                        <OptIcon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                                        <OptIcon className="w-3.5 h-3.5 shrink-0" />
                                         <span className="truncate">{statusOption}</span>
                                       </div>
-                                      {isCurrent && <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                                      {isCurrent && <Check className="w-3.5 h-3.5 text-[#FFFFFF] shrink-0" />}
                                     </DropdownMenuItem>
                                   );
                                 })}
@@ -403,14 +587,13 @@ export function WorkRequestSidePeek({
                         // Readonly status badge for non-admin
                         return (
                           <span
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border ${statusInfo.badgeClass}`}
-                            data-testid="side-peek-status"
+    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[6px] text-xs font-semibold border ${statusInfo.badgeClass}`}
+    data-testid="side-peek-status"
                             title="Work request status (Admin only can modify)"
                           >
-                            <span className={`w-2 h-2 rounded-full ${statusInfo.dotClass}`} />
                             <StatusIcon className="w-3.5 h-3.5 shrink-0" />
                             <span>{statusInfo.label}</span>
-                            <Lock className="w-3 h-3 ml-0.5 text-slate-400" />
+                            <Lock className="w-3 h-3 ml-0.5 text-[#475569]" />
                           </span>
                         );
                       })()}
@@ -420,7 +603,7 @@ export function WorkRequestSidePeek({
 
                 {/* Big, clean Notion-style Title */}
                 <h2
-                  className="text-xl font-bold text-slate-900 leading-snug break-words"
+                  className="text-xl font-semibold tracking-tight text-[#1E293B] leading-snug break-words"
                   data-testid="side-peek-title"
                 >
                   {isLoadingWr ? 'Loading Work Request...' : workRequest?.title || 'Work Request'}
@@ -439,11 +622,11 @@ export function WorkRequestSidePeek({
                       onViewInBoard(workRequestId);
                       onClose();
                     }}
-                    className="text-xs gap-1.5 font-medium border-slate-300 hover:bg-slate-100 text-slate-700"
+                    className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1.5"
                     data-testid="side-peek-board-btn"
                     title="Open in Kanban Board"
                   >
-                    <Columns className="h-3.5 w-3.5 text-blue-600" />
+                    <Columns className="h-3.5 w-3.5 text-[#1E293B]" />
                     Board
                   </Button>
                 )}
@@ -456,11 +639,11 @@ export function WorkRequestSidePeek({
                       onEdit(workRequest);
                       onClose();
                     }}
-                    className="text-xs gap-1.5 font-medium border-slate-300 hover:bg-slate-100 text-slate-700"
+                    className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1.5"
                     data-testid="side-peek-edit-btn"
                     title="Edit Work Request"
                   >
-                    <Edit className="h-3.5 w-3.5 text-slate-600" />
+                    <Edit className="h-3.5 w-3.5 text-[#1E293B]" />
                     Edit
                   </Button>
                 )}
@@ -469,7 +652,7 @@ export function WorkRequestSidePeek({
                   variant="ghost"
                   size="icon-sm"
                   onClick={onClose}
-                  className="text-slate-400 hover:text-slate-700 ml-1 rounded-lg"
+                  className="text-[#475569] hover:text-[#1E293B] hover:bg-[#F8FAFC] ml-1 rounded-[6px]"
                   data-testid="side-peek-close-btn"
                   aria-label="Close Side Peek"
                 >
@@ -481,8 +664,8 @@ export function WorkRequestSidePeek({
             {/* Drawer Content */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
               {isLoadingWr ? (
-                <div className="p-12 text-center text-sm text-slate-500">
-                  <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <div className="p-12 text-center text-sm text-[#475569]">
+                  <div className="w-8 h-8 border-[#E2E8F0] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
                   Loading work request details...
                 </div>
               ) : workRequest ? (
@@ -490,10 +673,10 @@ export function WorkRequestSidePeek({
                   {/* Completed Work Request Read-Only Lock Banner */}
                   {workRequest.status === 'Completed' && (
                     <div
-                      className="bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3.5 py-2.5 rounded-xl flex items-center gap-2.5 shadow-2xs"
+                      className="bg-[#F8FAFC] border-[#E2E8F0] text-[#1E293B] text-xs px-3.5 py-2.5 rounded-[6px] flex items-center gap-2.5"
                       data-testid="completed-wr-lock-banner"
                     >
-                      <Lock className="h-4 w-4 text-amber-600 shrink-0" />
+                      <Lock className="h-4 w-4 text-[#1E293B] shrink-0" />
                       <span>Completed Work Request: This record is finalized and locked against edits or mutations.</span>
                     </div>
                   )}
@@ -501,14 +684,14 @@ export function WorkRequestSidePeek({
                   {/* 1. Gate Blocker Warning */}
                   {blockerInfo.hasBlockers && (
                     <div
-                      className="p-4 bg-amber-50/90 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1.5 shadow-2xs"
+                      className="p-4 bg-[#FFFFFF] border-2 border-[#FCA5A5] rounded-[6px] text-xs text-[#DC2626] space-y-1.5"
                       data-testid="side-peek-blocker-alert"
                     >
-                      <div className="flex items-center gap-2 font-bold text-sm text-amber-900">
-                        <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                      <div className="flex items-center gap-2 font-bold text-sm text-[#DC2626]">
+                        <AlertTriangle className="h-4 w-4 text-[#DC2626] shrink-0" />
                         <span>Phase Advancement Blocked</span>
                       </div>
-                      <p className="text-xs text-amber-800 pl-6 leading-relaxed">
+                      <p className="text-xs text-[#DC2626] pl-6 leading-relaxed">
                         {blockerInfo.incomplete.length} task(s) in phase &quot;
                         {workRequest.phase.replace('_', ' ')}&quot; must be completed before advancing.
                       </p>
@@ -516,21 +699,21 @@ export function WorkRequestSidePeek({
                   )}
 
                   {/* 2. Notion-Style Properties Grid */}
-                  <div className="bg-slate-50/70 border border-slate-200 rounded-xl p-4.5 space-y-3 shadow-2xs">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1.5">
-                      <Layers className="h-3.5 w-3.5 text-slate-400" />
+                  <div className="bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] p-4 space-y-3">
+                    <h3 className="text-xs font-bold tracking-normal text-[#1E293B] mb-1 flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-[#1E293B]" />
                       Properties
                     </h3>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
                       {/* Client */}
-                      <div className="flex items-center justify-between p-2 bg-white border border-slate-200/80 rounded-lg">
-                        <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                          <Building className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                      <div className="flex items-center justify-between p-2 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
+                        <span className="text-[#475569] font-medium flex items-center gap-1.5">
+                          <Building className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                           Client
                         </span>
                         <span
-                          className="font-bold text-slate-800 truncate max-w-[160px]"
+                          className="font-bold text-[#1E293B] truncate max-w-[160px]"
                           data-testid="side-peek-client"
                         >
                           {workRequest.clientName || '—'}
@@ -538,12 +721,12 @@ export function WorkRequestSidePeek({
                       </div>
 
                       {/* Due Date */}
-                      <div className="flex items-center justify-between p-2 bg-white border border-slate-200/80 rounded-lg">
-                        <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                          <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                      <div className="flex items-center justify-between p-2 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
+                        <span className="text-[#475569] font-medium flex items-center gap-1.5">
+                          <Calendar className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                           Due Date
                         </span>
-                        <span className="font-semibold text-slate-800">
+                        <span className="font-semibold text-[#1E293B]">
                           {workRequest.dueDate
                             ? new Date(workRequest.dueDate).toLocaleDateString()
                             : 'No due date'}
@@ -551,13 +734,13 @@ export function WorkRequestSidePeek({
                       </div>
 
                       {/* Assigned Lead */}
-                      <div className="flex items-center justify-between p-2 bg-white border border-slate-200/80 rounded-lg">
-                        <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                          <User className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                      <div className="flex items-center justify-between p-2 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
+                        <span className="text-[#475569] font-medium flex items-center gap-1.5">
+                          <User className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                           Assigned Lead
                         </span>
                         <span
-                          className="font-bold text-slate-800 truncate max-w-[160px]"
+                          className="font-bold text-[#1E293B] truncate max-w-[160px]"
                           data-testid="side-peek-assignee"
                         >
                           {assignedLeadName}
@@ -565,12 +748,12 @@ export function WorkRequestSidePeek({
                       </div>
 
                       {/* Created Date */}
-                      <div className="flex items-center justify-between p-2 bg-white border border-slate-200/80 rounded-lg">
-                        <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                          <Clock className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                      <div className="flex items-center justify-between p-2 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
+                        <span className="text-[#475569] font-medium flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                           Created Date
                         </span>
-                        <span className="font-medium text-slate-700">
+                        <span className="font-medium text-[#1E293B]">
                           {workRequest.createdAt
                             ? new Date(workRequest.createdAt).toLocaleDateString()
                             : 'N/A'}
@@ -579,9 +762,9 @@ export function WorkRequestSidePeek({
 
                       {/* Co-Assignees */}
                       {coAssigneeNames.length > 0 && (
-                        <div className="sm:col-span-2 p-2.5 bg-white border border-slate-200/80 rounded-lg">
-                          <span className="text-[11px] uppercase font-bold text-slate-400 block mb-1.5 flex items-center gap-1.5">
-                            <Users className="h-3.5 w-3.5 text-slate-400" />
+                        <div className="sm:col-span-2 p-2.5 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
+                          <span className="text-xs uppercase font-bold text-[#475569] block mb-1.5 flex items-center gap-1.5">
+                            <Users className="h-3.5 w-3.5 text-[#475569]" />
                             Team Members / Co-Assignees
                           </span>
                           <div className="flex flex-wrap gap-1.5">
@@ -590,10 +773,10 @@ export function WorkRequestSidePeek({
                                 key={`${name}-${idx}`}
                                 variant="secondary"
                                 size="compact"
-                                className="text-xs bg-slate-100 font-medium text-slate-800 border-slate-300"
+                                className="text-xs rounded-[6px] bg-[#F8FAFC] font-medium text-[#1E293B] border-[#E2E8F0]"
                                 data-testid="side-peek-co-assignee"
                               >
-                                <Users className="h-2.5 w-2.5 mr-1 text-slate-500" />
+                                <Users className="h-2.5 w-2.5 mr-1 text-[#475569]" />
                                 {name}
                               </Badge>
                             ))}
@@ -605,13 +788,13 @@ export function WorkRequestSidePeek({
 
                   {/* 3. Description & Objectives */}
                   <div className="space-y-2">
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                      <FileText className="h-3.5 w-3.5 text-slate-400" />
+                    <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-1.5">
+                      <FileText className="h-3.5 w-3.5 text-[#475569]" />
                       Description & Objectives
                     </h4>
-                    <div className="p-4 bg-white border border-slate-200 rounded-xl text-sm text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs min-h-[60px]">
+                    <div className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B] whitespace-pre-wrap leading-relaxed min-h-[60px]">
                       {workRequest.description || (
-                        <span className="text-slate-400 italic">No description provided for this work request.</span>
+                        <span className="text-[#475569] italic">No description provided for this work request.</span>
                       )}
                     </div>
                   </div>
@@ -619,12 +802,12 @@ export function WorkRequestSidePeek({
                   {/* 4. Tasks Breakdown with Inspection Affordance */}
                   <div className="space-y-3" data-testid="side-peek-tasks">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-                        <CheckSquare className="h-4 w-4 text-indigo-600" />
+                      <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-2">
+                        <CheckSquare className="h-4 w-4 text-[#1E293B]" />
                         <span>Tasks Breakdown ({completedTasksCount}/{tasks.length})</span>
                       </h4>
                       {tasks.length > 0 && (
-                        <span className="text-xs font-semibold text-slate-600">
+                        <span className="text-xs font-semibold text-[#1E293B]">
                           {progressPercentage}% Complete
                         </span>
                       )}
@@ -632,24 +815,24 @@ export function WorkRequestSidePeek({
 
                     {/* Progress Bar */}
                     {tasks.length > 0 && (
-                      <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200/60">
+                      <div className="w-full bg-[#F8FAFC] rounded-[6px] h-2 overflow-hidden border-[#E2E8F0]">
                         <div
-                          className="bg-emerald-500 h-full rounded-full transition-all duration-300"
+                          className="bg-[#1D4ED8] h-full rounded-[6px] transition-all duration-300"
                           style={{ width: `${progressPercentage}%` }}
                         />
                       </div>
                     )}
 
                     {isLoadingTasks ? (
-                      <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="p-6 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0]">
                         Loading tasks...
                       </div>
                     ) : tasks.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200 italic">
+                      <div className="p-6 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0] italic">
                         No tasks created for this work request yet.
                       </div>
                     ) : (
-                      <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 bg-white shadow-2xs">
+                      <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#CBD5E1] bg-[#FFFFFF]">
                         {tasks.map((task) => {
                           const isCompleted = task.status === 'Completed';
                           const isExpanded = expandedTaskIds.has(task.id);
@@ -658,10 +841,21 @@ export function WorkRequestSidePeek({
                             ? task.checklist!.filter((c) => c.completed).length
                             : 0;
 
+                          const PHASES_ORDER = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
+                          const currentWrPhaseIndex = PHASES_ORDER.indexOf(workRequest?.phase || 'pre_processing');
+                          const taskPhaseIndex = PHASES_ORDER.indexOf(task.phase);
+                          const isTaskActivePhase = task.phase === workRequest?.phase;
+                          const isTaskPastPhase = taskPhaseIndex < currentWrPhaseIndex;
+                          const taskPhaseInfo = getPhaseBadgeInfo(task.phase);
+
                           return (
                             <div
                               key={task.id}
-                              className="group transition-colors hover:bg-slate-50/80"
+                              className={`group transition-colors ${
+                                isTaskActivePhase
+                                  ? 'border-l-4 border-l-[#2563EB] bg-[#EFF6FF]/25 hover:bg-[#EFF6FF]/40'
+                                  : 'hover:bg-[#F8FAFC]'
+                              }`}
                               data-testid={`side-peek-task-${task.id}`}
                             >
                               <div
@@ -672,24 +866,43 @@ export function WorkRequestSidePeek({
                                 <div className="flex items-start gap-2.5 min-w-0 flex-1">
                                   <CheckCircle2
                                     className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${
-                                      isCompleted ? 'text-emerald-500' : 'text-slate-300'
+                                      isCompleted ? 'text-[#1E293B]' : 'text-[#94A3B8]'
                                     }`}
                                   />
                                   <div className="min-w-0 flex-1">
                                     <span
                                       className={`font-semibold text-sm block truncate ${
-                                        isCompleted ? 'line-through text-slate-400' : 'text-slate-900 group-hover:text-indigo-600'
+                                        isCompleted ? 'line-through text-[#475569]' : 'text-[#1E293B]'
                                       }`}
                                     >
                                       {task.title}
                                     </span>
 
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 pt-1">
-                                      <span className="capitalize">{task.phase.replace('_', ' ')}</span>
+                                    <div className="flex flex-wrap items-center gap-2 text-xs text-[#475569] pt-1">
+                                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border text-xs font-medium ${taskPhaseInfo.badgeClass}`}>
+                                        <span className={`w-1.5 h-1.5 rounded-full ${taskPhaseInfo.dotClass}`} />
+                                        <span>{taskPhaseInfo.label}</span>
+                                      </span>
+                                      {isTaskActivePhase ? (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#93C5FD]">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
+                                          <span>Active Phase</span>
+                                        </span>
+                                      ) : isTaskPastPhase ? (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#F0FDF4] text-[#166534] border border-[#BBF7D0]">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
+                                          <span>Phase Completed</span>
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]">
+                                          <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" />
+                                          <span>Upcoming Phase (Locked)</span>
+                                        </span>
+                                      )}
                                       {(task.assigneeName || task.assigneeId) && (
                                         <>
                                           <span>•</span>
-                                          <span className="font-medium text-slate-700">
+                                          <span className="font-medium text-[#1E293B]">
                                             {task.assigneeName
                                               ? resolveUserName(task.assigneeName)
                                               : resolveUserName(task.assigneeId)}
@@ -699,7 +912,7 @@ export function WorkRequestSidePeek({
                                       {hasChecklist && (
                                         <>
                                           <span>•</span>
-                                          <span className="text-slate-600 font-medium bg-slate-100 px-1.5 py-0.2 rounded">
+                                          <span className="text-[#1E293B] font-medium bg-[#F8FAFC] px-1.5 py-0.5 rounded-[8px] border-[#E2E8F0]">
                                             ✓ {checklistDone}/{task.checklist!.length} subtasks
                                           </span>
                                         </>
@@ -709,19 +922,27 @@ export function WorkRequestSidePeek({
                                 </div>
 
                                 <div className="flex items-center gap-2 shrink-0">
-                                  {task.qaStatus && task.qaStatus !== 'none' && (
+                                  {task.qaStatus === 'passed' || task.qaStatus === 'failed' ? (
                                     <Badge
                                       variant={task.qaStatus === 'passed' ? 'success' : 'destructive'}
                                       size="compact"
-                                      className="text-[10px]"
+                                      className="text-xs rounded-[6px]"
                                     >
                                       QA: {task.qaStatus}
                                     </Badge>
-                                  )}
+                                  ) : workRequest?.phase === 'quality_assurance' ? (
+                                    <Badge
+                                      variant="secondary"
+                                      size="compact"
+                                      className="text-xs rounded-[6px] bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]"
+                                    >
+                                      QA: Under Review
+                                    </Badge>
+                                  ) : null}
                                   <Badge
                                     variant={isCompleted ? 'success' : 'secondary'}
                                     size="compact"
-                                    className="text-[11px] font-medium"
+                                    className="text-xs rounded-[6px] font-medium"
                                   >
                                     {task.status}
                                   </Badge>
@@ -731,7 +952,7 @@ export function WorkRequestSidePeek({
                                     type="button"
                                     variant="outline"
                                     size="xs"
-                                    className="gap-1 text-slate-600 hover:text-indigo-600 font-medium"
+                                    className="gap-1 text-[#1E293B] hover:bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] text-xs uppercase"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setSelectedTask(task);
@@ -747,7 +968,7 @@ export function WorkRequestSidePeek({
                                       type="button"
                                       variant="ghost"
                                       size="icon-xs"
-                                      className="text-slate-400 hover:text-slate-700"
+                                      className="text-[#475569] hover:text-[#1E293B] rounded-[6px]"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         toggleTaskExpanded(task.id);
@@ -766,22 +987,22 @@ export function WorkRequestSidePeek({
 
                               {/* Inline subtasks list if expanded */}
                               {isExpanded && hasChecklist && (
-                                <div className="px-10 pb-3 space-y-1.5 bg-slate-50/60 border-t border-slate-100">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block pt-2">
+                                <div className="px-10 pb-3 space-y-1.5 bg-[#F8FAFC]/60 border-t border-[#E2E8F0]">
+                                  <span className="text-xs font-bold tracking-normal text-[#475569] block pt-2">
                                     Subtasks / Checklist:
                                   </span>
                                   {task.checklist!.map((item) => (
                                     <div
                                       key={item.id}
-                                      className="flex items-center gap-2 text-xs text-slate-700 py-0.5"
+                                      className="flex items-center gap-2 text-xs text-[#1E293B] py-0.5"
                                     >
                                       <input
                                         type="checkbox"
                                         checked={item.completed}
                                         disabled
-                                        className="rounded border-slate-300 text-indigo-600"
+                                        className="rounded-[8px] border-[#E2E8F0] text-[#1E293B]"
                                       />
-                                      <span className={item.completed ? 'line-through text-slate-400' : 'text-slate-800'}>
+                                      <span className={item.completed ? 'line-through text-[#475569]' : 'text-[#1E293B]'}>
                                         {item.text}
                                       </span>
                                     </div>
@@ -798,8 +1019,8 @@ export function WorkRequestSidePeek({
                   {/* 5. Documents Section with Sidepeek Preview & Inspection */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-blue-600" />
+                      <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-[#1E293B]" />
                         <span>Attached Documents ({documents.length})</span>
                       </h4>
                       {previewDoc && (
@@ -807,7 +1028,7 @@ export function WorkRequestSidePeek({
                           type="button"
                           variant="ghost"
                           size="xs"
-                          className="text-slate-500 hover:text-slate-800 text-xs"
+                          className="text-[#475569] hover:text-[#1E293B] text-xs rounded-[6px] uppercase"
                           onClick={() => setPreviewDoc(null)}
                         >
                           Hide Preview
@@ -816,11 +1037,11 @@ export function WorkRequestSidePeek({
                     </div>
 
                     {isLoadingDocs ? (
-                      <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+                      <div className="p-6 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0]">
                         Loading documents...
                       </div>
                     ) : documents.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200 italic">
+                      <div className="p-6 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0] italic">
                         No documents attached to this work request yet.
                       </div>
                     ) : (
@@ -846,33 +1067,33 @@ export function WorkRequestSidePeek({
                             return (
                               <div
                                 key={doc.id}
-                                className={`p-3 bg-white border rounded-xl text-xs flex flex-col justify-between gap-2.5 transition-all shadow-2xs hover:shadow-xs ${
+                                className={`p-3 bg-[#FFFFFF] border rounded-[6px] text-xs flex flex-col justify-between gap-2.5 transition-all ${
                                   isSelectedForPreview
-                                    ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/30'
-                                    : 'border-slate-200 hover:border-slate-300'
+                                    ? 'border-[#E2E8F0] bg-[#F8FAFC]'
+                                    : 'border-[#E2E8F0] hover:bg-[#F8FAFC]/40'
                                 }`}
                               >
                                 <div className="flex items-start gap-2.5 min-w-0">
-                                  <div className="p-2 rounded-lg bg-slate-50 border border-slate-200/80 shrink-0">
+                                  <div className="p-2 rounded-[6px] bg-[#F8FAFC] border-[#E2E8F0] shrink-0">
                                     {isPdf ? (
-                                      <FileText className="h-4 w-4 text-rose-500" />
+                                      <FileText className="h-4 w-4 text-[#1E293B]" />
                                     ) : isImg ? (
-                                      <FileImage className="h-4 w-4 text-violet-500" />
+                                      <FileImage className="h-4 w-4 text-[#1E293B]" />
                                     ) : isSpreadsheet ? (
-                                      <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
+                                      <FileSpreadsheet className="h-4 w-4 text-[#1E293B]" />
                                     ) : (
-                                      <FileCode className="h-4 w-4 text-blue-500" />
+                                      <FileCode className="h-4 w-4 text-[#1E293B]" />
                                     )}
                                   </div>
 
                                   <div className="min-w-0 flex-1">
                                     <span
-                                      className="font-semibold text-slate-900 block truncate"
+                                      className="font-semibold text-[#1E293B] block truncate"
                                       title={name}
                                     >
                                       {name}
                                     </span>
-                                    <div className="text-[10px] text-slate-400 pt-0.5 flex items-center gap-1.5">
+                                    <div className="text-xs text-[#475569] pt-0.5 flex items-center gap-1.5">
                                       {doc.category && <span className="uppercase">{doc.category}</span>}
                                       {doc.fileSize && (
                                         <>
@@ -885,12 +1106,16 @@ export function WorkRequestSidePeek({
                                 </div>
 
                                 {/* Preview and View Actions */}
-                                <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+                                <div className="flex items-center justify-between pt-1 border-t border-[#E2E8F0]">
                                   <Button
                                     type="button"
                                     variant={isSelectedForPreview ? 'default' : 'outline'}
                                     size="xs"
-                                    className="gap-1 text-[11px] font-medium"
+                                    className={`gap-1 text-xs  tracking-normal rounded-[6px] ${
+                                      isSelectedForPreview
+                                        ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs'
+                                        : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC]'
+                                    }`}
                                     onClick={() => setPreviewDoc(isSelectedForPreview ? null : doc)}
                                     title="Preview directly inside sidepeek"
                                   >
@@ -902,7 +1127,7 @@ export function WorkRequestSidePeek({
                                     type="button"
                                     variant="ghost"
                                     size="xs"
-                                    className="gap-1 text-[11px] text-slate-600 hover:text-indigo-600"
+                                    className="gap-1 text-xs tracking-normal text-[#1E293B] hover:bg-[#F8FAFC] rounded-[6px]"
                                     onClick={() => setViewerDoc(doc)}
                                     title="Open full document modal with comments"
                                   >
@@ -917,17 +1142,192 @@ export function WorkRequestSidePeek({
                       </div>
                     )}
                   </div>
+
+                  {/* 6. Financials & Transmittals (360° Project Records) */}
+                  <div className="space-y-3" data-testid="side-peek-project-records">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-2">
+                        <Receipt className="h-4 w-4 text-[#1E293B]" />
+                        <span>Project Financials & Transmittals</span>
+                      </h4>
+                    </div>
+
+                    {isLoadingWrRelated ? (
+                      <div className="p-4 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[6px] border-[#E2E8F0]">
+                        Loading project records...
+                      </div>
+                    ) : relatedInvoices.length === 0 && relatedDisbursements.length === 0 && relatedTransmittals.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-[#475569] bg-[#FFFFFF] rounded-[6px] border-[#E2E8F0] italic">
+                        No linked invoices, disbursements, or transmittals for this work request.
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {/* Invoices Group */}
+                        {relatedInvoices.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-invoices-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Invoices ({relatedInvoices.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedInvoices.map((inv) => {
+                                const invTotal = inv.total != null ? inv.total : inv.amount;
+                                const invBalance = inv.balance != null ? inv.balance : null;
+                                const clientName =
+                                  inv.client_name ||
+                                  inv.clientName ||
+                                  inv.clients?.name ||
+                                  rawWorkRequest?.clientName ||
+                                  'Client';
+
+                                return (
+                                  <a
+                                    key={inv.id}
+                                    href={`/billing?invoiceId=${inv.id}`}
+                                    className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                    data-testid={`side-peek-invoice-${inv.id}`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                      <Receipt className="h-4 w-4 text-[#475569] shrink-0" />
+                                      <div className="min-w-0 flex-1">
+                                        <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                          {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
+                                        </span>
+                                        <span className="text-xs text-[#475569] block truncate">
+                                          {clientName}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {invTotal != null && (
+                                        <div className="flex flex-col items-end">
+                                          <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                            ₱{Number(invTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                          </span>
+                                          {invBalance != null && Number(invBalance) > 0 ? (
+                                            <span className="tabular-nums text-[10px] text-amber-600 font-medium">
+                                              Bal: ₱{Number(invBalance).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                            </span>
+                                          ) : invBalance === 0 || inv.status === 'Paid' ? (
+                                            <span className="tabular-nums text-[10px] text-emerald-600 font-medium">
+                                              Paid in full
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                      )}
+                                      {inv.status && (
+                                        <Badge
+                                          variant={inv.status === 'Paid' ? 'success' : inv.status === 'Draft' ? 'secondary' : 'outline'}
+                                          size="compact"
+                                          className="text-xs rounded-[6px]"
+                                        >
+                                          {inv.status}
+                                        </Badge>
+                                      )}
+                                      <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                    </div>
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Disbursements Group */}
+                        {relatedDisbursements.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-disbursements-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Disbursements ({relatedDisbursements.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedDisbursements.map((d) => (
+                                <a
+                                  key={d.id}
+                                  href={`/disbursements?disbursementId=${d.id}`}
+                                  className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                  data-testid={`side-peek-disbursement-${d.id}`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <CreditCard className="h-4 w-4 text-[#475569] shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                        {d.category || 'Disbursement'}
+                                      </span>
+                                      <span className="text-xs text-[#475569] block truncate">
+                                        {d.description || 'No description'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {d.amount != null && (
+                                      <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                        ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                      </span>
+                                    )}
+                                    {d.status && (
+                                      <Badge variant={d.status === 'Released' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
+                                        {d.status}
+                                      </Badge>
+                                    )}
+                                    <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Transmittals Group */}
+                        {relatedTransmittals.length > 0 && (
+                          <div className="space-y-1.5" data-testid="side-peek-transmittals-group">
+                            <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                              Transmittals ({relatedTransmittals.length})
+                            </span>
+                            <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
+                              {relatedTransmittals.map((t) => (
+                                <a
+                                  key={t.id}
+                                  href={`/transmittals?transmittalId=${t.id}`}
+                                  className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                  data-testid={`side-peek-transmittal-${t.id}`}
+                                >
+                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                    <Send className="h-4 w-4 text-[#475569] shrink-0" />
+                                    <div className="min-w-0 flex-1">
+                                      <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                        {t.tracking_number || t.trackingNumber || 'Transmittal'}
+                                      </span>
+                                      <span className="text-xs text-[#475569] block truncate">
+                                        {t.recipient_name || t.recipientName || 'Recipient'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {t.status && (
+                                      <Badge variant={t.status === 'Acknowledged' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
+                                        {t.status}
+                                      </Badge>
+                                    )}
+                                    <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                  </div>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </>
               ) : (
-                <div className="p-12 text-center text-sm text-slate-400">
+                <div className="p-12 text-center text-sm text-[#475569]">
                   Work request not found.
                 </div>
               )}
             </div>
 
             {/* Footer Actions */}
-            <div className="px-6 py-3.5 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
-              <span className="text-xs text-slate-400">
+            <div className="px-6 py-3.5 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
+              <span className="text-xs text-[#475569]">
                 ID: {workRequestId}
               </span>
               <div className="flex items-center gap-2">
@@ -940,18 +1340,17 @@ export function WorkRequestSidePeek({
                       onViewInBoard(workRequestId);
                       onClose();
                     }}
-                    className="text-xs gap-1.5 font-medium border-slate-300 text-slate-700"
+                    className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1.5"
                   >
-                    <Columns className="h-3.5 w-3.5 text-blue-600" />
+                    <Columns className="h-3.5 w-3.5 text-[#1E293B]" />
                     View in Board
                   </Button>
                 )}
                 <Button
                   type="button"
-                  variant="default"
                   size="sm"
                   onClick={onClose}
-                  className="text-xs font-semibold px-4"
+                  className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs tracking-normal px-4"
                 >
                   Done
                 </Button>
@@ -1041,12 +1440,12 @@ function InlineDocPreviewPanel({
   const isText = /\.(txt|json|csv|md|log)$/i.test(name) || contentType.includes('text');
 
   return (
-    <div className="border border-indigo-200 bg-indigo-50/20 rounded-xl p-3.5 space-y-2.5 shadow-sm">
+    <div className="border-[#E2E8F0] bg-[#F8FAFC] rounded-[6px] p-3.5 space-y-2.5 shadow-none">
       {/* Panel Header */}
-      <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
+      <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
         <div className="flex items-center gap-2 min-w-0">
-          <Eye className="h-4 w-4 text-indigo-600 shrink-0" />
-          <span className="font-bold text-xs text-slate-800 truncate" title={name}>
+          <Eye className="h-4 w-4 text-[#1E293B] shrink-0" />
+          <span className="font-bold text-xs text-[#1E293B] truncate" title={name}>
             Previewing: {name}
           </span>
         </div>
@@ -1058,14 +1457,14 @@ function InlineDocPreviewPanel({
               target="_blank"
               rel="noopener noreferrer"
             >
-              <Button size="xs" variant="outline" className="gap-1 text-[11px] h-7 text-blue-600 border-blue-200 hover:bg-blue-50">
+              <Button size="xs" variant="outline" className="gap-1 text-xs tracking-normal h-7 text-[#1E293B] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] rounded-[6px]">
                 <ExternalLink className="h-3 w-3" />
                 {parsedExternal.isGoogleDrive ? 'Open in Drive' : 'Open Link'}
               </Button>
             </a>
           ) : downloadUrl ? (
             <a href={downloadUrl} download={name} target="_blank" rel="noreferrer">
-              <Button size="xs" variant="outline" className="gap-1 text-[11px] h-7">
+              <Button size="xs" variant="outline" className="gap-1 text-xs tracking-normal h-7 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC]">
                 <Download className="h-3 w-3" /> Download
               </Button>
             </a>
@@ -1073,7 +1472,7 @@ function InlineDocPreviewPanel({
           <Button
             size="xs"
             variant="outline"
-            className="gap-1 text-[11px] h-7 text-indigo-700 border-indigo-300 hover:bg-indigo-50"
+            className="gap-1 text-xs tracking-normal h-7 text-[#1E293B] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] rounded-[6px]"
             onClick={onOpenFullViewer}
           >
             <ExternalLink className="h-3 w-3" /> Full View
@@ -1082,7 +1481,7 @@ function InlineDocPreviewPanel({
             size="icon-xs"
             variant="ghost"
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-700 h-7 w-7"
+            className="text-[#475569] hover:text-[#1E293B] hover:bg-[#F8FAFC] h-7 w-7 rounded-[6px]"
             title="Close Preview"
           >
             <X className="h-3.5 w-3.5" />
@@ -1091,25 +1490,25 @@ function InlineDocPreviewPanel({
       </div>
 
       {/* Panel Body */}
-      <div className="bg-white rounded-lg border border-slate-200 overflow-hidden min-h-[220px]">
+      <div className="bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0] overflow-hidden min-h-[220px]">
         {isLoading && !document.external_url && !document.externalUrl ? (
-          <div className="p-10 text-center text-xs text-slate-500 space-y-2">
-            <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="p-10 text-center text-xs text-[#475569] space-y-2">
+            <div className="w-6 h-6 border-[#E2E8F0] border-t-transparent rounded-full animate-spin mx-auto" />
             <p>Loading document preview...</p>
           </div>
         ) : !previewUrl ? (
-          <div className="p-8 text-center text-xs text-slate-500">
+          <div className="p-8 text-center text-xs text-[#475569]">
             Preview is unavailable for this document.
           </div>
         ) : parsedExternal.isGoogleDrive && previewUrl ? (
           <div className="w-full flex flex-col">
-            <div className="bg-blue-50 border-b border-blue-100 px-3 py-1.5 flex items-center justify-between text-[11px] text-blue-800">
+            <div className="bg-[#F8FAFC] border-b border-[#E2E8F0] px-3 py-1.5 flex items-center justify-between text-xs text-[#1E293B]">
               <span>Google Drive Preview</span>
               <a
                 href={parsedExternal.originalUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium underline hover:text-blue-950 flex items-center gap-1"
+                className="font-medium underline hover:text-[#1D4ED8] flex items-center gap-1"
               >
                 Open Original <ExternalLink className="h-3 w-3" />
               </a>
@@ -1124,10 +1523,10 @@ function InlineDocPreviewPanel({
           </div>
         ) : isExternal ? (
           <div className="p-8 text-center space-y-3">
-            <ExternalLink className="h-10 w-10 text-blue-600 mx-auto" />
+            <ExternalLink className="h-10 w-10 text-[#1E293B] mx-auto" />
             <div className="space-y-1">
-              <h5 className="font-semibold text-slate-800 text-xs">{name}</h5>
-              <p className="text-[11px] text-slate-500 max-w-xs mx-auto">
+              <h5 className="font-semibold text-[#1E293B] text-xs">{name}</h5>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
                 This external link cannot be embedded inline. You can open the link directly in a new tab.
               </p>
             </div>
@@ -1136,7 +1535,7 @@ function InlineDocPreviewPanel({
               target="_blank"
               rel="noopener noreferrer"
             >
-              <Button size="sm" className="gap-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700">
+              <Button size="sm" className="gap-1.5 text-xs text-[#FFFFFF] bg-[#1D4ED8] hover:bg-[#1E40AF] rounded-[6px] tracking-normal">
                 <ExternalLink className="h-3.5 w-3.5" /> Open External Link
               </Button>
             </a>
@@ -1149,33 +1548,33 @@ function InlineDocPreviewPanel({
             data-testid="inline-doc-preview-frame"
           />
         ) : isImg ? (
-          <div className="w-full h-72 sm:h-80 flex items-center justify-center p-3 bg-slate-50">
+          <div className="w-full h-72 sm:h-80 flex items-center justify-center p-3 bg-[#F8FAFC]/40">
             <img
               src={previewUrl}
               alt={name}
-              className="max-h-full max-w-full object-contain rounded shadow-xs"
+              className="max-h-full max-w-full object-contain rounded-[8px] shadow-card"
               data-testid="inline-doc-preview-image"
             />
           </div>
         ) : isText ? (
           <iframe
             src={previewUrl}
-            className="w-full h-72 border-0 font-mono text-xs p-3 bg-slate-50"
+            className="w-full h-72 border-0 text-xs p-3 bg-[#FFFFFF]"
             title={`Preview - ${name}`}
             data-testid="inline-doc-preview-frame"
           />
         ) : (
           <div className="p-8 text-center space-y-3">
-            <FileText className="h-10 w-10 text-blue-600 mx-auto" />
+            <FileText className="h-10 w-10 text-[#1E293B] mx-auto" />
             <div className="space-y-1">
-              <h5 className="font-semibold text-slate-800 text-xs">{name}</h5>
-              <p className="text-[11px] text-slate-500">
+              <h5 className="font-semibold text-[#1E293B] text-xs">{name}</h5>
+              <p className="text-xs text-[#475569]">
                 This document type cannot be embedded inline. You can download or open it in the full viewer.
               </p>
             </div>
             {downloadUrl ? (
               <a href={downloadUrl} download={name} target="_blank" rel="noreferrer">
-                <Button size="sm" className="gap-1.5 text-xs">
+                <Button size="sm" className="gap-1.5 text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC]">
                   <Download className="h-3.5 w-3.5" /> Download File
                 </Button>
               </a>

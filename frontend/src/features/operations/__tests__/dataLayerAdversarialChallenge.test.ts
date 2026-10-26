@@ -454,7 +454,7 @@ describe('Adversarial Challenge Suite — Milestone 1 TanStack Query Data Layer'
       const { result } = renderHook(() => useWorkRequestMutations(), { wrapper });
 
       // 1. Create
-      await result.current.createWorkRequest({ title: 'New WR', entity: 'ATA' });
+      await result.current.createWorkRequest({ dueDate: '2026-12-31', title: 'New WR', entity: 'ATA' });
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: operationsKeys.workRequests(),
       });

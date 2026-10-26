@@ -107,6 +107,56 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
     vi.restoreAllMocks();
   });
 
+  it('creates same-title tasks and their complete checklists in one request', async () => {
+    const { wrapper } = createTestHarness();
+    const firstId = 'a3512c21-578d-4194-82d9-ea56c4b367fe';
+    const secondId = 'aa5fe407-3e93-44bf-9848-3f3c510c314c';
+    const tasks = [
+      { localId: 'pre', title: 'Filing', phase: 'pre_processing', coAssignees: [], checklist: [
+        { id: firstId, text: 'Collect', completed: false, category: 'subtask' },
+        { id: secondId, text: 'Certificate', completed: false, category: 'document', periodYear: 2026, dependsOn: firstId },
+      ] },
+      { localId: 'proc', title: 'Filing', phase: 'processing', coAssignees: [], checklist: [
+        { id: '16b68687-d22d-409b-a74a-617c61d3fb90', text: 'Submit', completed: false, category: 'subtask' },
+      ] },
+    ];
+    localStorage.setItem('erp_wr_draft_new', JSON.stringify({
+      title: 'Checklist request', entity: 'ATA', assignedTo: 'user-lead-1', dueDate: '2026-12-31', tasks,
+    }));
+    const writes: Array<{ method: string; body: any }> = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method || 'GET';
+      if (method === 'POST' || method === 'PUT') {
+        const body = JSON.parse(String(init?.body));
+        writes.push({ method, body });
+        return new Response(JSON.stringify({ data: {
+          ...baseWr, id: 'created-request', tasks: tasks.map((task, index) => ({ ...task, id: `created-task-${index}` })),
+        } }), { status: 201 });
+      }
+      if (url.includes('/me/team') || url.includes('/users')) {
+        return new Response(JSON.stringify({ data: [{ id: 'user-lead-1', name: 'Lead Director', role: 'Manager' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    const onSuccess = vi.fn();
+    render(<WorkRequestModal isOpen onClose={vi.fn()} onSuccess={onSuccess} />, { wrapper });
+    fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
+    fireEvent.keyDown(screen.getByTestId('assigner-primary-select'), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'Lead Director (Manager)' }));
+    fireEvent.submit(screen.getByTestId('work-request-modal').querySelector('form')!);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.method).toBe('POST');
+    const phases = writes[0]?.body.phases;
+    expect(phases.pre_processing.tasks[0].checklist).toEqual([
+      { id: firstId, text: 'Collect', completed: false, category: 'subtask' },
+      { id: secondId, text: 'Certificate', completed: false, category: 'document', periodYear: '2026', dependsOn: firstId },
+    ]);
+    expect(phases.processing.tasks[0].checklist[0].text).toBe('Submit');
+  });
+
   // ==========================================================================
   // F4.1: Temporary local ID dependency resolution in WorkRequestModal edit mode
   // ==========================================================================
@@ -340,6 +390,10 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
           );
         }
 
+        if (url.endsWith('/operations/work-requests/wr-f4-test/tasks/task-f4-101') && method === 'GET') {
+          return new Response(JSON.stringify({ data: baseTask }), { status: 200 });
+        }
+
         if (url.includes('/time-entries')) {
           return new Response(JSON.stringify({ data: [] }), { status: 200 });
         }
@@ -363,6 +417,7 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
 
       // Find the checklist input
       const input = await screen.findByPlaceholderText('Add a new checklist item...');
+      await waitFor(() => expect(input).toBeEnabled());
       fireEvent.change(input, { target: { value: 'Verify BIR 2307 Withholding Tax Certificates' } });
 
       // Click Add button

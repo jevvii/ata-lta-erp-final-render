@@ -99,14 +99,14 @@ export function ArchiveConfirmModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-md p-6 space-y-4"
+        className="max-w-md p-6 space-y-4 rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
         data-testid="archive-confirm-modal"
       >
-        <DialogHeader>
-          <DialogTitle className="text-base font-bold text-slate-900">
+        <DialogHeader className="border-b border-[#E2E8F0] pb-3">
+          <DialogTitle className="text-base font-semibold uppercase tracking-tight text-[#1E293B]">
             {titleText}
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600 pt-1">
+          <DialogDescription className="text-xs text-[#475569] pt-1">
             {actionType === 'archive' &&
               `Are you sure you want to archive "${workRequest.title}"? It will be moved to the archive tab and hidden from active work queues.`}
             {actionType === 'cancel' &&
@@ -119,7 +119,7 @@ export function ArchiveConfirmModal({
         {/* Cancellation Reason input */}
         {actionType === 'cancel' && (
           <div className="space-y-1">
-            <label className="text-xs font-medium text-slate-700">
+            <label className="text-xs tracking-normal font-bold text-[#1E293B]">
               Reason for Cancellation (optional):
             </label>
             <textarea
@@ -127,19 +127,19 @@ export function ArchiveConfirmModal({
               onChange={(e) => setCancelReason(e.target.value)}
               placeholder="e.g. Scope revised by client, duplicated request..."
               rows={2}
-              className="w-full text-xs p-2 border border-slate-200 rounded-md bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full text-xs p-2 border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
               data-testid="cancel-reason-input"
             />
           </div>
         )}
 
-        <DialogFooter className="flex items-center justify-end gap-2 pt-2">
+        <DialogFooter className="flex items-center justify-end gap-2 pt-2 border-t border-[#E2E8F0]">
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={onClose}
-            className="text-xs"
+            className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
           >
             Cancel
           </Button>
@@ -149,7 +149,11 @@ export function ArchiveConfirmModal({
             size="sm"
             onClick={handleConfirm}
             data-testid="archive-confirm-btn"
-            className="text-xs font-semibold"
+            className={`text-xs  tracking-normal font-bold rounded-[6px] ${
+              actionType === 'restore'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs'
+                : 'bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs'
+            }`}
           >
             {confirmBtnText}
           </Button>

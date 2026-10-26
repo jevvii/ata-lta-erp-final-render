@@ -128,21 +128,18 @@ describe('CHALLENGER 2: Adversarial Verification of Print Preview, Address Secur
       // Verify A4 sheet layout
       const sheet = screen.getByTestId('a4-document-sheet');
       expect(sheet).toBeInTheDocument();
-      expect(sheet.className).toContain('max-w-[210mm]');
-      expect(sheet.className).toContain('min-h-[297mm]');
+      expect(sheet.className).toContain('statement-document');
 
-      // Verify BIR regulatory notice rendered in official footer
-      expect(
-        screen.getByText(/NOTICE: THIS STATEMENT OF ACCOUNT IS NOT VALID FOR CLAIM OF INPUT VAT/i)
-      ).toBeInTheDocument();
-      expect(screen.getByText(/Authorized Signatory/i)).toBeInTheDocument();
-      expect(screen.getByText(/ATA & LTA Accounting Department/i)).toBeInTheDocument();
+      // Preview uses the same official statement body as print and PDF.
+      expect(screen.getByText('HENRY WONG')).toBeInTheDocument();
+      expect(screen.getByText('Prepared by:')).toBeInTheDocument();
+      expect(screen.getByText('Received by:')).toBeInTheDocument();
 
       // Verify Bill To box, line items, and totals
       expect(screen.getByTestId('bill-to-box')).toBeInTheDocument();
       expect(screen.getByTestId('line-items-table')).toBeInTheDocument();
-      expect(screen.getByTestId('invoice-total')).toHaveTextContent('₱100,000.00');
-      expect(screen.getByTestId('invoice-balance')).toHaveTextContent('₱75,000.00');
+      expect(screen.getByTestId('invoice-total')).toHaveTextContent('100,000.00');
+      expect(sheet.textContent).toContain('TOTAL AMOUNT DUE');
 
       // CRITICAL ASSERTION: window.print must NOT be called on modal mount/open
       expect(window.print).not.toHaveBeenCalled();

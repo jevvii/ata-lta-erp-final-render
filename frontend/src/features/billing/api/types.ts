@@ -1,3 +1,4 @@
+import type { InvoicePrintDetails } from '@/lib/printDocuments';
 /**
  * Billing Module TypeScript interfaces.
  * Frozen at billing@2.0.0 (docs/api-contracts/modules/billing.md).
@@ -25,7 +26,13 @@ export interface InvoicePayment {
   invoice_id: string;
   entity_id?: string;
   amount: number;
-  payment_method: string;
+  /** Canonical method name matching table and API responses. */
+  method?: string;
+  /** Canonical reference matching table and API responses. */
+  reference?: string | null;
+  /** Legacy fallback for method. */
+  payment_method?: string;
+  /** Legacy fallback for reference. */
   reference_number?: string | null;
   payment_date: string;
   notes?: string | null;
@@ -40,6 +47,7 @@ export interface ClientSnapshot {
 }
 
 export interface Invoice {
+  print_details?: InvoicePrintDetails | null;
   id: string;
   entity_id: string;
   entity_code?: EntityCode;
@@ -151,6 +159,7 @@ export interface CreateLineItemInput {
   description: string;
   amount: number;
   type?: LineItemType;
+  sortOrder?: number;
 }
 
 export interface CreateInvoiceInput {
@@ -170,6 +179,7 @@ export interface CreateInvoiceInput {
 }
 
 export interface UpdateInvoiceInput {
+  printDetails?: InvoicePrintDetails;
   clientId?: string;
   workRequestId?: string | null;
   linkedTaskId?: string | null;

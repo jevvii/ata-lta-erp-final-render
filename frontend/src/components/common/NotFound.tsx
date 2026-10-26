@@ -6,20 +6,24 @@ export function NotFound() {
   return (
     <div
       data-testid="not-found-screen"
-      className="flex min-h-[500px] flex-col items-center justify-center p-8 text-center"
+      className="flex min-h-[500px] flex-col items-center justify-center p-8 text-center rounded-[8px] border border-[#E2E8F0] bg-[#FFFFFF] shadow-card"
     >
-      <div className="rounded-full bg-blue-100 p-4 text-[#2563eb] mb-4 shadow-xs">
-        <FileQuestion className="h-10 w-10" />
+      <div className="rounded-full bg-[#EFF6FF] p-4 text-[#1D4ED8] mb-4 border border-[#BFDBFE]">
+        <FileQuestion className="h-10 w-10 text-[#1D4ED8]" />
       </div>
-      <h1 className="text-3xl font-bold text-[#1e293b] mb-2">404</h1>
-      <h2 className="text-lg font-medium text-[#1e293b] mb-2">Page Not Found</h2>
-      <p className="text-sm text-[#9494a0] max-w-md mb-6">
-        The route you are trying to access does not exist or may have been moved.
+      <h1 className="text-4xl font-bold tracking-tight text-[#1E293B] mb-1">
+        404
+      </h1>
+      <h2 className="text-xs font-semibold tracking-normal text-[#475569] mb-2">
+        Page Not Found
+      </h2>
+      <p className="text-sm text-[#475569] max-w-md mb-6">
+        The requested routing coordinates do not resolve to an active system module.
       </p>
       <Button asChild className="gap-2">
         <Link to="/">
           <Home className="h-4 w-4" />
-          Back to Dashboard
+          Return to Dashboard
         </Link>
       </Button>
     </div>

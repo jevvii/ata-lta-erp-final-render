@@ -85,7 +85,9 @@ const mockDisbursement: Disbursement = {
   description: 'Special SEC Registration Filing Expedited',
   amount: 15000,
   fund_source: 'Firm Fund',
-  status: 'Pending',
+  status: 'Draft',
+  lifecycle_version: 2,
+  review_ready: true,
   linked_work_request_id: 'wr-stress-1',
   version: 5,
   created_at: '2026-10-10T08:00:00Z',
@@ -199,9 +201,9 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
   // =========================================================================
   describe('Dimension 2: Billing OCC Mutation Payloads Stress', () => {
     it('updateInvoiceAction enforces strict_occ flag contract across versions and edge cases', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -227,27 +229,27 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       );
       expect(capturedBody).toEqual({ notes: 'Note Embedded', expectedVersion: 7 });
 
-      // 4. strict_occ DISABLED + explicit number version -> MUST STRIP expectedVersion
+      // 4. strict_occ DISABLED + explicit number version -> MUST NEVER STRIP expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await updateInvoiceAction('inv-stress-101', { notes: 'Note B' }, 4, 'ATA');
-      expect(capturedBody).toEqual({ notes: 'Note B' });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody).toEqual({ notes: 'Note B', expectedVersion: 4 });
+      expect(capturedBody.expectedVersion).toBe(4);
 
-      // 5. strict_occ DISABLED + embedded expectedVersion in data -> MUST DELETE expectedVersion
+      // 5. strict_occ DISABLED + embedded expectedVersion in data -> MUST NEVER DELETE expectedVersion
       await updateInvoiceAction(
         'inv-stress-101',
         { notes: 'Note C', expectedVersion: 9 },
         9,
         'ATA'
       );
-      expect(capturedBody).toEqual({ notes: 'Note C' });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody).toEqual({ notes: 'Note C', expectedVersion: 9 });
+      expect(capturedBody.expectedVersion).toBe(9);
     });
 
     it('updateClientAddressAction enforces strict_occ flag contract across versions and edge cases', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -280,7 +282,7 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
         expectedVersion: 0,
       });
 
-      // 3. strict_occ DISABLED -> MUST OMIT expectedVersion
+      // 3. strict_occ DISABLED -> MUST NEVER OMIT expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await updateClientAddressAction(
         'inv-stress-101',
@@ -290,8 +292,9 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       );
       expect(capturedBody).toEqual({
         address: '88 Enterprise Center, Makati',
+        expectedVersion: 4,
       });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody.expectedVersion).toBe(4);
     });
   });
 
@@ -300,9 +303,9 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
   // =========================================================================
   describe('Dimension 3: Disbursements OCC Mutation Payloads Stress', () => {
     it('useApproveDisbursement correctly includes / omits expectedVersion under strict_occ', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -328,20 +331,20 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       await result.current.approveDisbursement({ id: 'disb-stress-201', expectedVersion: 0 });
       expect(capturedBody).toEqual({ expectedVersion: 0 });
 
-      // DISABLED: must omit expectedVersion (body is empty/null)
+      // DISABLED: unconditionally passes expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await result.current.approveDisbursement({ id: 'disb-stress-201', expectedVersion: 5 });
-      expect(capturedBody).toBeNull();
+      expect(capturedBody).toEqual({ expectedVersion: 5 });
 
       // DISABLED: approveWithBlocking
       await result.current.approveWithBlocking('disb-stress-201', 5);
-      expect(capturedBody).toBeNull();
+      expect(capturedBody).toEqual({ expectedVersion: 5 });
     });
 
     it('useRejectDisbursement correctly includes / omits expectedVersion under strict_occ', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -373,7 +376,7 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
         expectedVersion: 5,
       });
 
-      // DISABLED: must omit expectedVersion
+      // DISABLED: unconditionally passes expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await result.current.rejectDisbursement({
         id: 'disb-stress-201',
@@ -382,14 +385,15 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       });
       expect(capturedBody).toEqual({
         reason: 'Disallowed reimbursement item',
+        expectedVersion: 5,
       });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody.expectedVersion).toBe(5);
     });
 
     it('useFundDisbursement correctly includes / omits expectedVersion under strict_occ', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -411,16 +415,16 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       await result.current.fundWithBlocking('disb-stress-201', 6);
       expect(capturedBody).toEqual({ expectedVersion: 6 });
 
-      // DISABLED: must omit expectedVersion (body null)
+      // DISABLED: unconditionally passes expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await result.current.fundDisbursement({ id: 'disb-stress-201', expectedVersion: 6 });
-      expect(capturedBody).toBeNull();
+      expect(capturedBody).toEqual({ expectedVersion: 6 });
     });
 
     it('useReleaseDisbursement correctly includes / omits expectedVersion under strict_occ', async () => {
-      let capturedBody: any = null;
+      let capturedBody: Record<string, unknown> = {};
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
-        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : null;
+        capturedBody = opts?.body ? JSON.parse(String(opts.body)) : {};
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -444,14 +448,9 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
         },
         expectedVersion: 5,
       });
-      expect(capturedBody).toEqual({
-        method: 'Bank Transfer',
-        reference: 'BT-998877',
-        bank: 'BPI',
-        expectedVersion: 5,
-      });
+      expect(capturedBody).toEqual({ expectedVersion: 5 });
 
-      // DISABLED: must omit expectedVersion
+      // DISABLED: unconditionally passes expectedVersion
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
       await result.current.releaseDisbursement({
         id: 'disb-stress-201',
@@ -462,12 +461,8 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
         },
         expectedVersion: 5,
       });
-      expect(capturedBody).toEqual({
-        method: 'Bank Transfer',
-        reference: 'BT-998877',
-        bank: 'BPI',
-      });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody).toEqual({ expectedVersion: 5 });
+      expect(capturedBody.expectedVersion).toBe(5);
     });
   });
 
@@ -530,6 +525,7 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
     });
 
     it('Disbursements: Non-OCC 500 error does NOT open ConflictResolutionModal on approve', async () => {
+      useSessionStore.setState({ user: { ...useSessionStore.getState().user!, role: 'Admin' } });
       global.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
         const u = String(url);
         const method = opts?.method || 'GET';
@@ -573,14 +569,21 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId('drawer-approve-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('drawer-direct-approve-btn')).toBeInTheDocument();
       });
 
-      const approveBtn = screen.getByTestId('drawer-approve-btn');
+      const approveBtn = screen.getByTestId('drawer-direct-approve-btn');
       fireEvent.click(approveBtn);
 
-      // ConflictResolutionModal MUST NOT open
       await waitFor(() => {
+        expect(screen.getByTestId('admin-approval-modal')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('btn-confirm-approve'));
+
+      // Wait for the actual 500 response, then verify it is not misclassified as a conflict.
+      await waitFor(() => {
+        expect(useBlockingModalStore.getState().status).toBe('error');
+        expect(useBlockingModalStore.getState().error?.status).toBe(500);
         expect(screen.queryByTestId('conflict-resolution-modal')).not.toBeInTheDocument();
       });
     });
@@ -773,6 +776,7 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
     });
 
     it('Disbursements: "Refresh & Keep Latest" executes cache invalidations on disbursementKeys.detail and disbursementKeys.lists', async () => {
+      useSessionStore.setState({ user: { ...useSessionStore.getState().user!, role: 'Admin' } });
       global.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
         const u = String(url);
         const method = opts?.method || 'GET';
@@ -818,11 +822,16 @@ describe('Adversarial OCC & Conflict Resolution Modal Stress Harness (Parcels 2B
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId('drawer-approve-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('drawer-direct-approve-btn')).toBeInTheDocument();
       });
 
-      const approveBtn = screen.getByTestId('drawer-approve-btn');
+      const approveBtn = screen.getByTestId('drawer-direct-approve-btn');
       fireEvent.click(approveBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('admin-approval-modal')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('btn-confirm-approve'));
 
       await waitFor(() => {
         expect(screen.getByTestId('conflict-resolution-modal')).toBeInTheDocument();

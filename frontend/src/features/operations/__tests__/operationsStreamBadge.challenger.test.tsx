@@ -510,6 +510,26 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
   // Test 5: Duplicate Replayed CDC Event Idempotency
   // ==========================================================================
   it('Test 5: replayed duplicate CDC events do not create list query duplicate entries', async () => {
+    // Explicit Admin context for raw cache-patching deduplication test
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-ops-admin-1',
+        email: 'ops-admin@ata-lta.ph',
+        name: 'Ops Admin',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA', 'LTA'],
+      },
+      permissions: [
+        'workflow:view',
+        'workflow:edit',
+        'workflow:phase_transition',
+        'workflow:transition_request',
+        'retainers:use',
+      ],
+      activeEntity: 'ATA',
+    });
+
     // Seed list cache
     queryClient.setQueryData<OperationsRequest[]>(operationsKeys.requests(), []);
 

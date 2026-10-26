@@ -5,20 +5,17 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ATA &amp; LTA ERP</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
   </head>
   <body>
     <div id="root">
-      <div id="boot-loader" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #f4f6fb; font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; padding: 20px;">
-        <div style="width: 56px; height: 56px; border-radius: 14px; background: #ffffff; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.05); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid #e2e8f0;">
-          <div style="width: 26px; height: 26px; border: 3px solid #e2e8f0; border-top-color: #2563eb; border-radius: 50%; animation: boot-spin 0.8s linear infinite;"></div>
+      <div id="boot-loader" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #F8FAFC; font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #0F172A; padding: 20px;">
+        <div style="width: 56px; height: 56px; border-radius: 8px; background: #FFFFFF; box-shadow: 0px 1px 2px 0px rgba(15, 23, 42, 0.04); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid #CBD5E1;">
+          <div style="width: 24px; height: 24px; border: 3px solid #CBD5E1; border-top-color: #1D4ED8; border-radius: 50%; animation: boot-spin 0.8s linear infinite;"></div>
         </div>
-        <div style="font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; color: #1e293b;">ATA &amp; LTA Accounting Firm ERP</div>
-        <div style="font-size: 12px; color: #64748b; margin-bottom: 24px;">Loading enterprise workspace...</div>
-        <div style="width: 220px; height: 4px; background: #e2e8f0; border-radius: 999px; overflow: hidden;">
-          <div style="width: 100%; height: 100%; background: #2563eb; border-radius: 999px; animation: boot-shimmer 1.5s ease-in-out infinite;"></div>
+        <div style="font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; color: #0F172A;">ATA &amp; LTA Accounting Firm ERP</div>
+        <div style="font-size: 12px; font-family: 'Inter', system-ui, -apple-system, sans-serif; letter-spacing: 0.01em; color: #475569; margin-bottom: 24px;">System Initialization &middot; Enterprise Ledger</div>
+        <div style="width: 220px; height: 6px; background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 999px; overflow: hidden;">
+          <div style="width: 100%; height: 100%; background: #1D4ED8; border-radius: 999px; animation: boot-shimmer 1.5s ease-in-out infinite;"></div>
         </div>
         <style>
           @keyframes boot-spin { to { transform: rotate(360deg); } }
@@ -26,6 +23,9 @@
             0% { transform: translateX(-100%); }
             50% { transform: translateX(0%); }
             100% { transform: translateX(100%); }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            #boot-loader * { animation: none !important; }
           }
         </style>
       </div>

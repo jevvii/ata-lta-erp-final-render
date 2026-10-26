@@ -1,3 +1,4 @@
+import { getTaskDeletionReason } from '../lib/taskDeletion';
 import { DateInput } from '@/components/ui/date-input';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -26,6 +27,8 @@ import {
 } from '../api/useWorkRequests';
 import { useTaskMutations } from '../api/useTasks';
 import { operationsKeys } from '../api/queryKeys';
+import { toChecklistInput } from '../utils/checklist';
+import { isChecklistEditor } from '../lib/taskScope';
 import { validateDependencies } from '../utils/dependencyValidator';
 import { parseTaskDelimiterInput } from '../hooks/useTokenizer';
 import { useSessionStore } from '@/lib/session';
@@ -37,11 +40,6 @@ import type {
   UpdateWorkRequestInput,
   PhaseTaskInput,
 } from '../api/types';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-function isValidUUID(id?: string | null): boolean {
-  return typeof id === 'string' && UUID_REGEX.test(id);
-}
 
 export interface WorkRequestModalProps {
   isOpen: boolean;
@@ -59,6 +57,7 @@ const DEFAULT_TASKS: TaskItemData[] = [
     checklist: [],
     dependsOn: null,
     dueDate: null,
+    requiredLinkType: null,
   },
   {
     localId: 'tmp-2',
@@ -68,6 +67,7 @@ const DEFAULT_TASKS: TaskItemData[] = [
     checklist: [],
     dependsOn: null,
     dueDate: null,
+    requiredLinkType: null,
   },
 ];
 
@@ -81,17 +81,24 @@ export function WorkRequestModal({
   const isCompleted = workRequest?.status === 'Completed';
   const activeSessionEntity = useSessionStore((state) => state.activeEntity);
 
+  const user = useSessionStore((state) => state.user);
+  const checklistEditable = isChecklistEditor(user);
+
   // Queries
-  const { data: clients = [] } = useClients();
   const { data: team = [] } = useTeam();
   const { createWorkRequest, updateWorkRequest } = useWorkRequestMutations();
   const { createTask, updateTask, deleteTask } = useTaskMutations(workRequest?.id);
 
   // Form State
   const [title, setTitle] = useState('');
-  const [entity, setEntity] = useState<'ATA' | 'LTA'>('ATA');
+  const [entity, setEntity] = useState<'ATA' | 'LTA'>(
+    workRequest?.entity === 'LTA' || (!workRequest && activeSessionEntity === 'LTA') ? 'LTA' : 'ATA'
+  );
   const [clientId, setClientId] = useState<string>('');
+  const [clientError, setClientError] = useState<string | null>(null);
+  const { data: clients = [] } = useClients({ entity }, { enabled: isOpen });
   const [priority, setPriority] = useState<Priority>('Normal');
+  const [dueDateError, setDueDateError] = useState<string | null>(null);
   const [dueDate, setDueDate] = useState<string>('');
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
   const [coAssignees, setCoAssignees] = useState<string[]>([]);
@@ -111,7 +118,7 @@ export function WorkRequestModal({
     () => clients.find((c) => c.id === clientId),
     [clients, clientId]
   );
-  const isEntityLocked = Boolean(selectedClient?.entity);
+  const isEntityLocked = selectedClient?.entity === entity;
 
   // Initialize or reset form
   const resetForm = useCallback(() => {
@@ -133,6 +140,7 @@ export function WorkRequestModal({
         setTasks(
           workRequest.tasks.map((t) => ({
             localId: t.id,
+            deletionBlockedReason: getTaskDeletionReason(t, workRequest),
             id: t.id,
             title: t.title,
             description: t.description || undefined,
@@ -144,13 +152,19 @@ export function WorkRequestModal({
               [],
             dependsOn: t.predecessors?.length ? t.predecessors : null,
             dueDate: t.dueDate ? t.dueDate.split('T')[0] : null,
+            requiredLinkType:
+              t.requiredLinkType ||
+              (t as unknown as { required_link_type?: string | null }).required_link_type ||
+              null,
             checklist: t.checklist?.map((c) => ({
               id: c.id,
               text: c.text,
               completed: c.completed,
               category: (c.category as 'subtask' | 'document') || 'subtask',
-              periodYear: c.periodYear ? parseInt(c.periodYear, 10) : null,
-              dependsOn: typeof c.dependsOn === 'string' ? c.dependsOn : null,
+              periodYear: c.periodYear ?? null,
+              dependsOn: c.dependsOn ?? null,
+              assigneeId: c.assigneeId,
+              assigneeName: c.assigneeName,
             })),
           }))
         );
@@ -170,7 +184,9 @@ export function WorkRequestModal({
       setTasks(DEFAULT_TASKS);
     }
     setManagerError(null);
+    setClientError(null);
     setTitleError(null);
+    setDueDateError(null);
     setIsDirty(false);
   }, [workRequest, activeSessionEntity]);
 
@@ -193,17 +209,16 @@ export function WorkRequestModal({
     }
   }, [isOpen, resetForm, draftKey, workRequest?.id]);
 
-  // Client Entity Auto-Sync
+  // The operating entity scopes client selection; choosing a client never changes it.
   const handleClientChange = (newClientId: string) => {
+    // Radix may emit an empty value while a restored selection is loading.
+    // Only the explicit No Client option should clear the selection.
+    if (!newClientId) return;
     const cid = newClientId === 'unselected' ? '' : newClientId;
+    if (cid && !clients.some((c) => c.id === cid && c.entity === entity)) return;
     setClientId(cid);
+    setClientError(null);
     setIsDirty(true);
-    if (!cid) return;
-
-    const matched = clients.find((c) => c.id === cid);
-    if (matched?.entity) {
-      setEntity(matched.entity);
-    }
   };
 
   // Restore Draft
@@ -310,6 +325,21 @@ export function WorkRequestModal({
     }
     setTitleError(null);
 
+    // Drafts can predate entity scoping. Existing clients may be archived and
+    // absent from the active list; the API validates an unchanged binding.
+    const keepsExistingClient = isEditMode && clientId === workRequest?.clientId && entity === workRequest?.entity;
+    if (clientId && (selectedClient ? selectedClient.entity !== entity : !keepsExistingClient)) {
+      setClientError(`Choose a client registered under ${entity}, or select No Client.`);
+      return;
+    }
+    setClientError(null);
+
+    if (!isEditMode && !dueDate) {
+      setDueDateError('Due date is required');
+      return;
+    }
+    setDueDateError(null);
+
     // 2. Mandatory Manager Validation
     if (!assignedTo) {
       setManagerError('Manager is required');
@@ -346,6 +376,13 @@ export function WorkRequestModal({
         : 'Please wait while the work request is being created...',
       apiCall: async () => {
         if (isEditMode && workRequest) {
+          const retainedIds = new Set(tasks.map((task) => task.id).filter(Boolean));
+          for (const task of workRequest.tasks || []) {
+            if (!retainedIds.has(task.id)) {
+              const reason = getTaskDeletionReason(task, workRequest);
+              if (reason) throw new Error(reason);
+            }
+          }
           const updatePayload: UpdateWorkRequestInput = {
             title: title.trim(),
             description: description.trim() || null,
@@ -429,14 +466,8 @@ export function WorkRequestModal({
                   assignees,
                   predecessors: initialPredecessors,
                   dueDate: t.dueDate || null,
-                  checklist: t.checklist
-                    ?.filter((c) => c.text.trim())
-                    .map((c) => ({
-                      text: c.text.trim(),
-                      completed: c.completed,
-                      category: c.category,
-                      periodYear: c.periodYear ? String(c.periodYear) : null,
-                    })),
+                  requiredLinkType: t.requiredLinkType || null,
+                  checklist: checklistEditable ? t.checklist?.filter((c) => c.text.trim()).map(toChecklistInput) : undefined,
                 },
               });
 
@@ -479,14 +510,8 @@ export function WorkRequestModal({
                   assignees,
                   predecessors: resolvePredecessors(t.dependsOn),
                   dueDate: t.dueDate || null,
-                  checklist: t.checklist?.map((c) => ({
-                    id: isValidUUID(c.id) ? c.id : undefined,
-                    text: c.text,
-                    completed: c.completed,
-                    category: c.category,
-                    periodYear: c.periodYear ? String(c.periodYear) : null,
-                    dependsOn: c.dependsOn || null,
-                  })),
+                  requiredLinkType: t.requiredLinkType || null,
+                  checklist: checklistEditable ? t.checklist?.filter((c) => c.text.trim()).map(toChecklistInput) : undefined,
                 },
               });
             }
@@ -510,14 +535,8 @@ export function WorkRequestModal({
                   assignees: item.assignees,
                   predecessors: finalPredecessors,
                   dueDate: item.task.dueDate || null,
-                  checklist: item.task.checklist?.map((c) => ({
-                    id: isValidUUID(c.id) ? c.id : undefined,
-                    text: c.text,
-                    completed: c.completed,
-                    category: c.category,
-                    periodYear: c.periodYear ? String(c.periodYear) : null,
-                    dependsOn: c.dependsOn || null,
-                  })),
+                  requiredLinkType: item.task.requiredLinkType || null,
+                  checklist: checklistEditable ? item.task.checklist?.filter((c) => c.text.trim()).map(toChecklistInput) : undefined,
                 },
               });
             }
@@ -536,26 +555,15 @@ export function WorkRequestModal({
               ...t.coAssignees,
             ];
 
-            const taskInput: PhaseTaskInput & {
-              checklist?: Array<{
-                text: string;
-                completed?: boolean;
-                category?: string | null;
-                periodYear?: string | null;
-              }>;
-            } = {
+            const taskInput: PhaseTaskInput = {
               title: t.title.trim(),
               description: t.description?.trim() || null,
               local_id: t.localId,
               assignees,
               depends_on: t.dependsOn || undefined,
               dueDate: t.dueDate || null,
-              checklist: t.checklist?.filter((c) => c.text?.trim()).map((c) => ({
-                text: c.text.trim(),
-                completed: c.completed,
-                category: c.category || null,
-                periodYear: c.periodYear ? String(c.periodYear) : null,
-              })),
+              requiredLinkType: t.requiredLinkType || null,
+              checklist: checklistEditable ? t.checklist?.filter((c) => c.text?.trim()).map(toChecklistInput) : undefined,
             };
 
             if (t.phase === 'processing') {
@@ -571,7 +579,7 @@ export function WorkRequestModal({
             clientId: clientId || null,
             entity,
             priority,
-            dueDate: dueDate ? new Date(dueDate).toISOString() : null,
+            dueDate: new Date(dueDate).toISOString(),
             assignedTo,
             coAssignees,
             phases: {
@@ -579,60 +587,7 @@ export function WorkRequestModal({
               processing: { tasks: procTasks },
             },
           };
-          const savedWr = await createWorkRequest(createPayload);
-
-          // Persist checklist/subtasks for newly created tasks if any
-          const tasksWithChecklist = tasks.filter(
-            (t) => t.title.trim() && t.checklist && t.checklist.some((c) => c.text.trim())
-          );
-
-          if (tasksWithChecklist.length > 0 && savedWr?.id) {
-            const createdTasks = [
-              ...(savedWr.tasks || []),
-              ...(savedWr.phases?.pre_processing?.tasks || []),
-              ...(savedWr.phases?.processing?.tasks || []),
-            ];
-
-            for (const t of tasksWithChecklist) {
-              const matchedTask = createdTasks.find((ct) => {
-                const ctLocal = ct as unknown as { localId?: string; local_id?: string };
-                return (
-                  (ctLocal.localId && ctLocal.localId === t.localId) ||
-                  (ctLocal.local_id && ctLocal.local_id === t.localId) ||
-                  ct.title?.trim() === t.title.trim()
-                );
-              });
-
-              if (matchedTask?.id) {
-                const validChecklist = t.checklist!
-                  .filter((c) => c.text.trim())
-                  .map((c) => ({
-                    id: c.id,
-                    text: c.text.trim(),
-                    completed: c.completed,
-                    category: c.category,
-                    periodYear: c.periodYear ? String(c.periodYear) : null,
-                    dependsOn: c.dependsOn || null,
-                  }));
-
-                if (validChecklist.length > 0) {
-                  try {
-                    await updateTask({
-                      workRequestId: savedWr.id,
-                      taskId: matchedTask.id,
-                      data: {
-                        checklist: validChecklist,
-                      },
-                    });
-                  } catch (chkErr) {
-                    console.error('Failed to save task checklist:', chkErr);
-                  }
-                }
-              }
-            }
-          }
-
-          return savedWr;
+          return createWorkRequest(createPayload);
         }
       },
       successTitle: isEditMode ? 'Work Request Updated' : 'Work Request Created',
@@ -667,12 +622,12 @@ export function WorkRequestModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-3xl max-h-[90vh] flex flex-col p-0 overflow-hidden"
+        className="max-w-3xl max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
         data-testid="work-request-modal"
       >
-        <DialogHeader className="px-6 py-4 border-b border-slate-200">
+        <DialogHeader className="px-6 py-4 border-b border-[#E2E8F0]">
           <div className="flex items-center justify-between">
-            <DialogTitle className="text-lg font-bold text-slate-900">
+            <DialogTitle className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
               {isEditMode ? 'Edit Work Request' : 'New Work Request'}
             </DialogTitle>
           </div>
@@ -681,10 +636,10 @@ export function WorkRequestModal({
         {/* Completed Work Request Locked Banner */}
         {isCompleted && (
           <div
-            className="px-6 py-2.5 bg-slate-100 border-b border-slate-200 flex items-center gap-2 text-xs text-slate-700 font-medium"
+            className="px-6 py-2.5 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center gap-2 text-xs uppercase font-bold text-[#1E293B]"
             data-testid="completed-wr-locked-banner"
           >
-            <Lock className="h-4 w-4 text-slate-500 shrink-0" />
+            <Lock className="h-4 w-4 text-[#1E293B] shrink-0" />
             <span>This Work Request is completed and locked. Modifications are disabled.</span>
           </div>
         )}
@@ -692,7 +647,7 @@ export function WorkRequestModal({
         {/* Draft Restore Alert Banner */}
         {hasDraftBanner && (
           <div
-            className="px-6 py-2 bg-amber-50 border-b border-amber-200 flex items-center justify-between text-xs text-amber-800"
+            className="px-6 py-2 bg-[#FEF2F2] border-b border-[#FCA5A5] flex items-center justify-between text-xs text-[#DC2626]"
             data-testid="draft-restore-banner"
           >
             <span>You have an unsaved draft from a previous session.</span>
@@ -702,7 +657,7 @@ export function WorkRequestModal({
                 variant="outline"
                 size="xs"
                 onClick={handleRestoreDraft}
-                className="bg-white border-amber-300 text-amber-900"
+                className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] text-xs uppercase"
               >
                 Restore
               </Button>
@@ -711,7 +666,7 @@ export function WorkRequestModal({
                 variant="ghost"
                 size="xs"
                 onClick={handleDiscardDraft}
-                className="text-amber-700 hover:text-amber-900"
+                className="rounded-[6px] text-[#DC2626] hover:bg-[#DC2626]/20 text-xs uppercase"
               >
                 Discard
               </Button>
@@ -724,8 +679,8 @@ export function WorkRequestModal({
           <fieldset disabled={isCompleted} className="space-y-5">
           {/* Work Request Title */}
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
-              Title <span className="text-red-500">*</span>
+            <label className="text-xs tracking-normal font-bold text-[#1E293B]">
+              Title <span className="text-[#DC2626]">*</span>
             </label>
             <Input
               value={title}
@@ -736,50 +691,58 @@ export function WorkRequestModal({
               }}
               placeholder="e.g. Annual Corporate Income Tax Return 2025"
               autoFocus
-              className={`h-9 ${titleError ? 'border-red-500' : ''}`}
+              className={`h-9 tabular-nums text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] ${titleError ? 'border-[#FCA5A5]' : ''}`}
               data-testid="wr-modal-title-input"
             />
             {titleError && (
-              <span className="text-[11px] text-red-600 block">{titleError}</span>
+              <span className="text-xs text-[#DC2626] block">{titleError}</span>
             )}
           </div>
 
           {/* Entity Scoping Bar (ATA vs LTA) */}
-          <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-md border border-slate-200">
+          <div className="flex items-center justify-between p-2.5 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0]">
             <div className="space-y-0.5">
-              <span className="text-xs font-semibold text-slate-700 block">
+              <span className="text-xs tracking-normal font-bold text-[#1E293B] block">
                 Operating Entity
               </span>
-              <span className="text-[11px] text-slate-400">
+              <span className="text-xs text-[#475569]">
                 {isEntityLocked
                   ? "Locked to client's registered entity"
                   : 'Select ATA or LTA entity for this engagement'}
               </span>
             </div>
-            <div className="flex gap-1.5" data-testid="wr-modal-entity-toggle">
+            <div className="flex border-[#E2E8F0] divide-x divide-[#CBD5E1] bg-[#FFFFFF]" data-testid="wr-modal-entity-toggle">
               <Button
                 type="button"
-                variant={entity === 'ATA' ? 'ata' : 'outline'}
+                variant="ghost"
                 size="sm"
                 disabled={isEntityLocked}
                 onClick={() => {
                   setEntity('ATA');
+                  setClientId('');
+                  setClientError(null);
                   setIsDirty(true);
                 }}
-                className="text-xs font-semibold h-7 px-3"
+                className={`text-xs  font-bold uppercase rounded-[6px] h-7 px-3 ${
+                  entity === 'ATA' ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-transparent text-[#1E293B] hover:bg-[#F8FAFC]'
+                }`}
               >
                 ATA
               </Button>
               <Button
                 type="button"
-                variant={entity === 'LTA' ? 'lta' : 'outline'}
+                variant="ghost"
                 size="sm"
                 disabled={isEntityLocked}
                 onClick={() => {
                   setEntity('LTA');
+                  setClientId('');
+                  setClientError(null);
                   setIsDirty(true);
                 }}
-                className="text-xs font-semibold h-7 px-3"
+                className={`text-xs  font-bold uppercase rounded-[6px] h-7 px-3 ${
+                  entity === 'LTA' ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-transparent text-[#1E293B] hover:bg-[#F8FAFC]'
+                }`}
               >
                 LTA
               </Button>
@@ -790,30 +753,33 @@ export function WorkRequestModal({
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Client Select */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-700">Client</label>
+              <label className="text-xs tracking-normal font-bold text-[#1E293B]">Client</label>
               <Select value={clientId || 'unselected'} onValueChange={handleClientChange}>
                 <SelectTrigger
-                  className="h-9 bg-white"
+                  className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]"
                   data-testid="wr-modal-client-select"
                 >
                   <SelectValue placeholder="Select Client..." />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unselected">— No Client —</SelectItem>
+                <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                  <SelectItem value="unselected" className="text-xs">— No Client —</SelectItem>
                   {clients
-                    .filter((c) => !isEntityLocked || c.entity === entity)
+                    .filter((c) => c.entity === entity)
                     .map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
+                      <SelectItem key={c.id} value={c.id} className="text-xs">
                         {c.name} ({c.entity})
                       </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
+              {clientError && (
+                <span role="alert" className="text-[11px] text-red-500">{clientError}</span>
+              )}
             </div>
 
             {/* Priority */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-700">Priority</label>
+              <label className="text-xs tracking-normal font-bold text-[#1E293B]">Priority</label>
               <Select
                 value={priority}
                 onValueChange={(val) => {
@@ -821,40 +787,49 @@ export function WorkRequestModal({
                   setIsDirty(true);
                 }}
               >
-                <SelectTrigger className="h-9 bg-white">
+                <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Low">Low</SelectItem>
-                  <SelectItem value="Normal">Normal</SelectItem>
-                  <SelectItem value="Medium">Medium</SelectItem>
-                  <SelectItem value="High">High</SelectItem>
-                  <SelectItem value="Urgent">Urgent</SelectItem>
+                <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                  <SelectItem value="Low" className="text-xs">Low</SelectItem>
+                  <SelectItem value="Normal" className="text-xs">Normal</SelectItem>
+                  <SelectItem value="Medium" className="text-xs">Medium</SelectItem>
+                  <SelectItem value="High" className="text-xs">High</SelectItem>
+                  <SelectItem value="Urgent" className="text-xs">Urgent</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             {/* Due Date */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-700">Due Date</label>
+              <label className="text-xs tracking-normal font-bold text-[#1E293B]">Due Date{!isEditMode && ' *'}</label>
               <DateInput
                 type="date"
                 aria-label="Work request due date"
+                required={!isEditMode}
+                aria-invalid={Boolean(dueDateError)}
+                aria-describedby={dueDateError ? 'wr-due-date-error' : undefined}
                 disabled={isCompleted}
                 value={dueDate}
                 onValueChange={(value) => {
                   setDueDate(value);
+                  setDueDateError(null);
                   setIsDirty(true);
                 }}
-                className="h-9 bg-white text-xs"
+                className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]"
                 data-testid="wr-modal-due-date"
               />
+              {dueDateError && (
+                <p id="wr-due-date-error" role="alert" className="text-xs text-[#DC2626]">
+                  {dueDateError}
+                </p>
+              )}
             </div>
           </div>
 
           {/* Team Governance Section */}
-          <div className="p-3 bg-slate-50/70 border border-slate-200 rounded-md space-y-3">
-            <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+          <div className="p-3 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] space-y-3">
+            <h4 className="text-xs tracking-normal font-bold text-[#1E293B]">
               Team Governance
             </h4>
             <AssignerSelect
@@ -873,7 +848,7 @@ export function WorkRequestModal({
               }}
             />
             {managerError && (
-              <span className="text-[11px] text-red-600 block" data-testid="manager-error">
+              <span className="text-xs text-[#DC2626] block" data-testid="manager-error">
                 {managerError}
               </span>
             )}
@@ -881,7 +856,7 @@ export function WorkRequestModal({
 
           {/* Description Textarea */}
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
+            <label className="text-xs tracking-normal font-bold text-[#1E293B]">
               Description / Notes
             </label>
             <textarea
@@ -892,7 +867,7 @@ export function WorkRequestModal({
               }}
               placeholder="Scope summary, special requirements, client instructions..."
               rows={2}
-              className="w-full text-xs p-2.5 border border-slate-200 rounded-md bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="resize-none w-full text-xs tabular-nums p-2.5 border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
             />
           </div>
 
@@ -906,18 +881,19 @@ export function WorkRequestModal({
             projectTeam={projectTeam}
             disabled={isCompleted}
             isEditMode={isEditMode}
+            checklistEditable={checklistEditable}
             defaultPhase={workRequest?.phase === 'processing' ? 'processing' : 'pre_processing'}
           />
           </fieldset>
         </form>
 
-        <DialogFooter className="px-6 py-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+        <DialogFooter className="px-6 py-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={onClose}
-            className="text-xs"
+            className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
           >
             Cancel
           </Button>
@@ -928,7 +904,7 @@ export function WorkRequestModal({
             onClick={handleSubmit}
             disabled={isCompleted}
             data-testid="wr-modal-submit-btn"
-            className="text-xs font-semibold"
+            className="text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
           >
             {isEditMode ? 'Save Changes' : 'Create Work Request'}
           </Button>

@@ -11,7 +11,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="flex-1 space-y-6 p-6 max-w-7xl mx-auto" data-testid="admin-page">
+    <div className="w-full space-y-6" data-testid="admin-page">
       <AdminTabs />
       <BlockingActionModal />
     </div>

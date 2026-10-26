@@ -14,6 +14,11 @@ export const disbursementKeys = {
   list: (entity: string | null, filters?: DisbursementFilters) =>
     [...disbursementKeys.lists(), entity, filters ?? {}] as const,
 
+  // --- Queue Queries (v2 Segments & Workspaces) ---
+  queues: () => [...disbursementKeys.all, 'queue'] as const,
+  queue: (entity: string | null, queueName: string, filters?: DisbursementFilters) =>
+    [...disbursementKeys.queues(), entity, queueName, filters ?? {}] as const,
+
   // --- Detail Queries ---
   details: () => [...disbursementKeys.all, 'detail'] as const,
   detail: (id: string) => [...disbursementKeys.details(), id] as const,
@@ -21,6 +26,10 @@ export const disbursementKeys = {
   // --- Tab Badge Counts ---
   counts: (entity: string | null) =>
     [...disbursementKeys.all, 'counts', entity] as const,
+
+  // --- Receipt Download/Preview URL ---
+  receiptUrl: (id: string) =>
+    [...disbursementKeys.all, 'receiptUrl', id] as const,
 
   // --- Templates ---
   templates: (entity: string | null) =>

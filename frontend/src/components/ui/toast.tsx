@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Toaster as Sonner, toast } from 'sonner';
 
 type ToasterProps = React.ComponentProps<typeof Sonner>;
@@ -10,12 +11,12 @@ const Toaster = ({ ...props }: ToasterProps) => {
       toastOptions={{
         classNames: {
           toast:
-            'group toast group-[.toaster]:bg-white group-[.toaster]:text-[#1e293b] group-[.toaster]:border-[#f0f0f5] group-[.toaster]:shadow-[0_10px_40px_rgba(0,0,0,0.08)] group-[.toaster]:rounded-xl font-sans',
-          description: 'group-[.toast]:text-[#9494a0]',
+            'group toast group-[.toaster]:bg-[#FFFFFF] group-[.toaster]:text-[#1E293B] group-[.toaster]:border group-[.toaster]:border-[#E2E8F0] group-[.toaster]:shadow-float group-[.toaster]:rounded-[8px] font-sans',
+          description: 'group-[.toast]:text-[#475569]',
           actionButton:
-            'group-[.toast]:bg-[#2563eb] group-[.toast]:text-white',
+            'group-[.toast]:bg-[#1D4ED8] group-[.toast]:text-[#FFFFFF] group-[.toast]:rounded-[6px] group-[.toast]:border group-[.toast]:border-[#1D4ED8] group-[.toast]:hover:bg-[#1E40AF]',
           cancelButton:
-            'group-[.toast]:bg-[#f0f1f3] group-[.toast]:text-[#1e293b]',
+            'group-[.toast]:bg-[#F8FAFC] group-[.toast]:text-[#1E293B] group-[.toast]:rounded-[6px] group-[.toast]:border group-[.toast]:border-[#E2E8F0] group-[.toast]:hover:bg-[#E2E8F0]',
         },
       }}
       {...props}

@@ -58,38 +58,46 @@ export function AdminTabs() {
 
   return (
     <div className="space-y-6" data-testid="admin-tabs-container">
-      {/* Header Profile & Security Notice */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-200 pb-4">
+      {/* 1. Unified Module Header */}
+      <div className="border-b border-[#E2E8F0] pb-4 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
-            <ShieldCheck className="h-6 w-6 text-[#2563eb]" />
+          <nav
+            aria-label="Breadcrumb"
+            className="text-xs font-medium text-[#475569] flex items-center gap-1.5 pb-1"
+          >
+            <span>Modules</span>
+            <span aria-hidden="true">/</span>
+            <span className="text-[#1E293B] font-semibold">Admin</span>
+          </nav>
+          <h1 className="text-2xl font-semibold tracking-tight text-[#1E293B] flex items-center gap-2">
+            <ShieldCheck className="h-6 w-6 text-[#1D4ED8]" />
             Enterprise Administration
           </h1>
-          <p className="text-xs text-slate-500 pt-0.5">
+          <p className="text-xs sm:text-sm text-[#475569] pt-0.5">
             User provisioning, RBAC matrix governance, and recurring retainer template blueprints.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-xs bg-slate-50 text-slate-700 border-slate-200">
-            <Lock className="h-3 w-3 mr-1 text-slate-400" />
-            Admin Gated (<code className="font-mono text-[11px]">users:manage</code>)
+        <div className="flex items-center gap-2 self-start md:self-auto">
+          <Badge variant="outline" className="text-xs font-medium rounded-[6px] bg-[#F8FAFC] text-[#475569] border border-[#E2E8F0] px-2.5 py-1">
+            <Lock className="h-3 w-3 mr-1 text-[#475569]" />
+            Admin Gated (<code className="font-mono text-xs">users:manage</code>)
           </Badge>
         </div>
       </div>
 
-      {/* Tabs Layout */}
+      {/* 2. Tabs Layout */}
       <Tabs value={currentTab} onValueChange={handleTabChange} className="space-y-4">
-        <TabsList className="bg-slate-100 p-1 rounded-lg border border-slate-200">
+        <TabsList className="w-full justify-start rounded-[8px] bg-[#F8FAFC] p-1 border border-[#E2E8F0] gap-1 h-auto overflow-x-auto scrollbar-none flex flex-nowrap">
           {/* Tab: Users */}
           <TabsTrigger
             value="users"
-            className="gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-xs"
+            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-[#475569] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B] data-[state=active]:bg-[#FFFFFF] data-[state=active]:text-[#1E40AF] data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-[#1D4ED8] transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
             data-testid="tab-trigger-users"
           >
             <Users className="h-3.5 w-3.5" />
             <span>Team Members</span>
-            <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-blue-50 text-blue-700 border-blue-200">
+            <Badge variant="outline" className="text-xs tabular-nums py-0 px-1.5 ml-1.5 rounded-[4px] border border-[#E2E8F0] bg-[#E2E8F0]/70 text-[#1E293B]">
               {activeUsersCount}
             </Badge>
           </TabsTrigger>
@@ -97,12 +105,12 @@ export function AdminTabs() {
           {/* Tab: Permissions Matrix */}
           <TabsTrigger
             value="permissions"
-            className="gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-xs"
+            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-[#475569] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B] data-[state=active]:bg-[#FFFFFF] data-[state=active]:text-[#1E40AF] data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-[#1D4ED8] transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
             data-testid="tab-trigger-permissions"
           >
             <ShieldCheck className="h-3.5 w-3.5" />
             <span>Permissions Matrix</span>
-            <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-slate-50 text-slate-700">
+            <Badge variant="outline" className="text-xs py-0 px-1.5 ml-1.5 rounded-[4px] border border-[#E2E8F0] bg-[#E2E8F0]/70 text-[#1E293B]">
               {PERMISSION_KEYS.length}
             </Badge>
           </TabsTrigger>
@@ -110,12 +118,12 @@ export function AdminTabs() {
           {/* Tab: Retainer Templates */}
           <TabsTrigger
             value="retainers"
-            className="gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-xs"
+            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-[#475569] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B] data-[state=active]:bg-[#FFFFFF] data-[state=active]:text-[#1E40AF] data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-[#1D4ED8] transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
             data-testid="tab-trigger-retainers"
           >
             <FileSpreadsheet className="h-3.5 w-3.5" />
             <span>Retainer Templates</span>
-            <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-purple-50 text-purple-700 border-purple-200">
+            <Badge variant="outline" className="text-xs py-0 px-1.5 ml-1.5 rounded-[4px] border border-[#E2E8F0] bg-[#E2E8F0]/70 text-[#1E293B]">
               {templates.length}
             </Badge>
           </TabsTrigger>
@@ -123,13 +131,13 @@ export function AdminTabs() {
           {/* Tab: Generation Logs */}
           <TabsTrigger
             value="generations"
-            className="gap-2 text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-xs"
+            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-[#475569] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B] data-[state=active]:bg-[#FFFFFF] data-[state=active]:text-[#1E40AF] data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-[#1D4ED8] transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
             data-testid="tab-trigger-generations"
           >
             <History className="h-3.5 w-3.5" />
             <span>Generation Logs</span>
             {auditCountData?.total !== undefined && (
-              <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-slate-50 text-slate-600">
+              <Badge variant="outline" className="text-xs tabular-nums py-0 px-1.5 ml-1.5 rounded-[4px] border border-[#E2E8F0] bg-[#E2E8F0]/70 text-[#1E293B]">
                 {auditCountData.total}
               </Badge>
             )}

@@ -33,10 +33,10 @@ export function ClientTable({
 
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white p-8 text-center" data-testid="clients-table-loading">
+      <div className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-8 text-center" data-testid="clients-table-loading">
         <div className="flex flex-col items-center justify-center space-y-3">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-          <p className="text-sm text-slate-500">Loading client directory...</p>
+          <div className="h-6 w-6 animate-spin rounded-full border-[#E2E8F0] border-t-transparent" />
+          <p className="text-xs text-[#475569] tracking-normal">Loading client directory...</p>
         </div>
       </div>
     );
@@ -45,15 +45,15 @@ export function ClientTable({
   if (clients.length === 0) {
     return (
       <div
-        className="rounded-lg border border-slate-200 bg-white p-12 text-center"
+        className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-12 text-center"
         data-testid="clients-empty-state"
       >
         <div className="flex flex-col items-center justify-center max-w-sm mx-auto space-y-3">
-          <div className="p-3 bg-slate-100 rounded-full text-slate-400">
+          <div className="p-3 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] text-[#1E293B]">
             <FolderOpen className="h-8 w-8" />
           </div>
-          <h3 className="font-semibold text-slate-900">No clients found</h3>
-          <p className="text-sm text-slate-500">
+          <h3 className="font-bold text-sm text-[#1E293B] tracking-normal">No clients found</h3>
+          <p className="text-xs text-[#475569]">
             No client records match your current filter parameters or tab selection.
           </p>
         </div>
@@ -62,16 +62,16 @@ export function ClientTable({
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden" data-testid="clients-table-container">
+    <div className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] overflow-hidden" data-testid="clients-table-container">
       <Table data-testid="clients-table">
         <TableHeader>
-          <TableRow className="bg-slate-50 hover:bg-slate-50">
-            <TableHead className="font-semibold text-xs text-slate-700 w-1/4">Client Name</TableHead>
-            <TableHead className="font-semibold text-xs text-slate-700">TIN & RDO</TableHead>
-            <TableHead className="font-semibold text-xs text-slate-700">Entity</TableHead>
-            <TableHead className="font-semibold text-xs text-slate-700">Agreement</TableHead>
-            <TableHead className="font-semibold text-xs text-slate-700">Contact</TableHead>
-            <TableHead className="font-semibold text-xs text-slate-700 text-right">Actions</TableHead>
+          <TableRow className="bg-[#F8FAFC] border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] w-1/4">Client Name</TableHead>
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">TIN & RDO</TableHead>
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Entity</TableHead>
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Agreement</TableHead>
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Contact</TableHead>
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -83,21 +83,21 @@ export function ClientTable({
             return (
               <TableRow
                 key={client.id}
-                className="hover:bg-slate-50/80 cursor-pointer transition-colors"
+                className="hover:bg-[#E2E8F0] cursor-pointer transition-none border-b border-[#E2E8F0]"
                 onClick={() => onView(client)}
                 data-testid={`client-row-${client.id}`}
               >
                 {/* Name & Trade Name */}
                 <TableCell className="py-3">
                   <div className="space-y-0.5">
-                    <div className="font-semibold text-xs text-slate-900 flex items-center gap-1.5">
-                      <Building className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                    <div className="font-bold text-xs text-[#1E293B] flex items-center gap-1.5">
+                      <Building className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                       <span className="truncate" data-testid={`client-name-${client.id}`}>
                         {client.name}
                       </span>
                     </div>
                     {client.tradeName && (
-                      <p className="text-[11px] text-slate-500 pl-5 truncate">
+                      <p className="text-xs text-[#475569] pl-5 truncate">
                         DBA: {client.tradeName}
                       </p>
                     )}
@@ -106,11 +106,11 @@ export function ClientTable({
 
                 {/* TIN & RDO */}
                 <TableCell className="py-3">
-                  <div className="text-xs font-mono text-slate-800" data-testid={`client-tin-${client.id}`}>
+                  <div className="text-xs font-mono text-[#1E293B] tabular-nums font-semibold" data-testid={`client-tin-${client.id}`}>
                     {client.tin}
                   </div>
                   {client.rdoCode && (
-                    <div className="text-[11px] text-slate-500 mt-0.5">
+                    <div className="text-xs text-[#475569] mt-0.5">
                       RDO {client.rdoCode}
                     </div>
                   )}
@@ -120,10 +120,10 @@ export function ClientTable({
                 <TableCell className="py-3">
                   <Badge
                     variant="outline"
-                    className={`text-[11px] font-semibold px-2 py-0.5 ${
+                    className={`text-xs  font-bold tracking-normal rounded-[6px] px-2 py-0.5 ${
                       client.entity === 'ATA'
-                        ? 'bg-blue-50 text-blue-700 border-blue-200'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs border-[#E2E8F0]'
+                        : 'bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]'
                     }`}
                     data-testid={`client-entity-${client.id}`}
                   >
@@ -137,20 +137,20 @@ export function ClientTable({
                     <div className="space-y-0.5">
                       <Badge
                         variant="secondary"
-                        className="bg-purple-100 text-purple-800 border-purple-200 text-[11px] flex items-center gap-1 w-fit"
+                        className="bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs border-[#E2E8F0] rounded-[6px] text-xs font-bold uppercase flex items-center gap-1 w-fit"
                         data-testid={`client-retainer-badge-${client.id}`}
                       >
-                        <CheckCircle className="h-3 w-3" />
+                        <CheckCircle className="h-3 w-3 text-[#FFFFFF]" />
                         Retainer
                       </Badge>
                       {client.retainerFee !== null && client.retainerFee !== undefined && (
-                        <div className="text-[11px] text-slate-600 font-mono">
+                        <div className="text-xs text-[#1E293B] tabular-nums">
                           ₱{client.retainerFee.toLocaleString('en-US', { minimumFractionDigits: 2 })}/mo
                         </div>
                       )}
                     </div>
                   ) : (
-                    <Badge variant="outline" className="text-[11px] text-slate-500 border-slate-200">
+                    <Badge variant="outline" className="text-xs uppercase rounded-[6px] text-[#475569] border-[#E2E8F0] bg-transparent">
                       Standard
                     </Badge>
                   )}
@@ -158,19 +158,19 @@ export function ClientTable({
 
                 {/* Contact */}
                 <TableCell className="py-3">
-                  <div className="space-y-0.5 text-xs text-slate-700">
+                  <div className="space-y-0.5 text-xs text-[#1E293B]">
                     {client.contactPerson && (
-                      <div className="font-medium truncate">{client.contactPerson}</div>
+                      <div className="font-semibold truncate">{client.contactPerson}</div>
                     )}
                     {primaryEmail && (
-                      <div className="flex items-center gap-1 text-[11px] text-slate-500 truncate">
-                        <Mail className="h-3 w-3 text-slate-400 shrink-0" />
+                      <div className="flex items-center gap-1 text-xs text-[#475569] truncate">
+                        <Mail className="h-3 w-3 text-[#475569] shrink-0" />
                         <span className="truncate">{primaryEmail}</span>
                       </div>
                     )}
                     {!primaryEmail && primaryPhone && (
-                      <div className="flex items-center gap-1 text-[11px] text-slate-500 truncate">
-                        <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                      <div className="flex items-center gap-1 text-xs text-[#475569] truncate">
+                        <Phone className="h-3 w-3 text-[#475569] shrink-0" />
                         <span className="truncate">{primaryPhone}</span>
                       </div>
                     )}
@@ -186,7 +186,7 @@ export function ClientTable({
                       variant="ghost"
                       size="sm"
                       onClick={() => onView(client)}
-                      className="h-8 w-8 p-0 text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                      className="h-8 w-8 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                       data-testid={`view-client-btn-${client.id}`}
                       title="View Details"
                     >
@@ -200,7 +200,7 @@ export function ClientTable({
                         variant="ghost"
                         size="sm"
                         onClick={() => onEdit(client)}
-                        className="h-8 w-8 p-0 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                        className="h-8 w-8 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                         data-testid={`edit-client-btn-${client.id}`}
                         title="Edit Client"
                       >
@@ -216,7 +216,7 @@ export function ClientTable({
                           variant="ghost"
                           size="sm"
                           onClick={() => onRestore(client)}
-                          className="h-8 w-8 p-0 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                          className="h-8 w-8 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                           data-testid={`restore-client-btn-${client.id}`}
                           title="Restore Client"
                         >
@@ -228,7 +228,7 @@ export function ClientTable({
                           variant="ghost"
                           size="sm"
                           onClick={() => onArchive(client)}
-                          className="h-8 w-8 p-0 text-rose-500 hover:text-rose-600 hover:bg-rose-50"
+                          className="h-8 w-8 p-0 rounded-[6px] text-[#DC2626] hover:bg-[#F8FAFC] hover:border hover:border-[#FCA5A5]"
                           data-testid={`archive-client-btn-${client.id}`}
                           title="Archive Client"
                         >

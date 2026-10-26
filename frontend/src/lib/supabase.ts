@@ -399,13 +399,22 @@ export function getSupabaseClient(): SupabaseClient {
   if (url && key && typeof url === 'string' && typeof key === 'string' && !url.includes('placeholder')) {
     configuredUrl = url;
     configuredKey = key;
-    return createClient(url, key, {
+    const client = createClient(url, key, {
       realtime: {
         params: {
           eventsPerSecond: 10,
         },
       },
     });
+    try {
+      const storedToken = typeof localStorage !== 'undefined' ? localStorage.getItem('erp_access_token') : null;
+      if (storedToken) {
+        (client as unknown as { realtime?: { setAuth?: (t: string | null) => void } }).realtime?.setAuth?.(storedToken);
+      }
+    } catch {
+      // Safe fallback
+    }
+    return client;
   }
 
   return new MockSupabaseClient() as unknown as SupabaseClient;
@@ -417,6 +426,29 @@ let configuredUrl: string | null = null;
 let configuredKey: string | null = null;
 let activeSupabaseClient: SupabaseClient | MockSupabaseClient = createSupabaseInstance();
 
+/**
+ * Synchronizes the active Supabase Realtime WebSocket session with the user's JWT
+ * so RLS-protected tables (such as public.disbursements after migration 000071)
+ * authorize postgres_changes CDC events under the authenticated session role.
+ */
+export function syncSupabaseRealtimeAuth(accessToken?: string | null): void {
+  try {
+    const token =
+      accessToken !== undefined
+        ? accessToken
+        : typeof localStorage !== 'undefined'
+          ? localStorage.getItem('erp_access_token')
+          : null;
+    if (activeSupabaseClient && !(activeSupabaseClient instanceof MockSupabaseClient)) {
+      (activeSupabaseClient as unknown as { realtime?: { setAuth?: (t: string | null) => void } }).realtime?.setAuth?.(
+        token ?? null
+      );
+    }
+  } catch {
+    // Safe fallback
+  }
+}
+
 export function configureSupabase(url: string, key: string): SupabaseClient {
   if (url && key && typeof url === 'string' && typeof key === 'string' && !url.includes('placeholder')) {
     // If client is already initialized with identical credentials, reuse it to prevent
@@ -427,6 +459,7 @@ export function configureSupabase(url: string, key: string): SupabaseClient {
       activeSupabaseClient &&
       !(activeSupabaseClient instanceof MockSupabaseClient)
     ) {
+      syncSupabaseRealtimeAuth();
       return activeSupabaseClient as SupabaseClient;
     }
 
@@ -449,6 +482,7 @@ export function configureSupabase(url: string, key: string): SupabaseClient {
         },
       },
     });
+    syncSupabaseRealtimeAuth();
   }
   return activeSupabaseClient as SupabaseClient;
 }

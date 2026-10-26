@@ -83,6 +83,8 @@ export interface DmsDocumentVersion {
 }
 
 export interface DmsDocument {
+  /** Caller-specific comment authorization returned by document detail. */
+  can_comment?: boolean;
   id: string;
   file_name: string;
   original_name: string;

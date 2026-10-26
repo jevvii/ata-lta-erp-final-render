@@ -168,9 +168,9 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
   });
 
   // ==========================================================================
-  // Test 2: Strict Scoping Preventing Admin Contamination
+  // Test 2: Admin Visibility vs Non-Admin Strict Scoping
   // ==========================================================================
-  it('2. Strict Scoping: Admin user with timelog:edit_all strictly sees only their own tasks in PendingTasksCard', async () => {
+  it('2. Admin Visibility & Non-Admin Strict Scoping: Admin sees all work requests/tasks in PendingTasksCard while non-admin with timelog:edit_all strictly sees only their own', async () => {
     useSessionStore.getState().setSession({
       user: sampleAdminUser,
       permissions: ['workflow:view', 'timelog:create', 'timelog:edit_all', 'workflow:edit'],
@@ -217,18 +217,32 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       return { data: [] } as never;
     });
 
+    const { unmount } = render(<PendingTasksCard />, { wrapper: createWrapper() });
+
+    await waitFor(() => {
+      expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
+      expect(screen.getByText('Junior Voucher Verification')).toBeInTheDocument();
+    });
+
+    const badge = screen.getByTestId('pending-tasks-count-badge');
+    expect(badge).toHaveTextContent('2 Tasks Incomplete');
+
+    unmount();
+
+    // Verify non-Admin (e.g. Manager/Staff even with timelog:edit_all) strictly sees ONLY their own tasks
+    useSessionStore.getState().setSession({
+      user: { ...sampleWorkerUser, id: 'usr-admin-1', role: 'Manager' },
+      permissions: ['workflow:view', 'timelog:create', 'timelog:edit_all', 'workflow:edit'],
+      activeEntity: 'ATA',
+      unreadCount: 0,
+    });
+
     render(<PendingTasksCard />, { wrapper: createWrapper() });
 
     await waitFor(() => {
       expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
     });
-
-    // CRITICAL: Junior staff task MUST NOT leak to admin's pending tasks card
     expect(screen.queryByText('Junior Voucher Verification')).not.toBeInTheDocument();
-
-    // Verify counter badge states strictly 1 task
-    const badge = screen.getByTestId('pending-tasks-count-badge');
-    expect(badge).toHaveTextContent('1 Task Incomplete');
   });
 
   // ==========================================================================

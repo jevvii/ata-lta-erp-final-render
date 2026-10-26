@@ -192,7 +192,7 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
             data: {
               id: 'disb-archived-1',
               disbursement_number: 'DISB-ATA-20261001-001',
-              status: 'Approved',
+              status: 'Released',
             },
           }),
         };
@@ -203,7 +203,8 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
       const restored = await restoreDisbursementAction(
         'disb-archived-1',
         'DISB-ATA-20261001-001',
-        'ATA'
+        'ATA',
+        7
       );
 
       // Verify endpoint and method
@@ -228,7 +229,9 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
           description: 'Stationery bulk order',
           amount: 3200,
           fund_source: 'Firm Fund',
-          status: 'Draft',
+          status: 'Released',
+          lifecycle_version: 2,
+          archived: true,
           linked_work_request_id: '11111111-1111-1111-1111-111111111111',
           version: 1,
           created_at: new Date().toISOString(),
@@ -237,15 +240,17 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
       ];
 
       let restoreCalled = false;
+      let restoreBody: unknown;
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
         if (url.includes('/unarchive') && init?.method === 'POST') {
           restoreCalled = true;
+          restoreBody = JSON.parse(String(init.body));
           return {
             ok: true,
             status: 200,
             headers: new Headers({ 'content-type': 'application/json' }),
             json: async () => ({
-              data: { ...mockArchivedList[0], status: 'Draft' },
+              data: { ...mockArchivedList[0], status: 'Released', archived: false, version: 2 },
             }),
           };
         }
@@ -282,6 +287,7 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
 
       await waitFor(() => {
         expect(restoreCalled).toBe(true);
+        expect(restoreBody).toEqual({ expectedVersion: 1 });
       });
     });
 
@@ -523,6 +529,8 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
       });
 
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+      const confirmBtn = screen.queryByTestId('btn-confirm-no-receipt');
+      if (confirmBtn) fireEvent.click(confirmBtn);
 
       await waitFor(() => {
         expect(dispatchedBody).not.toBeNull();

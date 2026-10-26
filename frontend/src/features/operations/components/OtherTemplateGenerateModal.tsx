@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { DateInput } from '@/components/ui/date-input';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -23,6 +24,7 @@ import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers'
 import { useClients } from '../api/useClients';
 import { useTeam } from '../api/useTeam';
 import { AssignerSelect } from './AssignerSelect';
+import { TaskTypeBadge } from '../lib/taskTypes';
 import { runBlockingAction } from './BlockingActionModal';
 import { operationsKeys } from '../api/queryKeys';
 import { useSessionStore } from '@/lib/session';
@@ -50,6 +52,7 @@ interface BlueprintTask {
   assignees: string[];
   depends_on?: string | null;
   dueDate?: string | null;
+  requiredLinkType?: string | null;
   checklist?: ChecklistItemData[];
 }
 
@@ -142,6 +145,7 @@ export function OtherTemplateGenerateModal({
           assignees: Array.isArray(rawAssignees) ? rawAssignees : [],
           depends_on: dependsOn,
           dueDate: t.dueDate || t.due_date || null,
+          requiredLinkType: t.requiredLinkType ?? t.required_link_type ?? null,
           checklist: t.checklist || [],
         };
       })
@@ -202,6 +206,11 @@ export function OtherTemplateGenerateModal({
       return;
     }
 
+    if (!dueDate) {
+      setError('Due date is required to generate work requests.');
+      return;
+    }
+
     // Strict task assignee scoping check
     if (unmappedTasks.length > 0) {
       setError(
@@ -220,7 +229,7 @@ export function OtherTemplateGenerateModal({
           overrides: {
             clientId,
             priority,
-            dueDate: dueDate || undefined,
+            dueDate,
             assignedTo,
             coAssignees,
             description: description.trim() || undefined,
@@ -232,6 +241,7 @@ export function OtherTemplateGenerateModal({
               assignees: t.assignees,
               depends_on: t.depends_on || null,
               dueDate: t.dueDate || null,
+              requiredLinkType: t.requiredLinkType || null,
               checklist: t.checklist || [],
             })),
           },
@@ -260,15 +270,15 @@ export function OtherTemplateGenerateModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+        className="max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
         data-testid="other-template-generate-modal"
       >
         <DialogHeader>
-          <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
-            <Layers className="h-5 w-5 text-blue-600" />
+          <DialogTitle className="text-base font-semibold tracking-tight text-[#1E293B] flex items-center gap-2">
+            <Layers className="h-5 w-5 text-[#1E293B]" />
             Generate from Other Template
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600 pt-1">
+          <DialogDescription className="text-xs tabular-nums text-[#475569] pt-1">
             Create an ad-hoc work request with client assignment, manager lead governance, and scoped tasks.
           </DialogDescription>
         </DialogHeader>
@@ -276,18 +286,18 @@ export function OtherTemplateGenerateModal({
         <form onSubmit={handleGenerate} className="space-y-4">
           {error && (
             <div
-              className="p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-xs text-red-700"
+              className="p-3 bg-[#FFFFFF] border-[#FCA5A5] rounded-[6px] flex items-center gap-2 text-xs tabular-nums text-[#DC2626]"
               data-testid="generate-error-banner"
             >
-              <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
+              <AlertTriangle className="h-4 w-4 shrink-0 text-[#DC2626]" />
               <span>{error}</span>
             </div>
           )}
 
           {/* 1. Template Dropdown */}
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
-              Other Template <span className="text-red-500">*</span>
+            <label className="text-xs tracking-normal text-[#475569] block">
+              Other Template <span className="text-[#DC2626]">*</span>
             </label>
             <Select
               value={templateId}
@@ -298,12 +308,12 @@ export function OtherTemplateGenerateModal({
               disabled={isTemplatesLoading}
             >
               <SelectTrigger
-                className="h-9 bg-white text-xs"
+                className="h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B]"
                 data-testid="other-template-select"
               >
                 <SelectValue placeholder="Select an Other Template..." />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
                 {otherTemplates.map((t) => (
                   <SelectItem key={t.id} value={t.id} className="text-xs">
                     {t.name || t.title} ({(t.tasks || []).length} tasks)
@@ -316,14 +326,14 @@ export function OtherTemplateGenerateModal({
           {/* 2. Client Selection (Searchable & Required) */}
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <label className="text-xs font-semibold text-slate-700">
-                Client <span className="text-red-500">*</span>
+              <label className="text-xs tracking-normal text-[#475569]">
+                Client <span className="text-[#DC2626]">*</span>
               </label>
               {clientSearch && (
                 <button
                   type="button"
                   onClick={() => setClientSearch('')}
-                  className="text-[11px] text-slate-400 hover:text-slate-600"
+                  className="text-xs text-[#475569] hover:text-[#1E293B]"
                 >
                   Clear search
                 </button>
@@ -332,13 +342,13 @@ export function OtherTemplateGenerateModal({
 
             {/* Optional search filter input */}
             <div className="relative mb-1">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[#475569]" />
               <Input
                 type="text"
                 placeholder="Search client name or TIN..."
                 value={clientSearch}
                 onChange={(e) => setClientSearch(e.target.value)}
-                className="h-8 pl-8 text-xs bg-slate-50 border-slate-200"
+                className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
                 data-testid="client-search-input"
               />
             </div>
@@ -352,14 +362,14 @@ export function OtherTemplateGenerateModal({
               }}
             >
               <SelectTrigger
-                className="h-9 bg-white text-xs"
+                className="h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B]"
                 data-testid="other-template-client-select"
               >
                 <SelectValue placeholder="Select target client..." />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
                 {filteredClients.length === 0 ? (
-                  <div className="p-2 text-xs text-slate-400 text-center">
+                  <div className="p-2 text-xs text-[#475569] text-center">
                     No matching clients found
                   </div>
                 ) : (
@@ -372,7 +382,7 @@ export function OtherTemplateGenerateModal({
               </SelectContent>
             </Select>
             {clientError && (
-              <p className="text-xs text-rose-600" data-testid="client-error">
+              <p className="text-xs text-[#DC2626]" data-testid="client-error">
                 {clientError}
               </p>
             )}
@@ -382,7 +392,7 @@ export function OtherTemplateGenerateModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* Priority */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-700">
+              <label className="text-xs tracking-normal text-[#475569] block">
                 Priority
               </label>
               <Select
@@ -390,12 +400,12 @@ export function OtherTemplateGenerateModal({
                 onValueChange={(val) => setPriority(val as Priority)}
               >
                 <SelectTrigger
-                  className="h-9 bg-white text-xs"
+                  className="h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B]"
                   data-testid="other-template-priority-select"
                 >
                   <SelectValue placeholder="Select priority" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
                   <SelectItem value="Low" className="text-xs">Low</SelectItem>
                   <SelectItem value="Normal" className="text-xs">Normal</SelectItem>
                   <SelectItem value="High" className="text-xs">High</SelectItem>
@@ -406,15 +416,17 @@ export function OtherTemplateGenerateModal({
 
             {/* Due Date */}
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-slate-700 flex items-center gap-1">
-                <Calendar className="h-3 w-3 text-slate-500" />
-                <span>Due Date (Optional)</span>
+              <label className="text-xs tracking-normal text-[#475569] flex items-center gap-1">
+                <Calendar className="h-3 w-3 text-[#475569]" />
+                <span>Due Date *</span>
               </label>
-              <Input
+              <DateInput
                 type="date"
                 value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                className="h-9 bg-white text-xs"
+                onValueChange={(val) => setDueDate(val)}
+                className="h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] tabular-nums text-xs text-[#1E293B]"
+                aria-label="Due Date"
+                required
                 data-testid="other-template-due-date-input"
               />
             </div>
@@ -422,7 +434,7 @@ export function OtherTemplateGenerateModal({
 
           {/* 4. Description / Notes */}
           <div className="space-y-1">
-            <label className="text-xs font-semibold text-slate-700">
+            <label className="text-xs tracking-normal text-[#475569] block">
               Description / Notes (Optional)
             </label>
             <textarea
@@ -430,18 +442,18 @@ export function OtherTemplateGenerateModal({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Scope details, custom instructions, or client background..."
-              className="w-full rounded-md border border-slate-200 bg-white p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="resize-none w-full rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-2.5 text-xs text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
               data-testid="other-template-description-textarea"
             />
           </div>
 
           {/* 5. Team Governance (Mandatory) */}
-          <div className="p-3 bg-slate-50/70 border border-slate-200 rounded-md space-y-3">
+          <div className="p-3 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-[#1E293B] tracking-normal">
                 Team Governance (Mandatory)
               </h4>
-              <span className="text-[11px] text-slate-400">
+              <span className="text-xs text-[#475569]">
                 Lead Manager + Operations Co-Assignees
               </span>
             </div>
@@ -463,7 +475,7 @@ export function OtherTemplateGenerateModal({
             />
 
             {managerError && (
-              <p className="text-xs text-rose-600" data-testid="manager-error">
+              <p className="text-xs text-[#DC2626]" data-testid="manager-error">
                 {managerError}
               </p>
             )}
@@ -471,33 +483,37 @@ export function OtherTemplateGenerateModal({
 
           {/* 6. Blueprint Tasks Scoping Preview */}
           {blueprintTasks.length > 0 && (
-            <div className="space-y-2 pt-2 border-t border-slate-200">
+            <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-700">
+                <span className="text-xs font-bold tracking-normal text-[#1E293B]">
                   Task Blueprint Scoping ({blueprintTasks.length} tasks)
                 </span>
                 {unmappedTasks.length > 0 && (
-                  <Badge variant="destructive" size="compact">
+                  <Badge variant="destructive" size="compact" className="rounded-[6px] text-xs">
                     {unmappedTasks.length} unmapped assignee{unmappedTasks.length !== 1 ? 's' : ''}
                   </Badge>
                 )}
               </div>
 
-              <div className="max-h-40 overflow-y-auto space-y-1.5 divide-y divide-slate-100 border border-slate-200 rounded-md p-2 bg-white">
+              <div className="max-h-40 overflow-y-auto space-y-1.5 divide-y divide-[#CBD5E1] border-[#E2E8F0] rounded-[6px] p-2 bg-[#FFFFFF]">
                 {blueprintTasks.map((t, idx) => (
                   <div
                     key={t.local_id || idx}
                     className="flex items-center justify-between text-xs py-1"
                   >
                     <div className="flex items-center gap-1.5 truncate">
-                      <span className="text-slate-400 text-[10px]">#{idx + 1}</span>
-                      <span className="font-medium text-slate-800 truncate">{t.title}</span>
+                      <span className="text-[#475569] text-xs">#{idx + 1}</span>
+                      <TaskTypeBadge
+                        value={t.requiredLinkType}
+                        data-testid={`other-generate-task-type-${t.local_id || idx}`}
+                      />
+                      <span className="font-semibold text-[#1E293B] truncate">{t.title}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <Badge
                         variant={t.phase === 'processing' ? 'secondary' : 'default'}
                         size="compact"
-                        className="text-[10px]"
+                        className="text-xs rounded-[6px]"
                       >
                         {t.phase === 'processing' ? 'Processing' : 'Pre-Proc'}
                       </Badge>
@@ -508,13 +524,13 @@ export function OtherTemplateGenerateModal({
             </div>
           )}
 
-          <DialogFooter className="pt-4 border-t border-slate-200">
+          <DialogFooter className="pt-4 border-t border-[#E2E8F0]">
             <Button
               type="button"
               variant="outline"
               size="sm"
               onClick={onClose}
-              className="text-xs"
+              className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] tabular-nums text-xs tracking-normal"
               data-testid="other-template-generate-cancel-btn"
             >
               Cancel
@@ -522,7 +538,7 @@ export function OtherTemplateGenerateModal({
             <Button
               type="submit"
               size="sm"
-              className="text-xs font-semibold"
+              className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs tabular-nums text-xs tracking-normal"
               data-testid="other-template-generate-submit-btn"
             >
               Generate Work Request

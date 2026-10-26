@@ -1,18 +1,11 @@
-import { DateInput } from '@/components/ui/date-input';
 import { useState } from 'react';
 import {
-  Calendar,
-  Briefcase,
-  Receipt,
-  CreditCard,
-  Send,
-  DollarSign,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
-  AlertCircle,
-  FolderOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { DateInput } from '@/components/ui/date-input';
 import {
   Table,
   TableHeader,
@@ -22,11 +15,40 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { useDailyReport } from '../api/useReports';
-import { formatCurrency, formatDate, getTodayString } from '../utils/formatters';
+import { useSessionStore } from '@/lib/session';
+import {
+  formatCurrency,
+  formatCount,
+  formatManilaDate,
+  getTodayString,
+} from '../utils/formatters';
+import {
+  ReportToolbar,
+  ReportToolbarGroup,
+  ReportSummaryBand,
+  ReportSummaryCard,
+  ReportSection,
+  ReportTableContainer,
+  ReportScopePrompt,
+  ReportLoadingState,
+  ReportErrorState,
+} from './';
+import { shiftDays, scrollToReportSection } from './periodicReportHelpers';
 
 export function DailyActivityTab() {
+  const activeEntity = useSessionStore((state) => state.activeEntity);
   const [selectedDate, setSelectedDate] = useState<string>(getTodayString());
-  const { data, isLoading, error, refetch, isRefetching } = useDailyReport(selectedDate);
+  const { data, isLoading, error, refetch, isRefetching } = useDailyReport(selectedDate, {
+    enabled: activeEntity !== 'ALL',
+  });
+
+  if (activeEntity === 'ALL') {
+    return (
+      <div data-testid="daily-activity-tab" className="space-y-6">
+        <ReportScopePrompt />
+      </div>
+    );
+  }
 
   const summary = data?.summary || {
     workRequests: 0,
@@ -47,424 +69,473 @@ export function DailyActivityTab() {
   const disbursements = data?.disbursements || [];
   const transmittals = data?.transmittals || [];
 
+  const handlePrevDay = () => {
+    setSelectedDate((prev) => shiftDays(prev || getTodayString(), -1));
+  };
+
+  const handleNextDay = () => {
+    setSelectedDate((prev) => shiftDays(prev || getTodayString(), 1));
+  };
+
+  const handleToday = () => {
+    setSelectedDate(getTodayString());
+  };
+
   return (
     <div className="space-y-6" data-testid="daily-activity-tab">
-      {/* 1. Header & Date Picker Filter Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-blue-600" />
-            <span>Daily Activity Log</span>
-          </h2>
-          <p className="text-xs text-slate-500">
-            Itemized breakdown of operations, invoicing, disbursements, and document activities for a single day.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-xs">
-            <span className="text-xs font-semibold text-slate-600">Date:</span>
-            <DateInput
-              aria-label="Report date"
-              type="date"
-              value={selectedDate}
-              onValueChange={(value) => setSelectedDate(value || getTodayString())}
-              className="h-7 text-xs w-44"
-              data-testid="daily-date-picker"
-            />
+      {/* 1. Contextual Toolbar */}
+      <ReportToolbar dataTestId="daily-toolbar">
+        <ReportToolbarGroup align="left">
+          <label htmlFor="daily-date-picker" className="text-xs font-medium text-[#475569] shrink-0">
+            Date
+          </label>
+          <DateInput
+            id="daily-date-picker"
+            aria-label="Report date"
+            type="date"
+            value={selectedDate}
+            onValueChange={(value) => setSelectedDate(value || getTodayString())}
+            className="w-[176px] rounded-[6px] border border-[#E2E8F0] bg-white text-xs text-[#1E293B]"
+            data-testid="daily-date-picker"
+          />
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePrevDay}
+              aria-label="Previous day"
+              title="Previous day"
+              className="h-9 w-9 p-0 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] cursor-pointer shadow-2xs"
+              data-testid="daily-prev-day-btn"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleNextDay}
+              aria-label="Next day"
+              title="Next day"
+              className="h-9 w-9 p-0 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] cursor-pointer shadow-2xs"
+              data-testid="daily-next-day-btn"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
           </div>
-
           <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleToday}
+            className="h-9 px-3 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] text-xs font-semibold cursor-pointer shadow-2xs"
+            data-testid="daily-today-btn"
+          >
+            Today
+          </Button>
+        </ReportToolbarGroup>
+
+        <ReportToolbarGroup align="right">
+          <Button
+            type="button"
             variant="outline"
             size="sm"
             onClick={() => refetch()}
             disabled={isRefetching}
-            className="text-xs gap-1.5 cursor-pointer"
+            className="h-9 px-3 text-xs font-semibold gap-1.5 cursor-pointer rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] transition-colors shadow-2xs"
             data-testid="daily-refresh-button"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefetching ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </Button>
-        </div>
-      </div>
+        </ReportToolbarGroup>
+      </ReportToolbar>
 
+      {/* 2. Loading / Error / Data Content */}
       {isLoading ? (
-        <div
-          className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200"
-          data-testid="daily-loading"
-        >
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-          <p className="text-xs">Loading activity for {selectedDate}...</p>
-        </div>
+        <ReportLoadingState type="full" dataTestId="daily-loading" />
       ) : error ? (
-        <div
-          className="p-8 text-center bg-white rounded-xl border border-rose-200 space-y-3"
-          data-testid="daily-error"
-        >
-          <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-          <h3 className="text-sm font-semibold text-slate-800">Unable to load daily report</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            {error instanceof Error ? error.message : 'Please check your connection and try again.'}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            className="text-xs cursor-pointer"
-          >
-            Retry
-          </Button>
-        </div>
+        <ReportErrorState
+          dataTestId="daily-error"
+          title="Unable to load daily report"
+          message={error instanceof Error ? error.message : 'Please check your connection and try again.'}
+          onRetry={() => refetch()}
+        />
       ) : (
         <>
-          {/* 2. 9 Summary KPI Badges Grid */}
+          {/* 3. 3-Cell Monetary Summary Band */}
+          <ReportSummaryBand columns={3}>
+            <ReportSummaryCard
+              label="Invoice total"
+              value={formatCurrency(summary.invoicesTotal)}
+              dataTestId="kpi-invoices-total"
+            />
+            <ReportSummaryCard
+              label="Payments received"
+              value={formatCurrency(summary.paymentsTotal)}
+              dataTestId="kpi-payments-total"
+            />
+            <ReportSummaryCard
+              label="Disbursement total"
+              value={formatCurrency(summary.disbursementsTotal)}
+              dataTestId="kpi-disbursements-total"
+            />
+          </ReportSummaryBand>
+
+          {/* 4. Compact Category Count Strip */}
           <div
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2.5"
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5"
             data-testid="daily-kpi-grid"
           >
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-work-requests">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Work Requests
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.workRequests}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-documents">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Documents
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.documents}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-invoices">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Invoices
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.invoices}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-invoices-total">
-              <span className="text-[10px] font-semibold text-emerald-600 uppercase tracking-wide block">
-                Invoice Total
-              </span>
-              <span className="text-sm font-bold text-emerald-700 mt-1 block font-mono truncate">
-                {formatCurrency(summary.invoicesTotal)}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-payments">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Payments
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.payments}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-payments-total">
-              <span className="text-[10px] font-semibold text-indigo-600 uppercase tracking-wide block">
-                Payment Total
-              </span>
-              <span className="text-sm font-bold text-indigo-700 mt-1 block font-mono truncate">
-                {formatCurrency(summary.paymentsTotal)}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-disbursements">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Disbursements
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.disbursements}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-disbursements-total">
-              <span className="text-[10px] font-semibold text-purple-600 uppercase tracking-wide block">
-                Disb. Total
-              </span>
-              <span className="text-sm font-bold text-purple-700 mt-1 block font-mono truncate">
-                {formatCurrency(summary.disbursementsTotal)}
-              </span>
-            </div>
-
-            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-transmittals">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide block">
-                Transmittals
-              </span>
-              <span className="text-lg font-bold text-slate-900 mt-0.5 block">
-                {summary.transmittals}
-              </span>
-            </div>
+            {[
+              {
+                id: 'workRequests',
+                label: 'Work requests',
+                count: summary.workRequests,
+                testId: 'kpi-work-requests',
+                targetId: 'section-daily-work-requests',
+              },
+              {
+                id: 'invoices',
+                label: 'Invoices',
+                count: summary.invoices,
+                testId: 'kpi-invoices',
+                targetId: 'section-daily-invoices',
+              },
+              {
+                id: 'payments',
+                label: 'Payments',
+                count: summary.payments,
+                testId: 'kpi-payments',
+                targetId: 'section-daily-payments',
+              },
+              {
+                id: 'disbursements',
+                label: 'Disbursements',
+                count: summary.disbursements,
+                testId: 'kpi-disbursements',
+                targetId: 'section-daily-disbursements',
+              },
+              {
+                id: 'documents',
+                label: 'Documents',
+                count: summary.documents,
+                testId: 'kpi-documents',
+                targetId: 'section-daily-documents',
+              },
+              {
+                id: 'transmittals',
+                label: 'Transmittals',
+                count: summary.transmittals,
+                testId: 'kpi-transmittals',
+                targetId: 'section-daily-transmittals',
+              },
+            ].map((cat) => (
+              <button
+                type="button"
+                key={cat.id}
+                data-testid={cat.testId}
+                onClick={() => scrollToReportSection(cat.targetId)}
+                className="flex items-center justify-between gap-2 p-3 bg-[#FFFFFF] rounded-[8px] border border-[#E2E8F0] hover:bg-[#F8FAFC] hover:border-[#94A3B8] shadow-card transition-colors cursor-pointer text-left"
+              >
+                <span className="text-xs font-medium text-[#475569] leading-snug">
+                  {cat.label}
+                </span>
+                <span className="text-xs font-semibold text-[#1E40AF] tabular-nums px-2 py-0.5 rounded-[4px] border border-[#BFDBFE] bg-[#EFF6FF]">
+                  {formatCount(cat.count)}
+                </span>
+              </button>
+            ))}
           </div>
 
-          {/* 3. 6 Itemized Detail Tables */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Work Requests Created */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Briefcase className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Work Requests Created ({workRequests.length})</span>
-                </h3>
-              </div>
+          {/* 5. 6 Full-Width Itemized Detail Tables */}
+          <div className="space-y-6">
+            {/* Table 1: Work Requests Created */}
+            <ReportSection
+              id="section-daily-work-requests"
+              dataTestId="daily-work-requests-section"
+              title="Work requests"
+              badgeCount={workRequests.length}
+              collapsible
+            >
               {workRequests.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No work requests created on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Title</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {workRequests.map((wr) => (
-                      <TableRow key={wr.id}>
-                        <TableCell className="text-xs font-medium text-slate-900">
-                          {wr.title}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {wr.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(wr.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[540px]" ariaLabel="Work requests table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Title</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="w-40 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {workRequests.map((wr) => (
+                        <TableRow key={wr.id}>
+                          <TableCell className="font-medium text-[#1E293B]">
+                            <span
+                              className="line-clamp-2 max-w-xl break-words"
+                              title={wr.title}
+                            >
+                              {wr.title}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {wr.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(wr.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
-            {/* Invoices Issued */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Receipt className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Invoices Issued ({invoices.length})</span>
-                </h3>
-              </div>
+            {/* Table 2: Invoices Issued */}
+            <ReportSection
+              id="section-daily-invoices"
+              dataTestId="daily-invoices-section"
+              title="Invoices"
+              badgeCount={invoices.length}
+              collapsible
+            >
               {invoices.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No invoices issued on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Invoice #</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Total</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {invoices.map((inv) => (
-                      <TableRow key={inv.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {inv.invoice_number}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {inv.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-slate-800 text-right">
-                          {formatCurrency(inv.total)}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(inv.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[560px]" ariaLabel="Invoices table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Invoice #</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="w-40 text-right">Total</TableHead>
+                        <TableHead className="w-40 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {invoices.map((inv) => (
+                        <TableRow key={inv.id}>
+                          <TableCell className="font-semibold text-[#1E293B] tabular-nums">
+                            {inv.invoice_number}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {inv.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right font-semibold text-[#1E293B] tabular-nums">
+                            {formatCurrency(inv.total)}
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(inv.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
-            {/* Payments Received */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <DollarSign className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Payments Received ({payments.length})</span>
-                </h3>
-              </div>
+            {/* Table 3: Payments Received */}
+            <ReportSection
+              id="section-daily-payments"
+              dataTestId="daily-payments-section"
+              title="Payments"
+              badgeCount={payments.length}
+              collapsible
+            >
               {payments.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No payments received on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Amount</TableHead>
-                      <TableHead className="text-xs font-semibold">Method</TableHead>
-                      <TableHead className="text-xs font-semibold">Invoice ID</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Date</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {payments.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="text-xs font-mono font-bold text-emerald-600">
-                          {formatCurrency(p.amount)}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-600">{p.method}</TableCell>
-                        <TableCell className="text-xs font-mono text-slate-500 truncate max-w-[120px]">
-                          {p.invoice_id || '—'}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(p.payment_date || p.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[560px]" ariaLabel="Payments table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-44 text-right">Amount</TableHead>
+                        <TableHead className="w-36">Method</TableHead>
+                        <TableHead>Invoice ID</TableHead>
+                        <TableHead className="w-40 text-right">Payment Date</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {payments.map((p) => (
+                        <TableRow key={p.id}>
+                          <TableCell className="text-right font-bold text-[#1E293B] tabular-nums">
+                            {formatCurrency(p.amount)}
+                          </TableCell>
+                          <TableCell className="text-[#1E293B] tabular-nums text-xs">{p.method}</TableCell>
+                          <TableCell className="text-xs text-[#475569] tabular-nums">
+                            {p.invoice_id ? (
+                              <span title={p.invoice_id}>{p.invoice_id}</span>
+                            ) : (
+                              '—'
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(p.payment_date || p.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
-            {/* Disbursements Filed */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <CreditCard className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Disbursements Filed ({disbursements.length})</span>
-                </h3>
-              </div>
+            {/* Table 4: Disbursements Requested */}
+            <ReportSection
+              id="section-daily-disbursements"
+              dataTestId="daily-disbursements-section"
+              title="Disbursements"
+              badgeCount={disbursements.length}
+              collapsible
+            >
               {disbursements.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No disbursements filed on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Disbursement #</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Amount</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {disbursements.map((d) => (
-                      <TableRow key={d.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {d.disbursement_number}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {d.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-slate-800 text-right">
-                          {formatCurrency(d.amount)}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(d.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[560px]" ariaLabel="Disbursements table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Disbursement #</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="w-40 text-right">Amount</TableHead>
+                        <TableHead className="w-40 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {disbursements.map((d) => (
+                        <TableRow key={d.id}>
+                          <TableCell className="font-semibold text-[#1E293B] tabular-nums">
+                            {d.disbursement_number}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {d.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right font-semibold text-[#1E293B] tabular-nums">
+                            {formatCurrency(d.amount)}
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(d.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
-            {/* Documents Uploaded */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Documents Uploaded ({documents.length})</span>
-                </h3>
-              </div>
+            {/* Table 5: Documents Uploaded */}
+            <ReportSection
+              id="section-daily-documents"
+              dataTestId="daily-documents-section"
+              title="Documents"
+              badgeCount={documents.length}
+              collapsible
+            >
               {documents.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No documents uploaded on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">File Name</TableHead>
-                      <TableHead className="text-xs font-semibold">Category</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {documents.map((doc) => (
-                      <TableRow key={doc.id}>
-                        <TableCell className="text-xs font-medium text-slate-900 truncate max-w-[180px]">
-                          {doc.original_name}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="outline" className="text-[10px]">
-                            {doc.category}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(doc.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[540px]" ariaLabel="Documents table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Document Name</TableHead>
+                        <TableHead className="w-40">Category</TableHead>
+                        <TableHead className="w-40 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {documents.map((doc) => (
+                        <TableRow key={doc.id}>
+                          <TableCell className="font-medium text-[#1E293B]">
+                            <span
+                              className="line-clamp-2 max-w-xl break-words"
+                              title={doc.original_name}
+                            >
+                              {doc.original_name}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {doc.category}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(doc.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
-            {/* Transmittals */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Send className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Transmittals ({transmittals.length})</span>
-                </h3>
-              </div>
+            {/* Table 6: Transmittals Created */}
+            <ReportSection
+              id="section-daily-transmittals"
+              dataTestId="daily-transmittals-section"
+              title="Transmittals"
+              badgeCount={transmittals.length}
+              collapsible
+            >
               {transmittals.length === 0 ? (
-                <div className="p-6 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No transmittals created on this date.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Tracking #</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {transmittals.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {t.tracking_number}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {t.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(t.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[540px]" ariaLabel="Transmittals table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Tracking #</TableHead>
+                        <TableHead className="w-36">Status</TableHead>
+                        <TableHead className="w-40 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {transmittals.map((t) => (
+                        <TableRow key={t.id}>
+                          <TableCell className="font-mono font-semibold text-[#1E293B] tabular-nums">
+                            {t.tracking_number}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {t.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(t.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
           </div>
         </>
       )}

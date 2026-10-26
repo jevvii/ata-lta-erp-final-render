@@ -2,7 +2,6 @@ import { apiRequest, queryClient } from '@/lib/api';
 import { runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { useSessionStore } from '@/lib/session';
 import { broadcastEntityChange } from '@/lib/tabSync';
-import { isFeatureEnabled } from '@/lib/flags';
 import { billingKeys } from './queryKeys';
 import type {
   Invoice,
@@ -94,10 +93,10 @@ export async function updateInvoiceAction(
     actionName: 'Update Invoice',
     apiCall: async () => {
       const payload: Record<string, unknown> = { ...data };
-      if (isFeatureEnabled('strict_occ') && typeof explicitVersion === 'number') {
+      if (typeof explicitVersion === 'number') {
         payload.expectedVersion = explicitVersion;
-      } else if (!isFeatureEnabled('strict_occ')) {
-        delete payload.expectedVersion;
+      } else if (typeof data.expectedVersion === 'number') {
+        payload.expectedVersion = data.expectedVersion;
       }
 
       const res = await apiRequest<{ data: Invoice }>(`/invoices/${id}`, {
@@ -134,7 +133,7 @@ export async function updateClientAddressAction(
     successMessage: 'Updated invoice snapshot address only. Master client record remains unchanged.',
     apiCall: async () => {
       const payload: Record<string, unknown> = { address };
-      if (isFeatureEnabled('strict_occ') && typeof expectedVersion === 'number') {
+      if (typeof expectedVersion === 'number') {
         payload.expectedVersion = expectedVersion;
       }
       const res = await apiRequest<{ data: Invoice }>(`/invoices/${id}`, {
@@ -261,8 +260,8 @@ export async function recordPaymentAction(
   });
 }
 
-export async function fetchInvoicePdfUrl(id: string): Promise<string> {
-  const res = await apiRequest<{ data: { url: string } }>(`/invoices/${id}/pdf`);
+export async function fetchInvoicePdfUrl(id: string, includeCompanyDetails = true): Promise<string> {
+  const res = await apiRequest<{ data: { url: string } }>(`/invoices/${id}/pdf?includeCompanyDetails=${includeCompanyDetails}`);
   return res.data.url;
 }
 

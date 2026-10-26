@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CreateDisbursementModal } from '../components/CreateDisbursementModal';
@@ -82,7 +82,9 @@ const mockDisbursements: Disbursement[] = [
     description: 'Messenger delivery to SEC office',
     amount: 350,
     fund_source: 'Firm Fund',
-    status: 'Pending',
+    status: 'Draft',
+    lifecycle_version: 2,
+    review_ready: true,
     linked_work_request_id: '11111111-1111-1111-1111-111111111111',
     version: 1,
     created_at: new Date().toISOString(),
@@ -97,6 +99,8 @@ const mockDisbursements: Disbursement[] = [
     amount: 500,
     fund_source: 'Client Fund',
     status: 'Approved',
+    lifecycle_version: 2,
+    review_ready: true,
     linked_work_request_id: '11111111-1111-1111-1111-111111111111',
     version: 1,
     created_at: new Date().toISOString(),
@@ -110,7 +114,9 @@ const mockDisbursements: Disbursement[] = [
     description: 'Notary commission',
     amount: 2500,
     fund_source: 'Firm Fund',
-    status: 'Released',
+    status: 'Funded',
+    lifecycle_version: 2,
+    review_ready: true,
     linked_work_request_id: '11111111-1111-1111-1111-111111111111',
     version: 1,
     created_at: new Date().toISOString(),
@@ -252,8 +258,15 @@ describe('Disbursements UI Components & Integration', () => {
         target: { value: 'Official court filing fee payment' },
       });
 
-      // Submit
+      // Submit (triggers in-app no-receipt confirmation dialog)
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-receipt-confirm-dialog')).toBeInTheDocument();
+      });
+
+      // Confirm creation
+      fireEvent.click(screen.getByTestId('btn-confirm-no-receipt'));
 
       await waitFor(() => {
         expect(dispatchedBody).not.toBeNull();
@@ -306,39 +319,17 @@ describe('Disbursements UI Components & Integration', () => {
       expect(screen.getByTestId('select-work-request-task')).toBeDisabled();
     });
 
-    it('renders Employee select dropdown and receipt dropzone with clean label without optional or asterisk', async () => {
-      const mockTeamMembers = [
-        { id: '11111111-2222-3333-4444-555555555555', name: 'Maria Santos', email: 'maria@ata-lta.ph', role: 'Staff' },
-        { id: '22222222-3333-4444-5555-666666666666', name: 'Juan Dela Cruz', email: 'juan@ata-lta.ph', role: 'Manager' },
-      ];
-
-      global.fetch = vi.fn().mockImplementation(async (url: string) => {
-        const u = String(url);
-        if (u.includes('/me/team')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: mockTeamMembers }),
-          };
-        }
-        return {
-          ok: true,
-          status: 200,
-          headers: new Headers({ 'content-type': 'application/json' }),
-          json: async () => ({ data: [] }),
-        };
-      });
-
+    it('renders locked requester display and receipt dropzone with clean label without optional or asterisk', async () => {
       const { wrapper } = createHarness();
       render(
         <CreateDisbursementModal isOpen={true} onClose={() => {}} />,
         { wrapper }
       );
 
-      // Verify select-employee dropdown
-      const employeeSelect = screen.getByTestId('select-employee') as HTMLSelectElement;
-      expect(employeeSelect).toBeInTheDocument();
+      // Verify locked requester display (R2/D1)
+      const requesterDisplay = screen.getByTestId('requester-locked-display');
+      expect(requesterDisplay).toBeInTheDocument();
+      expect(requesterDisplay).toHaveTextContent('Session Locked');
 
       // Verify receipt-dropzone
       const receiptDropzone = screen.getByTestId('receipt-dropzone');
@@ -353,22 +344,12 @@ describe('Disbursements UI Components & Integration', () => {
       // Verify no optional indicators in dropzone container
       expect(receiptDropzone.textContent).not.toMatch(/optional/i);
       expect(receiptDropzone.textContent).not.toContain('*');
-
-      // Verify options in employee select
-      await waitFor(() => {
-        expect(screen.getByText('Maria Santos')).toBeInTheDocument();
-        expect(screen.getByText('Juan Dela Cruz')).toBeInTheDocument();
-      });
     });
 
-    it('submits successfully with employee selected and without receipt (receiptFilename is null)', async () => {
+    it('submits successfully with session user identity and without receipt after in-app confirmation', async () => {
       let dispatchedBody: Record<string, unknown> | null = null;
-      const mockTeamMembers = [
-        { id: '11111111-2222-3333-4444-555555555555', name: 'Maria Santos', email: 'maria@ata-lta.ph', role: 'Staff' },
-      ];
 
-      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
-        const u = String(url);
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
         if (init?.method === 'POST') {
           dispatchedBody = JSON.parse(init.body as string);
           return {
@@ -382,14 +363,6 @@ describe('Disbursements UI Components & Integration', () => {
                 ...dispatchedBody,
               },
             }),
-          };
-        }
-        if (u.includes('/me/team')) {
-          return {
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: mockTeamMembers }),
           };
         }
         return {
@@ -410,37 +383,72 @@ describe('Disbursements UI Components & Integration', () => {
         { wrapper }
       );
 
-      await waitFor(() => {
-        expect(screen.getByText('Maria Santos')).toBeInTheDocument();
-      });
-
-      // Select employee
-      fireEvent.change(screen.getByTestId('select-employee'), {
-        target: { value: '11111111-2222-3333-4444-555555555555' },
-      });
-
       // Fill in amount & description
       fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '1200' } });
       fireEvent.change(screen.getByTestId('textarea-description'), {
         target: { value: 'Travel allowance for client visit' },
       });
 
-      // Submit without dropping any receipt
+      // Submit without dropping any receipt -> in-app confirmation
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('no-receipt-confirm-dialog')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('btn-confirm-no-receipt'));
 
       await waitFor(() => {
         expect(dispatchedBody).not.toBeNull();
       });
 
-      expect(dispatchedBody!.employeeId).toBe('11111111-2222-3333-4444-555555555555');
+      expect(dispatchedBody!.employeeId).toBe('u-admin-1');
       expect(dispatchedBody!.receiptFilename).toBeNull();
+      expect(dispatchedBody!.receiptS3Key).toBeNull();
     });
 
-    it('submits successfully with receipt attached via dropzone (receiptFilename is receipt.pdf)', async () => {
+    it('submits successfully with receipt attached via dropzone using pre-signed upload flow', async () => {
       let dispatchedBody: Record<string, unknown> | null = null;
 
-      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
-        if (init?.method === 'POST') {
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/disbursements/receipt-uploads/') && u.includes('/complete')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: {
+                receiptS3Key: 'entities/ATA/disbursements/receipts/opaque-uuid-receipt.pdf',
+                receiptFilename: 'receipt.pdf',
+              },
+            }),
+          };
+        }
+        if (u.includes('/disbursements/receipt-uploads')) {
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: {
+                uploadId: 'upload-reservation-1',
+                uploadUrl: 'https://storage.test/upload-binary',
+                objectKey: 'entities/ATA/disbursements/receipts/opaque-uuid-receipt.pdf',
+                expiresAt: '2026-10-17T16:00:00.000Z',
+              },
+            }),
+          };
+        }
+        if (u.includes('upload-binary') && init?.method === 'PUT') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers(),
+            text: async () => '',
+          };
+        }
+        if (u.includes('/disbursements') && init?.method === 'POST') {
           dispatchedBody = JSON.parse(init.body as string);
           return {
             ok: true,
@@ -501,20 +509,22 @@ describe('Disbursements UI Components & Integration', () => {
       });
 
       expect(dispatchedBody!.receiptFilename).toBe('receipt.pdf');
-      expect(dispatchedBody!.receiptS3Key).toMatch(/^disbursements\/receipts\/.*receipt\.pdf$/);
+      expect(dispatchedBody!.receiptS3Key).toBe('entities/ATA/disbursements/receipts/opaque-uuid-receipt.pdf');
     });
 
-    it('prompts soft-warning when storage upload fails despite selecting a receipt file', async () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-      const storageSpy = vi.spyOn(supabase.storage, 'from').mockReturnValue({
-        upload: vi.fn().mockResolvedValue({ data: null, error: new Error('Storage network unreachable') }),
-        remove: vi.fn().mockResolvedValue({ data: [], error: null }),
-        getPublicUrl: vi.fn().mockReturnValue({ data: { publicUrl: '' } }),
-      } as any);
-
+    it('aborts creation and displays error when receipt upload fails', async () => {
       let dispatched = false;
-      global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
-        if (init?.method === 'POST') {
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/disbursements/receipt-uploads')) {
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ title: 'Internal Server Error', detail: 'Storage failure' }),
+          };
+        }
+        if (u.includes('/disbursements') && init?.method === 'POST') {
           dispatched = true;
           return {
             ok: true,
@@ -561,14 +571,9 @@ describe('Disbursements UI Components & Integration', () => {
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
 
       await waitFor(() => {
-        expect(confirmSpy).toHaveBeenCalledWith(
-          'No Government Assessment Document attached. Proceed anyway?'
-        );
+        expect(screen.getByTestId('error-receipt')).toBeInTheDocument();
       });
       expect(dispatched).toBe(false);
-
-      confirmSpy.mockRestore();
-      storageSpy.mockRestore();
     });
 
     it('allows removing an attached receipt before submission', async () => {
@@ -603,8 +608,7 @@ describe('Disbursements UI Components & Integration', () => {
       });
     });
 
-    it('prompts soft-warning when submitting without receipt and cancels when rejected', async () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    it('prompts in-app confirmation when submitting without receipt and cancels when cancelled', async () => {
       let dispatched = false;
 
       global.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
@@ -642,17 +646,20 @@ describe('Disbursements UI Components & Integration', () => {
 
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
 
-      expect(confirmSpy).toHaveBeenCalledWith(
-        'No Government Assessment Document attached. Proceed anyway?'
-      );
+      await waitFor(() => {
+        expect(screen.getByTestId('no-receipt-confirm-dialog')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByTestId('btn-cancel-no-receipt'));
+
       expect(dispatched).toBe(false);
-      confirmSpy.mockRestore();
+      expect(screen.queryByTestId('no-receipt-confirm-dialog')).not.toBeInTheDocument();
     });
   });
 
   describe('AdminApprovalQueue', () => {
-    it('displays My Submitted Approvals view for non-Admin user', () => {
-      // Set session to staff without disbursement:approve
+    it('displays unauthorized notice for non-Admin staff user', () => {
+      // Set session to staff without Admin or Accounting role
       useSessionStore.getState().setSession({
         user: {
           id: 'u-staff-1',
@@ -669,11 +676,11 @@ describe('Disbursements UI Components & Integration', () => {
       const { wrapper } = createHarness();
       render(<AdminApprovalQueue />, { wrapper });
 
-      expect(screen.getByText(/My Submitted Approvals/i)).toBeInTheDocument();
-      expect(screen.queryByTestId('admin-approval-queue-unauthorized')).not.toBeInTheDocument();
+      expect(screen.getByTestId('admin-approval-queue-unauthorized')).toBeInTheDocument();
+      expect(screen.getByText(/Access Restricted/i)).toBeInTheDocument();
     });
 
-    it('renders pending items for Admin and executes approve workflow', async () => {
+    it('renders pending items for Admin and executes approve workflow via AdminApprovalModal', async () => {
       setAdminSession();
       let approvedCall = false;
 
@@ -684,7 +691,7 @@ describe('Disbursements UI Components & Integration', () => {
             ok: true,
             status: 200,
             headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: { id: 'disb-101', status: 'Approved' } }),
+            json: async () => ({ data: { id: 'disb-101', status: 'Released', version: 2 } }),
           };
         }
         return {
@@ -707,9 +714,16 @@ describe('Disbursements UI Components & Integration', () => {
 
       expect(screen.getByText('Messenger delivery to SEC office')).toBeInTheDocument();
 
-      // Click Approve
+      // Click Approve opens AdminApprovalModal
       const approveBtn = screen.getByTestId('approve-btn-disb-101');
       fireEvent.click(approveBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('admin-approval-modal')).toBeInTheDocument();
+      });
+
+      // Submit payment details in modal
+      fireEvent.click(screen.getByTestId('btn-confirm-approve'));
 
       await waitFor(() => {
         expect(approvedCall).toBe(true);
@@ -779,27 +793,27 @@ describe('Disbursements UI Components & Integration', () => {
   });
 
   describe('FundsReleaseActions', () => {
-    it('renders release action for Approved status and fund action for Released status (gated by disbursement:mark_released)', async () => {
+    it('renders fund action for Approved status and release action for Funded status', async () => {
       const { wrapper } = createHarness();
 
-      // Approved item -> Release button visible
+      // Approved item -> Prepare Payment button visible
       const approvedItem = mockDisbursements[1]!;
       const { unmount } = render(
         <FundsReleaseActions disbursement={approvedItem} />,
         { wrapper }
       );
 
-      expect(screen.getByTestId('release-btn-disb-102')).toBeInTheDocument();
+      expect(screen.getByTestId('action-fund-btn')).toBeInTheDocument();
       unmount();
 
-      // Released item -> Mark Funded button visible
-      const releasedItem = mockDisbursements[2]!;
+      // Funded item -> Sanction Release button visible
+      const fundedItem = mockDisbursements[2]!;
       render(
-        <FundsReleaseActions disbursement={releasedItem} />,
+        <FundsReleaseActions disbursement={fundedItem} />,
         { wrapper }
       );
 
-      expect(screen.getByTestId('fund-btn-disb-103')).toBeInTheDocument();
+      expect(screen.getByTestId('action-release-btn')).toBeInTheDocument();
     });
 
     it('hides release actions when user lacks disbursement:mark_released permission', () => {
@@ -855,8 +869,232 @@ describe('Disbursements UI Components & Integration', () => {
       });
 
       // Check clicking a row
-      fireEvent.click(screen.getByTestId('disbursement-row-disb-101'));
+      const row101 = screen.getByTestId('disbursement-row-disb-101');
+      fireEvent.click(row101);
       expect(onSelect).toHaveBeenCalledWith('disb-101');
+      expect(row101).toHaveAttribute('aria-selected', 'true');
+      expect(row101).toHaveClass('bg-selected');
+    });
+
+    it('exposes valid ARIA grid semantics with grid role, row roles, and columnheader/gridcell roles', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          data: mockDisbursements,
+          meta: { total: 3, page: 1, limit: 20 },
+        }),
+      });
+
+      const { wrapper } = createHarness();
+      render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
+
+      const grid = await screen.findByRole('grid', { name: 'Disbursement vouchers' });
+      expect(grid).toBeInTheDocument();
+      expect(grid).toHaveAttribute('data-testid', 'disbursements-table');
+
+      await waitFor(() => {
+        expect(screen.getByTestId('disbursement-row-disb-101')).toBeInTheDocument();
+      });
+
+      const rows = within(grid).getAllByRole('row');
+      expect(rows.length).toBe(4); // 1 header row + 3 data rows
+
+      const columnHeaders = within(grid).getAllByRole('columnheader');
+      expect(columnHeaders.length).toBeGreaterThanOrEqual(9);
+
+      const gridCells = within(grid).getAllByRole('gridcell');
+      expect(gridCells.length).toBeGreaterThan(0);
+    });
+
+    it('supports roving tabindex and keyboard navigation with Arrow keys, Home, and End', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          data: mockDisbursements,
+          meta: { total: 3, page: 1, limit: 20 },
+        }),
+      });
+
+      const { wrapper } = createHarness();
+      const onSelect = vi.fn();
+
+      render(
+        <DisbursementsTable onSelectDisbursement={onSelect} />,
+        { wrapper }
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('disbursement-row-disb-101')).toBeInTheDocument();
+      });
+
+      const row101 = screen.getByTestId('disbursement-row-disb-101');
+      const row102 = screen.getByTestId('disbursement-row-disb-102');
+      const row103 = screen.getByTestId('disbursement-row-disb-103');
+
+      // Initial state: first row has tabIndex=0, others -1
+      expect(row101).toHaveAttribute('tabIndex', '0');
+      expect(row102).toHaveAttribute('tabIndex', '-1');
+      expect(row103).toHaveAttribute('tabIndex', '-1');
+
+      row101.focus();
+      expect(document.activeElement).toBe(row101);
+
+      // ArrowDown moves focus to next row and updates roving tabindex
+      fireEvent.keyDown(row101, { key: 'ArrowDown' });
+      expect(document.activeElement).toBe(row102);
+      expect(row101).toHaveAttribute('tabIndex', '-1');
+      expect(row102).toHaveAttribute('tabIndex', '0');
+
+      // End moves focus to the last row
+      fireEvent.keyDown(row102, { key: 'End' });
+      expect(document.activeElement).toBe(row103);
+      expect(row103).toHaveAttribute('tabIndex', '0');
+      expect(row102).toHaveAttribute('tabIndex', '-1');
+
+      // Home moves focus to the first row
+      fireEvent.keyDown(row103, { key: 'Home' });
+      expect(document.activeElement).toBe(row101);
+      expect(row101).toHaveAttribute('tabIndex', '0');
+      expect(row103).toHaveAttribute('tabIndex', '-1');
+
+      // Enter selects focused row
+      fireEvent.keyDown(row101, { key: 'Enter' });
+      expect(onSelect).toHaveBeenCalledWith('disb-101');
+
+      // Space selects row 102
+      row102.focus();
+      fireEvent.keyDown(row102, { key: ' ' });
+      expect(onSelect).toHaveBeenCalledWith('disb-102');
+    });
+
+    it('does not intercept Enter or Space when bubbling from inner control buttons', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          data: mockDisbursements,
+          meta: { total: 3, page: 1, limit: 20 },
+        }),
+      });
+
+      const { wrapper } = createHarness();
+      const onSelect = vi.fn();
+
+      render(<DisbursementsTable onSelectDisbursement={onSelect} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('view-action-disb-101')).toBeInTheDocument();
+      });
+
+      const actionBtn = screen.getByTestId('view-action-disb-101');
+      actionBtn.focus();
+
+      // Trigger Enter on inner button
+      const keyEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      actionBtn.dispatchEvent(keyEvent);
+
+      // Event should NOT be defaultPrevented by handleRowKeyDown
+      expect(keyEvent.defaultPrevented).toBe(false);
+    });
+
+    it('renders deadline indicators for items with and without due dates', async () => {
+      const today = new Date();
+      const pastDate = new Date(today);
+      pastDate.setDate(today.getDate() - 3);
+      const futureDate = new Date(today);
+      futureDate.setDate(today.getDate() + 5);
+
+      const formatLocalDate = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+      const itemsWithDeadlines: Disbursement[] = [
+        {
+          ...mockDisbursements[0]!,
+          id: 'disb-nodate',
+          due_date: null,
+        },
+        {
+          ...mockDisbursements[1]!,
+          id: 'disb-overdue',
+          due_date: formatLocalDate(pastDate),
+        },
+        {
+          ...mockDisbursements[2]!,
+          id: 'disb-future',
+          due_date: formatLocalDate(futureDate),
+        },
+      ];
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          data: itemsWithDeadlines,
+          meta: { total: 3, page: 1, limit: 20 },
+        }),
+      });
+
+      const { wrapper } = createHarness();
+      render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('deadline-indicator-disb-nodate')).toHaveTextContent('—');
+        expect(screen.getByTestId('deadline-indicator-disb-overdue')).toHaveTextContent('Overdue 3d');
+        expect(screen.getByTestId('deadline-indicator-disb-future')).toHaveTextContent('Due in 5d');
+      });
+    });
+
+    it('renders skeleton loading rows with row height when loading', () => {
+      // Create harness with unsettled query
+      global.fetch = vi.fn().mockImplementation(() => new Promise(() => {}));
+      const { wrapper } = createHarness();
+      render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
+
+      const loadingContainer = screen.getByTestId('table-loading');
+      expect(loadingContainer).toBeInTheDocument();
+      expect(loadingContainer).toHaveAttribute('aria-busy', 'true');
+      const skeletonRows = within(loadingContainer).getAllByRole('row');
+      expect(skeletonRows.length).toBe(5);
+      skeletonRows.forEach((row) => {
+        expect(row).toHaveClass('h-[var(--row-height-default,48px)]');
+      });
+    });
+
+    it('renders tokenized error state when fetch fails', async () => {
+      global.fetch = vi.fn().mockRejectedValue(new Error('Network error: 500'));
+      const { wrapper } = createHarness();
+      render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('table-error')).toBeInTheDocument();
+        expect(screen.getByText('Failed to load disbursements')).toBeInTheDocument();
+        expect(screen.getByTestId('table-retry-btn')).toBeInTheDocument();
+      });
+    });
+
+    it('renders tokenized empty state when no vouchers exist', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({
+          data: [],
+          meta: { total: 0, page: 1, limit: 20 },
+        }),
+      });
+      const { wrapper } = createHarness();
+      render(<DisbursementsTable onSelectDisbursement={vi.fn()} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('table-empty')).toBeInTheDocument();
+        expect(screen.getByText('No disbursements found')).toBeInTheDocument();
+      });
     });
 
     it('renders DisbursementStatusBadge with proper test attributes', () => {
@@ -877,12 +1115,12 @@ describe('Disbursements UI Components & Integration', () => {
 
     it('renders all lifecycle badges with corresponding styling', () => {
       const statusExpectations = [
-        { status: 'Submitted', expectedClasses: ['bg-blue-100', 'text-blue-800', 'border-blue-300'] },
-        { status: 'Pending Admin Approval', expectedClasses: ['bg-amber-100', 'text-amber-800', 'border-amber-300'] },
-        { status: 'Archived', expectedClasses: ['bg-slate-100', 'text-slate-700', 'border-slate-300'] },
-        { status: 'Released', expectedClasses: ['bg-purple-100', 'text-purple-800', 'border-purple-300'] },
-        { status: 'Funded', expectedClasses: ['bg-emerald-100', 'text-emerald-800', 'border-emerald-300'] },
-        { status: 'Rejected', expectedClasses: ['bg-rose-100', 'text-rose-800', 'border-rose-300'] },
+        { status: 'Submitted', expectedClasses: ['bg-primary-light', 'text-primary-hover', 'border-blue-300'] },
+        { status: 'Pending Admin Approval', expectedClasses: ['bg-warning-surface', 'text-warning', 'border-warning-border'] },
+        { status: 'Archived', expectedClasses: ['bg-sidebar', 'text-muted', 'border-border'] },
+        { status: 'Released', expectedClasses: ['bg-info-surface', 'text-info', 'border-info-border'] },
+        { status: 'Funded', expectedClasses: ['bg-success-surface', 'text-success', 'border-success-border'] },
+        { status: 'Rejected', expectedClasses: ['bg-danger-surface', 'text-danger', 'border-danger-border'] },
       ] as const;
 
       statusExpectations.forEach(({ status, expectedClasses }) => {
@@ -923,7 +1161,7 @@ describe('Disbursements UI Components & Integration', () => {
       const banner = screen.getByTestId('modified-by-accounting-banner');
       expect(banner).toBeInTheDocument();
       expect(banner).toHaveTextContent(/Modified by Accounting/i);
-      expect(screen.getByText('SEC Annual Filing 2026')).toBeInTheDocument();
+      expect(screen.getAllByText('SEC Annual Filing 2026').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText(/Maria Santos/)).toBeInTheDocument();
     });
 
@@ -972,12 +1210,14 @@ describe('Disbursements UI Components & Integration', () => {
         linked_work_request_name: 'BIR Tax Compromise Docket #889',
       };
 
+      const { wrapper } = createHarness();
       render(
         <DisbursementPrintModal
           isOpen={true}
           onClose={vi.fn()}
           disbursement={printDisb}
-        />
+        />,
+        { wrapper }
       );
 
       expect(screen.getByTestId('sig-prepared-by')).toHaveTextContent(/Maria Santos/i);

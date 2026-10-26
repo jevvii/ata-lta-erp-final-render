@@ -67,44 +67,50 @@ export default function LoginPage() {
 
   return (
     <div
-      className="flex min-h-screen w-full items-center justify-center p-4 bg-[#0f172a]"
+      className="flex min-h-screen w-full items-center justify-center p-4 sm:p-6 bg-[#F8FAFC]"
       data-testid="login-page"
     >
       <div className="w-full max-w-md">
         {/* Brand Header */}
         <div className="text-center mb-6">
-          <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-[#2563eb] text-white font-bold text-xl shadow-lg mb-3">
+          <div className="inline-flex h-12 w-12 items-center justify-center rounded-[10px] bg-[#1E3A8A] text-[#FFFFFF] font-bold text-xl shadow-card mb-3">
             ERP
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">ATA &amp; LTA ERP</h1>
-          <p className="text-xs text-slate-400 mt-1">Enterprise Management System v2.0</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#1E293B] tracking-tight">
+            ATA &amp; LTA ERP
+          </h1>
+          <p className="text-xs sm:text-sm text-[#475569] mt-1">
+            Enterprise Ledger &bull; Institutional Access
+          </p>
         </div>
 
-        <Card className="border-0 shadow-2xl bg-white rounded-2xl">
-          <CardHeader className="space-y-1 pb-4">
-            <CardTitle className="text-lg font-bold text-[#1e293b]">Sign in to your account</CardTitle>
-            <CardDescription className="text-xs text-[#9494a0]">
-              Enter your corporate credentials to continue
+        <Card className="border border-[#E2E8F0] shadow-float bg-[#FFFFFF] rounded-[12px] p-0 overflow-hidden">
+          <CardHeader className="space-y-1 p-6 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+            <CardTitle className="text-lg font-semibold tracking-tight text-[#1E293B]">
+              Sign in to your account
+            </CardTitle>
+            <CardDescription className="text-xs sm:text-sm text-[#475569]">
+              Enter your corporate credentials to access the ledger
             </CardDescription>
           </CardHeader>
           <form onSubmit={handleLogin}>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 p-6">
               {error && (
                 <div
                   data-testid="login-error"
-                  className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-xs text-red-700 border border-red-200"
+                  className="flex items-center gap-2 rounded-[6px] bg-[#FEF2F2] p-3 text-xs text-[#991B1B] border border-[#FCA5A5]"
                 >
-                  <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[#DC2626]" />
                   <span>{error}</span>
                 </div>
               )}
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#1e293b]" htmlFor="email">
+                <label className="text-xs font-semibold text-[#1E293B]" htmlFor="email">
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[#9494a0]" />
+                  <Mail className="absolute left-3 top-2.5 h-4 w-4 text-[#64748B]" />
                   <Input
                     id="email"
                     type="email"
@@ -119,11 +125,11 @@ export default function LoginPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-[#1e293b]" htmlFor="password">
+                <label className="text-xs font-semibold text-[#1E293B]" htmlFor="password">
                   Password
                 </label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-[#9494a0]" />
+                  <Lock className="absolute left-3 top-2.5 h-4 w-4 text-[#64748B]" />
                   <Input
                     id="password"
                     type={showPassword ? 'text' : 'password'}
@@ -137,12 +143,12 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword((prev) => !prev)}
-                    className="absolute right-3 top-2.5 text-[#9494a0] hover:text-[#1e293b] focus:outline-none transition-colors"
+                    className="absolute right-3 top-2.5 text-[#64748B] hover:text-[#1E293B] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8] rounded-[4px] p-0.5 transition-colors cursor-pointer"
                     data-testid="password-toggle-btn"
                     id="password-toggle-btn"
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                     title={showPassword ? 'Hide password' : 'Show password'}
-                    tabIndex={-1}
+                    tabIndex={0}
                   >
                     {showPassword ? (
                       <EyeOff className="h-4 w-4" />
@@ -154,23 +160,23 @@ export default function LoginPage() {
               </div>
             </CardContent>
 
-            <CardFooter className="flex flex-col space-y-3 pt-2">
+            <CardFooter className="flex flex-col space-y-4 p-6 pt-0">
               <Button
                 type="submit"
-                className="w-full gap-2 bg-[#2563eb] hover:bg-[#1d4ed8]"
+                className="w-full gap-2 h-10 cursor-pointer"
                 disabled={loading}
                 data-testid="login-submit"
               >
-                {loading ? 'Signing in...' : 'Sign In'}
+                {loading ? 'Signing In...' : 'Sign In'}
                 <ArrowRight className="h-4 w-4" />
               </Button>
 
               {/* Dev quick-login buttons */}
-              <div className="pt-2 text-center w-full">
-                <span className="text-[11px] font-medium text-[#9494a0] block mb-2">
-                  Dev Seed Accounts (Click to fill)
+              <div className="pt-2 text-center w-full border-t border-[#E2E8F0]">
+                <span className="text-xs font-semibold text-[#475569] block mb-2">
+                  Quick Development Access
                 </span>
-                <div className="flex flex-wrap gap-1.5 justify-center">
+                <div className="flex flex-wrap gap-2 justify-center">
                   <Button
                     type="button"
                     variant="outline"

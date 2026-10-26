@@ -3,23 +3,23 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2',
+  'inline-flex items-center rounded-full text-xs font-medium transition-colors border select-none focus:outline-none focus:ring-2 focus:ring-[#1D4ED8] focus:ring-offset-2',
   {
     variants: {
       variant: {
-        default: 'bg-[#2563eb] text-white hover:bg-[#1d4ed8]',
-        secondary: 'bg-[#f0f1f3] text-[#1e293b] hover:bg-[#e4e5e9]',
-        destructive: 'bg-[#ef4444] text-white hover:bg-[#dc2626]',
-        outline: 'border border-[#f0f0f5] text-[#1e293b]',
-        success: 'bg-[#10b981]/15 text-[#10b981] border border-[#10b981]/25',
-        warning: 'bg-[#fbbf24]/20 text-[#b45309] border border-[#fbbf24]/30',
-        info: 'bg-[#3b82f6]/15 text-[#2563eb] border border-[#3b82f6]/25',
-        ata: 'bg-[#2563eb]/15 text-[#2563eb] border border-[#2563eb]/30',
-        lta: 'bg-[#475569]/15 text-[#475569] border border-[#475569]/30',
+        default: 'bg-[#EFF6FF] text-[#1E40AF] border-[#BFDBFE]',
+        secondary: 'bg-[#F8FAFC] text-[#334155] border-[#E2E8F0]',
+        destructive: 'bg-[#FEF2F2] text-[#991B1B] border-[#FCA5A5]',
+        success: 'bg-[#F0FDF4] text-[#166534] border-[#86EFAC]',
+        warning: 'bg-[#FEFCE8] text-[#854D0E] border-[#FDE047]',
+        info: 'bg-[#F0F9FF] text-[#075985] border-[#7DD3FC]',
+        outline: 'bg-[#FFFFFF] text-[#334155] border-[#E2E8F0]',
+        ata: 'bg-[#EFF6FF] text-[#1E3A8A] border-[#93C5FD] font-semibold',
+        lta: 'bg-[#F0F9FF] text-[#075985] border-[#7DD3FC] font-semibold',
       },
       size: {
         default: 'px-2.5 py-0.5 text-xs',
-        compact: 'px-1.5 py-0 text-[10px] leading-tight',
+        compact: 'px-2 py-0 text-xs leading-tight',
       },
     },
     defaultVariants: {

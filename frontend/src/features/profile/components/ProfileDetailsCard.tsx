@@ -98,16 +98,16 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
   }, [displayAvatar]);
 
   return (
-    <Card className="border border-[#f0f0f5] dark:border-zinc-800 shadow-xs" data-testid="profile-details-card">
+    <Card className="border-[#E2E8F0] dark:border-zinc-800 shadow-none" data-testid="profile-details-card">
       <CardHeader>
         <CardTitle className="text-lg font-bold text-foreground">Your Details</CardTitle>
         <CardDescription>Update your name and profile photo.</CardDescription>
       </CardHeader>
       <CardContent>
         {/* Avatar Upload Row */}
-        <div className="flex items-center gap-5 pb-6 border-b border-[#f0f0f5] dark:border-zinc-800">
+        <div className="flex items-center gap-5 pb-6 border-b border-[#E2E8F0] dark:border-zinc-800">
           <div
-            className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xl font-bold text-primary overflow-hidden border border-[#f0f0f5] dark:border-zinc-800"
+            className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-[6px] bg-primary/10 text-xl font-bold text-primary overflow-hidden border-[#E2E8F0] dark:border-zinc-800"
             style={
               displayAvatar && !avatarLoadFailed
                 ? {
@@ -179,7 +179,7 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
         {/* Profile Details Form */}
         <form onSubmit={handleSubmit} className="mt-6 space-y-4" data-testid="profile-details-form">
           <div className="space-y-1.5">
-            <label htmlFor="profile-name" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            <label htmlFor="profile-name" className="text-xs font-semibold text-muted-foreground tracking-normal">
               Full Name
             </label>
             <Input
@@ -195,7 +195,7 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
           </div>
 
           <div className="space-y-1.5">
-            <label htmlFor="profile-email" className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+            <label htmlFor="profile-email" className="text-xs font-semibold text-muted-foreground tracking-normal">
               Email Address
             </label>
             <Input

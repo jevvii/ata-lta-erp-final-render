@@ -132,33 +132,43 @@ export default function ClientsPage() {
   });
 
   return (
-    <div className="space-y-6" data-testid="clients-page">
-      {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="w-full space-y-6" data-testid="clients-page">
+      {/* 1. Unified Module Header */}
+      <div className="border-b border-[#E2E8F0] pb-4 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Building2 className="h-6 w-6 text-blue-600" />
-            Clients & Master Records
+          <nav
+            aria-label="Breadcrumb"
+            className="text-xs font-medium text-[#475569] flex items-center gap-1.5 pb-1"
+          >
+            <span>Modules</span>
+            <span aria-hidden="true">/</span>
+            <span className="text-[#1E293B] font-semibold">Clients</span>
+          </nav>
+          <h1 className="text-2xl font-semibold tracking-tight text-[#1E293B] flex items-center gap-2">
+            <Building2 className="h-6 w-6 text-[#1D4ED8]" />
+            Clients &amp; Master Records
           </h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs sm:text-sm text-[#475569] pt-0.5">
             Maintain registered entities, tax identification numbers, and contact channels.
           </p>
         </div>
 
         {/* Action Button: Gated on clients:edit */}
-        {canEditClients && (
-          <Button
-            type="button"
-            variant="default"
-            size="sm"
-            onClick={handleCreate}
-            className="text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white gap-1.5 shadow-sm"
-            data-testid="new-client-btn"
-          >
-            <Plus className="h-4 w-4" />
-            New Client
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          {canEditClients && (
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={handleCreate}
+              className="text-xs font-medium bg-[#1D4ED8] hover:bg-[#1E40AF] text-[#FFFFFF] rounded-[6px] h-9 gap-1.5 shadow-2xs cursor-pointer"
+              data-testid="new-client-btn"
+            >
+              <Plus className="h-4 w-4" />
+              New Client
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filter and Tab Bar */}
@@ -193,18 +203,20 @@ export default function ClientsPage() {
       />
 
       {/* Create / Edit Client Modal */}
-      <ClientModal
-        isOpen={isFormModalOpen}
-        client={editingClient}
-        onClose={() => {
-          setIsFormModalOpen(false);
-          setEditingClient(null);
-        }}
-        onSuccess={() => {
-          setIsFormModalOpen(false);
-          setEditingClient(null);
-        }}
-      />
+      {canEditClients && (
+        <ClientModal
+          isOpen={isFormModalOpen}
+          client={editingClient}
+          onClose={() => {
+            setIsFormModalOpen(false);
+            setEditingClient(null);
+          }}
+          onSuccess={() => {
+            setIsFormModalOpen(false);
+            setEditingClient(null);
+          }}
+        />
+      )}
 
       {/* Global Blocking Action Modal */}
       <BlockingActionModal />

@@ -44,7 +44,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-self-123');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
   });
 
   afterEach(() => {
@@ -72,7 +82,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('receives and processes live postgres_changes events for work_requests', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       renderHook(
         () => useEntityRealtimeSync({ table: 'work_requests' }),
@@ -94,7 +114,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('receives and processes live postgres_changes events for invoices', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       renderHook(
         () => useEntityRealtimeSync({ table: 'invoices' }),
@@ -116,7 +146,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('receives and processes live postgres_changes events for disbursements', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       renderHook(
         () => useEntityRealtimeSync({ table: 'disbursements' }),
@@ -171,7 +211,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
   // =========================================================================
   describe('Criterion 3: Tenant Isolation Guard', () => {
     it('discards cross-tenant events when activeEntity is ATA and payload is LTA', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const payloadCrossTenant = {
         eventType: 'UPDATE',
@@ -187,7 +237,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('processes events matching activeEntity (ATA)', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const payloadSameTenant = {
         eventType: 'UPDATE',
@@ -219,7 +279,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('gracefully allows tables without entity_id such as tasks', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const taskPayload = {
         eventType: 'UPDATE',
@@ -235,7 +305,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('discards payloads with entity_id: null when activeEntity is ATA', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
       const payload = {
         eventType: 'UPDATE',
         new: { id: 'wr-null-id', entity_id: null, version: 2 },
@@ -245,7 +325,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('matches activeEntityUUID case-insensitively when payload contains uppercase UUID', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
       const lowerUUID = '123e4567-e89b-12d3-a456-426614174000';
       const upperUUID = '123E4567-E89B-12D3-A456-426614174000';
       const payload = {
@@ -274,7 +364,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('resolves ATA entity UUID automatically when payload contains raw ATA entity_id UUID and activeEntity is ATA', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       // CDC row payload from Supabase has raw UUID entity_id and no entity code
       const payload = {
@@ -307,7 +407,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('discards payload with raw LTA entity_id UUID when activeEntity is ATA (without activeEntityUUID)', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       // Foreign tenant payload with raw LTA UUID
       const payload = {
@@ -380,7 +490,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('matches raw entity_id UUID with mixed-case and whitespace against activeEntity without activeEntityUUID', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const payload = {
         eventType: 'UPDATE',
@@ -411,7 +531,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
   // =========================================================================
   describe('Criterion 4: Stale Version Guard', () => {
     it('discards duplicate INSERT payloads where version is equal to cached version', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-10'), {
         id: 'wr-10',
@@ -433,7 +563,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('accepts UPDATE payloads where version is equal to cached version (SPEC-002)', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-10'), {
         id: 'wr-10',
@@ -457,7 +597,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('discards payloads where version is lower than cached version', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-10'), {
         id: 'wr-10',
@@ -480,7 +630,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('accepts payloads where version is greater than cached version', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-10'), {
         id: 'wr-10',
@@ -504,7 +664,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('accepts payloads when cached version is undefined or cache is empty', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const newRecordPayload = {
         eventType: 'UPDATE',
@@ -524,7 +694,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
   // =========================================================================
   describe('Criterion 5: Loop Prevention Guard', () => {
     it('discards payload with origin_tab_id matching current tab', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
       const currentTab = getTabId();
 
       const selfPayload = {
@@ -547,7 +727,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('discards payload registered in local mutation tracker', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       trackLocalMutation('work_requests', 'wr-30', 2);
 
@@ -565,7 +755,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('accepts payload originated from a different tab', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       const otherTabPayload = {
         eventType: 'UPDATE',
@@ -592,7 +792,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
   // =========================================================================
   describe('Criterion 6: TanStack Query Cache Reconciliation', () => {
     it('patches detail and list caches on UPDATE', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-100'), {
         id: 'wr-100',
@@ -629,7 +839,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('prepends new records into list cache and seeds detail cache on INSERT', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(billingKeys.invoicesList('ATA'), {
         data: [{ id: 'inv-1', entity: 'ATA', invoiceNumber: 'INV-001', version: 1 }],
@@ -654,7 +874,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('removes records from detail and list caches on DELETE and decrements total', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(disbursementKeys.detail('disb-1'), {
         id: 'disb-1',
@@ -684,7 +914,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('enforces eventType UPDATE precedence: does not treat UPDATE as DELETE when payload.new is absent', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-update-nodelete'), {
         id: 'wr-update-nodelete',
@@ -708,7 +948,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('enforces eventType UPDATE precedence: does not treat UPDATE as INSERT when payload.old is absent', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(billingKeys.invoicesList('ATA'), {
         data: [{ id: 'inv-upd-1', entity: 'ATA', invoiceNumber: 'INV-EXISTING', version: 1 }],
@@ -729,7 +979,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('infers DELETE when eventType is omitted but only old record is provided', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(disbursementKeys.detail('disb-infer-del'), {
         id: 'disb-infer-del',
@@ -749,7 +1009,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('infers INSERT when eventType is omitted but only new record is provided', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(billingKeys.invoicesList('ATA'), {
         data: [],
@@ -769,7 +1039,17 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
     });
 
     it('updates nested task inside work request phases cache on task UPDATE', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.setState({
+      activeEntity: 'ATA',
+      user: {
+        id: '00000000-0000-4000-a000-000000000099',
+        role: 'Admin',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+    });
 
       queryClient.setQueryData(operationsKeys.workRequestsList('ATA'), {
         data: [
@@ -884,6 +1164,84 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
 
       const cached = queryClient.getQueryData(operationsKeys.workRequestDetail('wr-after-unmount'));
       expect(cached).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Criterion 8: Non-Admin & Untrusted CDC Query Invalidation (SHARED-PROJECT-VISIBILITY-20261024)
+  // =========================================================================
+  describe('Criterion 8: Non-Admin & Untrusted CDC Query Invalidation', () => {
+    it('invalidates queries instead of raw injecting when user is non-admin staff', () => {
+      useSessionStore.setState({
+        activeEntity: 'ATA',
+        user: {
+          id: 'staff-1',
+          role: 'Staff',
+          email: 'staff@ata-lta.ph',
+          name: 'Staff Member',
+          departments: ['Operations'],
+          entities: ['ATA'],
+        },
+      });
+
+      const detailKey = operationsKeys.workRequestDetail('wr-staff-test');
+      queryClient.setQueryData(detailKey, { id: 'wr-staff-test', title: 'Before Staff Invalidation', version: 1 });
+
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      handleRealtimePayload(
+        queryClient,
+        { table: 'work_requests' },
+        {
+          eventType: 'UPDATE',
+          table: 'work_requests',
+          schema: 'public',
+          new: { id: 'wr-staff-test', entity: 'ATA', title: 'Attempted Raw Injection', version: 2 },
+          old: { id: 'wr-staff-test', entity: 'ATA', title: 'Before Staff Invalidation', version: 1 },
+        }
+      );
+
+      // Raw injection must NOT occur: cache title should not be modified directly
+      const cached = queryClient.getQueryData<TestRecord>(detailKey);
+      expect(cached?.title).toBe('Before Staff Invalidation');
+
+      // Instead, query invalidation must be triggered
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: detailKey })
+      );
+    });
+
+    it('invalidates queries instead of raw injecting when current user is null / unauthenticated', () => {
+      useSessionStore.setState({
+        activeEntity: 'ATA',
+        user: null,
+      });
+
+      const detailKey = operationsKeys.workRequestDetail('wr-null-user-test');
+      queryClient.setQueryData(detailKey, { id: 'wr-null-user-test', title: 'Before Null User Invalidation', version: 1 });
+
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      handleRealtimePayload(
+        queryClient,
+        { table: 'work_requests' },
+        {
+          eventType: 'UPDATE',
+          table: 'work_requests',
+          schema: 'public',
+          new: { id: 'wr-null-user-test', entity: 'ATA', title: 'Attempted Untrusted Injection', version: 2 },
+          old: { id: 'wr-null-user-test', entity: 'ATA', title: 'Before Null User Invalidation', version: 1 },
+        }
+      );
+
+      // Cache title must NOT be overwritten
+      const cached = queryClient.getQueryData<TestRecord>(detailKey);
+      expect(cached?.title).toBe('Before Null User Invalidation');
+
+      // Query invalidation must be triggered
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: detailKey })
+      );
     });
   });
 });

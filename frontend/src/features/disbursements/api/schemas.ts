@@ -55,7 +55,7 @@ export const createDisbursementSchema = z.object({
   }),
   linkedWorkRequestId: z.string().uuid('Valid Work Request UUID is required'),
   clientId: z.string().uuid('Invalid Client UUID').nullable().optional(),
-  employeeId: z.string().uuid('Invalid Employee UUID').nullable().optional(),
+  employeeId: z.string().max(100).nullable().optional(),
   linkedInvoiceId: z.string().uuid('Invalid Invoice UUID').nullable().optional(),
   linkedTaskId: z.string().uuid('Invalid Task UUID').nullable().optional(),
   linkedTransmittalId: z.string().uuid('Invalid Transmittal UUID').nullable().optional(),
@@ -75,6 +75,13 @@ export const createDisbursementSchema = z.object({
  * Client validation schema for updating a disbursement.
  */
 export const updateDisbursementSchema = createDisbursementSchema.partial().extend({
+  printDetails: z.object({
+    requesterName: z.string().max(500).optional(), referenceNumber: z.string().max(500).optional(),
+    submittedDate: z.string().max(500).optional(), workRequestName: z.string().max(500).optional(),
+    paymentDate: z.string().max(500).optional(), paymentMethod: z.string().max(500).optional(),
+    paymentReference: z.string().max(500).optional(), paymentBank: z.string().max(500).optional(),
+    preparedBy: z.string().max(500).optional(), approvedBy: z.string().max(500).optional(), releasedBy: z.string().max(500).optional(),
+  }).strict().optional(),
   archived: z.boolean().optional(),
   expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
 });
@@ -89,18 +96,129 @@ export const rejectDisbursementSchema = z.object({
     .trim()
     .min(1, 'Rejection reason is required')
     .max(500, 'Rejection reason cannot exceed 500 characters'),
+  expectedVersion: z.number().int().positive().optional(),
 });
 
 export const rejectSchema = rejectDisbursementSchema;
 
 /**
- * Client validation schema for releasing payment details.
+ * Client validation schema for releasing payment details (legacy and v2).
  */
 export const releasePaymentSchema = z.object({
   method: z.string().max(50, 'Payment method cannot exceed 50 characters').optional(),
   reference: z.string().max(100, 'Payment reference cannot exceed 100 characters').optional(),
   bank: z.string().max(100, 'Bank name cannot exceed 100 characters').optional(),
   date: z.string().optional(),
+  expectedVersion: z.number().int().positive().optional(),
+});
+
+/**
+ * Client validation schema for v2 final release (Admin including the preparer).
+ */
+export const releaseDisbursementSchema = z.object({
+  expectedVersion: z
+    .number({ required_error: 'Expected version is required' })
+    .int('Expected version must be an integer')
+    .positive('Expected version must be a positive integer'),
+});
+
+/**
+ * Client validation schema for Admin budget approval (POST /:id/approve).
+ * V2 budget authorization requires only expectedVersion; payment fields belong to Funding.
+ */
+export const approveDisbursementSchema = z.object({
+  expectedVersion: z
+    .number({ required_error: 'Expected version is required' })
+    .int('Expected version must be an integer')
+    .positive('Expected version must be a positive integer'),
+});
+
+/**
+ * Client validation schema for v2 payment preparation (POST /:id/fund).
+ * Requires all four trimmed valid fields and expectedVersion.
+ */
+export const fundDisbursementSchema = z.object({
+  method: z
+    .string({ required_error: 'Payment method is required' })
+    .trim()
+    .min(1, 'Payment method is required')
+    .max(50, 'Payment method cannot exceed 50 characters'),
+  bank: z
+    .string({ required_error: 'Bank or payment source is required' })
+    .trim()
+    .min(1, 'Bank or payment source is required')
+    .max(100, 'Bank name cannot exceed 100 characters'),
+  reference: z
+    .string({ required_error: 'Payment reference is required' })
+    .trim()
+    .min(1, 'Payment reference is required')
+    .max(100, 'Payment reference cannot exceed 100 characters'),
+  date: z
+    .string({ required_error: 'Payment date is required' })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Valid date YYYY-MM-DD is required'),
+  expectedVersion: z
+    .number({ required_error: 'Expected version is required' })
+    .int('Expected version must be an integer')
+    .positive('Expected version must be a positive integer'),
+});
+
+/**
+ * Client validation schema for resending a rejected voucher to draft (POST /:id/resend_draft).
+ */
+export const resendDraftSchema = z.object({
+  expectedVersion: z
+    .number({ required_error: 'Expected version is required' })
+    .int('Expected version must be an integer')
+    .positive('Expected version must be a positive integer'),
+});
+
+/**
+ * Client validation schema for payment detail updates.
+ */
+export const updatePaymentDetailsSchema = z.object({
+  method: z
+    .string({ required_error: 'Payment method is required' })
+    .trim()
+    .min(1, 'Payment method is required')
+    .max(50, 'Payment method cannot exceed 50 characters'),
+  reference: z
+    .string()
+    .trim()
+    .max(100, 'Payment reference cannot exceed 100 characters')
+    .nullable()
+    .optional(),
+  bank: z
+    .string()
+    .trim()
+    .max(100, 'Bank name cannot exceed 100 characters')
+    .nullable()
+    .optional(),
+  date: z
+    .string({ required_error: 'Payment date is required' })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Valid date YYYY-MM-DD is required'),
+  expectedVersion: z
+    .number({ required_error: 'Expected version is required' })
+    .int('Expected version must be an integer')
+    .positive('Expected version must be a positive integer'),
+});
+
+/**
+ * Client validation schema for pre-signed receipt upload reservation.
+ */
+export const receiptUploadReservationSchema = z.object({
+  filename: z
+    .string({ required_error: 'Filename is required' })
+    .trim()
+    .min(1, 'Filename is required')
+    .max(255, 'Filename cannot exceed 255 characters'),
+  contentType: z.enum(['application/pdf', 'image/png', 'image/jpeg'], {
+    errorMap: () => ({ message: 'Only PDF, PNG, and JPEG files are allowed' }),
+  }),
+  size: z
+    .number({ required_error: 'File size is required' })
+    .int()
+    .positive('File size must be positive')
+    .max(10485760, 'File size cannot exceed 10 MiB'),
 });
 
 /**
@@ -114,6 +232,14 @@ export const disbursementFiltersSchema = z.object({
   linkedTransmittalId: z.string().uuid('Invalid Transmittal UUID').optional(),
   search: z.string().optional(),
   archived: z.union([z.boolean(), z.string()]).optional(),
+  queue: z
+    .enum([
+      'initial_requests',
+      'payment_releases',
+      'ready_for_funding',
+      'needs_correction',
+    ])
+    .optional(),
   page: z.number().int().positive().optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
@@ -126,6 +252,11 @@ export const disbursementCountsSchema = z.object({
   archived: z.number().nonnegative(),
   rejected: z.number().nonnegative(),
   awaitingRelease: z.number().nonnegative(),
+  pending: z.number().nonnegative().optional(),
+  initialRequests: z.number().nonnegative().optional(),
+  paymentReleases: z.number().nonnegative().optional(),
+  readyForFunding: z.number().nonnegative().optional(),
+  needsCorrection: z.number().nonnegative().optional(),
 });
 
 /**

@@ -10,6 +10,8 @@
  * UAT-FIN5 / UAT-FIN8 / print parity.
  */
 
+import { PRINT_PAGE_CSS, wrapPrintPage } from './printPage';
+
 const esc = (v: unknown): string =>
   String(v ?? '')
     .replace(/&/g, '&amp;')
@@ -35,6 +37,79 @@ const formatDate = (dateStr?: string | null): string => {
   });
 };
 
+export function resolvePaymentProperties(
+  p?: {
+    amount?: number | null;
+    method?: string | null;
+    reference?: string | null;
+    payment_method?: string | null;
+    reference_number?: string | null;
+    payment_date?: string | null;
+  } | null
+) {
+  if (!p) return null;
+  const method =
+    p.method !== undefined && p.method !== null
+      ? String(p.method)
+      : p.payment_method !== undefined && p.payment_method !== null
+        ? String(p.payment_method)
+        : '';
+  const reference =
+    p.reference !== undefined && p.reference !== null
+      ? String(p.reference)
+      : p.reference_number !== undefined && p.reference_number !== null
+        ? String(p.reference_number)
+        : '';
+  const payment_date = p.payment_date ? formatDate(p.payment_date) : '';
+  const amount = p.amount;
+  return { method, reference, payment_date, amount };
+}
+
+export function getAutomaticPaymentDetails(
+  payment?: {
+    amount?: number | null;
+    method?: string | null;
+    reference?: string | null;
+    payment_method?: string | null;
+    reference_number?: string | null;
+    payment_date?: string | null;
+  } | null
+) {
+  const resolved = resolvePaymentProperties(payment);
+  if (!resolved || !resolved.method) {
+    return {
+      paymentDate: resolved?.payment_date ?? '',
+      cash: '',
+      checkNumber: '',
+      bankBranch: '',
+    };
+  }
+  if (resolved.method === 'Cash') {
+    return {
+      paymentDate: resolved.payment_date,
+      cash:
+        resolved.amount !== undefined && resolved.amount !== null ? formatPHP(resolved.amount) : '',
+      checkNumber: '',
+      bankBranch: '',
+    };
+  }
+  if (resolved.method === 'Check') {
+    return {
+      paymentDate: resolved.payment_date,
+      cash: '',
+      checkNumber: resolved.reference || '',
+      bankBranch: '',
+    };
+  }
+  return {
+    paymentDate: resolved.payment_date,
+    cash:
+      resolved.amount !== undefined && resolved.amount !== null ? formatPHP(resolved.amount) : '',
+    checkNumber: resolved.reference || '',
+    bankBranch: resolved.method,
+  };
+}
+
 function openPrintWindow(title: string, css: string, bodyHtml: string): void {
   const w = window.open('', '_blank');
   if (!w) return;
@@ -53,7 +128,26 @@ function openPrintWindow(title: string, css: string, bodyHtml: string): void {
 /* Billing Statement (prototype generateInvoice, LTA/ATA variants)     */
 /* ------------------------------------------------------------------ */
 
+export interface InvoicePrintDetails {
+  clientName?: string;
+  clientTin?: string;
+  paymentDate?: string;
+  cash?: string;
+  checkNumber?: string;
+  bankBranch?: string;
+  notedBy?: string;
+  preparedBy?: string;
+  receivedBy?: string;
+}
+
+export interface StatementPrintOptions {
+  includeCompanyDetails?: boolean;
+}
+
 export interface StatementPrintInvoice {
+  print_details?: InvoicePrintDetails | null;
+  notes?: string | null;
+  terms?: string | null;
   invoice_number: string;
   entity_code?: 'ATA' | 'LTA' | string;
   issue_date?: string | null;
@@ -68,16 +162,36 @@ export interface StatementPrintInvoice {
   } | null;
   line_items?: Array<{ description?: string | null; amount: number }>;
   payments?: Array<{
-    amount: number;
+    amount?: number | null;
+    method?: string | null;
+    reference?: string | null;
     payment_method?: string | null;
     reference_number?: string | null;
     payment_date?: string | null;
   }>;
 }
 
-const STATEMENT_CSS = `
+/** Defaults shared by both admin editors; explicit empty strings remain empty. */
+export function getInvoicePrintDetails(inv: StatementPrintInvoice): InvoicePrintDetails {
+  const auto = getAutomaticPaymentDetails(inv.payments?.[0]);
+  return {
+    clientName: inv.clients?.name ?? '',
+    clientTin: inv.clients?.tin ?? '',
+    paymentDate: auto.paymentDate,
+    cash: auto.cash,
+    checkNumber: auto.checkNumber,
+    bankBranch: auto.bankBranch,
+    notedBy: 'HENRY WONG',
+    preparedBy: '',
+    receivedBy: '',
+    ...inv.print_details,
+  };
+}
+
+export const STATEMENT_CSS = `
+* { box-sizing: border-box; }
 @page { size: A4; margin: 15mm 20mm; }
-body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #000; max-width: 210mm; margin: 0 auto; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #000; box-sizing: border-box; max-width: 210mm; margin: 0 auto; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
 /* Generic Header Styles */
 .generic-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
@@ -145,40 +259,33 @@ body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height:
 .footer-container { margin-top: 30px; text-align: center; }
 .thank-you { font-size: 11pt; font-weight: 700; letter-spacing: 1px; margin-bottom: 4px; }
 .footer-text { font-size: 9pt; font-weight: bold; }
-.footer-text.underline { text-decoration: underline; }
 
 .vat-breakdown { background: #f8fafc; padding: 12px; border-radius: 12px; margin-top: 12px; font-size: 9pt; border: 1px solid #cbd5e1; }
 .vat-breakdown p { margin: 2px 0; }
 `;
 
-export function printStatementDocument(inv: StatementPrintInvoice): void {
+export function buildStatementDocument(
+  inv: StatementPrintInvoice,
+  options: StatementPrintOptions = {}
+): string {
+  const includeCompanyDetails = options.includeCompanyDetails !== false;
+  const details = inv.print_details || {};
   const entity = inv.entity_code === 'LTA' ? 'LTA' : 'ATA';
   const companyName =
     entity === 'ATA' ? 'A.T.A. BUSINESS CONSULTANCY' : 'LTA BUSINESS MANAGEMENT CORP';
 
-  let dateVal = '';
-  let cashVal = '';
-  let checkVal = '';
-  let bankVal = '';
-  const payments = inv.payments || [];
-  if (payments.length > 0 && payments[0]) {
-    const p = payments[0];
-    if (p.payment_date) dateVal = formatDate(p.payment_date);
-    if (p.payment_method === 'Cash') {
-      cashVal = formatPHP(p.amount);
-    } else if (p.payment_method === 'Check') {
-      checkVal = p.reference_number || '';
-      bankVal = '';
-    } else if (p.payment_method) {
-      cashVal = formatPHP(p.amount);
-      checkVal = p.reference_number || '';
-      bankVal = p.payment_method;
-    }
-  }
+  const auto = getAutomaticPaymentDetails(inv.payments?.[0]);
+  const dateVal = details.paymentDate ?? auto.paymentDate;
+  const cashVal = details.cash ?? auto.cash;
+  const checkVal = details.checkNumber ?? auto.checkNumber;
+  const bankVal = details.bankBranch ?? auto.bankBranch;
 
-  /* Header (includeCompanyDetails default; noLogo false) */
+  /* Keep the header's space for preprinted stationery. */
   let headerHtml: string;
-  if (entity === 'ATA') {
+  if (!includeCompanyDetails) {
+    headerHtml =
+      '<div class="generic-header" style="min-height:65px"><div></div><div class="generic-title">STATEMENT</div></div><div class="generic-header-divider"></div>';
+  } else if (entity === 'ATA') {
     headerHtml =
       `<div class="header-container-ata">` +
       `<div style="display: flex; align-items: center;">` +
@@ -200,14 +307,19 @@ export function printStatementDocument(inv: StatementPrintInvoice): void {
   }
 
   /* Bill To */
-  const billToLines: string[] = [`<p><strong>${esc(inv.clients?.name || '—')}</strong></p>`];
+  const billToLines: string[] = [
+    `<p><strong>${esc(details.clientName ?? inv.clients?.name ?? '—')}</strong></p>`,
+  ];
   if (inv.clients?.trade_name) billToLines.push(`<p>(${esc(inv.clients.trade_name)})</p>`);
-  billToLines.push(`<p>${esc(inv.address || inv.clients?.address || '—')}</p>`);
-  if (inv.clients?.tin) billToLines.push(`<p>TIN: ${esc(inv.clients.tin)}</p>`);
+  billToLines.push(
+    `<p data-testid="client-address-display">${esc(inv.address ?? inv.clients?.address ?? 'No address provided')}</p>`
+  );
+  if (details.clientTin ?? inv.clients?.tin)
+    billToLines.push(`<p>TIN: ${esc(details.clientTin ?? inv.clients?.tin)}</p>`);
 
   const twoColHtml =
     `<div class="two-col">` +
-    `<div class="col-bill-to">` +
+    `<div class="col-bill-to" data-testid="bill-to-box">` +
     `<div class="bill-to-title">${entity === 'ATA' ? 'BILL TO' : 'BILL TO:'}</div>` +
     `<div class="bill-to-content">${billToLines.join('')}</div>` +
     `</div>` +
@@ -222,7 +334,7 @@ export function printStatementDocument(inv: StatementPrintInvoice): void {
     `</div>`;
 
   /* Items table — generic/ATA layout 3 cols, LTA layout 4 cols (blank 10% spacer) */
-  const isGenericLayout = entity === 'ATA';
+  const isGenericLayout = !includeCompanyDetails || entity === 'ATA';
   const theadHtml = isGenericLayout
     ? `<tr><th style="width: 15%;">DATE</th><th style="width: 65%;">DESCRIPTION</th><th style="width: 20%; text-align: right;">AMOUNT DUE</th></tr>`
     : `<tr><th style="width: 15%;">DATE</th><th style="width: 55%;">DESCRIPTION</th><th style="width: 10%;"></th><th style="width: 20%; text-align: right;">AMOUNT DUE</th></tr>`;
@@ -240,7 +352,7 @@ export function printStatementDocument(inv: StatementPrintInvoice): void {
       : `<tr><td>${esc(dateStr)}</td><td>${esc(descStr)}</td><td></td>${amountCell}</tr>`;
   });
 
-  const itemsTableHtml = `<table class="items-table"><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>`;
+  const itemsTableHtml = `<table class="items-table" data-testid="line-items-table"><thead>${theadHtml}</thead><tbody>${tbodyHtml}</tbody></table>`;
 
   /* Bottom: payment details + totals */
   const fillRow = (label: string, value: string) =>
@@ -261,7 +373,7 @@ export function printStatementDocument(inv: StatementPrintInvoice): void {
     `<table class="total-table"><tbody><tr>` +
     `<td class="total-label">TOTAL AMOUNT DUE</td>` +
     `<td class="total-currency">PHP</td>` +
-    `<td class="total-value">${esc(formatPHP(inv.total).replace('₱', '').trim())}</td>` +
+    `<td class="total-value" data-testid="invoice-total">${esc(formatPHP(inv.total).replace('₱', '').trim())}</td>` +
     `</tr></tbody></table>` +
     `</div>` +
     `</div>`;
@@ -281,26 +393,49 @@ export function printStatementDocument(inv: StatementPrintInvoice): void {
 
   const sigBox = (label: string, name: string) =>
     `<div class="signature-box"><div class="signature-label">${label}</div>` +
-    `<div class="signature-line-container"><div class="signature-name-printed">${name}</div></div></div>`;
+    `<div class="signature-line-container"><div class="signature-name-printed">${name ? esc(name) : '&nbsp;'}</div></div></div>`;
 
   const signaturesHtml =
     `<div class="signature-row">` +
-    sigBox('Noted by:', 'HENRY WONG') +
-    sigBox('Prepared by:', '&nbsp;') +
-    sigBox('Received by:', '&nbsp;') +
+    sigBox('Noted by:', details.notedBy ?? 'HENRY WONG') +
+    sigBox('Prepared by:', details.preparedBy ?? '') +
+    sigBox('Received by:', details.receivedBy ?? '') +
     `</div>`;
 
   const footerHtml =
     `<div class="footer-container"><div class="thank-you">THANK YOU !!!</div>` +
-    (entity === 'ATA'
+    (!includeCompanyDetails || entity === 'ATA'
       ? `<div class="footer-text">customer's copy</div>`
-      : `<div class="footer-text underline">Should you have any enquiries concerning this statement, please contact us on 742-8582/404-4928</div>`) +
+      : '') +
     `</div>`;
 
+  const notesHtml = inv.notes
+    ? `<p style="white-space:pre-wrap"><strong>Notes:</strong> ${esc(inv.notes)}</p>`
+    : '';
+  const termsHtml = inv.terms
+    ? `<p style="white-space:pre-wrap"><strong>Terms:</strong> ${esc(inv.terms)}</p>`
+    : '';
+  return (
+    headerHtml +
+    twoColHtml +
+    itemsTableHtml +
+    bottomHtml +
+    vatHtml +
+    notesHtml +
+    termsHtml +
+    signaturesHtml +
+    footerHtml
+  );
+}
+
+export function printStatementDocument(
+  inv: StatementPrintInvoice,
+  options: StatementPrintOptions = {}
+): void {
   openPrintWindow(
     `Statement ${inv.invoice_number || ''}`,
-    STATEMENT_CSS,
-    headerHtml + twoColHtml + itemsTableHtml + bottomHtml + vatHtml + signaturesHtml + footerHtml
+    STATEMENT_CSS + PRINT_PAGE_CSS,
+    wrapPrintPage(buildStatementDocument(inv, options))
   );
 }
 
@@ -317,6 +452,7 @@ export interface TransmittalPrintData {
   acknowledged_at?: string | null;
   received_by_name?: string | null;
   recipient_name?: string | null;
+  recipient_details?: string | null;
   notes?: string | null;
   clients?: { name?: string | null; address?: string | null } | null;
   items?: Array<{
@@ -324,12 +460,36 @@ export interface TransmittalPrintData {
     document_type?: string | null;
     documentType?: string | null;
     description?: string | null;
+    quantity?: number;
   }>;
 }
 
+export interface TransmittalPrintOptions {
+  includeCompanyDetails?: boolean;
+  companyName?: string;
+  companyAddress?: string;
+}
+
+export function defaultTransmittalCompany(entity?: string) {
+  return {
+    includeCompanyDetails: true,
+    companyName: `${entity === 'LTA' ? 'LTA' : 'ATA'} BUSINESS CONSULTANCY SERVICES`,
+    companyAddress:
+      'RM 307 Republic Supermarket Bldg,\nSoler St., cor. F.Torres St.,\nSta. Cruz, Manila',
+  };
+}
+
+/** Ignore blank draft rows; never pad or truncate the document manifest. */
+export function printableTransmittalItems<T extends { description?: string | null }>(
+  items?: T[]
+): T[] {
+  return (items || []).filter((item) => Boolean(item.description?.trim()));
+}
+
 const TRANSMITTAL_CSS = `
-@page { size: letter; margin: 12mm 15mm; }
+@page { size: letter; margin: 0; }
 body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; color: #000; background-color: #fff; font-size: 10pt; line-height: 1.35; }
+@media print { body { padding-top: 8mm; box-sizing: border-box; } }
 .container { width: 100%; max-width: 680px; margin: 0 auto; position: relative; }
 .header-table { width: 100%; border: 2px solid #000; border-collapse: collapse; margin-bottom: 15px; table-layout: fixed; }
 .header-table td { border: 2px solid #000; padding: 6px 10px; vertical-align: top; word-break: break-word; word-break: break-all; overflow-wrap: anywhere; box-sizing: border-box; }
@@ -348,7 +508,9 @@ body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; color: 
 .table-header-cell { border-bottom: 2px solid #000; padding: 6px 10px; font-weight: bold; text-align: left; font-size: 10pt; }
 .category-header-cell { width: 35%; border-right: 2px solid #000; }
 .document-header-cell { width: 65%; }
-.doc-row { height: 22px; }
+.doc-row { break-inside: avoid; page-break-inside: avoid; }
+.document-table thead { display: table-header-group; }
+.signature-container { break-inside: avoid; }
 .doc-cell { border-bottom: 1px solid #000; padding: 4px 10px; font-size: 10pt; text-align: left; word-break: break-word; overflow-wrap: anywhere; }
 .category-cell { font-weight: bold; border-right: 1px solid #000; width: 35%; }
 .document-cell { width: 65%; }
@@ -364,18 +526,19 @@ body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; color: 
 .sig-label { font-size: 9pt; color: #333; margin-top: 6px; }
 `;
 
-export function printTransmittalDocument(t: TransmittalPrintData): void {
+export function printTransmittalDocument(
+  t: TransmittalPrintData,
+  options: TransmittalPrintOptions = {}
+): void {
   const entity = t.entity_code === 'LTA' ? 'LTA' : 'ATA';
   const isATA = entity === 'ATA';
 
-  const companyName = isATA
-    ? 'ATA BUSINESS CONSULTANCY SERVICES'
-    : 'LTA BUSINESS CONSULTANCY SERVICES';
-  const companyAddressLines = [
-    'RM 307 Republic Supermarket Bldg,',
-    'Soler St., cor. F.Torres St.,',
-    'Sta. Cruz, Manila',
-  ];
+  const company = { ...defaultTransmittalCompany(entity), ...options };
+  const companyName = company.companyName;
+  const companyAddressLines = company.companyAddress
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
 
   /* Entity-aware date: ATA uppercase long form, LTA M/D/YYYY */
   const dateObj = new Date(t.sent_at || t.created_at || new Date());
@@ -409,12 +572,8 @@ export function printTransmittalDocument(t: TransmittalPrintData): void {
   /* Signature / stamp from acknowledgment */
   let sigName = '';
   let sigDate = '';
-  let stampDateStr = '';
   if (t.status === 'Acknowledged' && t.acknowledged_at) {
     const stampDateObj = new Date(t.acknowledged_at);
-    stampDateStr = stampDateObj
-      .toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
-      .toUpperCase();
     if (t.received_by_name) {
       sigName = t.received_by_name.toUpperCase();
       sigDate = `${stampDateObj.getMonth() + 1}/${stampDateObj.getDate()}/${String(
@@ -423,16 +582,12 @@ export function printTransmittalDocument(t: TransmittalPrintData): void {
     }
   }
 
-  /* 12 fixed rows: real items then padded blanks (prototype behavior) */
-  const rows: Array<{ category: string; document: string }> = [];
-  const totalRows = 12;
-  (t.items || []).slice(0, totalRows).forEach((item) => {
-    rows.push({
-      category: (item.document_type || item.documentType || '').toUpperCase(),
-      document: (item.description || '').toUpperCase(),
-    });
-  });
-  while (rows.length < totalRows) rows.push({ category: '', document: '' });
+  const rows = printableTransmittalItems(t.items).map((item) => ({
+    category: (item.document_type || item.documentType || 'Others').toUpperCase(),
+    document:
+      (item.description || '').toUpperCase() +
+      (item.quantity && item.quantity > 1 ? ` (QTY: ${item.quantity})` : ''),
+  }));
 
   const rowsHtml = rows
     .map(
@@ -458,10 +613,12 @@ export function printTransmittalDocument(t: TransmittalPrintData): void {
     )}</span></td>` +
     `</tr>` +
     `<tr>` +
-    `<td class="from-cell"><strong>FROM:</strong> <strong>${esc(companyName)}</strong>` +
-    companyAddressLines.map((l) => `<br>${esc(l)}`).join('') +
-    `</td>` +
-    `<td class="to-cell">` +
+    (company.includeCompanyDetails
+      ? `<td class="from-cell"><strong>FROM:</strong> <strong>${esc(companyName)}</strong>` +
+        companyAddressLines.map((l) => `<br>${esc(l)}`).join('') +
+        `</td>`
+      : '') +
+    `<td class="to-cell"${company.includeCompanyDetails ? '' : ' colspan="2" style="width:100%"'}>` +
     `<div style="display: flex; gap: 8px; align-items: flex-start;">` +
     `<strong style="margin-top: 3px;">TO:</strong>` +
     `<div style="flex: 1; display: flex; flex-direction: column;">` +
@@ -469,6 +626,9 @@ export function printTransmittalDocument(t: TransmittalPrintData): void {
     `<div class="underline-line">${toLine2 ? esc(toLine2) : ''}</div>` +
     `<div class="underline-line">${toLine3 ? esc(toLine3) : ''}</div>` +
     `<div class="underline-line">${toLine4 ? esc(toLine4) : ''}</div>` +
+    (t.recipient_details?.trim()
+      ? `<div style="white-space:pre-line;margin-top:4px">${esc(t.recipient_details)}</div>`
+      : '') +
     `</div></div>` +
     `</td>` +
     `</tr>` +
@@ -483,11 +643,6 @@ export function printTransmittalDocument(t: TransmittalPrintData): void {
     `</tr></thead>` +
     `<tbody>${rowsHtml}</tbody>` +
     `</table>` +
-    (t.status === 'Acknowledged' && stampDateStr
-      ? `<div class="received-stamp"><div class="stamp-title">RECEIVED</div><div class="stamp-date">${esc(
-          stampDateStr
-        )}</div></div>`
-      : '') +
     `</div>` +
     (t.notes
       ? `<div style="margin: 10px 0; font-style: italic; font-size: 9.5pt; color: #555;">Notes: ${esc(

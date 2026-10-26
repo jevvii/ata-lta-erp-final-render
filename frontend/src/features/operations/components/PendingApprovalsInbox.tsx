@@ -276,61 +276,77 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
   };
 
   return (
-    <div className="flex flex-col h-[700px] border border-slate-200 rounded-lg bg-white overflow-hidden" data-testid="pending-approvals-inbox">
+    <div className="flex flex-col h-[700px] border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] overflow-hidden" data-testid="pending-approvals-inbox">
       {/* Top Bar with Sub-Tabs */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200 bg-slate-50">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
         <div className="flex items-center gap-1.5" data-testid="inbox-subtabs">
           <Button
             type="button"
-            variant={activeSubTab === 'pending' ? 'default' : 'ghost'}
+            variant={activeSubTab === 'pending' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setActiveSubTab('pending')}
-            className="text-xs gap-1.5"
+            className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
+              activeSubTab === 'pending'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
+                : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#E2E8F0]'
+            }`}
             data-testid="tab-pending"
           >
             <span>Pending</span>
             {pendingCount > 0 && (
-              <Badge variant="secondary" size="compact" className="bg-amber-100 text-amber-800 font-bold px-1.5" data-testid="pending-badge-count">
+              <Badge variant="secondary" size="compact" className="bg-[#FFFFFF] text-[#1E293B] border-[#E2E8F0] font-bold px-1.5 rounded-[6px] tabular-nums text-xs" data-testid="pending-badge-count">
                 {pendingCount}
               </Badge>
             )}
           </Button>
           <Button
             type="button"
-            variant={activeSubTab === 'rejected' ? 'default' : 'ghost'}
+            variant={activeSubTab === 'rejected' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setActiveSubTab('rejected')}
-            className="text-xs gap-1.5"
+            className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
+              activeSubTab === 'rejected'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
+                : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#E2E8F0]'
+            }`}
             data-testid="tab-rejected"
           >
             <span>Rejected</span>
             {(counts?.rejected ?? 0) > 0 && (
-              <Badge variant="secondary" size="compact" className="bg-rose-100 text-rose-800 font-bold px-1.5" data-testid="rejected-badge-count">
+              <Badge variant="secondary" size="compact" className="bg-[#FFFFFF] text-[#1E293B] border-[#E2E8F0] font-bold px-1.5 rounded-[6px] tabular-nums text-xs" data-testid="rejected-badge-count">
                 {counts?.rejected}
               </Badge>
             )}
           </Button>
           <Button
             type="button"
-            variant={activeSubTab === 'fulfilled' ? 'default' : 'ghost'}
+            variant={activeSubTab === 'fulfilled' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setActiveSubTab('fulfilled')}
-            className="text-xs gap-1.5"
+            className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
+              activeSubTab === 'fulfilled'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
+                : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#E2E8F0]'
+            }`}
             data-testid="tab-fulfilled"
           >
             <span>Fulfilled</span>
             {(counts?.fulfilled ?? 0) > 0 && (
-              <Badge variant="secondary" size="compact" className="bg-emerald-100 text-emerald-800 font-bold px-1.5" data-testid="fulfilled-badge-count">
+              <Badge variant="secondary" size="compact" className="bg-[#FFFFFF] text-[#1E293B] border-[#E2E8F0] font-bold px-1.5 rounded-[6px] tabular-nums text-xs" data-testid="fulfilled-badge-count">
                 {counts?.fulfilled}
               </Badge>
             )}
           </Button>
           <Button
             type="button"
-            variant={activeSubTab === 'all' ? 'default' : 'ghost'}
+            variant={activeSubTab === 'all' ? 'default' : 'outline'}
             size="xs"
             onClick={() => setActiveSubTab('all')}
-            className="text-xs"
+            className={`text-xs  tracking-normal rounded-[6px] ${
+              activeSubTab === 'all'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
+                : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#E2E8F0]'
+            }`}
             data-testid="tab-all"
           >
             All History
@@ -338,12 +354,12 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
         </div>
 
         <div className="w-56 relative">
-          <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-slate-400" />
+          <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-[#475569]" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search queue..."
-            className="h-8 pl-8 text-xs bg-white"
+            className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
           />
         </div>
       </div>
@@ -351,24 +367,24 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
       {/* Main 2-Column Layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Column: Queue Cards (40% width) */}
-        <div className="w-[380px] border-r border-slate-200 overflow-y-auto divide-y divide-slate-100 bg-slate-50/50">
+        <div className="w-[380px] border-r border-[#E2E8F0] overflow-y-auto divide-y divide-[#CBD5E1] bg-[#F8FAFC]/30">
           {isLoading ? (
-            <div className="p-8 text-center text-xs text-slate-400">Loading transition queue...</div>
+            <div className="p-8 text-center text-xs text-[#475569]">Loading transition queue...</div>
           ) : isError ? (
-            <div className="p-8 text-center text-xs text-rose-500 space-y-2">
+            <div className="p-8 text-center text-xs text-[#DC2626] space-y-2">
               <p>Failed to load transition requests.</p>
               <Button
                 type="button"
                 variant="outline"
                 size="xs"
                 onClick={() => refetch()}
-                className="text-xs"
+                className="text-xs rounded-[8px] border-[#E2E8F0]"
               >
                 Retry
               </Button>
             </div>
           ) : filteredRequests.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-400 italic">
+            <div className="p-8 text-center text-xs text-[#475569] italic">
               No {activeSubTab} transition requests found.
             </div>
           ) : (
@@ -388,13 +404,13 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                   onClick={() => setSelectedRequestId(req.id)}
                   className={`p-3 cursor-pointer transition-colors space-y-1.5 ${
                     isSelected
-                      ? 'bg-blue-50/80 border-l-4 border-l-blue-600'
-                      : 'hover:bg-slate-100/70 border-l-4 border-l-transparent'
+                      ? 'bg-[#FFFFFF] border-l-4 border-l-[#1D4ED8]'
+                      : 'hover:bg-[#F8FAFC]/60 border-l-4 border-l-transparent'
                   }`}
                   data-testid={`approval-item-${req.id}`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-xs text-slate-900 truncate max-w-[240px]">
+                    <span className="font-semibold text-xs text-[#1E293B] truncate max-w-[240px]">
                       {reqTitle}
                     </span>
                     <Badge
@@ -408,14 +424,14 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                               : 'secondary'
                       }
                       size="compact"
-                      className="text-[10px] uppercase tracking-wide"
+                      className="text-xs uppercase tracking-wide rounded-[6px]"
                     >
                       {req.status}
                     </Badge>
                   </div>
 
-                  <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                    <Badge variant={(req.entity || req.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact" className="text-[9px]">
+                  <div className="flex items-center gap-1.5 text-xs text-[#475569]">
+                    <Badge variant={(req.entity || req.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact" className="text-xs rounded-[6px]">
                       {req.entity || (req.entity_id === 'LTA' || req.entity_id === 'ATA' ? req.entity_id : 'ATA')}
                     </Badge>
                     <span className="truncate max-w-[200px]" data-testid={`approval-client-${req.id}`}>
@@ -425,29 +441,29 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
 
                   {/* Route Badge or Request Type Badge */}
                   {req.type === 'billing' ? (
-                    <div className="flex items-center gap-1.5 text-[11px] text-blue-700 font-medium">
+                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
                       <Receipt className="h-3.5 w-3.5 shrink-0" />
                       <span>Invoice Request</span>
                     </div>
                   ) : req.type === 'transmittal' ? (
-                    <div className="flex items-center gap-1.5 text-[11px] text-purple-700 font-medium">
+                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
                       <Send className="h-3.5 w-3.5 shrink-0" />
                       <span>Transmittal Request</span>
                     </div>
                   ) : req.type === 'disbursement' ? (
-                    <div className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
+                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
                       <CreditCard className="h-3.5 w-3.5 shrink-0" />
                       <span>Disbursement Request</span>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1.5 text-[11px] text-slate-600">
-                      <span className="font-medium capitalize">{fromP.replace('_', ' ')}</span>
-                      <ArrowRight className="h-3 w-3 text-slate-400" />
-                      <span className="font-medium capitalize text-blue-700">{toP.replace('_', ' ')}</span>
+                    <div className="flex items-center gap-1.5 text-xs text-[#475569]">
+                      <span className="font-medium capitalize text-[#1E293B]">{fromP.replace('_', ' ')}</span>
+                      <ArrowRight className="h-3 w-3 text-[#475569]" />
+                      <span className="font-medium capitalize text-[#1E293B]">{toP.replace('_', ' ')}</span>
                     </div>
                   )}
 
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 pt-0.5">
+                  <div className="flex items-center justify-between text-xs text-[#475569] pt-0.5">
                     <span>By {submitter}</span>
                     <span>{req.createdAt ? new Date(req.createdAt).toLocaleDateString() : ''}</span>
                   </div>
@@ -458,21 +474,22 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
         </div>
 
         {/* Right Column: Diff & Validation Inspector (60% width) */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white">
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-[#FFFFFF] tabular-nums">
           {selectedRequest ? (
             <>
               {/* Header */}
-              <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-start justify-between border-b border-[#E2E8F0] pb-4">
                 <div className="space-y-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant={(wrDetail?.entity || selectedRequest.entity || selectedRequest.entity_id) === 'LTA' ? 'lta' : 'ata'}
                       size="compact"
+                      className="rounded-[6px] text-xs"
                       data-testid="request-detail-entity"
                     >
                       {wrDetail?.entity || selectedRequest.entity || (selectedRequest.entity_id === 'LTA' || selectedRequest.entity_id === 'ATA' ? selectedRequest.entity_id : 'ATA')}
                     </Badge>
-                    <h3 className="font-bold text-base text-slate-900" data-testid="request-detail-title">
+                    <h3 className="font-bold text-base text-[#1E293B]" data-testid="request-detail-title">
                       {selectedRequest.work_requests?.title ||
                         wrDetail?.title ||
                         (selectedRequest as unknown as { workRequestTitle?: string }).workRequestTitle ||
@@ -484,15 +501,15 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                         variant="ghost"
                         size="xs"
                         onClick={() => onNavigateToWr(wrId)}
-                        className="text-xs text-blue-600 h-6 px-1.5"
+                        className="text-xs text-[#1E293B] hover:text-[#1D4ED8] hover:bg-[#F8FAFC] rounded-[6px] h-6 px-1.5 underline"
                       >
                         Open Details
                       </Button>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500">
+                  <div className="text-xs text-[#475569]">
                     Requested by{' '}
-                    <span className="font-medium text-slate-700">
+                    <span className="font-semibold text-[#1E293B]">
                       {selectedRequest.requester?.name || selectedRequest.requestedByName || 'Staff'}
                     </span>{' '}
                     on {selectedRequest.createdAt ? new Date(selectedRequest.createdAt).toLocaleString() : ''}
@@ -510,7 +527,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                           : 'secondary'
                   }
                   size="default"
-                  className="capitalize"
+                  className="capitalize rounded-[6px] text-xs"
                   data-testid="request-detail-status"
                 >
                   {selectedRequest.status}
@@ -518,13 +535,13 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               </div>
 
               {/* Full WR Detail Card (UAT2-4) */}
-              <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-xs" data-testid="request-wr-detail-card">
+              <div className="grid grid-cols-2 gap-3 p-3.5 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-xs" data-testid="request-wr-detail-card">
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">
+                  <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
                     Client
                   </span>
-                  <div className="flex items-center gap-1.5 font-medium text-slate-800 truncate" data-testid="request-client-name">
-                    <Building className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <div className="flex items-center gap-1.5 font-semibold text-[#1E293B] truncate" data-testid="request-client-name">
+                    <Building className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                     <span className="truncate">
                       {wrDetail?.clientName || wrDetail?.client?.name || selectedRequest.clients?.name || (selectedRequest as unknown as { clientName?: string }).clientName || '—'}
                     </span>
@@ -532,11 +549,11 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                 </div>
 
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">
+                  <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
                     Assigned Lead
                   </span>
-                  <div className="flex items-center gap-1.5 font-medium text-slate-800 truncate" data-testid="request-assigned-lead">
-                    <User className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <div className="flex items-center gap-1.5 font-semibold text-[#1E293B] truncate" data-testid="request-assigned-lead">
+                    <User className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                     <span className="truncate">
                       {wrDetail?.assignedToName || resolveName(wrDetail?.assignedTo) || 'Unassigned'}
                     </span>
@@ -544,13 +561,13 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                 </div>
 
                 {wrDetail?.coAssignees && wrDetail.coAssignees.length > 0 && (
-                  <div className="col-span-2 pt-1 border-t border-slate-200">
-                    <span className="text-[10px] uppercase font-bold text-slate-400 block mb-1">
+                  <div className="col-span-2 pt-1 border-t border-[#E2E8F0]">
+                    <span className="text-xs uppercase font-bold text-[#475569] block mb-1">
                       Co-Assignees / Team
                     </span>
                     <div className="flex flex-wrap gap-1.5" data-testid="request-co-assignees">
                       {wrDetail.coAssignees.map((val, idx) => (
-                        <Badge key={`${val}-${idx}`} variant="secondary" size="compact" className="text-[10px]">
+                        <Badge key={`${val}-${idx}`} variant="secondary" size="compact" className="text-xs rounded-[6px] bg-[#FFFFFF] border-[#E2E8F0] text-[#1E293B]">
                           <Users className="h-2.5 w-2.5 mr-1" />
                           {resolveName(val)}
                         </Badge>
@@ -562,22 +579,22 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
 
               {/* Side-by-side Flow or Non-Transition Request Card */}
               {selectedRequest.type === 'billing' || selectedRequest.type === 'transmittal' || selectedRequest.type === 'disbursement' ? (
-                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
+                <div className="p-4 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] space-y-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2 bg-white rounded-md border border-slate-200 shadow-2xs">
-                      {selectedRequest.type === 'billing' && <Receipt className="h-5 w-5 text-blue-600" />}
-                      {selectedRequest.type === 'transmittal' && <Send className="h-5 w-5 text-purple-600" />}
-                      {selectedRequest.type === 'disbursement' && <CreditCard className="h-5 w-5 text-emerald-600" />}
+                    <div className="p-2 bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0]">
+                      {selectedRequest.type === 'billing' && <Receipt className="h-5 w-5 text-[#1E293B]" />}
+                      {selectedRequest.type === 'transmittal' && <Send className="h-5 w-5 text-[#1E293B]" />}
+                      {selectedRequest.type === 'disbursement' && <CreditCard className="h-5 w-5 text-[#1E293B]" />}
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                      <h4 className="text-xs font-bold tracking-normal text-[#1E293B]">
                         {selectedRequest.type === 'billing'
                           ? 'Invoice Generation Request'
                           : selectedRequest.type === 'transmittal'
                           ? 'Transmittal Documentation Request'
                           : 'Disbursement Voucher Request'}
                       </h4>
-                      <p className="text-[11px] text-slate-500">
+                      <p className="text-xs text-[#475569]">
                         {selectedRequest.type === 'billing'
                           ? 'Request submitted to Accounting to issue and link an invoice.'
                           : selectedRequest.type === 'transmittal'
@@ -588,17 +605,17 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                   </div>
 
                   {selectedRequest.linked_task_id && (
-                    <div className="text-xs text-slate-700 bg-white p-2.5 rounded border border-slate-200 flex items-center justify-between">
-                      <span className="text-slate-500 font-medium">Linked Task:</span>
-                      <span className="font-semibold text-slate-800">
+                    <div className="text-xs text-[#1E293B] bg-[#FFFFFF] p-2.5 rounded-[8px] border-[#E2E8F0] flex items-center justify-between">
+                      <span className="text-[#475569] font-medium">Linked Task:</span>
+                      <span className="font-semibold text-[#1E293B]">
                         {wrDetail?.tasks?.find((t) => t.id === selectedRequest.linked_task_id)?.title || selectedRequest.linked_task_id}
                       </span>
                     </div>
                   )}
 
                   {selectedRequest.notes && (
-                    <div className="text-xs text-slate-600 bg-white p-2.5 rounded border border-slate-200">
-                      <span className="font-semibold text-slate-700">Submitter Notes: </span>
+                    <div className="text-xs text-[#1E293B] bg-[#FFFFFF] p-2.5 rounded-[8px] border-[#E2E8F0]">
+                      <span className="font-semibold text-[#1E293B]">Submitter Notes: </span>
                       {(() => {
                         const raw = selectedRequest.notes;
                         if (typeof raw === 'string' && raw.trim().startsWith('{')) {
@@ -613,22 +630,22 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                   )}
                 </div>
               ) : (
-                <div className="p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-2">
-                  <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                <div className="p-4 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] space-y-2">
+                  <h4 className="text-xs font-semibold text-[#1E293B] tracking-normal">
                     Phase Transition Flow
                   </h4>
                   <div className="flex items-center justify-center gap-4 py-3">
-                    <div className="px-4 py-2 bg-white rounded-md border border-slate-200 text-xs font-semibold text-slate-700 capitalize shadow-xs">
+                    <div className="px-4 py-2 bg-[#FFFFFF] rounded-[8px] border-[#E2E8F0] text-xs font-semibold text-[#1E293B] capitalize">
                       {(selectedRequest.from_phase || (selectedRequest as unknown as { fromPhase?: Phase }).fromPhase || 'pre_processing').replace('_', ' ')}
                     </div>
-                    <ArrowRight className="h-5 w-5 text-blue-600" />
-                    <div className="px-4 py-2 bg-blue-50 border border-blue-200 text-xs font-semibold text-blue-700 capitalize shadow-xs">
+                    <ArrowRight className="h-5 w-5 text-[#1E293B]" />
+                    <div className="px-4 py-2 bg-[#FFFFFF] border-[#E2E8F0] text-xs font-semibold text-[#1E293B] capitalize">
                       {(selectedRequest.to_phase || (selectedRequest as unknown as { toPhase?: Phase }).toPhase || 'processing').replace('_', ' ')}
                     </div>
                   </div>
                   {selectedRequest.notes && (
-                    <div className="text-xs text-slate-600 bg-white p-2.5 rounded border border-slate-200">
-                      <span className="font-semibold text-slate-700">Submitter Notes: </span>
+                    <div className="text-xs text-[#1E293B] bg-[#FFFFFF] p-2.5 rounded-[8px] border-[#E2E8F0]">
+                      <span className="font-semibold text-[#1E293B]">Submitter Notes: </span>
                       {(() => {
                         const raw = selectedRequest.notes;
                         if (typeof raw === 'string' && raw.trim().startsWith('{')) {
@@ -647,25 +664,25 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               {/* Gate Prerequisite Inspector (Only for phase transitions) */}
               {(selectedRequest.type === 'wr_phase_transition' || !selectedRequest.type) && (
                 <div className="space-y-3" data-testid="gate-inspector">
-                  <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  <h4 className="text-xs font-semibold text-[#1E293B] tracking-normal">
                     Phase Gate Checklist Inspector
                   </h4>
 
                 {gateEvaluation ? (
                   <div className="space-y-3">
                     <div
-                      className={`p-3 rounded-md border flex items-center justify-between text-xs ${
+                      className={`p-3 rounded-[8px] border-2 flex items-center justify-between text-xs  ${
                         gateEvaluation.passed
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                          : 'bg-amber-50 border-amber-200 text-amber-800'
+                          ? 'bg-[#FFFFFF] border-[#E2E8F0] text-[#1E293B]'
+                          : 'bg-[#FFFFFF] border-[#FCA5A5] text-[#DC2626]'
                       }`}
                       data-testid="gate-status-banner"
                     >
                       <div className="flex items-center gap-2">
                         {gateEvaluation.passed ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <CheckCircle2 className="h-4 w-4 text-[#1E293B] shrink-0" />
                         ) : (
-                          <Clock className="h-4 w-4 text-amber-600 shrink-0" />
+                          <Clock className="h-4 w-4 text-[#475569] shrink-0" />
                         )}
                         <span className="font-medium">
                           {gateEvaluation.passed
@@ -676,6 +693,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                       <Badge
                         variant={gateEvaluation.passed ? 'success' : 'warning'}
                         size="compact"
+                        className="rounded-[6px] tabular-nums text-xs"
                       >
                         {gateEvaluation.completedCount} / {gateEvaluation.total} Done
                       </Badge>
@@ -683,15 +701,15 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
 
                     {/* Blocker Tasks List */}
                     {gateEvaluation.incompleteTasks.length > 0 && (
-                      <div className="space-y-1.5 bg-slate-50 p-3 rounded-md border border-slate-200 text-xs">
-                        <span className="font-semibold text-slate-700 block">
+                      <div className="space-y-1.5 bg-[#F8FAFC] p-3 rounded-[8px] border-[#E2E8F0] text-xs">
+                        <span className="font-semibold text-[#1E293B] block">
                           Incomplete Gate Tasks (Blockers):
                         </span>
-                        <ul className="space-y-1 pl-4 list-disc text-slate-600">
+                        <ul className="space-y-1 pl-4 list-disc text-[#475569]">
                           {gateEvaluation.incompleteTasks.map((t) => (
                             <li key={t.id} className="text-xs">
-                              <span className="font-medium text-slate-800">{t.title}</span> —{' '}
-                              <Badge variant="outline" size="compact" className="text-[10px]">
+                              <span className="font-medium text-[#1E293B]">{t.title}</span> —{' '}
+                              <Badge variant="outline" size="compact" className="text-xs rounded-[8px] border-[#E2E8F0]">
                                 {t.status}
                               </Badge>
                             </li>
@@ -701,7 +719,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                     )}
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-400 italic">
+                  <div className="text-xs text-[#475569] italic">
                     Loading work request tasks for gate inspection...
                   </div>
                 )}
@@ -711,22 +729,22 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               {/* Full Work Request Tasks Breakdown (UAT2-4) */}
               {wrDetail && wrDetail.tasks && wrDetail.tasks.length > 0 && (
                 <div className="space-y-2" data-testid="request-tasks-breakdown">
-                  <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <h4 className="text-xs font-semibold text-[#1E293B] tracking-normal flex items-center gap-1.5">
                     <CheckSquare className="h-3.5 w-3.5" />
                     Work Request Tasks ({wrDetail.tasks.filter((t) => t.status === 'Completed').length}/{wrDetail.tasks.length} Completed)
                   </h4>
-                  <div className="border border-slate-200 rounded-lg overflow-hidden divide-y divide-slate-100 bg-white">
+                  <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#CBD5E1] bg-[#FFFFFF]">
                     {wrDetail.tasks.map((task) => (
                       <div
                         key={task.id}
-                        className="p-2.5 flex items-center justify-between gap-2 text-xs hover:bg-slate-50 transition-colors"
+                        className="p-2.5 flex items-center justify-between gap-2 text-xs hover:bg-[#F8FAFC]/60 transition-colors"
                         data-testid={`request-task-row-${task.id}`}
                       >
                         <div className="min-w-0">
-                          <span className={`font-medium block truncate ${task.status === 'Completed' ? 'line-through text-slate-400' : 'text-slate-800'}`}>
+                          <span className={`font-medium block truncate ${task.status === 'Completed' ? 'line-through text-[#475569]' : 'text-[#1E293B]'}`}>
                             {task.title}
                           </span>
-                          <div className="flex items-center gap-2 text-[10px] text-slate-400 pt-0.5">
+                          <div className="flex items-center gap-2 text-xs text-[#475569] pt-0.5">
                             <span className="capitalize">{task.phase.replace('_', ' ')}</span>
                             <span>•</span>
                             <span data-testid={`request-task-assignee-${task.id}`}>
@@ -737,7 +755,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                         <Badge
                           variant={task.status === 'Completed' ? 'success' : 'secondary'}
                           size="compact"
-                          className="text-[10px]"
+                          className="text-xs rounded-[6px]"
                         >
                           {task.status}
                         </Badge>
@@ -750,18 +768,18 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               {/* Rejection Details (if rejected) */}
               {selectedRequest.status === 'rejected' && (
                 <div
-                  className="p-3.5 bg-red-50 border border-red-200 rounded-md space-y-1.5 text-xs text-red-800"
+                  className="p-3.5 bg-[#FFFFFF] border-2 border-[#FCA5A5] rounded-[6px] space-y-1.5 text-xs text-[#DC2626]"
                   data-testid="rejection-history-card"
                 >
-                  <div className="flex items-center gap-2 font-bold text-red-900">
-                    <XCircle className="h-4 w-4 text-red-600" />
+                  <div className="flex items-center gap-2 font-bold text-[#DC2626]">
+                    <XCircle className="h-4 w-4 text-[#DC2626]" />
                     <span>Rejection Reason:</span>
                   </div>
                   <p className="whitespace-pre-wrap pl-6">
                     {selectedRequest.rejection_reason || selectedRequest.rejectionReason || 'No reason provided.'}
                   </p>
                   {selectedRequest.fulfilledAt && (
-                    <div className="text-[10px] text-red-600/80 pl-6">
+                    <div className="text-xs text-[#DC2626]/80 pl-6">
                       Resolved on {new Date(selectedRequest.fulfilledAt).toLocaleString()}
                     </div>
                   )}
@@ -769,7 +787,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               )}
 
               {/* Action Buttons Footer */}
-              <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
+              <div className="pt-4 border-t border-[#E2E8F0] flex items-center justify-between">
                 <div>
                   {selectedRequest.status === 'pending' &&
                     selectedRequest.requested_by === currentUserId && (
@@ -778,7 +796,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                         variant="ghost"
                         size="sm"
                         onClick={handleWithdraw}
-                        className="text-xs text-slate-500 hover:text-red-600"
+                        className="text-xs text-[#475569] hover:text-[#DC2626] rounded-[6px]"
                         data-testid="withdraw-btn"
                       >
                         Withdraw Request
@@ -795,17 +813,16 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                         variant="destructive"
                         size="sm"
                         onClick={() => setIsRejectModalOpen(true)}
-                        className="text-xs gap-1"
+                        className="text-xs tracking-normal rounded-[6px] bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs gap-1"
                         data-testid="reject-btn"
                       >
                         <X className="h-3.5 w-3.5" /> Reject
                       </Button>
                       <Button
                         type="button"
-                        variant="default"
                         size="sm"
                         onClick={handleApprove}
-                        className="text-xs gap-1 bg-emerald-600 hover:bg-emerald-700"
+                        className="text-xs tracking-normal rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs gap-1"
                         data-testid="approve-btn"
                       >
                         <Check className="h-3.5 w-3.5" />{' '}
@@ -826,14 +843,15 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                             onChange={(e) => setResubmitNotes(e.target.value)}
                             placeholder="Add explanation or audit notes for resubmission..."
                             rows={2}
-                            className="w-full text-xs p-2 border border-slate-300 rounded bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            className="w-full text-xs p-2 border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
                             data-testid="resubmit-notes-input"
                           />
                           <div className="flex justify-end gap-2">
                             <Button
                               type="button"
-                              variant="ghost"
+                              variant="outline"
                               size="xs"
+                              className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] text-xs tracking-normal"
                               onClick={() => setIsResubmitting(false)}
                             >
                               Cancel
@@ -841,6 +859,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                             <Button
                               type="button"
                               size="xs"
+                              className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs tracking-normal"
                               onClick={handleResubmit}
                               data-testid="confirm-resubmit-btn"
                             >
@@ -854,7 +873,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                           variant="outline"
                           size="sm"
                           onClick={() => setIsResubmitting(true)}
-                          className="text-xs gap-1 text-blue-600"
+                          className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1"
                           data-testid="resubmit-btn"
                         >
                           <RotateCcw className="h-3.5 w-3.5" /> Resubmit Transition
@@ -866,7 +885,7 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
               </div>
             </>
           ) : (
-            <div className="h-full flex items-center justify-center text-xs text-slate-400">
+            <div className="h-full flex items-center justify-center text-xs text-[#475569]">
               Select a request from the queue to inspect details and gate tasks.
             </div>
           )}

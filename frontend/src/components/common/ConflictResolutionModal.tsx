@@ -36,17 +36,14 @@ export interface ConflictFieldComparison {
 }
 
 export interface ConflictResolutionModalProps {
-  // Modal visibility
   isOpen?: boolean;
   open?: boolean;
   onClose?: () => void;
   onOpenChange?: (open: boolean) => void;
 
-  // Error / RFC 7807 context
   error?: ApiError | Error | null;
   errorMessage?: string;
 
-  // Entity metadata
   title?: string;
   entityTitle?: string;
   entityName?: string;
@@ -54,21 +51,17 @@ export interface ConflictResolutionModalProps {
   entityId?: string;
   recordIdentifier?: string;
 
-  // Version indicators
   expectedVersion?: number | null;
   serverVersion?: number | null;
   localVersion?: number | null;
 
-  // Explicit diffs
   comparisons?: ConflictFieldComparison[];
   localValues?: Record<string, unknown>;
   serverValues?: Record<string, unknown>;
 
-  // Fallbacks for quick-action status changes
   attemptedStatus?: string | null;
   currentStatus?: string | null;
 
-  // Actions
   onRefreshAndKeepLatest?: () => Promise<void> | void;
   onRefreshLatest?: () => Promise<void> | void;
   onCancel?: () => void;
@@ -132,7 +125,6 @@ export function ConflictResolutionModal({
     }
   };
 
-  // Derive error details
   const errorCode =
     (error && typeof error === 'object' && 'code' in error && (error as ApiError).code) ||
     'CONCURRENCY_CONFLICT';
@@ -146,7 +138,6 @@ export function ConflictResolutionModal({
   const localVer = expectedVersion ?? localVersion;
   const targetTitle = recordIdentifier || entityTitle || entityName;
 
-  // Compute field comparisons
   const computedComparisons = React.useMemo<ConflictFieldComparison[]>(() => {
     if (comparisons && comparisons.length > 0) {
       return comparisons.map((c) => ({
@@ -186,7 +177,7 @@ export function ConflictResolutionModal({
         serverValue:
           serverVersion !== null && serverVersion !== undefined
             ? `Version ${serverVersion}`
-            : 'Latest',
+            : 'Authoritative',
       });
     }
 
@@ -197,42 +188,42 @@ export function ConflictResolutionModal({
     <Dialog open={isModalOpen} onOpenChange={handleOpenChange}>
       <DialogContent
         data-testid="conflict-resolution-modal"
-        className="max-w-xl w-full p-6 space-y-4"
+        className="max-w-xl w-full p-6 space-y-4 rounded-[12px] border border-[#E2E8F0] bg-[#FFFFFF] shadow-float overscroll-contain"
       >
         <DialogHeader className="text-left space-y-1">
-          <DialogTitle className="text-lg font-semibold text-[#1e293b]">
+          <DialogTitle className="text-lg font-semibold tracking-tight text-[#1E293B]">
             {title || 'Record Out of Sync'}
           </DialogTitle>
-          <DialogDescription className="text-xs text-[#64748b]">
+          <DialogDescription className="text-xs text-[#475569]">
             {targetTitle
-              ? `Conflict detected on ${entityType}: "${targetTitle}". Another user updated this record while you were editing.`
-              : `Conflict detected on this ${entityType}. Another user updated this record while you were editing.`}
+              ? `Conflict detected on ${entityType}: "${targetTitle}".`
+              : `Conflict detected on this ${entityType}.`}
           </DialogDescription>
         </DialogHeader>
 
-        {/* Out-of-sync Warning Banner */}
+        {/* Warning Banner */}
         <div
           data-testid="conflict-warning-banner"
-          className="bg-amber-50 border border-amber-200/80 rounded-lg p-3.5 space-y-2"
+          className="bg-[#FEFCE8] border border-[#FDE047] rounded-[8px] p-3.5 space-y-2"
         >
           <div className="flex items-start gap-2.5">
-            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <AlertTriangle className="h-5 w-5 text-[#854D0E] shrink-0 mt-0.5" />
             <div className="space-y-1 flex-1">
               <div className="flex items-center gap-2 flex-wrap justify-between">
-                <span className="font-semibold text-xs sm:text-sm text-amber-900">
-                  Record Out of Sync: Another user modified this record while you were editing.
+                <span className="font-semibold text-xs text-[#854D0E]">
+                  Another user modified this record while you were editing.
                 </span>
                 <Badge
                   variant="destructive"
                   data-testid="error-code-badge"
-                  className="text-[10px] uppercase font-mono font-bold tracking-wider px-2 py-0.5"
+                  className="text-xs px-2 py-0.5"
                 >
                   {errorCode}
                 </Badge>
               </div>
               <p
                 data-testid="conflict-detail-message"
-                className="text-xs text-amber-800 leading-relaxed"
+                className="text-xs text-[#854D0E] leading-relaxed"
               >
                 {detailMessage}
               </p>
@@ -243,19 +234,19 @@ export function ConflictResolutionModal({
         {/* Side-by-Side Comparison Container */}
         <div
           data-testid="conflict-comparison-view"
-          className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/50 p-3.5"
+          className="space-y-3 rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] p-3.5"
         >
           {/* Column Headers */}
-          <div className="grid grid-cols-2 gap-3 pb-2 border-b border-slate-200 text-xs font-semibold">
-            <div className="flex items-center justify-between text-blue-900">
+          <div className="grid grid-cols-2 gap-3 pb-2 border-b border-[#E2E8F0] text-xs font-semibold">
+            <div className="flex items-center justify-between text-[#1E293B]">
               <span>Your Attempted Changes</span>
-              <Badge variant="outline" className="text-[10px] text-blue-700 border-blue-300 bg-blue-50/60">
+              <Badge variant="outline" className="text-xs">
                 {localVer !== null && localVer !== undefined ? `v${localVer}` : 'Local Draft'}
               </Badge>
             </div>
-            <div className="flex items-center justify-between text-slate-800">
+            <div className="flex items-center justify-between text-[#1E293B]">
               <span>Authoritative Server Record</span>
-              <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300 bg-emerald-50">
+              <Badge variant="default" className="text-xs">
                 {serverVersion !== null && serverVersion !== undefined ? `v${serverVersion}` : 'Server Truth'}
               </Badge>
             </div>
@@ -265,19 +256,19 @@ export function ConflictResolutionModal({
           <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
             {computedComparisons.map((comp, idx) => (
               <div key={idx} className="space-y-1">
-                <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">
+                <span className="text-xs font-medium text-[#475569]">
                   {comp.label}
                 </span>
                 <div className="grid grid-cols-2 gap-3">
                   <div
                     data-testid="conflict-local-value"
-                    className="text-xs font-medium text-blue-800 bg-blue-50/50 p-2 rounded border border-blue-200/60 break-words"
+                    className="text-xs text-[#1E293B] bg-[#FFFFFF] p-2 rounded-[6px] border border-[#E2E8F0] break-words"
                   >
                     {comp.localValue ?? '—'}
                   </div>
                   <div
                     data-testid="conflict-server-value"
-                    className="text-xs font-medium text-slate-800 bg-white p-2 rounded border border-slate-200 break-words"
+                    className="text-xs font-semibold text-[#1E3A8A] bg-[#EFF6FF] p-2 rounded-[6px] border border-[#93C5FD] break-words"
                   >
                     {comp.serverValue ?? '—'}
                   </div>

@@ -132,7 +132,7 @@ describe('PrintPreviewModal Component (Decoupled Print & Address Security)', () 
 
     expect(screen.getByTestId('print-preview-modal')).toBeInTheDocument();
     expect(screen.getByTestId('a4-document-sheet')).toBeInTheDocument();
-    expect(screen.getAllByText(/Amaya Tan & Associates/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/A.T.A. BUSINESS CONSULTANCY/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('ATA-SI-2026-0088').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Acme Corporation')).toBeInTheDocument();
 
@@ -243,5 +243,103 @@ describe('PrintPreviewModal Component (Decoupled Print & Address Security)', () 
         'Updated invoice snapshot address only. Master client record remains unchanged.'
       );
     });
+  });
+});
+
+describe('Company details controls', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('omits branding in preview and print, and passes the same option to PDF generation', async () => {
+    const originalFetch = global.fetch;
+    const write = vi.fn();
+    const printWindow = {
+      document: { open: vi.fn(), write, close: vi.fn() },
+      focus: vi.fn(),
+      print: vi.fn(),
+    };
+    const popup = { location: { href: '' }, close: vi.fn() };
+    const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+    global.fetch = vi
+      .fn()
+      .mockImplementation(async (url) => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: String(url).includes('/pdf')
+            ? { url: 'https://example.test/plain.pdf' }
+            : mockInvoiceForPrint,
+        }),
+      }));
+    try {
+      const { wrapper } = createHarness();
+      const { rerender } = render(
+        <PrintPreviewModal isOpen onClose={vi.fn()} initialInvoice={mockInvoiceForPrint} />,
+        { wrapper }
+      );
+      expect(screen.getByAltText('ATA Logo')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('company-details-checkbox'));
+      expect(screen.queryByAltText('ATA Logo')).not.toBeInTheDocument();
+      expect(screen.getByTestId('a4-document-sheet')).not.toHaveTextContent(
+        'A.T.A. BUSINESS CONSULTANCY'
+      );
+      fireEvent.click(screen.getByTestId('print-document-button'));
+      expect(write.mock.calls[0]![0]).not.toContain('<img');
+      open.mockReturnValue(popup as unknown as Window);
+      fireEvent.click(screen.getByTestId('download-pdf-button'));
+      await waitFor(() => expect(popup.location.href).toBe('https://example.test/plain.pdf'));
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/pdf?includeCompanyDetails=false'),
+        expect.anything()
+      );
+      rerender(
+        <PrintPreviewModal isOpen={false} onClose={vi.fn()} initialInvoice={mockInvoiceForPrint} />
+      );
+      rerender(<PrintPreviewModal isOpen onClose={vi.fn()} initialInvoice={mockInvoiceForPrint} />);
+      expect(screen.getByTestId('company-details-checkbox')).not.toBeChecked();
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  it('suppresses print preview and PDF download on non-access query failure (HTTP 500)', async () => {
+    let shouldFail = true;
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/invoices/inv-preview-fail') && shouldFail) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          json: async () => ({ title: 'Server Error', detail: 'Database error' }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { ...mockInvoiceForPrint, id: 'inv-preview-fail' } }),
+      } as Response);
+    });
+
+    const { wrapper } = createHarness();
+    render(
+      <PrintPreviewModal
+        isOpen={true}
+        onClose={vi.fn()}
+        invoiceId="inv-preview-fail"
+        initialInvoice={mockInvoiceForPrint}
+      />,
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('print-preview-error')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Unable to Load Print Preview')).toBeInTheDocument();
+    expect(screen.queryByTestId('a4-document-sheet')).not.toBeInTheDocument();
+
+    shouldFail = false;
+    fireEvent.click(screen.getByTestId('print-preview-error-retry-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('print-preview-error')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('a4-document-sheet')).toBeInTheDocument();
   });
 });

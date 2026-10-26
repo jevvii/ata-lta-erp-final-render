@@ -19,7 +19,7 @@ export function ViewModeToggle({
 }: ViewModeToggleProps) {
   return (
     <div
-      className={`flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 ${className}`}
+      className={`inline-flex items-center bg-[#F8FAFC] p-0 rounded-[8px] border-[#E2E8F0] divide-x divide-[#CBD5E1] ${className}`}
       data-testid="view-mode-toggle"
     >
       {availableModes.map((m) => {
@@ -39,10 +39,10 @@ export function ViewModeToggle({
             key={m}
             type="button"
             onClick={() => onChange(m)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md transition-all cursor-pointer ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs  font-bold rounded-[6px] transition-colors cursor-pointer ${
               isActive
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-500 hover:text-slate-900'
+                ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs'
+                : 'bg-[#F8FAFC] text-[#475569] hover:bg-[#E2E8F0] hover:text-[#1E293B]'
             }`}
             data-testid={`${testIdPrefix}-${m}`}
             data-view-mode={m}

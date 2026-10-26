@@ -86,6 +86,7 @@ export interface RetainerTemplateTask {
   depends_on_local_id?: string | null;
   dependsOnLocalId?: string | null;
   requiredLinkType?: string | null;
+  required_link_type?: string | null;
   dueDate?: string | null;
   checklist?: ChecklistItemData[];
 }

@@ -9,6 +9,9 @@ import { useSessionStore } from '@/lib/session';
 // Mock TanStack hooks from useDocuments
 const mockMutateAsyncComment = vi.fn();
 const mockMutateAsyncUpload = vi.fn();
+let mockCommentDoc: DmsDocument | undefined;
+let mockDownloadError: Error | null = null;
+const mockRetryDownload = vi.fn();
 let mockDownloadData: { url: string; fileName: string; contentType?: string } | undefined = {
   url: 'https://storage.test/docs/doc-101.pdf',
   fileName: 'test-document.pdf',
@@ -17,9 +20,11 @@ let mockDownloadData: { url: string; fileName: string; contentType?: string } | 
 vi.mock('../api/useDocuments', () => ({
   useDocumentDownloadUrl: () => ({
     data: mockDownloadData,
+    error: mockDownloadError,
+    refetch: mockRetryDownload,
     isLoading: false,
   }),
-  useDocumentDetail: () => ({ data: undefined }),
+  useDocumentDetail: () => ({ data: mockCommentDoc }),
   useEditDocumentComment: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteDocumentComment: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useAddDocumentComment: () => ({
@@ -40,6 +45,9 @@ describe('DocumentViewerModal (UAT2-14)', () => {
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
     vi.restoreAllMocks();
+    mockCommentDoc = undefined;
+    mockDownloadError = null;
+    mockRetryDownload.mockReset();
     mockMutateAsyncComment.mockReset();
     mockMutateAsyncUpload.mockReset();
     mockDownloadData = {
@@ -316,6 +324,7 @@ describe('DocumentViewerModal (UAT2-14)', () => {
   });
 
   it('handles comments: displays existing and posts new comment', async () => {
+    mockCommentDoc = { ...baseDoc, can_comment: true };
     mockMutateAsyncComment.mockResolvedValueOnce({
       ...baseDoc,
       comments: [
@@ -778,5 +787,16 @@ describe('DocumentViewerModal (UAT2-14)', () => {
     expect(screen.getByTestId('doc-work-request')).toHaveTextContent('None / Not Linked');
     expect(screen.getByTestId('doc-linked-task')).toHaveTextContent('None / Not Linked');
   });
+  it('shows the preview failure and allows retry instead of an unsupported-file message', () => {
+    mockDownloadData = undefined;
+    mockDownloadError = new Error('Document not found');
+    render(<QueryClientProvider client={queryClient}>
+      <DocumentViewerModal isOpen onClose={vi.fn()} document={baseDoc} />
+    </QueryClientProvider>);
+    expect(screen.getByRole('alert')).toHaveTextContent('Document not found');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry preview' }));
+    expect(mockRetryDownload).toHaveBeenCalledTimes(1);
+  });
+
 });
 

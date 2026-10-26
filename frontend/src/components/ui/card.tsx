@@ -10,8 +10,8 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
     <div
       ref={ref}
       className={cn(
-        'rounded-xl border border-[#f0f0f5] bg-white text-[#1e293b] shadow-[0_10px_40px_rgba(0,0,0,0.03)]',
-        density === 'compact' ? 'p-3' : 'p-6',
+        'rounded-[8px] border border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] shadow-card',
+        density === 'compact' ? 'p-3' : 'p-5 sm:p-6',
         className
       )}
       {...props}
@@ -43,8 +43,8 @@ const CardTitle = React.forwardRef<
   <h3
     ref={ref}
     className={cn(
-      'font-semibold leading-none tracking-tight text-[#1e293b]',
-      density === 'compact' ? 'text-sm' : 'text-base',
+      'font-semibold leading-tight tracking-tight text-[#1E293B]',
+      density === 'compact' ? 'text-sm' : 'text-base sm:text-lg',
       className
     )}
     {...props}
@@ -59,8 +59,8 @@ const CardDescription = React.forwardRef<
   <p
     ref={ref}
     className={cn(
-      'text-[#9494a0]',
-      density === 'compact' ? 'text-xs' : 'text-sm',
+      'text-[#475569]',
+      density === 'compact' ? 'text-xs' : 'text-xs sm:text-sm',
       className
     )}
     {...props}

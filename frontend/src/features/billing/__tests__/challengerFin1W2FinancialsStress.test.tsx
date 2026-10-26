@@ -788,6 +788,8 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       // Submit
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+      const confirmBtn = screen.queryByTestId('btn-confirm-no-receipt');
+      if (confirmBtn) fireEvent.click(confirmBtn);
 
       await waitFor(() => {
         expect(capturedPayload).not.toBeNull();
@@ -1391,6 +1393,8 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         target: { value: 'Cycle 3 Disbursement' },
       });
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+      const confirmCycleBtn = screen.queryByTestId('btn-confirm-no-receipt');
+      if (confirmCycleBtn) fireEvent.click(confirmCycleBtn);
 
       await waitFor(() => {
         expect(capturedPayload).not.toBeNull();

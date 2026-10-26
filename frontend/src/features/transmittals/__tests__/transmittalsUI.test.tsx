@@ -358,7 +358,7 @@ describe('Transmittals UI Integration & Behavioral Parity', () => {
 
       // Verify Manila address is rendered
       expect(
-        screen.getByText(/RM 307 Republic Supermarket Bldg, Soler St\., cor\. F\.Torres St\., Sta\. Cruz, Manila/i)
+        within(document.getElementById('transmittal-print-area')!).getByText(/RM 307 Republic Supermarket Bldg, Soler St\., cor\. F\.Torres St\., Sta\. Cruz, Manila/i)
       ).toBeInTheDocument();
 
       // Item-rows-only manifest: exactly 1 table header row + 2 data item rows = 3 rows in items table

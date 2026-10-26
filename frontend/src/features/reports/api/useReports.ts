@@ -73,7 +73,7 @@ export function useDailyReport(date: string, options?: { enabled?: boolean }) {
       return res.data;
     },
     staleTime: 30 * 1000,
-    enabled: Boolean(date) && (options?.enabled ?? true),
+    enabled: activeEntity !== 'ALL' && Boolean(date) && (options?.enabled ?? true),
   });
 }
 
@@ -89,7 +89,7 @@ export function useWeeklyReport(date: string, options?: { enabled?: boolean }) {
       return res.data;
     },
     staleTime: 30 * 1000,
-    enabled: Boolean(date) && (options?.enabled ?? true),
+    enabled: activeEntity !== 'ALL' && Boolean(date) && (options?.enabled ?? true),
   });
 }
 
@@ -104,7 +104,7 @@ export function useMonthlyPending(month?: string, options?: { enabled?: boolean 
       return res.data;
     },
     staleTime: 30 * 1000,
-    enabled: options?.enabled ?? true,
+    enabled: activeEntity !== 'ALL' && (options?.enabled ?? true),
   });
 }
 
@@ -125,6 +125,7 @@ export function useAgingReport(
       return res.data;
     },
     staleTime: 30 * 1000,
-    enabled: options?.enabled ?? true,
+    enabled: activeEntity !== 'ALL' && (options?.enabled ?? true),
   });
 }
+

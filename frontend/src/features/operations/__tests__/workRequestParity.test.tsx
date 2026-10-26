@@ -323,5 +323,19 @@ describe('Work Request Parity Feature Set (Step 3)', () => {
         expect(screen.getByText(/will split into 3 sibling tasks/i)).toBeInTheDocument();
       });
     });
+
+    it('supports selecting Task, Billing, and Documents task types in TaskLineItems', () => {
+      const { wrapper } = createHarness();
+      render(<WorkRequestModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+
+      const typeSelect0 = screen.getByTestId('task-type-select-0');
+      expect(typeSelect0).toHaveValue('');
+      fireEvent.change(typeSelect0, { target: { value: 'billing' } });
+      expect(typeSelect0).toHaveValue('billing');
+      fireEvent.change(typeSelect0, { target: { value: 'documents' } });
+      expect(typeSelect0).toHaveValue('documents');
+      fireEvent.change(typeSelect0, { target: { value: '' } });
+      expect(typeSelect0).toHaveValue('');
+    });
   });
 });

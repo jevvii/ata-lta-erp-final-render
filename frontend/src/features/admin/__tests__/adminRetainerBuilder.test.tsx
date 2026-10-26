@@ -375,6 +375,14 @@ describe('Retainer Template Builder & Generation Logs (Admin Gated)', () => {
       const removeClBtn = screen.getByTestId('checklist-remove-btn-0-0');
       fireEvent.click(removeClBtn);
       expect(screen.queryByTestId('checklist-item-input-0-0')).not.toBeInTheDocument();
+
+      // Verify Jira-inspired task type selector on retainer template task row
+      const retainerTypeSelect = screen.getByTestId('retainer-template-task-type-0');
+      expect(retainerTypeSelect).toHaveValue('');
+      fireEvent.change(retainerTypeSelect, { target: { value: 'billing' } });
+      expect(retainerTypeSelect).toHaveValue('billing');
+      fireEvent.change(retainerTypeSelect, { target: { value: 'documents' } });
+      expect(retainerTypeSelect).toHaveValue('documents');
     });
 
     it('blocks access if user lacks retainers:edit permission', () => {

@@ -18,6 +18,8 @@
 export interface TimeEntry {
   id: string;
   userId: string;
+  userName?: string | null;
+  userRole?: string | null;
   taskId: string;
   entryDate: string; // YYYY-MM-DD
   durationMinutes: number; // 1 - 1440
@@ -29,6 +31,8 @@ export interface TimeEntry {
 export interface RawTimeEntryApi {
   id: string;
   user_id: string;
+  user_name?: string | null;
+  user_role?: string | null;
   task_id: string;
   entry_date: string;
   duration_minutes: number;
@@ -92,7 +96,8 @@ export type NotificationType =
   | 'wr.transition_request.received'
   | 'wr.transition_request.resolved'
   | 'pending_request.resolved'
-  | 'wr.qa_reroute';
+  | 'wr.qa_reroute'
+  | 'disbursement.lifecycle';
 
 export interface TransitionRequestReceivedPayload {
   requestId?: string;
@@ -168,11 +173,25 @@ export interface QaReroutePayload {
   rerouted_by_name?: string;
 }
 
+export interface DisbursementLifecyclePayload {
+  action?: 'approved' | 'funded' | 'released' | 'rejected' | 'returned_for_correction' | string;
+  table_name?: 'disbursements' | string;
+  tableName?: string;
+  request_id?: string;
+  requestId?: string;
+  entity?: string;
+  disbursement_number?: string;
+  disbursementNumber?: string;
+  title?: string;
+  reason?: string | null;
+}
+
 export type NotificationPayload =
   | TransitionRequestReceivedPayload
   | TransitionRequestResolvedPayload
   | PendingRequestResolvedPayload
   | QaReroutePayload
+  | DisbursementLifecyclePayload
   | Record<string, unknown>;
 
 export interface NotificationItem {
@@ -222,6 +241,8 @@ export interface RawNotificationListApiResponse {
 // 3. Assigned Task for Picker
 // ============================================================================
 
+import type { Task, WorkRequest } from '@/features/operations/api/types';
+
 export interface AssignableTaskOption {
   taskId: string;
   taskTitle: string;
@@ -231,4 +252,40 @@ export interface AssignableTaskOption {
   status: string;
   phase?: string | null;
   clientName?: string | null;
+  assigneeId?: string | null;
+  assigneeName?: string | null;
+  assigneeRole?: string | null;
+  coAssigneeCount?: number;
+  dueDate?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  priority?: string | null;
+  assigneesList?: Array<{ id: string; name: string; role?: string }>;
+  rawTask?: Task;
+  rawWorkRequest?: WorkRequest;
+}
+
+export interface DashboardWorkRequestItem {
+  id: string;
+  title: string;
+  work_order_number?: string | null;
+  entity: string;
+  status: string;
+  phase: string | null;
+  clientId?: string | null;
+  clientName?: string | null;
+  assigneeId?: string | null;
+  assigneeName?: string | null;
+  assigneeRole?: string | null;
+  coAssignees: string[];
+  coAssigneeCount: number;
+  dueDate: string | null;
+  updatedAt: string | null;
+  completedAt?: string | null;
+  priority: string | null;
+  tasksCount: number;
+  completedTasksCount: number;
+  tasks: Task[];
+  rawWorkRequest: WorkRequest;
+  assigneesList: Array<{ id: string; name: string; role?: string }>;
 }

@@ -46,7 +46,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-empirical-challenger');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -428,7 +439,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
 
     it('handles entity_id: null and entity: null strictly across all tenant states', () => {
       // 1. Session is 'ATA' -> entity_id: null MUST be dropped
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
       const payloadNullId = {
         eventType: 'UPDATE',
         new: { id: 'wr-null-1', entity_id: null, version: 1 },
@@ -469,7 +491,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
     });
 
     it('un-partitioned tables (tasks) without entity fields pass Guard 1 cleanly under any session', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
       const taskATA = {
         eventType: 'UPDATE',
         new: { id: 'task-no-entity-1', work_request_id: 'wr-1', version: 1 },
@@ -490,7 +523,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
   // =========================================================================
   describe('Challenge 4: Loop Prevention & Tab Isolation', () => {
     it('drops self-originated mutations across camelCase and snake_case properties at root and nested levels', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
       const myTab = 'tab-empirical-challenger';
 
       const cases = [
@@ -516,7 +560,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
     });
 
     it('suppresses 20 concurrent local mutations in local mutation registry with version pinning', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       for (let i = 0; i < 20; i++) {
         trackLocalMutation('work_requests', `wr-local-${i}`, i + 1);
@@ -543,7 +598,18 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
   // =========================================================================
   describe('Challenge 5: Cache Reconciliation Edge Cases', () => {
     it('handles DELETE payloads with old record and removes from both detail and list caches', () => {
-      useSessionStore.setState({ activeEntity: 'ATA' });
+      useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-empirical',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin Empirical',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
 
       // Seed detail and list cache
       queryClient.setQueryData(billingKeys.invoiceDetail('inv-del-1'), {

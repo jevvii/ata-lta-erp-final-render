@@ -1,14 +1,3 @@
-/**
- * Ephemeral Collaboration & SidePeek Presence Avatars (Spec §5, Parcel F)
- *
- * Connects to Supabase Realtime Presence channel `presence:work_request:${roomId}`
- * using the singleton Supabase client. Renders Notion-style overlapping circular
- * avatar badges showing other active viewers.
- *
- * Guarded by `isFeatureEnabled('realtime_sync')`. Purely in-memory WebSocket presence
- * with 0 persistent database writes.
- */
-
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useSessionStore } from '@/lib/session';
@@ -31,14 +20,12 @@ export interface PresenceAvatarsProps {
 }
 
 const AVATAR_BG_COLORS = [
-  'bg-indigo-600 text-white',
-  'bg-emerald-600 text-white',
-  'bg-amber-600 text-white',
-  'bg-rose-600 text-white',
-  'bg-sky-600 text-white',
-  'bg-violet-600 text-white',
-  'bg-teal-600 text-white',
-  'bg-fuchsia-600 text-white',
+  'bg-[#1E3A8A] text-white',
+  'bg-[#0369A1] text-white',
+  'bg-[#1D4ED8] text-white',
+  'bg-[#166534] text-white',
+  'bg-[#854D0E] text-white',
+  'bg-[#334155] text-white',
 ];
 
 export function getInitials(name: string): string {
@@ -60,7 +47,7 @@ export function getAvatarColorClass(idOrName: string): string {
     hash |= 0;
   }
   const index = Math.abs(hash) % AVATAR_BG_COLORS.length;
-  return AVATAR_BG_COLORS[index] ?? 'bg-indigo-600 text-white';
+  return AVATAR_BG_COLORS[index] ?? 'bg-[#1E3A8A] text-white';
 }
 
 export function getCachedUserAvatar(userIdOrKey?: string, userEmail?: string): string | null {
@@ -125,7 +112,6 @@ export function extractViewers(
           : null;
       const avatarUrl = resolvedAvatar || getCachedUserAvatar(id, email);
 
-      // Filter out current active user
       if (currentUserId && id === currentUserId) continue;
       if (currentUserEmail && email && email.toLowerCase() === currentUserEmail.toLowerCase()) continue;
 
@@ -159,10 +145,8 @@ export function PresenceAvatars({
   const [failedAvatarIds, setFailedAvatarIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    // Eagerly reset otherViewers when roomId/domain changes
     setOtherViewers((prev) => (prev.length > 0 ? [] : prev));
 
-    // Guard: feature flag bypass or empty roomId or unauthenticated session
     if (!isSyncEnabled || !roomId || !roomId.trim() || !user) {
       return;
     }
@@ -185,27 +169,21 @@ export function PresenceAvatars({
             state = { ...state, ...(p.state as Record<string, unknown>) };
           } else if (p.currentPresences && Array.isArray(p.currentPresences) && p.key) {
             const k = String(p.key).trim();
-            if (k) {
-              state[k] = p.currentPresences;
-            }
+            if (k) state[k] = p.currentPresences;
           } else if (p.newPresences && Array.isArray(p.newPresences) && p.key) {
             const k = String(p.key).trim();
-            if (k && !state[k]) {
-              state[k] = p.newPresences;
-            }
+            if (k && !state[k]) state[k] = p.newPresences;
           }
         }
         const viewers = extractViewers(state, user.id, user.email);
         if (isMounted) {
           setOtherViewers((prev) => {
-            if (prev.length === 0 && viewers.length === 0) {
-              return prev;
-            }
+            if (prev.length === 0 && viewers.length === 0) return prev;
             return viewers;
           });
         }
       } catch {
-        // purely in-memory presence; safe error swallow
+        // purely in-memory presence
       }
     };
 
@@ -213,7 +191,6 @@ export function PresenceAvatars({
       if (!isMounted) return;
       const p = payload as Record<string, unknown> | undefined;
 
-      // If remaining presences exist for this key (e.g. multi-tab partial leave), retain user
       const remainingPresences = (p?.currentPresences && Array.isArray(p.currentPresences))
         ? p.currentPresences
         : [];
@@ -222,7 +199,6 @@ export function PresenceAvatars({
         return;
       }
 
-      // Collect all keys/identifiers that left (strictly non-empty strings)
       const leftKeys = new Set<string>();
       if (p?.leftPresences && Array.isArray(p.leftPresences)) {
         for (const lp of p.leftPresences) {
@@ -239,9 +215,7 @@ export function PresenceAvatars({
       }
       if (p?.key) {
         const trimmedKey = String(p.key).trim();
-        if (trimmedKey) {
-          leftKeys.add(trimmedKey);
-        }
+        if (trimmedKey) leftKeys.add(trimmedKey);
       }
 
       const isLeaving = (v: ViewerPresence) => {
@@ -251,7 +225,6 @@ export function PresenceAvatars({
         return idMatches || emailMatches || nameMatches;
       };
 
-      // Synchronize with channel presenceState if available, strictly excluding left keys
       const rawState = channel.presenceState();
       if (rawState && typeof rawState === 'object' && Object.keys(rawState).length > 0) {
         const viewers = extractViewers(rawState, user.id, user.email);
@@ -283,13 +256,10 @@ export function PresenceAvatars({
               updateFromState();
             }
           } catch {
-            // in-memory presence; ignore tracking errors
+            // in-memory presence
           }
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          // Reset stale presence on disconnection or transport errors
-          if (isMounted) {
-            setOtherViewers([]);
-          }
+          if (isMounted) setOtherViewers([]);
         }
       });
 
@@ -308,7 +278,6 @@ export function PresenceAvatars({
     };
   }, [roomId, domain, user, isSyncEnabled]);
 
-  // Renders nothing (null) if feature flag is false, roomId is empty, or no other viewers
   if (!isSyncEnabled || !roomId || !roomId.trim() || !user || otherViewers.length === 0) {
     return null;
   }
@@ -331,7 +300,7 @@ export function PresenceAvatars({
 
   return (
     <div
-      className={`flex items-center -space-x-1.5 overflow-visible py-0.5 ${className}`}
+      className={`flex items-center -space-x-1 overflow-visible py-0.5 ${className}`}
       data-testid="presence-avatars"
       aria-label="Active viewers"
     >
@@ -357,7 +326,7 @@ export function PresenceAvatars({
             onBlur={() => setHoveredUserId(null)}
           >
             <div
-              className={`h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white shadow-xs transition-transform hover:scale-110 cursor-pointer ${colorClass}`}
+              className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-semibold border-2 border-white shadow-2xs cursor-pointer ${colorClass}`}
             >
               {hasValidAvatar && effectiveAvatarUrl ? (
                 <img
@@ -375,7 +344,7 @@ export function PresenceAvatars({
 
             {/* Live presence active green dot */}
             <span
-              className="absolute bottom-0 right-0 block h-2 w-2 rounded-full bg-emerald-500 ring-1 ring-white"
+              className="absolute -bottom-0.5 -right-0.5 block h-2 w-2 rounded-full bg-[#166534] border border-[#FFFFFF]"
               aria-hidden="true"
             />
 
@@ -384,13 +353,9 @@ export function PresenceAvatars({
               <div
                 role="tooltip"
                 data-testid={`presence-tooltip-${viewer.userId}`}
-                className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2.5 py-1 bg-slate-900 text-white text-xs font-normal rounded-md shadow-lg max-w-xs break-words sm:whitespace-nowrap z-50 pointer-events-none animate-in fade-in-0 zoom-in-95 duration-100"
+                className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2.5 py-1 bg-[#0F172A] text-[#FFFFFF] text-xs font-medium rounded-[6px] border border-[#334155] shadow-float max-w-xs break-words sm:whitespace-nowrap z-50 pointer-events-none"
               >
                 {tooltipText}
-                <span
-                  className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-slate-900"
-                  aria-hidden="true"
-                />
               </div>
             )}
           </div>
@@ -399,7 +364,7 @@ export function PresenceAvatars({
 
       {overflowCount > 0 && (
         <div
-          className={`relative h-7 w-7 rounded-full flex items-center justify-center text-[10px] font-bold border-2 border-white shadow-xs bg-slate-200 text-slate-700 cursor-default focus:outline-none ${isOverflowHovered ? 'z-30' : 'z-0'}`}
+          className={`relative h-7 w-7 rounded-full flex items-center justify-center tabular-nums text-xs font-semibold border-2 border-white bg-[#F8FAFC] text-[#1E293B] shadow-2xs cursor-default focus:outline-none ${isOverflowHovered ? 'z-30' : 'z-0'}`}
           title={overflowTooltipText}
           aria-label={`${overflowCount} more viewers: ${overflowViewers.map((v) => v.name).join(', ')}`}
           data-testid="presence-avatars-overflow"
@@ -414,13 +379,9 @@ export function PresenceAvatars({
             <div
               role="tooltip"
               data-testid="presence-tooltip-overflow"
-              className="absolute top-full right-0 mt-1.5 px-2.5 py-1.5 bg-slate-900 text-white text-xs font-normal rounded-md shadow-lg max-w-xs sm:max-w-sm break-words z-50 pointer-events-none animate-in fade-in-0 zoom-in-95 duration-100"
+              className="absolute top-full right-0 mt-1.5 px-2.5 py-1 bg-[#0F172A] text-[#FFFFFF] text-xs font-medium rounded-[6px] border border-[#334155] shadow-float max-w-xs sm:max-w-sm break-words z-50 pointer-events-none"
             >
               {overflowTooltipText}
-              <span
-                className="absolute bottom-full right-2.5 border-4 border-transparent border-b-slate-900"
-                aria-hidden="true"
-              />
             </div>
           )}
         </div>

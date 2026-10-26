@@ -653,11 +653,11 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
       );
 
       // Both OperationsPage and PendingApprovalsInbox are mounted.
-      // OperationsPage mounts: work_requests, tasks, operations_requests
+      // OperationsPage mounts: work_requests, tasks, operations_requests, task_assignees
       // PendingApprovalsInbox mounts: operations_requests
       // table:operations_requests has 2 subscribers multiplexed on a single channel.
       expect(mockClient.getChannel('cdc_operations_requests')).toBeDefined();
-      expect(mockClient.getChannels()).toHaveLength(3); // work_requests, tasks, operations_requests
+      expect(mockClient.getChannels()).toHaveLength(4); // work_requests, tasks, operations_requests, task_assignees
 
       // 2. Unmount OperationsPage (which unmounts PendingApprovalsInbox as child)
       page.unmount();
@@ -686,10 +686,10 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
         unmount();
       }
 
-      // Each cycle: OperationsPage creates 3 channels (work_requests, tasks, operations_requests)
+      // Each cycle: OperationsPage creates 4 channels (work_requests, tasks, operations_requests, task_assignees)
       // and tears them down on unmount
-      expect(channelSpy).toHaveBeenCalledTimes(15 * 3);
-      expect(removeChannelSpy).toHaveBeenCalledTimes(15 * 3);
+      expect(channelSpy).toHaveBeenCalledTimes(15 * 4);
+      expect(removeChannelSpy).toHaveBeenCalledTimes(15 * 4);
 
       // Verify zero dangling channels in mock client after 15 cycles
       const channels = mockClient.getChannels();
@@ -721,16 +721,16 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
         </QueryClientProvider>
       );
 
-      // Now 3 total channels in mockClient: cdc_operations_requests (shared by 3 subscribers),
-      // plus cdc_work_requests and cdc_tasks from OperationsPage.
-      expect(mockClient.getChannels()).toHaveLength(3);
+      // Now 4 total channels in mockClient: cdc_operations_requests (shared by 3 subscribers),
+      // plus cdc_work_requests, cdc_tasks, and cdc_task_assignees from OperationsPage.
+      expect(mockClient.getChannels()).toHaveLength(4);
 
       // Unmount standalone PendingApprovalsInbox (1 subscriber drops, 2 remain on cdc_operations_requests)
       standalone.unmount();
 
       // Channel MUST STILL BE ACTIVE!
       expect(mockClient.getChannel('cdc_operations_requests')).toBeDefined();
-      expect(mockClient.getChannels()).toHaveLength(3);
+      expect(mockClient.getChannels()).toHaveLength(4);
 
       // Now unmount OperationsPage (final subscribers drop)
       page.unmount();
@@ -784,10 +784,10 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
         </QueryClientProvider>
       );
 
-      // OperationsPage mounts cdc_operations_requests, cdc_work_requests, cdc_tasks, cdc_time_entries, cdc_task_time_logs
+      // OperationsPage mounts cdc_operations_requests, cdc_work_requests, cdc_tasks, cdc_time_entries, cdc_task_time_logs, cdc_task_assignees
       const channel = mockClient.getChannel('cdc_operations_requests');
       expect(channel).toBeDefined();
-      expect(mockClient.getChannels()).toHaveLength(5);
+      expect(mockClient.getChannels()).toHaveLength(6);
 
       // Unmount OperationsPage
       unmount();

@@ -17,11 +17,11 @@ export function TransmittalStatusBadge({ status, className = '' }: TransmittalSt
       return (
         <Badge
           variant="outline"
-          className={`bg-slate-50 text-slate-700 border-slate-300 flex items-center gap-1 font-medium ${className}`}
+          className={`bg-[#F8FAFC] text-[#475569] border-[#E2E8F0] rounded-[6px]  text-xs font-medium flex items-center gap-1 ${className}`}
           data-testid="transmittal-status-badge"
           data-status="Draft"
         >
-          <Clock className="h-3 w-3 text-slate-500" />
+          <Clock className="h-3 w-3 text-[#475569]" />
           Draft
         </Badge>
       );
@@ -29,11 +29,11 @@ export function TransmittalStatusBadge({ status, className = '' }: TransmittalSt
       return (
         <Badge
           variant="outline"
-          className={`bg-blue-50 text-blue-700 border-blue-200 flex items-center gap-1 font-medium ${className}`}
+          className={`bg-[#F0F9FF] text-[#075985] border-[#7DD3FC] rounded-[6px]  text-xs font-medium flex items-center gap-1 ${className}`}
           data-testid="transmittal-status-badge"
           data-status="Sent"
         >
-          <Send className="h-3 w-3 text-blue-500" />
+          <Send className="h-3 w-3 text-[#075985]" />
           Sent
         </Badge>
       );
@@ -41,11 +41,11 @@ export function TransmittalStatusBadge({ status, className = '' }: TransmittalSt
       return (
         <Badge
           variant="outline"
-          className={`bg-emerald-50 text-emerald-700 border-emerald-300 flex items-center gap-1 font-medium ${className}`}
+          className={`bg-[#F0FDF4] text-[#166534] border-[#86EFAC] rounded-[6px]  text-xs font-medium flex items-center gap-1 ${className}`}
           data-testid="transmittal-status-badge"
           data-status="Acknowledged"
         >
-          <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+          <CheckCircle2 className="h-3 w-3 text-[#166534]" />
           Acknowledged
         </Badge>
       );
@@ -53,17 +53,17 @@ export function TransmittalStatusBadge({ status, className = '' }: TransmittalSt
       return (
         <Badge
           variant="outline"
-          className={`bg-rose-50 text-rose-700 border-rose-200 flex items-center gap-1 font-medium ${className}`}
+          className={`bg-[#FEF2F2] text-[#991B1B] border-[#FCA5A5] rounded-[6px]  text-xs font-medium flex items-center gap-1 ${className}`}
           data-testid="transmittal-status-badge"
           data-status="Cancelled"
         >
-          <XCircle className="h-3 w-3 text-rose-500" />
+          <XCircle className="h-3 w-3 text-[#991B1B]" />
           Cancelled
         </Badge>
       );
     default:
       return (
-        <Badge variant="outline" className={className} data-testid="transmittal-status-badge">
+        <Badge variant="outline" className={`rounded-[6px] border-[#E2E8F0] bg-[#F8FAFC] text-[#475569]  text-xs font-medium ${className}`} data-testid="transmittal-status-badge">
           {status}
         </Badge>
       );
@@ -90,11 +90,11 @@ export function TransmittalApprovalBadge({
     return (
       <Badge
         variant="outline"
-        className={`bg-emerald-50 text-emerald-700 border-emerald-300 flex items-center gap-1 font-normal text-xs ${className}`}
+        className={`bg-[#EFF6FF] text-[#1E40AF] border-[#93C5FD] rounded-[6px] flex items-center gap-1  font-medium text-xs ${className}`}
         data-testid="transmittal-approval-badge"
         data-approved="true"
       >
-        <ShieldCheck className="h-3 w-3 text-emerald-600" />
+        <ShieldCheck className="h-3 w-3 text-[#1E40AF]" />
         Approved
       </Badge>
     );
@@ -103,11 +103,11 @@ export function TransmittalApprovalBadge({
   return (
     <Badge
       variant="outline"
-      className={`bg-amber-50 text-amber-700 border-amber-300 flex items-center gap-1 font-normal text-xs ${className}`}
+      className={`bg-[#FEFCE8] text-[#854D0E] border-[#FDE047] rounded-[6px] flex items-center gap-1  font-medium text-xs ${className}`}
       data-testid="transmittal-approval-badge"
       data-approved="false"
     >
-      <ShieldAlert className="h-3 w-3 text-amber-600" />
+      <ShieldAlert className="h-3 w-3 text-[#854D0E]" />
       Pending Admin Approval
     </Badge>
   );

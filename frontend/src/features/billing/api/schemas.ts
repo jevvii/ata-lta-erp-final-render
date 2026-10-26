@@ -6,6 +6,7 @@ export const lineItemSchema = z.object({
   description: z.string().min(1, 'Description is required').max(500, 'Max 500 characters'),
   amount: z.number().min(0, 'Amount must be non-negative'),
   type: z.enum(LINE_ITEM_TYPES).default('Professional Fee'),
+  sortOrder: z.number().int().optional(),
 });
 
 export const createInvoiceSchema = z.object({

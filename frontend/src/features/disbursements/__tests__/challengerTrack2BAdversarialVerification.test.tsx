@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -56,6 +56,8 @@ vi.mock('@/lib/session', async (importOriginal) => {
   };
 });
 
+let activeQueryClient: QueryClient | null = null;
+
 function createHarness() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -63,6 +65,7 @@ function createHarness() {
       mutations: { retry: false },
     },
   });
+  activeQueryClient = queryClient;
 
   const wrapper = ({ children }: { children: React.ReactNode }) =>
     React.createElement(
@@ -108,6 +111,8 @@ const mockDraftDisbursement: Disbursement = {
   amount: 450,
   fund_source: 'Firm Fund',
   status: 'Draft',
+  lifecycle_version: 2,
+  review_ready: true,
   linked_work_request_id: 'wr-101',
   version: 1,
   created_at: new Date().toISOString(),
@@ -117,6 +122,14 @@ const mockDraftDisbursement: Disbursement = {
 
 describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () => {
   const originalFetch = global.fetch;
+  const safeMockFetch = vi.fn().mockImplementation(() =>
+    Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      json: async () => ({ data: [] }),
+    })
+  );
 
   beforeAll(() => {
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -124,13 +137,25 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
     window.HTMLElement.prototype.releasePointerCapture = vi.fn();
   });
 
+  afterAll(() => {
+    global.fetch = originalFetch;
+  });
+
   beforeEach(() => {
+    cleanup();
     localStorage.clear();
     useBlockingModalStore.getState().reset();
+    global.fetch = safeMockFetch;
   });
 
   afterEach(async () => {
-    global.fetch = originalFetch;
+    if (activeQueryClient) {
+      activeQueryClient.cancelQueries();
+      activeQueryClient.clear();
+      activeQueryClient = null;
+    }
+    cleanup();
+    global.fetch = safeMockFetch;
     localStorage.clear();
     await supabase.removeAllChannels();
     useBlockingModalStore.getState().reset();
@@ -321,7 +346,7 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
       });
     });
 
-    it('Admin with special email lorein@ata-lta.ph on Draft invoice gets btn-approve-and-issue and NEVER btn-submit-for-approval', async () => {
+    it('does not grant invoice administrator rights from an email address alone', async () => {
       let patchedStatus: string | null = null;
       global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
         const u = String(url);
@@ -343,7 +368,7 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
         });
       });
 
-      // Special admin user with role="Staff" but email="lorein@ata-lta.ph"
+      // The server requires the Admin role; an email address alone does not grant approval.
       useSessionStore.getState().setSession({
         user: {
           id: 'admin-lorein',
@@ -368,14 +393,14 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
         { wrapper }
       );
 
-      expect(screen.queryByTestId('btn-submit-for-approval')).toBeNull();
-      const approveBtn = screen.getByTestId('btn-approve-and-issue');
+      expect(screen.queryByTestId('btn-approve-and-issue')).toBeNull();
+      const approveBtn = screen.getByTestId('btn-submit-for-approval');
       expect(approveBtn).toBeInTheDocument();
 
       fireEvent.click(approveBtn);
 
       await waitFor(() => {
-        expect(patchedStatus).toBe('Sent');
+        expect(patchedStatus).toBe('Pending');
       });
     });
 
@@ -568,23 +593,18 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
       fireEvent.click(directApproveBtn);
 
       await waitFor(() => {
+        expect(screen.getByTestId('admin-approval-modal')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('btn-confirm-approve'));
+
+      await waitFor(() => {
         expect(approvedCalled).toBe(true);
       });
     });
 
-    it('Non-admin on Draft voucher gets drawer-submit-btn and NEVER drawer-direct-approve-btn', async () => {
-      let submittedCalled = false;
-      global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    it('Non-admin on Draft voucher NEVER gets drawer-direct-approve-btn nor dead submit button', async () => {
+      global.fetch = vi.fn().mockImplementation((url: string) => {
         const u = String(url);
-        if (init?.method === 'POST' && u.includes('/disbursements/disb-draft-101/submit')) {
-          submittedCalled = true;
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            headers: new Headers({ 'content-type': 'application/json' }),
-            json: async () => ({ data: { ...mockDraftDisbursement, status: 'Pending' } }),
-          });
-        }
         if (u.includes('/disbursements/disb-draft-101')) {
           return Promise.resolve({
             ok: true,
@@ -625,18 +645,11 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
       );
 
       await waitFor(() => {
-        expect(screen.getByTestId('drawer-submit-btn')).toBeInTheDocument();
+        expect(screen.getByTestId('disbursement-detail-drawer')).toBeInTheDocument();
       });
 
       expect(screen.queryByTestId('drawer-direct-approve-btn')).toBeNull();
-      const submitBtn = screen.getByTestId('drawer-submit-btn');
-      expect(submitBtn).toBeInTheDocument();
-
-      fireEvent.click(submitBtn);
-
-      await waitFor(() => {
-        expect(submittedCalled).toBe(true);
-      });
+      expect(screen.queryByTestId('drawer-submit-btn')).toBeNull();
     });
   });
 
@@ -791,6 +804,9 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
     it('form submission succeeds smoothly with receipt attached', async () => {
       let createdPayload: Record<string, unknown> | null = null;
       global.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        if (_url.endsWith('/receipt-uploads')) return Promise.resolve({ ok: true, status: 201, json: async () => ({ data: { uploadId: 'receipt-1', uploadUrl: 'https://storage.test/put', objectKey: 'entities/ATA/receipts/court.pdf', expiresAt: '2026-10-20T12:00:00Z' } }) });
+        if (_url === 'https://storage.test/put') return Promise.resolve({ ok: true, status: 200 });
+        if (_url.endsWith('/receipt-uploads/receipt-1/complete')) return Promise.resolve({ ok: true, status: 200, json: async () => ({ data: { receiptS3Key: 'entities/ATA/receipts/court.pdf', receiptFilename: 'court_receipt.pdf' } }) });
         if (init?.method === 'POST') {
           createdPayload = JSON.parse(init.body as string);
           return Promise.resolve({
@@ -892,6 +908,8 @@ describe('Empirical Challenger: Track 2B Adversarial Verification Harness', () =
       });
 
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+      const confirmBtn = screen.queryByTestId('btn-confirm-no-receipt');
+      if (confirmBtn) fireEvent.click(confirmBtn);
 
       await waitFor(() => {
         expect(createdPayload).not.toBeNull();

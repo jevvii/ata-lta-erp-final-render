@@ -31,6 +31,27 @@ import type {
   UploadDocumentVariables,
 } from './types';
 
+/**
+ * Helper to identify and filter out disbursement receipts from DMS documents.
+ * Disbursement receipts belong exclusively to the disbursements workflow.
+ */
+export function isDisbursementReceiptDocument(doc: {
+  storage_path?: string | null;
+  category?: string | null;
+  document_type?: string | null;
+  original_name?: string | null;
+  file_name?: string | null;
+}): boolean {
+  if (!doc) return false;
+  const path = (doc.storage_path || '').toLowerCase();
+  if (path.includes('/disbursements/receipts/') || path.includes('/disbursements/')) return true;
+  const cat = (doc.category || '').toLowerCase();
+  if (['receipt', 'receipts', 'disbursement', 'disbursement_receipt'].includes(cat)) return true;
+  const type = (doc.document_type || '').toLowerCase();
+  if (type === 'disbursement_receipt' || type === 'disbursement receipt') return true;
+  return false;
+}
+
 // ============================================================================
 // 1. Data Query Hooks
 // ============================================================================
@@ -64,6 +85,16 @@ export function useDocumentsList(
       const queryStr = params.toString();
       const path = `/documents${queryStr ? `?${queryStr}` : ''}`;
       const res = await apiRequest<DocumentListResponse>(path);
+      if (res && Array.isArray(res.data)) {
+        const filtered = res.data.filter((doc) => !isDisbursementReceiptDocument(doc));
+        return {
+          ...res,
+          data: filtered,
+          meta: res.meta
+            ? { ...res.meta, total: Math.min(res.meta.total ?? filtered.length, filtered.length) }
+            : res.meta,
+        };
+      }
       return res;
     },
     placeholderData: keepPreviousData,

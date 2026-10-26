@@ -44,16 +44,16 @@ export function DocumentFilterBar({
   const isFiltered = Boolean(search || category || lifecycle);
 
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-white p-4 rounded-lg border border-[#f0f0f5]">
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-[#FFFFFF] p-3 border-[#E2E8F0] rounded-[6px]">
       <div className="flex flex-1 flex-wrap items-center gap-3">
         {/* Search Input */}
         <div className="relative min-w-[220px] max-w-sm flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#9494a0]" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#475569]" />
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by name, description..."
-            className="pl-9 h-9"
+            className="pl-9 h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]"
             data-testid="document-search-input"
           />
         </div>
@@ -64,10 +64,10 @@ export function DocumentFilterBar({
             value={category || 'all'}
             onValueChange={(val) => onCategoryChange(val === 'all' ? '' : val)}
           >
-            <SelectTrigger className="h-9" data-testid="document-category-filter">
+            <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-category-filter">
               <SelectValue placeholder="All Categories" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
               <SelectItem value="all">All Categories</SelectItem>
               {DOCUMENT_CATEGORIES.map((cat) => (
                 <SelectItem key={cat} value={cat}>
@@ -84,10 +84,10 @@ export function DocumentFilterBar({
             value={lifecycle || 'all'}
             onValueChange={(val) => onLifecycleChange(val === 'all' ? '' : val)}
           >
-            <SelectTrigger className="h-9" data-testid="document-lifecycle-filter">
+            <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-lifecycle-filter">
               <SelectValue placeholder="All Stages" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
               <SelectItem value="all">All Stages</SelectItem>
               {DOCUMENT_LIFECYCLE_STAGES.map((stage) => (
                 <SelectItem key={stage} value={stage}>
@@ -104,7 +104,7 @@ export function DocumentFilterBar({
             variant="ghost"
             size="sm"
             onClick={onReset}
-            className="h-9 text-[#9494a0] hover:text-[#1e293b]"
+            className="h-9 text-xs text-[#475569] hover:text-[#1E293B] rounded-[6px]"
             data-testid="document-reset-filters-btn"
           >
             <RotateCcw className="h-3.5 w-3.5 mr-1" />
@@ -118,7 +118,7 @@ export function DocumentFilterBar({
         <div className="flex items-center">
           <Button
             onClick={onUploadClick}
-            className="h-9 bg-[#2563eb] hover:bg-[#1d4ed8] text-white"
+            className="h-9 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs font-bold"
             data-testid="upload-document-button"
           >
             <Plus className="h-4 w-4 mr-1.5" />

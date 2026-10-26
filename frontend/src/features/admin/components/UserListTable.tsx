@@ -41,7 +41,7 @@ export interface UserListTableProps {
 const DEPARTMENT_BADGE_COLORS: Record<DepartmentName, string> = {
   Management: 'bg-purple-50 text-purple-700 border-purple-200',
   Accounting: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  Operations: 'bg-blue-50 text-blue-700 border-blue-200',
+  Operations: 'bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]',
   Documentation: 'bg-amber-50 text-amber-700 border-amber-200',
   HR: 'bg-rose-50 text-rose-700 border-rose-200',
 };
@@ -50,7 +50,7 @@ const ROLE_BADGE_COLORS: Record<UserRole, string> = {
   Admin: 'bg-red-50 text-red-700 border-red-200 font-semibold',
   Manager: 'bg-purple-50 text-purple-700 border-purple-200',
   Accounting: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  Operations: 'bg-blue-50 text-blue-700 border-blue-200',
+  Operations: 'bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]',
   Documentation: 'bg-amber-50 text-amber-700 border-amber-200',
   HR: 'bg-rose-50 text-rose-700 border-rose-200',
 };
@@ -118,7 +118,7 @@ export function UserListTable({
       {/* Active User Cap Notification Banner */}
       {isAtOrAboveCap && (
         <div
-          className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800"
+          className="flex items-center gap-2 rounded-[6px] border-amber-300 bg-amber-50 p-3 text-xs text-amber-800"
           data-testid="user-cap-banner"
         >
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
@@ -133,7 +133,7 @@ export function UserListTable({
         <div className="flex flex-1 flex-wrap items-center gap-2">
           {/* Search Input */}
           <div className="relative min-w-[200px] flex-1 max-w-sm">
-            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#475569]" />
             <Input
               type="text"
               placeholder="Search by name or email..."
@@ -217,7 +217,7 @@ export function UserListTable({
           <Button
             onClick={onAddUser}
             size="sm"
-            className="h-9 gap-1.5 text-xs font-semibold bg-[#2563eb] text-white hover:bg-blue-700 shadow-xs shrink-0"
+            className="h-9 gap-1.5 text-xs font-semibold bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs shadow-none shrink-0"
             data-testid="add-user-button"
           >
             <UserPlus className="h-4 w-4" />
@@ -227,10 +227,10 @@ export function UserListTable({
       </div>
 
       {/* Users Table */}
-      <div className="rounded-lg border border-slate-200 bg-white shadow-xs overflow-hidden">
+      <div className="rounded-[8px] border-[#E2E8F0] bg-white shadow-card shadow-none overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-xs text-slate-500 space-y-2">
-            <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+          <div className="p-8 text-center text-xs text-[#475569] space-y-2">
+            <div className="inline-block h-6 w-6 animate-spin rounded-[6px] border-[#E2E8F0] border-t-blue-600" />
             <p>Loading enterprise user accounts...</p>
           </div>
         ) : error ? (
@@ -239,22 +239,22 @@ export function UserListTable({
             <p>Failed to load user accounts: {error.message}</p>
           </div>
         ) : filteredUsers.length === 0 ? (
-          <div className="p-8 text-center text-xs text-slate-500 space-y-1">
-            <p className="font-semibold text-slate-700">No users found</p>
+          <div className="p-8 text-center text-xs text-[#475569] space-y-1">
+            <p className="font-semibold text-[#1E293B]">No users found</p>
             <p>Try adjusting your search criteria or filters.</p>
           </div>
         ) : (
           <Table data-testid="user-table">
-            <TableHeader className="bg-slate-50/75">
+            <TableHeader className="bg-[#F8FAFC]/75">
               <TableRow>
-                <TableHead className="w-[60px] text-xs font-semibold text-slate-700">#</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">User / Name</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Role</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Departments</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Email</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Entities</TableHead>
-                <TableHead className="text-xs font-semibold text-slate-700">Status</TableHead>
-                <TableHead className="text-right text-xs font-semibold text-slate-700">Actions</TableHead>
+                <TableHead className="w-[60px] text-xs font-semibold text-[#1E293B]">#</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">User / Name</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">Role</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">Departments</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">Email</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">Entities</TableHead>
+                <TableHead className="text-xs font-semibold text-[#1E293B]">Status</TableHead>
+                <TableHead className="text-right text-xs font-semibold text-[#1E293B]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -266,26 +266,26 @@ export function UserListTable({
                   <TableRow
                     key={user.id}
                     data-testid={`user-row-${user.id}`}
-                    className="hover:bg-slate-50/60 transition-colors"
+                    className="hover:bg-[#F8FAFC]/60 transition-colors"
                   >
                     {/* Index / Key Tag */}
-                    <TableCell className="font-mono text-xs text-slate-400 font-medium">
+                    <TableCell className="text-xs text-[#475569] font-medium">
                       {rowKey}
                     </TableCell>
 
                     {/* Name + Self Indicator */}
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700 border border-slate-200">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#F8FAFC] text-xs font-bold text-[#1E293B] border-[#E2E8F0]">
                           {user.name.charAt(0).toUpperCase()}
                         </div>
                         <div>
                           <div className="flex items-center gap-1.5">
-                            <span className="font-medium text-xs text-slate-900" data-testid={`user-name-${user.id}`}>
+                            <span className="font-medium text-xs text-[#1E293B]" data-testid={`user-name-${user.id}`}>
                               {user.name}
                             </span>
                             {isSelf && (
-                              <Badge variant="outline" className="text-[10px] py-0 px-1 border-blue-200 bg-blue-50 text-blue-700">
+                              <Badge variant="outline" className="text-xs py-0 px-1 border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]">
                                 You
                               </Badge>
                             )}
@@ -298,8 +298,8 @@ export function UserListTable({
                     <TableCell>
                       <Badge
                         variant="outline"
-                        className={`text-[11px] py-0.5 px-2 ${
-                          ROLE_BADGE_COLORS[user.role] ?? 'bg-slate-50 text-slate-700 border-slate-200'
+                        className={`text-xs  py-0.5 px-2 ${
+                          ROLE_BADGE_COLORS[user.role] ?? 'bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]'
                         }`}
                         data-testid={`user-role-${user.id}`}
                       >
@@ -318,10 +318,10 @@ export function UserListTable({
                               <Badge
                                 key={dept}
                                 variant="outline"
-                                className={`text-[10px] py-0 px-1.5 ${
+                                className={`text-xs  py-0 px-1.5 ${
                                   displayDept === 'Admin'
                                     ? 'bg-red-50 text-red-700 border-red-200'
-                                    : DEPARTMENT_BADGE_COLORS[dept] ?? 'bg-slate-50 text-slate-700 border-slate-200'
+                                    : DEPARTMENT_BADGE_COLORS[dept] ?? 'bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]'
                                 }`}
                               >
                                 {displayDept}
@@ -329,13 +329,13 @@ export function UserListTable({
                             );
                           })
                         ) : (
-                          <span className="text-slate-400 text-xs">—</span>
+                          <span className="text-[#475569] text-xs">—</span>
                         )}
                       </div>
                     </TableCell>
 
                     {/* Email */}
-                    <TableCell className="font-mono text-xs text-slate-600">
+                    <TableCell className="text-xs text-[#475569]">
                       {user.email}
                     </TableCell>
 
@@ -346,7 +346,7 @@ export function UserListTable({
                           <Badge
                             key={ent}
                             variant="outline"
-                            className="text-[10px] py-0 px-1 border-slate-300 bg-slate-100 text-slate-800"
+                            className="text-xs py-0 px-1 border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]"
                           >
                             {ent}
                           </Badge>
@@ -358,18 +358,18 @@ export function UserListTable({
                     <TableCell>
                       {user.isActive ? (
                         <span
-                          className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200"
+                          className="inline-flex items-center gap-1 rounded-[6px] bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border-emerald-200"
                           data-testid={`user-status-${user.id}`}
                         >
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                          <span className="h-1.5 w-1.5 rounded-[6px] bg-emerald-500" />
                           Active
                         </span>
                       ) : (
                         <span
-                          className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200"
+                          className="inline-flex items-center gap-1 rounded-[6px] bg-[#F8FAFC] px-2 py-0.5 text-xs font-medium text-[#475569] border-[#E2E8F0]"
                           data-testid={`user-status-${user.id}`}
                         >
-                          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                          <span className="h-1.5 w-1.5 rounded-[6px] bg-slate-400" />
                           Disabled
                         </span>
                       )}
@@ -383,7 +383,7 @@ export function UserListTable({
                           variant="ghost"
                           size="sm"
                           onClick={() => onViewDetails(user)}
-                          className="h-8 w-8 p-0 text-slate-600 hover:text-blue-600"
+                          className="h-8 w-8 p-0 text-[#475569] hover:text-[#1E293B]"
                           title="View Effective Permissions"
                           data-testid={`user-view-perms-btn-${user.id}`}
                         >
@@ -396,7 +396,7 @@ export function UserListTable({
                             variant="ghost"
                             size="sm"
                             onClick={() => onEditUser(user)}
-                            className="h-8 w-8 p-0 text-slate-600 hover:text-blue-600"
+                            className="h-8 w-8 p-0 text-[#475569] hover:text-[#1E293B]"
                             title="Edit User"
                             data-testid={`user-edit-btn-${user.id}`}
                           >
@@ -413,8 +413,8 @@ export function UserListTable({
                             disabled={isSelf}
                             className={`h-8 w-8 p-0 ${
                               isSelf
-                                ? 'text-slate-300 cursor-not-allowed'
-                                : 'text-slate-600 hover:text-rose-600 hover:bg-rose-50'
+                                ? 'text-[#CBD5E1] cursor-not-allowed'
+                                : 'text-[#475569] hover:text-rose-600 hover:bg-rose-50'
                             }`}
                             title={isSelf ? 'Cannot disable your own account' : 'Disable User Account'}
                             data-testid={`user-disable-btn-${user.id}`}

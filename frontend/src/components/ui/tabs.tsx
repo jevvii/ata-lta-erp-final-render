@@ -13,8 +13,8 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex items-center justify-center rounded-lg bg-[#f0f1f3] p-1 text-[#9494a0]',
-      density === 'compact' ? 'h-8' : 'h-10',
+      'inline-flex items-center justify-start rounded-[8px] bg-[#F8FAFC] p-1 text-[#475569] border border-[#E2E8F0] overflow-x-auto scrollbar-none max-w-full w-full gap-1 h-auto',
+      density === 'compact' ? 'min-h-[34px]' : 'min-h-[40px]',
       className
     )}
     {...props}
@@ -31,8 +31,8 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      'inline-flex items-center justify-center whitespace-nowrap rounded-md font-medium ring-offset-white transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-white data-[state=active]:text-[#1e293b] data-[state=active]:shadow-xs cursor-pointer',
-      density === 'compact' ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm',
+      'inline-flex items-center justify-center whitespace-nowrap rounded-[6px] text-xs sm:text-sm font-medium text-[#475569] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8] disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-[#FFFFFF] data-[state=active]:text-[#1E40AF] data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-[#1D4ED8] transition-[background-color,color,box-shadow] duration-150 cursor-pointer shrink-0 select-none',
+      density === 'compact' ? 'px-3 py-1.5' : 'px-3.5 py-2',
       className
     )}
     {...props}
@@ -47,7 +47,7 @@ const TabsContent = React.forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
-      'mt-2 ring-offset-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563eb]',
+      'mt-4 ring-offset-[#F8FAFC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8]',
       className
     )}
     {...props}

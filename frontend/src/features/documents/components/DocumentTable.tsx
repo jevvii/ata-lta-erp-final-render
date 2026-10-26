@@ -38,6 +38,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { DmsDocument } from '../api/types';
+import { isDisbursementReceiptDocument } from '../api/useDocuments';
 import {
   CATEGORY_LABELS,
   LIFECYCLE_LABELS,
@@ -81,31 +82,33 @@ export function DocumentTable({
   canEdit = false,
   canDelete = false,
 }: DocumentTableProps) {
-  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const visibleDocuments = documents.filter((doc) => !isDisbursementReceiptDocument(doc));
+  const effectiveTotal = Math.min(total, visibleDocuments.length > 0 ? total : 0);
+  const totalPages = Math.max(1, Math.ceil(effectiveTotal / limit));
 
   if (isLoading) {
     return (
-      <div className="rounded-lg border border-[#f0f0f5] bg-white p-8 text-center">
+      <div className="rounded-[8px] border-[#E2E8F0] bg-white p-8 text-center">
         <div className="flex flex-col items-center justify-center space-y-3">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#2563eb] border-t-transparent" />
-          <p className="text-sm text-[#9494a0]">Loading documents...</p>
+          <div className="h-6 w-6 animate-spin rounded-full border-[#E2E8F0] border-t-transparent" />
+          <p className="text-sm text-[#475569]">Loading documents...</p>
         </div>
       </div>
     );
   }
 
-  if (documents.length === 0) {
+  if (visibleDocuments.length === 0) {
     return (
       <div
-        className="rounded-lg border border-[#f0f0f5] bg-white p-12 text-center"
+        className="rounded-[8px] border-[#E2E8F0] bg-white p-12 text-center"
         data-testid="documents-empty-state"
       >
         <div className="flex flex-col items-center justify-center max-w-sm mx-auto space-y-3">
-          <div className="p-3 bg-[#f0f1f3] rounded-full text-[#9494a0]">
+          <div className="p-3 bg-[#F8FAFC] rounded-[6px] text-[#475569]">
             <FolderOpen className="h-8 w-8" />
           </div>
-          <h3 className="font-semibold text-[#1e293b]">No documents found</h3>
-          <p className="text-sm text-[#9494a0]">
+          <h3 className="font-semibold text-[#1E293B]">No documents found</h3>
+          <p className="text-sm text-[#475569]">
             No document records match your current filter parameters or tab selection.
           </p>
         </div>
@@ -115,7 +118,7 @@ export function DocumentTable({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg border border-[#f0f0f5] bg-white overflow-hidden">
+      <div className="rounded-[8px] border-[#E2E8F0] bg-white overflow-hidden">
         <Table data-testid="documents-table">
           <TableHeader>
             <TableRow>
@@ -128,7 +131,7 @@ export function DocumentTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {documents.map((doc) => {
+            {visibleDocuments.map((doc) => {
               const displayName = doc.original_name || doc.file_name;
               const cat = doc.category || 'OTHER';
               const lifecycle = doc.document_lifecycle || 'collected';
@@ -139,7 +142,7 @@ export function DocumentTable({
                   {/* Document Name & Meta */}
                   <TableCell>
                     <div className="flex items-start gap-3">
-                      <div className="p-2 rounded bg-[#eef1ff] text-[#2563eb] shrink-0 mt-0.5">
+                      <div className="p-2 rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B] shrink-0 mt-0.5">
                         {isExternal ? (
                           <ExternalLink className="h-4 w-4" />
                         ) : (
@@ -150,15 +153,15 @@ export function DocumentTable({
                         <button
                           type="button"
                           onClick={() => onView(doc)}
-                          className="font-medium text-sm text-[#1e293b] hover:text-[#2563eb] truncate block text-left"
+                          className="font-medium text-sm text-[#1E293B] hover:text-[#1E293B] truncate block text-left"
                           title={displayName}
                           data-testid={`document-name-${doc.id}`}
                         >
                           {displayName}
                         </button>
-                        <div className="flex items-center gap-2 text-xs text-[#9494a0] mt-0.5 truncate">
+                        <div className="flex items-center gap-2 text-xs text-[#475569] mt-0.5 truncate">
                           {isExternal ? (
-                            <span className="text-[#2563eb]">External Link</span>
+                            <span className="text-[#1E293B]">External Link</span>
                           ) : (
                             <span>{formatFileSize(doc.file_size)}</span>
                           )}
@@ -170,7 +173,7 @@ export function DocumentTable({
                           )}
                         </div>
                         {doc.description && (
-                          <p className="text-xs text-[#9494a0] mt-1 line-clamp-1">
+                          <p className="text-xs text-[#475569] mt-1 line-clamp-1">
                             {doc.description}
                           </p>
                         )}
@@ -218,7 +221,7 @@ export function DocumentTable({
                   </TableCell>
 
                   {/* Date */}
-                  <TableCell className="text-xs text-[#9494a0] whitespace-nowrap">
+                  <TableCell className="text-xs text-[#475569] whitespace-nowrap">
                     {new Date(doc.created_at).toLocaleDateString()}
                   </TableCell>
 
@@ -308,7 +311,7 @@ export function DocumentTable({
 
       {/* Pagination Controls */}
       {total > 0 && onPageChange && (
-        <div className="flex items-center justify-between px-2 py-1 text-sm text-[#9494a0]">
+        <div className="flex items-center justify-between px-2 py-1 text-sm text-[#475569]">
           <div>
             Showing {Math.min((page - 1) * limit + 1, total)} to {Math.min(page * limit, total)} of {total} documents
           </div>

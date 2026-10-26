@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -141,14 +141,14 @@ describe('Clients UI Components & RBAC Integration', () => {
     });
   };
 
-  const setStaffSession = () => {
+  const setStaffSession = (role = 'Operations', department = role) => {
     useSessionStore.getState().setSession({
       user: {
         id: 'u-staff-1',
         email: 'staff@ata-lta.ph',
-        name: 'Operations Staff',
-        role: 'Operations',
-        departments: ['Operations'],
+        name: `${department} Staff`,
+        role,
+        departments: [department],
         entities: ['ATA'],
       },
       permissions: ['clients:view'], // Has view, but NOT clients:edit
@@ -223,8 +223,32 @@ describe('Clients UI Components & RBAC Integration', () => {
       expect(screen.queryByTestId('clients-page')).not.toBeInTheDocument();
     });
 
-    it('renders client directory for Staff with clients:view, but hides create, edit, and archive buttons', async () => {
-      setStaffSession();
+    it.each([
+      ['Operations', 'Operations'],
+      ['Accounting', 'Accounting'],
+      ['Documentation', 'Documentation'],
+      ['HR', 'HR'],
+      ['Manager', 'Management'],
+      ['Staff', 'Operations'],
+      ['Staff', 'Accounting'],
+      ['Staff', 'Documentation'],
+      ['Staff', 'HR'],
+      ['Staff', 'Management'],
+    ])('lets %s / %s view active and archived clients without mutation controls', async (role, department) => {
+      setStaffSession(role, department);
+      const archivedClient: Client = {
+        ...mockClients[0]!, id: 'c-archived', name: 'Archived Client',
+        status: 'Archived', deletedAt: new Date().toISOString(),
+      };
+      const defaultMock = createDefaultMockFetch();
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('archived=true')) {
+          return new Response(JSON.stringify({ data: [archivedClient] }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          });
+        }
+        return defaultMock(url);
+      });
       const { wrapper } = createWrapper();
       render(<ClientsPage />, { wrapper });
 
@@ -239,6 +263,38 @@ describe('Clients UI Components & RBAC Integration', () => {
       expect(screen.queryByTestId('new-client-btn')).not.toBeInTheDocument();
       expect(screen.queryByTestId('edit-client-btn-c-101')).not.toBeInTheDocument();
       expect(screen.queryByTestId('archive-client-btn-c-101')).not.toBeInTheDocument();
+      expect(screen.getByTestId('clients-count-active')).toHaveTextContent('2');
+      expect(screen.getByTestId('clients-count-archived')).toHaveTextContent('1');
+
+      fireEvent.click(screen.getByTestId('view-client-btn-c-101'));
+      expect(await screen.findByTestId('client-detail-name')).toHaveTextContent('Megaworld Prime Corp');
+      expect(screen.getByTestId('client-detail-contact-channels')).toHaveTextContent('contact@megaworld.com');
+      expect(screen.queryByTestId('client-detail-edit-btn')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('client-detail-close-btn'));
+
+      fireEvent.click(screen.getByTestId('clients-tab-archived'));
+      fireEvent.click(await screen.findByTestId('view-client-btn-c-archived'));
+      expect(await screen.findByTestId('client-detail-name')).toHaveTextContent('Archived Client');
+      expect(screen.queryByTestId('restore-client-btn-c-archived')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('client-detail-edit-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('client-modal')).not.toBeInTheDocument();
+      for (const [, init] of vi.mocked(global.fetch).mock.calls) {
+        expect(init?.method ?? 'GET').toBe('GET');
+      }
+    });
+
+    it('removes an open edit form when the session becomes view-only, retaining directory access', async () => {
+      const { wrapper } = createWrapper();
+      render(<ClientsPage />, { wrapper });
+      fireEvent.click(await screen.findByTestId('edit-client-btn-c-101'));
+      expect(await screen.findByTestId('client-modal')).toBeInTheDocument();
+
+      act(() => setStaffSession());
+
+      expect(screen.getByTestId('clients-page')).toBeInTheDocument();
+      expect(screen.getByTestId('view-client-btn-c-101')).toBeInTheDocument();
+      expect(screen.queryByTestId('client-modal')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('client-submit-btn')).not.toBeInTheDocument();
     });
 
     it('displays New Client, Edit, and Archive buttons for Admin with clients:edit', async () => {
@@ -275,6 +331,7 @@ describe('Clients UI Components & RBAC Integration', () => {
       expect(screen.getByTestId('client-detail-name')).toHaveTextContent('Megaworld Prime Corp');
       expect(screen.getByTestId('client-detail-tin')).toHaveTextContent('111-222-333-000');
       expect(screen.getByTestId('client-detail-rdo')).toHaveTextContent('RDO 044');
+      expect(screen.getByTestId('client-detail-modal')).not.toHaveTextContent('Version:');
       expect(screen.getByTestId('client-detail-retainer-badge')).toBeInTheDocument();
     });
 

@@ -238,7 +238,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
       });
     });
 
-    it('omits expectedVersion in updateInvoiceAction when strict_occ is disabled', async () => {
+    it('unconditionally passes expectedVersion in updateInvoiceAction even when strict_occ is disabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
 
       let capturedBody: any = null;
@@ -260,8 +260,9 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
 
       expect(capturedBody).toEqual({
         notes: 'Updated notes',
+        expectedVersion: 3,
       });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody.expectedVersion).toBe(3);
     });
 
     it('passes expectedVersion in updateClientAddressAction when strict_occ is enabled', async () => {
@@ -290,7 +291,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
       });
     });
 
-    it('omits expectedVersion in updateClientAddressAction when strict_occ is disabled', async () => {
+    it('unconditionally passes expectedVersion in updateClientAddressAction even when strict_occ is disabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
 
       let capturedBody: any = null;
@@ -312,8 +313,9 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
 
       expect(capturedBody).toEqual({
         address: '200 BGC Taguig City',
+        expectedVersion: 3,
       });
-      expect(capturedBody.expectedVersion).toBeUndefined();
+      expect(capturedBody.expectedVersion).toBe(3);
     });
   });
 

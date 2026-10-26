@@ -111,6 +111,8 @@ describe('Time Entries API Hooks & Contract Compliance (time-entries@2.0.0)', ()
           {
             id: 'entry-1',
             user_id: 'user-1',
+            user_name: 'Maria Reyes',
+            user_role: 'Staff',
             task_id: 'task-1',
             entry_date: '2026-10-04',
             duration_minutes: 45,
@@ -131,6 +133,8 @@ describe('Time Entries API Hooks & Contract Compliance (time-entries@2.0.0)', ()
         {
           id: 'entry-1',
           userId: 'user-1',
+          userName: 'Maria Reyes',
+          userRole: 'Staff',
           taskId: 'task-1',
           entryDate: '2026-10-04',
           durationMinutes: 45,

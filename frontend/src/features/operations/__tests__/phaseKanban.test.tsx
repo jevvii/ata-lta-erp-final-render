@@ -253,6 +253,60 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
     expect(screen.getByTestId('admin-advance-btn')).toBeInTheDocument();
   });
 
+  it.each([
+    { phase: 'processing', hasDocuments: false, message: 'advanced beyond its phase' },
+    { phase: 'quality_assurance', hasDocuments: false, message: 'advanced beyond its phase' },
+    { phase: 'pre_processing', hasDocuments: true, message: 'has documents/receipts' },
+    { phase: 'completion', hasDocuments: false, message: 'work request is completed' },
+  ])('prevents protected task deletion: $phase / documents=$hasDocuments', async ({ phase, hasDocuments, message }) => {
+    const { wrapper } = createTestHarness();
+    const wr = { ...mockWorkRequests[0], phase };
+    const tasks = [{ ...mockPreTasks[0], hasDocuments }];
+    const writes: string[] = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'DELETE') writes.push(url);
+      const data = url.includes('/work-requests?') ? [wr]
+        : url.endsWith('/tasks') ? tasks
+        : url.includes('/work-requests/wr-101') ? wr : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+    await screen.findAllByTestId('kanban-task-card-task-1');
+    const menu = screen.getAllByTestId('task-menu-btn-task-1')[0]!;
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    fireEvent.keyDown(menu, { key: 'ArrowDown', code: 'ArrowDown' });
+    const remove = await screen.findByTestId('menu-delete-task-btn-task-1');
+    expect(remove).toHaveAttribute('data-disabled');
+    expect(screen.getByTestId('task-delete-reason-task-1')).toHaveTextContent(message);
+    fireEvent.click(remove);
+    expect(screen.queryByTestId('confirm-delete-task-btn')).not.toBeInTheDocument();
+    expect(writes).toEqual([]);
+  });
+
+  it('shows the server rejection when documents were linked after the board loaded', async () => {
+    const { wrapper } = createTestHarness();
+    vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ title: 'Conflict', detail: 'You cannot delete this task because it has documents/receipts.', code: 'TASK_HAS_DOCUMENTS' }), { status: 409 });
+      }
+      const data = url.includes('/work-requests?') ? mockWorkRequests
+        : url.endsWith('/tasks') ? mockPreTasks
+        : url.includes('/work-requests/wr-101') ? mockWorkRequests[0] : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+    await screen.findByTestId('kanban-task-card-task-1');
+    const menu = screen.getByTestId('task-menu-btn-task-1');
+    fireEvent.pointerDown(menu, { button: 0, ctrlKey: false });
+    fireEvent.keyDown(menu, { key: 'ArrowDown', code: 'ArrowDown' });
+    fireEvent.click(await screen.findByTestId('menu-delete-task-btn-task-1'));
+    fireEvent.click(await screen.findByTestId('confirm-delete-task-btn'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('has documents/receipts');
+    expect(screen.getByTestId('kanban-task-card-task-1')).toBeInTheDocument();
+  });
+
   it('deletes task from board with confirmation prompt calling deleteTask (Issue 15)', async () => {
     const { wrapper } = createTestHarness();
 
@@ -832,6 +886,32 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
       expect(channelSpy).not.toHaveBeenCalled();
       expect(screen.queryByTestId('presence-avatars')).not.toBeInTheDocument();
     });
+  });
+
+  it('defaults QA compliance badge to "Under Review" instead of "Failed" when task qaStatus is "none"', async () => {
+    const { wrapper } = createTestHarness();
+    const qaWr = { ...mockWorkRequests[0]!, phase: 'quality_assurance' as const };
+    const qaTasks = mockPreTasks.map((t) => ({ ...t, status: 'Completed' as const, qaStatus: 'none' as const }));
+
+    vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes('/operations/work-requests?')) {
+        return new Response(JSON.stringify({ data: [qaWr] }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101/tasks')) {
+        return new Response(JSON.stringify({ data: qaTasks }), { status: 200 });
+      }
+      if (url.includes('/operations/work-requests/wr-101')) {
+        return new Response(JSON.stringify({ data: qaWr }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+    const qaBadge = await screen.findByTestId('qa-status-badge-task-1');
+    expect(qaBadge).toHaveTextContent('Under Review');
+    expect(qaBadge).not.toHaveTextContent('Failed');
   });
 });
 

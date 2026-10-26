@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { syncSupabaseRealtimeAuth } from './supabase';
 
 export interface UserProfile {
   id: string;
@@ -78,6 +79,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       // ignore
     }
 
+    syncSupabaseRealtimeAuth();
     set({
       user,
       permissions: permSet,
@@ -125,6 +127,7 @@ export const useSessionStore = create<SessionState>((set) => ({
     } catch {
       // ignore
     }
+    syncSupabaseRealtimeAuth(null);
     set({
       user: null,
       permissions: new Set<string>(),

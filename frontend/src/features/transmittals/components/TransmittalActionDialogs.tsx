@@ -76,14 +76,14 @@ export function ApproveDialog({ transmittal, isOpen, onClose }: ApproveDialogPro
             <ShieldCheck className="h-5 w-5 text-emerald-600" />
             Approve Transmittal
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
+          <DialogDescription className="text-xs text-[#475569]">
             As an Administrator, approving transmittal{' '}
-            <span className="font-mono font-bold text-slate-900">{transmittal.tracking_number}</span>{' '}
-            will mark it as approved and transition its status directly to <span className="font-semibold text-blue-700">Sent</span>.
+            <span className="font-mono font-bold text-[#1E293B]">{transmittal.tracking_number}</span>{' '}
+            will mark it as approved and transition its status directly to <span className="font-semibold text-[#1E293B]">Sent</span>.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-800">
+        <div className="p-3 bg-emerald-50 border-emerald-200 rounded text-xs text-emerald-800">
           Recipient: <span className="font-medium">{transmittal.recipient_name || transmittal.clients?.name}</span>
           <br />
           Line items: <span className="font-medium">{transmittal.items?.length ?? 0} documents</span>
@@ -141,32 +141,32 @@ export function SendDialog({ transmittal, isOpen, onClose }: SendDialogProps) {
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent data-testid="send-transmittal-dialog">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base font-bold text-blue-800">
-            <Send className="h-5 w-5 text-blue-600" />
+          <DialogTitle className="flex items-center gap-2 text-base font-bold text-[#1E293B]">
+            <Send className="h-5 w-5 text-[#1E293B]" />
             Mark Transmittal as Sent
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
+          <DialogDescription className="text-xs text-[#475569]">
             Confirm dispatch of transmittal{' '}
-            <span className="font-mono font-bold text-slate-900">{transmittal.tracking_number}</span> to{' '}
-            <span className="font-semibold text-slate-800">{transmittal.recipient_name || transmittal.clients?.name}</span>.
+            <span className="font-mono font-bold text-[#1E293B]">{transmittal.tracking_number}</span> to{' '}
+            <span className="font-semibold text-[#1E293B]">{transmittal.recipient_name || transmittal.clients?.name}</span>.
           </DialogDescription>
         </DialogHeader>
 
         {isSendBlocked ? (
           <div
-            className="p-3 bg-amber-50 border border-amber-200 rounded text-xs text-amber-800 flex items-start gap-2"
+            className="p-3 bg-amber-50 border-amber-200 rounded text-xs text-amber-800 flex items-start gap-2"
             data-testid="send-blocked-warning"
           >
             <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-semibold">Requires Admin approval before sending</p>
-              <p className="text-[11px] text-amber-700 mt-0.5">
+              <p className="text-xs text-amber-700 mt-0.5">
                 Staff users cannot mark unapproved transmittals as sent. Please request an Administrator to approve this draft first.
               </p>
             </div>
           </div>
         ) : (
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+          <div className="p-3 bg-[#F8FAFC] border-[#E2E8F0] rounded text-xs text-[#1E293B]">
             {isAdmin && !isApproved ? (
               <p>As Admin, confirming dispatch will automatically grant approval and record transmission.</p>
             ) : (
@@ -188,7 +188,7 @@ export function SendDialog({ transmittal, isOpen, onClose }: SendDialogProps) {
                     size="sm"
                     disabled={isSendBlocked}
                     onClick={handleConfirm}
-                    className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
+                    className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs disabled:opacity-50"
                     data-testid="confirm-send-btn"
                   >
                     Confirm Dispatch
@@ -240,13 +240,13 @@ export function AcknowledgeDialog({ transmittal, isOpen, onClose }: AcknowledgeD
             <CheckCircle2 className="h-5 w-5 text-emerald-600" />
             Acknowledge Receipt
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
+          <DialogDescription className="text-xs text-[#475569]">
             Confirm that documents for transmittal{' '}
-            <span className="font-mono font-bold text-slate-900">{transmittal.tracking_number}</span> were physically received and signed by the recipient.
+            <span className="font-mono font-bold text-[#1E293B]">{transmittal.tracking_number}</span> were physically received and signed by the recipient.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-xs text-emerald-800">
+        <div className="p-3 bg-emerald-50 border-emerald-200 rounded text-xs text-emerald-800">
           This will stamp the manifest as <span className="font-semibold">Acknowledged</span> and capture the receipt timestamp.
         </div>
 
@@ -301,13 +301,13 @@ export function DeleteDialog({ transmittalId, trackingNumber, isOpen, onClose }:
             <Trash2 className="h-5 w-5 text-rose-600" />
             Delete Transmittal
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
+          <DialogDescription className="text-xs text-[#475569]">
             Are you sure you want to soft-delete transmittal{' '}
-            <span className="font-mono font-bold text-slate-900">{trackingNumber || transmittalId}</span>?
+            <span className="font-mono font-bold text-[#1E293B]">{trackingNumber || transmittalId}</span>?
           </DialogDescription>
         </DialogHeader>
 
-        <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-800">
+        <div className="p-3 bg-rose-50 border-rose-200 rounded text-xs text-rose-800">
           This transmittal will be removed from active lists and kanban swimlanes.
         </div>
 
@@ -363,20 +363,20 @@ export function ArchiveDialog({ transmittalId, isArchived, isOpen, onClose }: Ar
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent data-testid="archive-transmittal-dialog">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base font-bold text-slate-800">
+          <DialogTitle className="flex items-center gap-2 text-base font-bold text-[#1E293B]">
             {isArchived ? (
               <>
-                <ArchiveRestore className="h-5 w-5 text-blue-600" />
+                <ArchiveRestore className="h-5 w-5 text-[#1E293B]" />
                 Restore Transmittal
               </>
             ) : (
               <>
-                <Archive className="h-5 w-5 text-slate-600" />
+                <Archive className="h-5 w-5 text-[#475569]" />
                 Archive Transmittal
               </>
             )}
           </DialogTitle>
-          <DialogDescription className="text-xs text-slate-600">
+          <DialogDescription className="text-xs text-[#475569]">
             {isArchived
               ? 'Restore this transmittal back to the active list.'
               : 'Archive this transmittal. It will be moved to the Archived tab.'}
@@ -390,7 +390,7 @@ export function ArchiveDialog({ transmittalId, isArchived, isOpen, onClose }: Ar
           <Button
             size="sm"
             onClick={handleConfirm}
-            className="bg-slate-800 hover:bg-slate-900 text-white"
+            className="bg-slate-800 hover:bg-[#1D4ED8] text-white hover:bg-[#1E40AF] shadow-2xs"
             data-testid="confirm-archive-btn"
           >
             {isArchived ? 'Restore' : 'Archive'}

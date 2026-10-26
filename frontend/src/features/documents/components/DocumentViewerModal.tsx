@@ -9,7 +9,7 @@
  * - PDF inline iframe, image preview, text preview, fallback download cards
  * - Comments pane (view, add, edit, delete)
  * - File replace/upload with 50 MB limit guard
- * - Shared design tokens (#f0f0f5, #f0f1f3, #2563eb, #1e293b, #9494a0)
+ * - Shared design tokens (#0F172A, #F1F5F9, #CBD5E1, #475569)
  */
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
@@ -35,7 +35,11 @@ import {
   Maximize2,
   Minimize2,
   ExternalLink,
+  RefreshCw,
+  Lock,
 } from 'lucide-react';
+import { documentKeys } from '../api/queryKeys';
+import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
 import {
   useDocumentDownloadUrl,
   useDocumentDetail,
@@ -78,6 +82,10 @@ export interface DocumentViewerModalProps {
   workRequests?: ViewerWorkRequest[] | null;
   onUploadSuccess?: (doc: DmsDocument) => void;
   readOnly?: boolean;
+  previewUrl?: string | null;
+  attachmentOnly?: boolean;
+  onRefreshPreview?: () => void | Promise<unknown>;
+  isRefreshingPreview?: boolean;
 }
 
 export function DocumentViewerModal({
@@ -89,12 +97,44 @@ export function DocumentViewerModal({
   workRequests: propWorkRequests,
   onUploadSuccess,
   readOnly = false,
+  previewUrl: propPreviewUrl,
+  attachmentOnly = false,
+  onRefreshPreview,
+  isRefreshingPreview = false,
 }: DocumentViewerModalProps) {
   const initialDoc = propDocument ?? propDoc ?? null;
   const workRequest = propWorkRequest ?? (propWorkRequests && propWorkRequests[0]) ?? null;
   const [selectedDoc, setDoc] = useState<DmsDocument | null>(initialDoc);
-  const { data: liveDoc } = useDocumentDetail(selectedDoc?.id, { enabled: isOpen });
-  const doc = liveDoc ?? selectedDoc;
+
+  useEffect(() => {
+    if (initialDoc && initialDoc.id !== selectedDoc?.id) {
+      setDoc(initialDoc);
+    }
+  }, [initialDoc, selectedDoc?.id]);
+
+  const {
+    data: liveDoc,
+    isError: isDocError,
+    error: docError,
+    isPlaceholderData: isDocPlaceholder,
+  } = useDocumentDetail(selectedDoc?.id, { enabled: isOpen && Boolean(selectedDoc?.id) });
+
+  const {
+    record: doc,
+    isDenied: isDocDenied,
+    isScopeStale,
+    canFetchChildren,
+  } = useScopedRecordGuard<DmsDocument>({
+    recordId: selectedDoc?.id,
+    isOpen,
+    onClose,
+    queryError: docError,
+    isQueryError: isDocError,
+    isPlaceholderData: isDocPlaceholder,
+    liveRecord: liveDoc,
+    initialRecord: selectedDoc,
+    queryKey: selectedDoc?.id ? documentKeys.detail(selectedDoc.id) : undefined,
+  });
   useEntityRealtimeSync({ table: 'documents', enabled: isOpen && Boolean(doc?.id) });
   const commentsRef = useRef<HTMLDivElement | null>(null);
   const followComments = useRef(true);
@@ -108,6 +148,10 @@ export function DocumentViewerModal({
   currentDocumentId.current = doc?.id;
   const [commentError, setCommentError] = useState<string | null>(null);
   const [isFullPage, setIsFullPage] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
+  const [previewAttempt, setPreviewAttempt] = useState(0);
+
+  useEffect(() => { setPreviewFailed(false); }, [propPreviewUrl, isOpen]);
   const [newCommentText, setNewCommentText] = useState('');
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
@@ -187,8 +231,30 @@ export function DocumentViewerModal({
   }, [isFullPage]);
 
   const documentId = doc?.id;
-  const { data: downloadData, isLoading: isDownloadLoading } =
-    useDocumentDownloadUrl(documentId, { enabled: Boolean(documentId) });
+  const {
+    data: downloadData,
+    isLoading: isDownloadLoading,
+    isError: isDownloadError,
+    error: downloadError,
+    refetch: retryDownload,
+    isFetching: isDownloadFetching,
+  } = useDocumentDownloadUrl(documentId, {
+    enabled:
+      isOpen &&
+      Boolean(documentId) &&
+      canFetchChildren &&
+      !(doc?.external_url?.trim() || doc?.externalUrl?.trim()),
+  });
+
+  const isDownloadDenied = Boolean(
+    isDownloadError &&
+      ((downloadError as { status?: number })?.status === 403 ||
+        (downloadError as { status?: number })?.status === 404 ||
+        String((downloadError as { message?: string })?.message || '').includes('403') ||
+        String((downloadError as { message?: string })?.message || '').includes('404'))
+  );
+
+  const isDenied = Boolean(isDocDenied || isDownloadDenied);
 
   const addComment = useAddDocumentComment();
   const editComment = useEditDocumentComment();
@@ -196,10 +262,12 @@ export function DocumentViewerModal({
   const uploadMutation = useUploadDocument();
 
   const isReadOnly =
-    readOnly ||
+    attachmentOnly || readOnly ||
     workRequest?.status === 'Cancelled' ||
     Boolean(workRequest?.archived) ||
     Boolean(doc?.archived);
+  const canComment = !isReadOnly && !isDocError && !isDocPlaceholder &&
+    liveDoc?.id === doc?.id && liveDoc?.can_comment === true;
 
   // File attributes (original name takes precedence for user display)
   const fileName =
@@ -213,14 +281,23 @@ export function DocumentViewerModal({
     (doc?.external_url && doc.external_url.trim()) ||
     (doc?.externalUrl && doc.externalUrl.trim()) ||
     null;
-  const rawUrl = effectiveExternalUrl || downloadData?.url || null;
+  const rawUrl = propPreviewUrl || effectiveExternalUrl || downloadData?.url || null;
   const parsedExternal = parseExternalUrl(rawUrl || '', fileName);
   const previewUrl = parsedExternal.isGoogleDrive ? parsedExternal.previewUrl : rawUrl;
   const isExternal = Boolean(
-    effectiveExternalUrl ||
-    parsedExternal.isGoogleDrive
+    !propPreviewUrl && (effectiveExternalUrl || parsedExternal.isGoogleDrive)
   );
-  const downloadUrl = isExternal ? null : rawUrl;
+  const downloadUrl = isExternal && !propPreviewUrl ? null : rawUrl;
+
+  const refreshPreview = async () => {
+    try {
+      await onRefreshPreview?.();
+      setPreviewAttempt((attempt) => attempt + 1);
+      setPreviewFailed(false);
+    } catch {
+      setPreviewFailed(true);
+    }
+  };
 
   // File Upload Handler (3-step signed upload)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -260,7 +337,7 @@ export function DocumentViewerModal({
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!doc || !newCommentText.trim() || isReadOnly || sending.current || addComment.isPending) return;
+    if (!doc || !newCommentText.trim() || !canComment || sending.current || addComment.isPending) return;
     const id = doc.id;
     const submitted = newCommentText;
     sending.current = true;
@@ -278,7 +355,7 @@ export function DocumentViewerModal({
   };
 
   const handleSaveEditComment = async (commentId: string) => {
-    if (!doc || !editingCommentText.trim() || isReadOnly || editComment.isPending) return;
+    if (!doc || !editingCommentText.trim() || !canComment || editComment.isPending) return;
     const id = doc.id;
     setCommentError(null);
     try {
@@ -293,7 +370,7 @@ export function DocumentViewerModal({
   };
 
   const handleDeleteComment = async (commentId: string) => {
-    if (!doc || isReadOnly || deleteComment.isPending) return;
+    if (!doc || !canComment || deleteComment.isPending) return;
     const id = doc.id;
     setCommentError(null);
     try {
@@ -305,17 +382,24 @@ export function DocumentViewerModal({
 
   // Determine Preview Component
   const renderPreview = () => {
+    if (attachmentOnly && previewFailed) return (
+      <div role="alert" data-testid="attachment-preview-error" className="space-y-3 p-6 text-center text-sm text-[#475569]">
+        <p>Unable to display this receipt. Refresh the preview or download the file.</p>
+        {onRefreshPreview && <Button type="button" variant="outline" size="sm" disabled={isRefreshingPreview}
+          onClick={() => void refreshPreview()}>Retry preview</Button>}
+      </div>
+    );
     if (!doc) {
       return (
-        <div className="h-full flex flex-col items-center justify-center text-[#9494a0] p-8 space-y-3">
-          <Upload className="h-12 w-12 text-[#9494a0]" />
+        <div className="h-full flex flex-col items-center justify-center text-[#475569] p-8 space-y-3">
+          <Upload className="h-12 w-12 text-[#475569]" />
           <p className="text-sm">No document selected. Upload a file to preview.</p>
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
-            className="border-[#f0f0f5] text-[#1e293b]"
+            className="border-[#E2E8F0] text-[#1E293B]"
           >
             Select Document
           </Button>
@@ -325,8 +409,20 @@ export function DocumentViewerModal({
 
     if (isDownloadLoading && !doc?.external_url && !doc?.externalUrl) {
       return (
-        <div className="h-full flex items-center justify-center text-[#9494a0] text-sm">
+        <div className="h-full flex items-center justify-center text-[#475569] text-sm">
           Loading document preview...
+        </div>
+      );
+    }
+
+    if (downloadError && !effectiveExternalUrl) {
+      return (
+        <div role="alert" className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center text-[#475569]">
+          <p className="text-sm font-medium">Unable to load document preview</p>
+          <p className="text-xs">{downloadError.message}</p>
+          <Button type="button" variant="outline" size="sm" disabled={isDownloadFetching} onClick={() => void retryDownload()}>
+            Retry preview
+          </Button>
         </div>
       );
     }
@@ -334,7 +430,7 @@ export function DocumentViewerModal({
     if (parsedExternal.isGoogleDrive && previewUrl) {
       return (
         <div className="w-full h-full flex flex-col">
-          <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 flex items-center justify-between text-xs text-blue-800">
+          <div className="bg-[#F8FAFC] border-b border-blue-100 px-4 py-2 flex items-center justify-between text-xs text-[#1E293B]">
             <span>Google Drive Document Preview</span>
             <a
               href={parsedExternal.originalUrl}
@@ -361,16 +457,16 @@ export function DocumentViewerModal({
       const openUrl = effectiveExternalUrl || parsedExternal.originalUrl;
       return (
         <div className="h-full flex flex-col items-center justify-center p-8 space-y-4 text-center">
-          <ExternalLink className="h-16 w-16 text-[#2563eb]" />
+          <ExternalLink className="h-16 w-16 text-[#1E293B]" />
           <div className="space-y-1">
-            <h4 className="font-semibold text-[#1e293b] text-sm">{fileName}</h4>
-            <p className="text-xs text-[#9494a0] max-w-sm">
+            <h4 className="font-semibold text-[#1E293B] text-sm">{fileName}</h4>
+            <p className="text-xs text-[#475569] max-w-sm">
               This external document cannot be embedded inline. You can open the external link directly in your browser.
             </p>
           </div>
           {openUrl && (
             <a href={openUrl} target="_blank" rel="noopener noreferrer">
-              <Button type="button" size="sm" className="gap-2 bg-[#2563eb] hover:bg-[#1d4ed8] text-white">
+              <Button type="button" size="sm" className="gap-2 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs">
                 <ExternalLink className="h-4 w-4" /> Open External Link
               </Button>
             </a>
@@ -396,7 +492,7 @@ export function DocumentViewerModal({
       return (
         <iframe
           src={previewUrl}
-          className="w-full h-full border-0 rounded-md"
+          className="w-full h-full border-0 rounded-[6px]"
           title={fileName}
           data-testid="doc-preview-pdf"
         />
@@ -407,10 +503,12 @@ export function DocumentViewerModal({
       return (
         <div className="w-full h-full flex items-center justify-center p-4">
           <img
+            key={previewAttempt}
             src={previewUrl}
             alt={fileName}
-            className="max-w-full max-h-full object-contain shadow-xs rounded"
+            className="max-w-full max-h-full object-contain shadow-none rounded"
             data-testid="doc-preview-image"
+            onError={attachmentOnly ? () => setPreviewFailed(true) : undefined}
           />
         </div>
       );
@@ -420,7 +518,7 @@ export function DocumentViewerModal({
       return (
         <iframe
           src={previewUrl}
-          className="w-full h-full border-0 p-4 font-mono text-xs bg-white rounded"
+          className="w-full h-full border-0 p-4 text-xs bg-white rounded"
           title={fileName}
           data-testid="doc-preview-text"
         />
@@ -430,10 +528,10 @@ export function DocumentViewerModal({
     if (isDocx || isLegacyDoc) {
       return (
         <div className="h-full flex flex-col items-center justify-center p-8 space-y-4 text-center">
-          <FileText className="h-16 w-16 text-[#2563eb]" />
+          <FileText className="h-16 w-16 text-[#1E293B]" />
           <div className="space-y-1">
-            <h4 className="font-semibold text-[#1e293b] text-sm">{fileName}</h4>
-            <p className="text-xs text-[#9494a0] max-w-sm">
+            <h4 className="font-semibold text-[#1E293B] text-sm">{fileName}</h4>
+            <p className="text-xs text-[#475569] max-w-sm">
               {isLegacyDoc
                 ? 'Legacy Word document (.doc) cannot be previewed inline. Please download to view.'
                 : 'Word Document (.docx) preview is ready for download.'}
@@ -446,7 +544,7 @@ export function DocumentViewerModal({
               target="_blank"
               rel="noreferrer"
             >
-              <Button type="button" size="sm" className="gap-2 bg-[#2563eb] hover:bg-[#1d4ed8] text-white">
+              <Button type="button" size="sm" className="gap-2 bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs">
                 <Download className="h-4 w-4" /> Download to View
               </Button>
             </a>
@@ -458,10 +556,10 @@ export function DocumentViewerModal({
     // Generic / Fallback
     return (
       <div className="h-full flex flex-col items-center justify-center p-8 space-y-4 text-center">
-        <FileQuestion className="h-16 w-16 text-[#9494a0]" />
+        <FileQuestion className="h-16 w-16 text-[#475569]" />
         <div className="space-y-1">
-          <h4 className="font-semibold text-[#1e293b] text-sm">{fileName}</h4>
-          <p className="text-xs text-[#9494a0] max-w-sm">
+          <h4 className="font-semibold text-[#1E293B] text-sm">{fileName}</h4>
+          <p className="text-xs text-[#475569] max-w-sm">
             This file type does not support inline preview. You can download the file to inspect its contents.
           </p>
         </div>
@@ -472,7 +570,7 @@ export function DocumentViewerModal({
             target="_blank"
             rel="noreferrer"
           >
-            <Button type="button" size="sm" variant="outline" className="gap-2 border-[#f0f0f5] text-[#1e293b]">
+            <Button type="button" size="sm" variant="outline" className="gap-2 border-[#E2E8F0] text-[#1E293B]">
               <Download className="h-4 w-4" /> Download File
             </Button>
           </a>
@@ -482,28 +580,61 @@ export function DocumentViewerModal({
   };
 
   const contentClasses = isFullPage
-    ? 'fixed inset-0 left-0 top-0 translate-x-0 translate-y-0 w-screen h-screen max-w-none max-h-none rounded-none border-0 p-0 flex flex-col overflow-hidden z-50 bg-white gap-0'
-    : 'max-w-6xl w-[95vw] h-[88vh] max-h-[92vh] flex flex-col p-0 overflow-hidden border border-[#f0f0f5] bg-white gap-0';
+    ? 'fixed inset-0 left-0 top-0 translate-x-0 translate-y-0 w-screen h-screen max-w-none max-h-none rounded-[8px] border-0 p-0 flex flex-col overflow-hidden z-50 bg-white gap-0'
+    : 'max-w-6xl w-[95vw] h-[88vh] max-h-[92vh] flex flex-col p-0 overflow-hidden border-[#E2E8F0] bg-white gap-0';
+
+  if (isScopeStale || !isOpen) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className={contentClasses}
         data-testid="document-viewer-modal"
+        onEscapeKeyDown={(event) => {
+          if (isFullPage) { event.preventDefault(); setIsFullPage(false); }
+        }}
       >
-        {/* Header */}
-        <DialogHeader className="px-6 py-3 border-b border-[#f0f0f5] flex flex-row items-center justify-between space-y-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <DialogTitle className="text-base font-bold text-[#1e293b] truncate max-w-md">
+        {isDenied ? (
+          <div className="py-24 text-center space-y-3" data-testid="document-access-denied">
+            <div className="w-12 h-12 rounded-full bg-[#F1F5F9] mx-auto flex items-center justify-center">
+              <Lock className="w-6 h-6 text-[#64748B]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-[#1E293B]">Access Not Available</h3>
+              <p className="text-xs text-[#475569] max-w-xs mx-auto">
+                You do not have access to this document or access has been revoked.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              className="mt-2 text-xs"
+              data-testid="document-access-denied-close-btn"
+            >
+              Close
+            </Button>
+          </div>
+        ) : !doc ? (
+          <div className="py-24 text-center text-xs text-[#475569]">Loading document...</div>
+        ) : (
+          <>
+            {/* Header */}
+            <DialogHeader className={`py-3 border-b border-[#E2E8F0] flex flex-row items-center justify-between space-y-0 ${attachmentOnly ? 'px-4 sm:px-6 flex-wrap gap-3 pr-10 sm:pr-12' : 'px-6'}`}>
+          <div className={`flex items-center gap-2 min-w-0 ${attachmentOnly ? 'flex-1 basis-48' : ''}`}>
+            <DialogTitle className="text-base font-bold text-[#1E293B] truncate max-w-md">
               {fileName}
             </DialogTitle>
             {doc?.category && (
-              <Badge variant="outline" size="compact" className="text-[10px]">
+              <Badge variant="outline" size="compact" className="text-xs">
                 {doc.category}
               </Badge>
             )}
           </div>
-          <div className="flex items-center gap-2 pr-6">
+          <div className={`flex items-center gap-2 ${attachmentOnly ? 'flex-wrap' : 'pr-6'}`}>
+            {attachmentOnly && onRefreshPreview && <Button type="button" variant="outline" size="xs"
+              disabled={isRefreshingPreview} className="gap-1 text-xs" onClick={() => void refreshPreview()}>
+              <RefreshCw className="h-3.5 w-3.5" />Refresh</Button>}
             {(doc?.id || initialDoc?.id) && (
               <PresenceAvatars
                 domain="document"
@@ -517,7 +648,7 @@ export function DocumentViewerModal({
               variant="outline"
               size="xs"
               onClick={() => setIsFullPage(!isFullPage)}
-              className="gap-1.5 text-xs text-[#1e293b] border-[#f0f0f5] hover:bg-[#f0f1f3]"
+              className="gap-1.5 text-xs text-[#1E293B] border-[#E2E8F0] hover:bg-[#F8FAFC]"
               title={isFullPage ? 'Exit full-page view' : 'Full-page preview'}
               data-testid="toggle-fullpage-preview"
             >
@@ -547,7 +678,7 @@ export function DocumentViewerModal({
                 variant="outline"
                 size="xs"
                 onClick={() => fileInputRef.current?.click()}
-                className="gap-1 text-xs text-[#1e293b] border-[#f0f0f5] hover:bg-[#f0f1f3]"
+                className="gap-1 text-xs text-[#1E293B] border-[#E2E8F0] hover:bg-[#F8FAFC]"
                 data-testid="upload-doc-btn"
               >
                 <Upload className="h-3.5 w-3.5" /> Replace / Upload
@@ -559,7 +690,7 @@ export function DocumentViewerModal({
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                <Button variant="outline" size="xs" className="gap-1.5 text-xs text-[#2563eb]">
+                <Button variant="outline" size="xs" className="gap-1.5 text-xs text-[#1E293B]">
                   <ExternalLink className="h-3.5 w-3.5" />
                   {parsedExternal.isGoogleDrive ? 'Open in Google Drive' : 'Open External Link'}
                 </Button>
@@ -570,7 +701,7 @@ export function DocumentViewerModal({
                   type="button"
                   variant="outline"
                   size="xs"
-                  className="gap-1 text-xs text-[#1e293b] border-[#f0f0f5] hover:bg-[#f0f1f3]"
+                  className="gap-1 text-xs text-[#1E293B] border-[#E2E8F0] hover:bg-[#F8FAFC]"
                   data-testid="download-doc-btn"
                 >
                   <Download className="h-3.5 w-3.5" /> Download
@@ -589,54 +720,54 @@ export function DocumentViewerModal({
         )}
 
         {/* 2-Column Viewer & Comments Body */}
-        <div className="flex-1 flex overflow-hidden min-h-[520px]">
+        <div className={`flex-1 flex overflow-hidden ${attachmentOnly ? 'min-h-0' : 'min-h-[520px]'}`}>
           {/* Left: Document Preview */}
-          <div className="flex-1 bg-[#f8fafc] border-r border-[#f0f0f5] p-2 overflow-auto flex flex-col items-center justify-center">
+          <div className="flex-1 bg-[#FFFFFF] border-r border-[#E2E8F0] p-2 overflow-auto flex flex-col items-center justify-center">
             {renderPreview()}
           </div>
 
           {/* Right: Threaded Comments */}
-          <div className="w-80 sm:w-96 flex flex-col bg-white">
+          {!attachmentOnly && <div className="w-80 sm:w-96 flex flex-col bg-white">
             {/* Document Details Metadata Panel */}
             <div
-              className="p-3 border-b border-[#f0f0f5] bg-[#f8fafc] text-xs space-y-2 shrink-0"
+              className="p-3 border-b border-[#E2E8F0] bg-[#FFFFFF] text-xs space-y-2 shrink-0"
               data-testid="document-details-panel"
             >
-              <div className="font-semibold text-[#1e293b] text-xs">
+              <div className="font-semibold text-[#1E293B] text-xs">
                 Document Details
               </div>
-              <div className="space-y-1.5 text-[11px]">
+              <div className="space-y-1.5 text-xs">
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-[#9494a0] shrink-0">Uploader:</span>
+                  <span className="text-[#475569] shrink-0">Uploader:</span>
                   <span
-                    className="font-medium text-[#1e293b] text-right truncate"
+                    className="font-medium text-[#1E293B] text-right truncate"
                     data-testid="doc-uploader-name"
                   >
                     {doc?.uploader_name || doc?.uploaderName || (doc?.uploader_id ? teamMap.get(doc.uploader_id) : undefined) || 'Unknown User'}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-[#9494a0] shrink-0">Date Uploaded:</span>
+                  <span className="text-[#475569] shrink-0">Date Uploaded:</span>
                   <span
-                    className="font-medium text-[#1e293b] text-right truncate"
+                    className="font-medium text-[#1E293B] text-right truncate"
                     data-testid="doc-upload-date"
                   >
                     {formattedUploadDate}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-[#9494a0] shrink-0">Work Request:</span>
+                  <span className="text-[#475569] shrink-0">Work Request:</span>
                   <span
-                    className="font-medium text-[#1e293b] text-right truncate"
+                    className="font-medium text-[#1E293B] text-right truncate"
                     data-testid="doc-work-request"
                   >
                     {doc?.work_request_title || workRequest?.title || 'None / Not Linked'}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-2">
-                  <span className="text-[#9494a0] shrink-0">Linked Task:</span>
+                  <span className="text-[#475569] shrink-0">Linked Task:</span>
                   <span
-                    className="font-medium text-[#1e293b] text-right truncate"
+                    className="font-medium text-[#1E293B] text-right truncate"
                     data-testid="doc-linked-task"
                   >
                     {doc?.linked_task_title || 'None / Not Linked'}
@@ -645,8 +776,8 @@ export function DocumentViewerModal({
               </div>
             </div>
 
-            <div className="p-3 border-b border-[#f0f0f5] flex items-center gap-1.5 text-xs font-semibold text-[#1e293b]">
-              <MessageSquare className="h-3.5 w-3.5 text-[#2563eb]" />
+            <div className="p-3 border-b border-[#E2E8F0] flex items-center gap-1.5 text-xs font-semibold text-[#1E293B]">
+              <MessageSquare className="h-3.5 w-3.5 text-[#1E293B]" />
               <span>Comments ({doc?.comments?.length || 0})</span>
             </div>
 
@@ -666,12 +797,12 @@ export function DocumentViewerModal({
                   return (
                     <div
                       key={commentId}
-                      className="p-2.5 rounded-md bg-[#f8fafc] border border-[#f0f0f5] text-xs space-y-1.5"
+                      className="p-2.5 rounded-[6px] bg-[#FFFFFF] border-[#E2E8F0] text-xs space-y-1.5"
                       data-testid={`comment-item-${commentId}`}
                     >
-                      <div className="flex items-center justify-between text-[11px] text-[#9494a0]">
-                        <span className="font-semibold text-[#1e293b]">
-                          <span aria-hidden="true" className="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-800">
+                      <div className="flex items-center justify-between text-xs text-[#475569]">
+                        <span className="font-semibold text-[#1E293B]">
+                          <span aria-hidden="true" className="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-[6px] bg-[#F8FAFC] text-[#1E293B]">
                             {sender.split(' ').map((part) => part[0]).slice(0, 2).join('')}
                           </span>{sender}
                         </span>
@@ -690,7 +821,7 @@ export function DocumentViewerModal({
                             maxLength={4000}
                             aria-label="Edit comment"
                             rows={2}
-                            className="w-full text-xs p-1.5 border border-[#f0f0f5] rounded bg-white text-[#1e293b] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                            className="w-full text-xs p-1.5 border-[#E2E8F0] rounded bg-white text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
                           />
                           <div className="flex justify-end gap-1">
                             <Button
@@ -698,7 +829,7 @@ export function DocumentViewerModal({
                               variant="ghost"
                               size="xs"
                               onClick={() => setEditingCommentId(null)}
-                              className="h-5 text-[10px]"
+                              className="h-5 text-xs"
                             >
                               Cancel
                             </Button>
@@ -707,27 +838,27 @@ export function DocumentViewerModal({
                               size="xs"
                               disabled={editComment.isPending || !editingCommentText.trim()}
                               onClick={() => handleSaveEditComment(commentId)}
-                              className="h-5 text-[10px] bg-[#2563eb] hover:bg-[#1d4ed8] text-white"
+                              className="h-5 text-xs bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs"
                             >
                               Save
                             </Button>
                           </div>
                         </div>
                       ) : (
-                        <p className="text-[#1e293b] whitespace-pre-wrap">
+                        <p className="text-[#1E293B] whitespace-pre-wrap">
                           {comment.text}
                         </p>
                       )}
 
-                      {!isReadOnly && !isEditing && Boolean(comment.id) && (isAuthor || isAdmin) && (
-                        <div className="flex justify-end gap-2 pt-1 border-t border-[#f0f0f5] text-[10px] text-[#9494a0]">
+                      {canComment && !isEditing && Boolean(comment.id) && (isAuthor || isAdmin) && (
+                        <div className="flex justify-end gap-2 pt-1 border-t border-[#E2E8F0] text-xs text-[#475569]">
                           {isAuthor && <button
                             type="button"
                             onClick={() => {
                               setEditingCommentId(commentId);
                               setEditingCommentText(comment.text);
                             }}
-                            className="hover:text-[#2563eb] flex items-center gap-0.5 cursor-pointer"
+                            className="hover:text-[#1E293B] flex items-center gap-0.5 cursor-pointer"
                           >
                             <Edit2 className="h-2.5 w-2.5" /> Edit
                           </button>}
@@ -745,7 +876,7 @@ export function DocumentViewerModal({
                   );
                 })
               ) : (
-                <div className="text-xs text-[#9494a0] italic py-4 text-center">
+                <div className="text-xs text-[#475569] italic py-4 text-center">
                   No comments yet. Start the conversation below.
                 </div>
               )}
@@ -753,8 +884,8 @@ export function DocumentViewerModal({
 
             {commentError && <p role="alert" className="px-3 py-2 text-xs text-rose-700">{commentError}</p>}
             {/* Add Comment Box */}
-            {!isReadOnly && (
-              <form onSubmit={handleAddComment} className="p-3 border-t border-[#f0f0f5] space-y-2">
+            {canComment && (
+              <form onSubmit={handleAddComment} className="p-3 border-t border-[#E2E8F0] space-y-2">
                 <textarea
                   maxLength={4000}
                   onKeyDown={(e) => {
@@ -767,7 +898,7 @@ export function DocumentViewerModal({
                   onChange={(e) => setNewCommentText(e.target.value)}
                   placeholder="Add a comment or review note..."
                   rows={2}
-                  className="w-full text-xs p-2 border border-[#f0f0f5] rounded-md bg-white text-[#1e293b] placeholder:text-[#9494a0] focus:outline-none focus:ring-1 focus:ring-[#2563eb]"
+                  className="w-full text-xs p-2 border-[#E2E8F0] rounded-[6px] bg-white text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
                   data-testid="new-comment-textarea"
                 />
                 <div className="flex justify-end">
@@ -776,27 +907,36 @@ export function DocumentViewerModal({
                     size="xs"
                     disabled={!newCommentText.trim() || addComment.isPending}
                     data-testid="post-comment-btn"
-                    className="text-xs bg-[#2563eb] hover:bg-[#1d4ed8] text-white"
+                    className="text-xs bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs"
                   >
                     {addComment.isPending ? 'Sending...' : 'Post Comment'}
                   </Button>
                 </div>
               </form>
             )}
-          </div>
+            {!isReadOnly && liveDoc?.can_comment === false && (
+              <p className="p-3 text-xs text-[#475569]">
+                {doc?.linked_task_id || doc?.linkedTaskId
+                  ? 'Only task assignees and admins can comment on this document.'
+                  : 'Document edit permission is required to comment.'}
+              </p>
+            )}
+          </div>}
         </div>
 
-        <DialogFooter className="px-6 py-2.5 border-t border-[#f0f0f5] bg-[#f8fafc] flex items-center justify-end">
+        <DialogFooter className="px-6 py-2.5 border-t border-[#E2E8F0] bg-[#FFFFFF] flex items-center justify-end">
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={onClose}
-            className="text-xs text-[#1e293b] hover:bg-[#f0f1f3]"
+            className="text-xs text-[#1E293B] hover:bg-[#F8FAFC]"
           >
             Close
           </Button>
         </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

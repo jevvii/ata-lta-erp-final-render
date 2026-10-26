@@ -15,7 +15,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-50 bg-black/40 backdrop-blur-xs data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      'fixed inset-0 z-50 bg-slate-950/30 backdrop-blur-[1px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-150',
       className
     )}
     {...props}
@@ -32,7 +32,7 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-[#f0f0f5] bg-white p-6 shadow-[0_20px_50px_rgba(0,0,0,0.15)] duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 rounded-xl',
+        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-[12px] border border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] p-6 shadow-float overscroll-contain duration-150 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         className
       )}
       {...props}
@@ -41,9 +41,11 @@ const DialogContent = React.forwardRef<
         // Radix listens in capture phase, before MUI can consume Escape.
         // Let an open calendar close itself without dismissing the enclosing form.
         const target = event.target;
-        if (target instanceof Element &&
+        if (
+          target instanceof Element &&
           (target.closest('.erp-date-picker-popup') ||
-            target.closest('[data-erp-dialog]')?.querySelector('.erp-date-picker-popup'))) {
+            target.closest('[data-erp-dialog]')?.querySelector('.erp-date-picker-popup'))
+        ) {
           event.preventDefault();
           return;
         }
@@ -51,8 +53,8 @@ const DialogContent = React.forwardRef<
       }}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[#2563eb] disabled:pointer-events-none cursor-pointer">
-        <X className="h-4 w-4 text-[#9494a0]" />
+      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-[6px] p-1 text-[#475569] opacity-80 transition-[opacity,background-color,color] hover:opacity-100 hover:bg-[#F8FAFC] hover:text-[#1E293B] focus:outline-none focus:ring-2 focus:ring-[#1D4ED8] disabled:pointer-events-none cursor-pointer">
+        <X className="h-4 w-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
@@ -91,7 +93,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn('text-lg font-semibold leading-none tracking-tight text-[#1e293b]', className)}
+    className={cn('text-lg font-semibold leading-none tracking-tight text-[#1E293B]', className)}
     {...props}
   />
 ));
@@ -103,7 +105,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-[#9494a0]', className)}
+    className={cn('text-sm text-[#475569]', className)}
     {...props}
   />
 ));

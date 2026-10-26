@@ -14,7 +14,7 @@ import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 
-interface NavItem {
+export interface NavItem {
   name: string;
   path: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -22,7 +22,7 @@ interface NavItem {
   adminOnly?: boolean;
 }
 
-const NAV_ITEMS: NavItem[] = [
+export const NAV_ITEMS: NavItem[] = [
   {
     name: 'Dashboard',
     path: '/dashboard',
@@ -81,7 +81,7 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function Sidebar() {
+export function SidebarNavLinks({ onNavigate }: { onNavigate?: () => void }) {
   const permissions = useSessionStore((state) => state.permissions);
   const user = useSessionStore((state) => state.user);
   const isAdmin = user?.role === 'Admin' || hasPermission(permissions, 'users:manage');
@@ -93,52 +93,59 @@ export function Sidebar() {
   });
 
   return (
+    <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3" data-testid="sidebar-nav">
+      {visibleNavItems.map((item) => {
+        const Icon = item.icon;
+        return (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            onClick={onNavigate}
+            data-testid={`nav-item-${item.name.toLowerCase()}`}
+            className={({ isActive }) =>
+              cn(
+                'flex items-center gap-3 rounded-[6px] px-3 py-2 text-sm font-medium transition-colors duration-150',
+                isActive
+                  ? 'bg-[#DBEAFE]/80 text-[#1E40AF] font-semibold border-l-3 border-l-[#1D4ED8]'
+                  : 'text-[#334155] hover:bg-[#E2E8F0]/70 hover:text-[#1E293B]'
+              )
+            }
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <span>{item.name}</span>
+          </NavLink>
+        );
+      })}
+    </nav>
+  );
+}
+
+export function Sidebar() {
+  return (
     <aside
-      className="flex h-screen w-[220px] flex-col border-r border-[#f0f0f5] bg-white transition-all select-none"
+      className="hidden lg:flex h-dvh w-[232px] flex-col border-r border-[#E2E8F0] bg-[#F8FAFC] transition-all select-none shrink-0"
       data-testid="app-sidebar"
     >
       {/* Brand Header */}
-      <div className="flex h-16 items-center gap-3 border-b border-[#f0f0f5] px-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#2563eb] text-white font-bold text-sm shadow-xs">
+      <div className="flex h-14 items-center gap-3 border-b border-[#E2E8F0] px-4 bg-[#FFFFFF]">
+        <div className="flex h-8 w-8 items-center justify-center rounded-[6px] bg-[#1E3A8A] text-[#FFFFFF] font-bold text-xs shadow-2xs">
           ERP
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-bold leading-tight text-[#1e293b]">ATA &amp; LTA</span>
-          <span className="text-[11px] font-medium text-[#9494a0]">Enterprise v2</span>
+          <span className="text-sm font-bold tracking-tight text-[#1E293B] leading-tight">ATA &amp; LTA</span>
+          <span className="text-xs text-[#475569] leading-none">Accounting Firm</span>
         </div>
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" data-testid="sidebar-nav">
-        {visibleNavItems.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              data-testid={`nav-item-${item.name.toLowerCase()}`}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
-                  isActive
-                    ? 'bg-[#2563eb] text-white font-semibold shadow-xs'
-                    : 'text-[#1e293b] hover:bg-[#f0f1f3] hover:text-[#1e293b]'
-                )
-              }
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              <span>{item.name}</span>
-            </NavLink>
-          );
-        })}
-      </nav>
+      <SidebarNavLinks />
 
-      {/* Footer Info */}
-      <div className="border-t border-[#f0f0f5] p-3 text-[11px] text-[#9494a0]">
-        <div className="flex items-center justify-between px-2">
-          <span>React 19 Shell</span>
-          <span className="rounded bg-[#f0f1f3] px-1.5 py-0.5 text-[10px] font-mono text-[#1e293b]">
-            v2.0.0
+      {/* Footer Telemetry */}
+      <div className="border-t border-[#E2E8F0] p-3 text-xs text-[#475569] bg-[#F8FAFC]">
+        <div className="flex items-center justify-between px-1">
+          <span className="font-medium text-[#475569]">System Active</span>
+          <span className="rounded-[4px] border border-[#E2E8F0] bg-[#FFFFFF] px-1.5 py-0.5 text-xs font-medium text-[#334155] shadow-2xs">
+            v2.0
           </span>
         </div>
       </div>

@@ -10,25 +10,30 @@ export function Forbidden({ requiredPermission }: ForbiddenProps) {
   return (
     <div
       data-testid="forbidden-screen"
-      className="flex min-h-[500px] flex-col items-center justify-center p-8 text-center"
+      className="flex min-h-[500px] flex-col items-center justify-center p-8 text-center rounded-[8px] border border-[#E2E8F0] bg-[#FFFFFF] shadow-card"
     >
-      <div className="rounded-full bg-amber-100 p-4 text-amber-600 mb-4 shadow-xs">
-        <ShieldAlert className="h-10 w-10" />
+      <div className="rounded-full bg-[#FEFCE8] p-4 text-[#854D0E] mb-4 border border-[#FDE047]">
+        <ShieldAlert className="h-10 w-10 text-[#854D0E]" />
       </div>
-      <h1 className="text-2xl font-bold text-[#1e293b] mb-2">Access Forbidden</h1>
-      <p className="text-sm text-[#9494a0] max-w-md mb-2">
-        You do not have the required permissions to view this resource.
+      <div className="mb-2 inline-block rounded-full border border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-0.5 text-xs font-medium text-[#334155]">
+        403 Forbidden
+      </div>
+      <h1 className="text-2xl font-semibold tracking-tight text-[#1E293B] mb-2">
+        Access Forbidden
+      </h1>
+      <p className="text-sm text-[#475569] max-w-md mb-2">
+        You do not have the necessary operational permissions to access this ledger division.
       </p>
       {requiredPermission && (
-        <div className="my-2 rounded-md bg-[#f0f1f3] px-3 py-1 text-xs font-mono text-[#1e293b]">
-          Required: <span className="font-semibold text-[#2563eb]">{requiredPermission}</span>
+        <div className="my-2 rounded-[6px] bg-[#F8FAFC] border border-[#E2E8F0] px-3 py-1.5 text-xs text-[#334155]">
+          Required Permission: <span className="font-semibold text-[#DC2626]">{requiredPermission}</span>
         </div>
       )}
       <div className="mt-6">
         <Button asChild variant="outline" className="gap-2">
           <Link to="/">
             <ArrowLeft className="h-4 w-4" />
-            Back to Dashboard
+            Return to Dashboard
           </Link>
         </Button>
       </div>

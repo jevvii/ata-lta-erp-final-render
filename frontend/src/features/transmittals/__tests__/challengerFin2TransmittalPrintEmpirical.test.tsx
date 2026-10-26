@@ -169,7 +169,7 @@ describe('CHALLENGER FIN 2: Transmittal Print Empirical Verification Suite', () 
 
       // Verbatim Manila Address
       expect(
-        screen.getByText(
+        within(document.getElementById('transmittal-print-area')!).getByText(
           /RM 307 Republic Supermarket Bldg, Soler St\., cor\. F\.Torres St\., Sta\. Cruz, Manila/i
         )
       ).toBeInTheDocument();
@@ -207,7 +207,7 @@ describe('CHALLENGER FIN 2: Transmittal Print Empirical Verification Suite', () 
 
       // Manila address is constant across entities
       expect(
-        screen.getByText(
+        within(document.getElementById('transmittal-print-area')!).getByText(
           /RM 307 Republic Supermarket Bldg, Soler St\., cor\. F\.Torres St\., Sta\. Cruz, Manila/i
         )
       ).toBeInTheDocument();

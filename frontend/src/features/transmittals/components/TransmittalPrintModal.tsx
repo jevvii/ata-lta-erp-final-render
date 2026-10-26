@@ -1,14 +1,7 @@
-/**
- * Transmittal Print / PDF Preview Modal (UAT2-3)
- *
- * Verbatim 1:1 port of prototype transmittal preview layout (erp_prototype/js/transmittal.js),
- * omitting the prototype's 12-row filler loop to match backend PDF behavior (item-rows-only).
- * Features entity-aware date formatting, Manila company address, TO 4-line block,
- * boxed document table, centered signature block, and dynamic "RECEIVED" stamp on Acknowledged status.
- */
+/** Transmittal preview and print options; document rows match the complete manifest. */
 
-import { useRef } from 'react';
-import { Printer } from 'lucide-react';
+import { useRef, useState, useEffect } from 'react';
+import { Printer, Plus, Trash2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -17,34 +10,50 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { printTransmittalDocument } from '@/lib/printDocuments';
-import type { Transmittal } from '../api/types';
+import { printTransmittalDocument, defaultTransmittalCompany, printableTransmittalItems } from '@/lib/printDocuments';
+import { Input } from '@/components/ui/input';
+import { useSessionStore } from '@/lib/session';
+import { hasPermission } from '@/lib/permissions';
+import type { Transmittal, TransmittalItem, CreateTransmittalItemInput } from '../api/types';
 
 export interface TransmittalPrintModalProps {
   transmittal: Transmittal | null;
   isOpen: boolean;
   onClose: () => void;
+  onEdit?: (transmittal: Transmittal) => void;
+  onSaveItems?: (items: CreateTransmittalItemInput[]) => Promise<void>;
 }
 
 export function TransmittalPrintModal({
   transmittal,
   isOpen,
   onClose,
+  onEdit,
+  onSaveItems,
 }: TransmittalPrintModalProps) {
   const printAreaRef = useRef<HTMLDivElement>(null);
+
+  const [company, setCompany] = useState(() => defaultTransmittalCompany(transmittal?.entity_code));
+  const [editingItems, setEditingItems] = useState(false);
+  const [draftItems, setDraftItems] = useState<TransmittalItem[]>([]);
+  const [savingItems, setSavingItems] = useState(false);
+  const [itemsError, setItemsError] = useState('');
+  useEffect(() => {
+    setEditingItems(false);
+    setItemsError('');
+  }, [isOpen, transmittal?.id]);
+  const user = useSessionStore((state) => state.user);
+  const permissions = useSessionStore((state) => state.permissions);
+  useEffect(() => {
+    if (isOpen) setCompany(defaultTransmittalCompany(transmittal?.entity_code));
+  }, [isOpen, transmittal?.id, transmittal?.entity_code]);
 
   if (!isOpen || !transmittal) return null;
 
   const entityCode = transmittal.entity_code || 'ATA';
   const isATA = entityCode === 'ATA';
 
-  const companyName = isATA
-    ? 'ATA BUSINESS CONSULTANCY SERVICES'
-    : 'LTA BUSINESS CONSULTANCY SERVICES';
-
-  const companyAddress =
-    'RM 307 Republic Supermarket Bldg, Soler St., cor. F.Torres St., Sta. Cruz, Manila';
-
+  const { companyName, companyAddress, includeCompanyDetails } = company;
   const companyTin = isATA ? 'TIN: 234-567-890-000' : 'TIN: 345-678-901-000';
 
   // Date formatting (Entity-aware: ATA = uppercase full month, LTA = M/D/YYYY)
@@ -108,20 +117,42 @@ export function TransmittalPrintModal({
   }
 
   // Item-rows-only: strictly map real items without filler rows
-  const items = transmittal.items || [];
+  const canEditItems = user?.role === 'Admin' && hasPermission(permissions, 'transmittal:edit');
+  const items = printableTransmittalItems(editingItems ? draftItems : transmittal.items);
+  const updateDraftItem = (index: number, patch: Partial<TransmittalItem>) => {
+    setDraftItems((previous) => previous.map((item, i) => i === index ? { ...item, ...patch } : item));
+    setItemsError('');
+  };
+  const saveItems = async () => {
+    if (!canEditItems || !onSaveItems || savingItems) return;
+    if (!draftItems.length || draftItems.some((item) => !item.description.trim() || !Number.isInteger(item.quantity) || item.quantity < 1)) {
+      setItemsError('Add at least one document. Each row needs a description and a positive whole-number quantity.');
+      return;
+    }
+    setSavingItems(true);
+    setItemsError('');
+    try {
+      await onSaveItems(draftItems.map((item) => ({
+        description: item.description.trim(),
+        documentType: (item.document_type || item.documentType || 'Others').trim(),
+        quantity: item.quantity,
+      })));
+      setEditingItems(false);
+    } catch {
+      setItemsError('Documents were not saved. Your edits are still here; please try again.');
+    } finally {
+      setSavingItems(false);
+    }
+  };
 
   const handlePrint = () => {
-    // Print via a fresh window containing the prototype-verbatim transmittal
-    // letter (erp_prototype/js/transmittal.js openPrintLetter) incl. the
-    // 12-row padded document table — Chromium output matches the legacy form
-    // 1:1, independent of the in-app modal CSS.
-    printTransmittalDocument(transmittal);
+    printTransmittalDocument(transmittal, company);
   };
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-4xl max-h-[92vh] overflow-y-auto p-0 print:p-0 print:m-0 print:max-w-none print:max-h-none print:w-full print:static print:transform-none print:border-none print:shadow-none print:overflow-visible print:bg-white print:rounded-none"
+        className="max-w-4xl max-h-[92vh] overflow-y-auto p-0 rounded-[12px] border border-[#CBD5E1] bg-[#FFFFFF] shadow-float print:p-0 print:m-0 print:max-w-none print:max-h-none print:w-full print:static print:transform-none print:border-none print:shadow-none print:overflow-visible print:bg-white print:rounded-none"
         data-testid="transmittal-print-modal"
       >
         {/* Print Stylesheet: ensures document prints authentically without modal screenshot artifacts */}
@@ -210,16 +241,31 @@ export function TransmittalPrintModal({
           }
         `}</style>
 
-        <DialogHeader className="p-4 border-b bg-slate-50 flex flex-row items-center justify-between print:hidden">
-          <DialogTitle className="text-base font-bold text-slate-800 flex items-center gap-2">
-            <Printer className="h-4 w-4 text-blue-600" />
+        <DialogHeader className="p-4 pr-14 border-b border-[#CBD5E1] bg-[#F1F5F9] flex flex-row flex-wrap gap-3 items-center justify-between print:hidden">
+          <DialogTitle className="text-base font-semibold text-[#0F172A] flex items-center gap-2">
+            <Printer className="h-4 w-4 text-[#1D4ED8]" />
             Transmittal Letter Preview
           </DialogTitle>
           <div className="flex items-center gap-2">
+            {canEditItems && (onSaveItems || onEdit) && (
+              <Button size="sm" variant="outline" disabled={editingItems} className="rounded-[6px] border-[#CBD5E1] bg-[#FFFFFF] hover:bg-[#F1F5F9] text-[#0F172A] text-xs font-medium" onClick={() => {
+                if (onSaveItems) {
+                  setDraftItems((transmittal.items || []).map((item) => ({ ...item })));
+                  setItemsError('');
+                  setEditingItems(true);
+                } else {
+                  onEdit?.(transmittal);
+                }
+              }}>
+                Edit contents
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={handlePrint}
-              className="h-8 text-xs bg-blue-600 hover:bg-blue-700 text-white gap-1 cursor-pointer print:hidden"
+              disabled={editingItems || savingItems}
+              title={editingItems ? 'Save or cancel document edits before printing' : undefined}
+              className="h-8 text-xs bg-[#1D4ED8] hover:bg-[#1E40AF] text-[#FFFFFF] gap-1 cursor-pointer print:hidden rounded-[6px] font-medium shadow-2xs"
               data-testid="print-action-btn"
             >
               <Printer className="h-3.5 w-3.5" />
@@ -227,6 +273,72 @@ export function TransmittalPrintModal({
             </Button>
           </div>
         </DialogHeader>
+
+        <section className="mx-4 mb-4 rounded-[8px] border border-[#CBD5E1] bg-[#F1F5F9] p-4 space-y-3 print:hidden" aria-label="Print options">
+          <label className="flex items-center gap-2 text-sm font-semibold text-[#0F172A] cursor-pointer">
+            <input type="checkbox" checked={includeCompanyDetails} className="rounded-[4px] accent-[#1D4ED8]"
+              onChange={(event) => setCompany({ ...company, includeCompanyDetails: event.target.checked })} />
+            Include company details (FROM)
+          </label>
+          {includeCompanyDetails && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-xs font-medium text-[#475569]">
+                <span>Company Name</span>
+                <Input value={companyName} className="bg-[#FFFFFF] border-[#CBD5E1] rounded-[6px]" onChange={(event) => setCompany({ ...company, companyName: event.target.value })} />
+              </label>
+              <label className="space-y-1 text-xs font-medium text-[#475569]">
+                <span>Company Address</span>
+                <textarea rows={3} value={companyAddress}
+                  onChange={(event) => setCompany({ ...company, companyAddress: event.target.value })}
+                  className="w-full rounded-[6px] border border-[#CBD5E1] bg-[#FFFFFF] px-3 py-2 text-sm text-[#0F172A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1D4ED8]" />
+              </label>
+            </div>
+          )}
+          <p className="text-xs text-[#475569]">These company details apply to this print preview and PDF. They do not change the company record.</p>
+        </section>
+
+        {editingItems && canEditItems && (
+          <section className="mx-4 mb-4 rounded-[8px] border border-[#CBD5E1] bg-[#FFFFFF] p-4 space-y-3 print:hidden" aria-label="Edit document rows">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Documents ({draftItems.length})</h3>
+                <p className="text-xs text-slate-500">Save your changes to update the transmittal and printout.</p>
+              </div>
+              <Button size="sm" variant="outline" disabled={savingItems} onClick={() => {
+                setDraftItems((previous) => [...previous, { id: crypto.randomUUID(), description: '', document_type: 'Others', quantity: 1 }]);
+                setItemsError('');
+              }}><Plus className="mr-1 h-3.5 w-3.5" />Add document row</Button>
+            </div>
+            <fieldset disabled={savingItems} className="space-y-2">
+              {draftItems.map((item, index) => (
+                <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_5rem_2rem] gap-2 rounded-md border border-slate-200 bg-white p-3 sm:grid-cols-[9rem_minmax(0,1fr)_5rem_2rem]">
+                  <label className="col-span-3 text-xs font-medium text-slate-600 sm:col-span-1">Category
+                    <Input aria-label={`Document ${index + 1} category`} maxLength={50} value={item.document_type || item.documentType || ''}
+                      onChange={(event) => updateDraftItem(index, { document_type: event.target.value, documentType: event.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">Document
+                    <Input aria-label={`Document ${index + 1} description`} maxLength={255} value={item.description}
+                      onChange={(event) => updateDraftItem(index, { description: event.target.value })} />
+                  </label>
+                  <label className="text-xs font-medium text-slate-600">Quantity
+                    <Input aria-label={`Document ${index + 1} quantity`} type="number" min={1} step={1} value={item.quantity || ''}
+                      onChange={(event) => updateDraftItem(index, { quantity: Number(event.target.value) })} />
+                  </label>
+                  <Button size="icon" variant="ghost" className="self-end" aria-label={`Remove document ${index + 1}`}
+                    onClick={() => setDraftItems((previous) => previous.filter((_, i) => i !== index))}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </fieldset>
+            {itemsError && <p role="alert" className="text-xs text-red-700">{itemsError}</p>}
+            <div className="flex flex-wrap justify-end gap-2">
+              {onEdit && <Button size="sm" variant="ghost" disabled={savingItems} onClick={() => onEdit(transmittal)}>Edit other details</Button>}
+              <Button size="sm" variant="outline" disabled={savingItems} onClick={() => { setEditingItems(false); setItemsError(''); }}>Cancel edits</Button>
+              <Button size="sm" disabled={savingItems} onClick={saveItems}>{savingItems ? 'Saving…' : 'Save documents'}</Button>
+            </div>
+          </section>
+        )}
 
         {/* Printable Document Sheet (Verbatim 1:1 Prototype Boxed Form) */}
         <div
@@ -277,19 +389,20 @@ export function TransmittalPrintModal({
 
               {/* Row 3: FROM & TO */}
               <tr>
-                <td
+                {includeCompanyDetails && <td
                   className="border-2 border-black p-2.5 align-top break-words leading-relaxed text-black"
                   style={{ width: '55%', border: '2px solid #000' }}
                 >
                   <strong>FROM:</strong> <strong>{companyName}</strong>
                   <br />
-                  {companyAddress}
+                  <span className="whitespace-pre-line">{companyAddress}</span>
                   <br />
                   <span className="text-[10px] font-mono text-slate-500">{companyTin}</span>
-                </td>
+                </td>}
                 <td
+                  colSpan={includeCompanyDetails ? 1 : 2}
                   className="border-2 border-black p-2.5 align-top break-words leading-relaxed text-black"
-                  style={{ width: '45%', border: '2px solid #000' }}
+                  style={{ width: includeCompanyDetails ? '45%' : '100%', border: '2px solid #000' }}
                 >
                   <div className="flex gap-2 items-start">
                     <strong className="mt-0.5">TO:</strong>
@@ -312,6 +425,9 @@ export function TransmittalPrintModal({
                       <div className="border-b-[1.5px] border-black min-h-[16px] mt-0.5 pb-0.5 font-bold text-black">
                         {toLine4}
                       </div>
+                      {transmittal.recipient_details?.trim() && (
+                        <div className="mt-1 whitespace-pre-line">{transmittal.recipient_details}</div>
+                      )}
                     </div>
                   </div>
                 </td>
@@ -361,7 +477,7 @@ export function TransmittalPrintModal({
                 {items.map((item, idx) => (
                   <tr
                     key={item.id || `manifest-row-${idx}`}
-                    className="h-[22px]"
+                    className="break-inside-avoid"
                     data-testid={`print-item-row-${idx}`}
                   >
                     <td

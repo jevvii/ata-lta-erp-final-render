@@ -18,6 +18,9 @@ export default defineConfig({
     port: 8081,
     strictPort: true,
     host: true,
+    fs: {
+      allow: ['..', '/home/deutz/Migration_Final-render'],
+    },
   },
   preview: {
     port: 8081,

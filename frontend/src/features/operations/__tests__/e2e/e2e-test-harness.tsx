@@ -65,11 +65,11 @@ export const BlockingModalHarness: React.FC<{
             <div className="flex items-center gap-2 mb-2">
               <span
                 data-testid="error-code-badge"
-                className="bg-red-100 text-red-800 text-xs px-2 py-0.5 rounded font-mono font-bold"
+                className="bg-red-100 text-red-800 text-xs px-2 py-0.5 rounded font-bold"
               >
                 {error.code || `HTTP_${error.status}`}
               </span>
-              <span className="text-xs text-gray-500 font-mono">Status: {error.status}</span>
+              <span className="text-xs text-gray-500">Status: {error.status}</span>
             </div>
             <p data-testid="error-detail" className="text-sm text-red-600 break-words">
               {error.detail || error.title || 'An unexpected error occurred.'}

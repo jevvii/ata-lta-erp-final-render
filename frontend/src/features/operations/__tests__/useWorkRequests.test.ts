@@ -172,7 +172,7 @@ describe('useWorkRequests & Operations Data Layer (Zero Optimistic Updates Doctr
       // Cache starts completely empty (zero optimistic updates)
       expect(queryClient.getQueryData(operationsKeys.workRequests())).toBeUndefined();
 
-      const created = await result.current.createWorkRequest({
+      const created = await result.current.createWorkRequest({ dueDate: '2026-12-31',
         title: 'Draft Financial Statements',
         entity: 'ATA',
         phase: 'pre_processing',
@@ -630,7 +630,7 @@ describe('useWorkRequests & Operations Data Layer (Zero Optimistic Updates Doctr
       const { result } = renderHook(() => useWorkRequestMutations(), { wrapper });
 
       await expect(
-        result.current.createWorkRequest({
+        result.current.createWorkRequest({ dueDate: '2026-12-31',
           title: 'Task with too many delimiters...',
           entity: 'ATA',
         })

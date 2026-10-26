@@ -1,15 +1,11 @@
-import { DateInput } from '@/components/ui/date-input';
 import { useState } from 'react';
 import {
-  Clock,
-  CreditCard,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
-  AlertCircle,
-  Receipt,
-  FileWarning,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { DateInput } from '@/components/ui/date-input';
 import {
   Table,
   TableHeader,
@@ -19,11 +15,38 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { useMonthlyPending } from '../api/useReports';
-import { formatCurrency, formatDate, getCurrentMonthString } from '../utils/formatters';
+import { useSessionStore } from '@/lib/session';
+import {
+  formatCurrency,
+  formatCount,
+  formatManilaDate,
+  getCurrentMonthString,
+} from '../utils/formatters';
+import {
+  ReportToolbar,
+  ReportToolbarGroup,
+  ReportSection,
+  ReportTableContainer,
+  ReportScopePrompt,
+  ReportLoadingState,
+  ReportErrorState,
+} from './';
+import { shiftMonths, scrollToReportSection } from './periodicReportHelpers';
 
 export function MonthlyPendingTab() {
+  const activeEntity = useSessionStore((state) => state.activeEntity);
   const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonthString());
-  const { data, isLoading, error, refetch, isRefetching } = useMonthlyPending(selectedMonth);
+  const { data, isLoading, error, refetch, isRefetching } = useMonthlyPending(selectedMonth, {
+    enabled: activeEntity !== 'ALL',
+  });
+
+  if (activeEntity === 'ALL') {
+    return (
+      <div data-testid="monthly-pending-tab" className="space-y-6">
+        <ReportScopePrompt />
+      </div>
+    );
+  }
 
   const overdueInvoices = data?.overdueInvoices || {
     count: 0,
@@ -42,298 +65,372 @@ export function MonthlyPendingTab() {
     items: [],
   };
 
+  const handlePrevMonth = () => {
+    setSelectedMonth((prev) => shiftMonths(prev || getCurrentMonthString(), -1));
+  };
+
+  const handleNextMonth = () => {
+    setSelectedMonth((prev) => shiftMonths(prev || getCurrentMonthString(), 1));
+  };
+
+  const handleThisMonth = () => {
+    setSelectedMonth(getCurrentMonthString());
+  };
+
   return (
     <div className="space-y-6" data-testid="monthly-pending-tab">
-      {/* 1. Header & Month Selector Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <Clock className="w-5 h-5 text-amber-600" />
-            <span>Monthly Pending & Action Items</span>
-          </h2>
-          <p className="text-xs text-slate-500">
-            Real-time attention queue tracking overdue invoices, pending disbursements, and stale draft transmittals.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shadow-xs">
-            <span className="text-xs font-semibold text-slate-600">Month:</span>
-            <DateInput
-              aria-label="Report month"
-              type="month"
-              value={selectedMonth}
-              onValueChange={(value) => setSelectedMonth(value || getCurrentMonthString())}
-              className="h-7 text-xs w-44"
-              data-testid="monthly-month-picker"
-            />
+      {/* 1. Contextual Toolbar */}
+      <ReportToolbar dataTestId="monthly-toolbar">
+        <ReportToolbarGroup align="left">
+          <label htmlFor="monthly-month-picker" className="text-xs font-medium text-[#475569] shrink-0">
+            Month
+          </label>
+          <DateInput
+            id="monthly-month-picker"
+            aria-label="Report month"
+            type="month"
+            value={selectedMonth}
+            onValueChange={(value) => setSelectedMonth(value || getCurrentMonthString())}
+            className="w-[184px] rounded-[6px] border border-[#E2E8F0] bg-white text-xs text-[#1E293B] focus:border-[#1D4ED8] focus:ring-1 focus:ring-[#1D4ED8]"
+            data-testid="monthly-month-picker"
+          />
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePrevMonth}
+              aria-label="Previous month"
+              title="Previous month"
+              className="h-9 w-9 p-0 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] cursor-pointer shadow-2xs transition-colors"
+              data-testid="monthly-prev-month-btn"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleNextMonth}
+              aria-label="Next month"
+              title="Next month"
+              className="h-9 w-9 p-0 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] cursor-pointer shadow-2xs transition-colors"
+              data-testid="monthly-next-month-btn"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </Button>
           </div>
-
           <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleThisMonth}
+            className="h-9 px-3 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] text-xs font-medium cursor-pointer shadow-2xs transition-colors"
+            data-testid="monthly-this-month-btn"
+          >
+            This month
+          </Button>
+        </ReportToolbarGroup>
+
+        <ReportToolbarGroup align="right">
+          <Button
+            type="button"
             variant="outline"
             size="sm"
             onClick={() => refetch()}
             disabled={isRefetching}
-            className="text-xs gap-1.5 cursor-pointer"
+            className="h-9 px-3 text-xs font-medium gap-1.5 cursor-pointer rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] shadow-2xs transition-colors"
             data-testid="monthly-refresh-button"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefetching ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
           </Button>
-        </div>
-      </div>
+        </ReportToolbarGroup>
+      </ReportToolbar>
 
+      {/* 2. Loading / Error / Data Content */}
       {isLoading ? (
-        <div
-          className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200"
-          data-testid="monthly-loading"
-        >
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600 mb-2"></div>
-          <p className="text-xs">Loading pending items for {selectedMonth}...</p>
-        </div>
+        <ReportLoadingState type="full" dataTestId="monthly-loading" />
       ) : error ? (
-        <div
-          className="p-8 text-center bg-white rounded-xl border border-rose-200 space-y-3"
-          data-testid="monthly-error"
-        >
-          <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-          <h3 className="text-sm font-semibold text-slate-800">Unable to load pending report</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            {error instanceof Error ? error.message : 'Please check your connection and try again.'}
-          </p>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            className="text-xs cursor-pointer"
-          >
-            Retry
-          </Button>
-        </div>
+        <ReportErrorState
+          dataTestId="monthly-error"
+          title="Unable to load pending report"
+          message={error instanceof Error ? error.message : 'Please check your connection and try again.'}
+          onRetry={() => refetch()}
+        />
       ) : (
         <>
-          {/* 2. 5 Summary KPI Cards Grid */}
+          {/* 3. 3 Summary Groups combining counts with available amounts */}
           <div
-            className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
+            className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4"
             data-testid="monthly-kpi-grid"
           >
-            <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-overdue-invoices">
-              <span className="text-[11px] font-semibold text-rose-600 uppercase tracking-wide block">
-                Overdue Invoices
-              </span>
-              <span className="text-xl font-bold text-rose-700 mt-1 block">
-                {overdueInvoices.count}
-              </span>
-              <span className="text-[10px] text-slate-400">Due &le; {selectedMonth}-31</span>
-            </div>
+            {/* Group 1: Overdue Invoices */}
+            <button
+              type="button"
+              onClick={() => scrollToReportSection('section-monthly-overdue-invoices')}
+              className="bg-[#FFFFFF] rounded-[8px] border border-[#E2E8F0] hover:bg-[#F8FAFC] hover:border-[#94A3B8] p-4 shadow-card transition-colors text-left cursor-pointer flex flex-col justify-between"
+              data-testid="card-overdue-invoices"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-[#475569]">
+                    Overdue invoices
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#BFDBFE] text-xs font-medium bg-[#EFF6FF] text-[#1E40AF]">
+                    Follow-up
+                  </span>
+                </div>
+                <div className="mt-2 flex items-baseline gap-3">
+                  <span
+                    className="text-2xl font-bold text-[#1E293B] tabular-nums"
+                    data-testid="kpi-overdue-invoices"
+                  >
+                    {formatCount(overdueInvoices.count)}
+                  </span>
+                  <span
+                    className="text-lg sm:text-xl font-bold text-[#1E293B] tabular-nums"
+                    data-testid="kpi-overdue-outstanding"
+                  >
+                    {formatCurrency(overdueInvoices.totalOutstanding)}
+                  </span>
+                </div>
+              </div>
+              <div className="text-xs text-[#475569] mt-3 pt-2.5 border-t border-[#E2E8F0]">
+                Invoices due on or before {selectedMonth}-31 with balance &gt; 0
+              </div>
+            </button>
 
-            <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-overdue-outstanding">
-              <span className="text-[11px] font-semibold text-amber-600 uppercase tracking-wide block">
-                Outstanding Balance
-              </span>
-              <span className="text-base font-bold text-amber-700 mt-1 block font-mono truncate">
-                {formatCurrency(overdueInvoices.totalOutstanding)}
-              </span>
-              <span className="text-[10px] text-slate-400">Total overdue balance</span>
-            </div>
+            {/* Group 2: Pending Disbursements */}
+            <button
+              type="button"
+              onClick={() => scrollToReportSection('section-monthly-pending-disbursements')}
+              className="bg-[#FFFFFF] rounded-[8px] border border-[#E2E8F0] hover:bg-[#F8FAFC] hover:border-[#94A3B8] p-4 shadow-card transition-colors text-left cursor-pointer flex flex-col justify-between"
+              data-testid="card-pending-disbursements"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-[#475569]">
+                    Pending disbursements
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#BFDBFE] text-xs font-medium bg-[#EFF6FF] text-[#1E40AF]">
+                    Queue
+                  </span>
+                </div>
+                <div className="mt-2 flex items-baseline gap-3">
+                  <span
+                    className="text-2xl font-bold text-[#1E293B] tabular-nums"
+                    data-testid="kpi-pending-disbursements"
+                  >
+                    {formatCount(pendingDisbursements.count)}
+                  </span>
+                  <span
+                    className="text-lg sm:text-xl font-bold text-[#1E293B] tabular-nums"
+                    data-testid="kpi-pending-disb-total"
+                  >
+                    {formatCurrency(pendingDisbursements.totalAmount)}
+                  </span>
+                </div>
+              </div>
+              <div className="text-xs text-[#475569] mt-3 pt-2.5 border-t border-[#E2E8F0]">
+                Current active queue awaiting approval or release
+              </div>
+            </button>
 
-            <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-pending-disbursements">
-              <span className="text-[11px] font-semibold text-purple-600 uppercase tracking-wide block">
-                Pending Disbursements
-              </span>
-              <span className="text-xl font-bold text-purple-700 mt-1 block">
-                {pendingDisbursements.count}
-              </span>
-              <span className="text-[10px] text-slate-400">Awaiting release</span>
-            </div>
-
-            <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-pending-disb-total">
-              <span className="text-[11px] font-semibold text-purple-600 uppercase tracking-wide block">
-                Pending Disb. Total
-              </span>
-              <span className="text-base font-bold text-purple-800 mt-1 block font-mono truncate">
-                {formatCurrency(pendingDisbursements.totalAmount)}
-              </span>
-              <span className="text-[10px] text-slate-400">Pending/Approved amount</span>
-            </div>
-
-            <div className="p-3.5 bg-white rounded-xl border border-slate-200 shadow-xs" data-testid="kpi-stale-transmittals">
-              <span className="text-[11px] font-semibold text-cyan-600 uppercase tracking-wide block">
-                Stale Transmittals
-              </span>
-              <span className="text-xl font-bold text-cyan-700 mt-1 block">
-                {staleTransmittals.count}
-              </span>
-              <span className="text-[10px] text-slate-400">Draft &gt; 7 days old</span>
-            </div>
+            {/* Group 3: Stale Transmittals */}
+            <button
+              type="button"
+              onClick={() => scrollToReportSection('section-monthly-stale-transmittals')}
+              className="bg-[#FFFFFF] rounded-[8px] border border-[#E2E8F0] hover:bg-[#F8FAFC] hover:border-[#94A3B8] p-4 shadow-card transition-colors text-left cursor-pointer flex flex-col justify-between"
+              data-testid="card-stale-transmittals"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-[#475569]">
+                    Stale transmittals
+                  </span>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#BFDBFE] text-xs font-medium bg-[#EFF6FF] text-[#1E40AF]">
+                    &gt; 7 days draft
+                  </span>
+                </div>
+                <div className="mt-2 flex items-baseline gap-3">
+                  <span
+                    className="text-2xl font-bold text-[#1E293B] tabular-nums"
+                    data-testid="kpi-stale-transmittals"
+                  >
+                    {formatCount(staleTransmittals.count)}
+                  </span>
+                </div>
+              </div>
+              <div className="text-xs text-[#475569] mt-3 pt-2.5 border-t border-[#E2E8F0]">
+                Draft transmittals created more than 7 days ago
+              </div>
+            </button>
           </div>
 
-          {/* 3. 3 Detail Tables */}
+          {/* 4. 3 Full-Width Itemized Detail Tables */}
           <div className="space-y-6">
             {/* Table 1: Overdue Invoices */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <Receipt className="w-3.5 h-3.5 text-rose-600" />
-                  <span>Overdue Invoices ({overdueInvoices.items.length})</span>
-                </h3>
-                <Badge variant="outline" className="text-rose-700 border-rose-200 bg-rose-50 text-[10px]">
-                  Requires Collection
-                </Badge>
-              </div>
-
+            <ReportSection
+              id="section-monthly-overdue-invoices"
+              dataTestId="monthly-overdue-invoices-section"
+              title="Overdue invoices"
+              badgeCount={overdueInvoices.items.length}
+              collapsible
+            >
               {overdueInvoices.items.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No overdue invoices found for this period. All invoices are settled or current.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Invoice #</TableHead>
-                      <TableHead className="text-xs font-semibold">Client Name</TableHead>
-                      <TableHead className="text-xs font-semibold">Due Date</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Total Amount</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Outstanding Balance</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {overdueInvoices.items.map((inv) => (
-                      <TableRow key={inv.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {inv.invoice_number}
-                        </TableCell>
-                        <TableCell className="text-xs font-medium text-slate-700">
-                          {inv.clients?.name || 'Unknown Client'}
-                        </TableCell>
-                        <TableCell className="text-xs text-rose-600 font-mono font-semibold">
-                          {formatDate(inv.due_date)}
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-slate-600 text-right">
-                          {formatCurrency(inv.total)}
-                        </TableCell>
-                        <TableCell className="text-xs font-mono font-bold text-rose-600 text-right">
-                          {formatCurrency(inv.balance)}
-                        </TableCell>
-                        <TableCell className="text-xs text-right">
-                          <Badge variant="secondary" className="text-[10px]">
-                            {inv.status}
-                          </Badge>
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[640px]" ariaLabel="Overdue invoices table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Invoice #</TableHead>
+                        <TableHead>Client</TableHead>
+                        <TableHead className="w-36">Due Date</TableHead>
+                        <TableHead className="w-32">Status</TableHead>
+                        <TableHead className="w-36 text-right">Invoice Total</TableHead>
+                        <TableHead className="w-36 text-right">Balance</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {overdueInvoices.items.map((inv) => (
+                        <TableRow key={inv.id}>
+                          <TableCell className="font-medium text-[#1E293B] tabular-nums">
+                            {inv.invoice_number}
+                          </TableCell>
+                          <TableCell className="font-medium text-[#1E293B]">
+                            {inv.clients?.name || 'Unknown Client'}
+                          </TableCell>
+                          <TableCell className="text-xs text-[#1E293B] tabular-nums">
+                            {formatManilaDate(inv.due_date)}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#E2E8F0] text-xs font-medium bg-[#F8FAFC] text-[#1E293B]">
+                              {inv.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatCurrency(inv.total)}
+                          </TableCell>
+                          <TableCell className="text-right font-bold text-[#1E293B] tabular-nums">
+                            {formatCurrency(inv.balance)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
             {/* Table 2: Pending Disbursements */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <CreditCard className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Pending Disbursements Queue ({pendingDisbursements.items.length})</span>
-                </h3>
-                <Badge variant="outline" className="text-purple-700 border-purple-200 bg-purple-50 text-[10px]">
-                  Pending / Approved
-                </Badge>
-              </div>
-
+            <ReportSection
+              id="section-monthly-pending-disbursements"
+              dataTestId="monthly-pending-disbursements-section"
+              title="Pending disbursements"
+              badgeCount={pendingDisbursements.items.length}
+              collapsible
+            >
               {pendingDisbursements.items.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No disbursements pending approval or release.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Disbursement #</TableHead>
-                      <TableHead className="text-xs font-semibold">Category</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Amount</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created At</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pendingDisbursements.items.map((d) => (
-                      <TableRow key={d.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {d.disbursement_number}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-600">
-                          {d.category || 'General'}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge
-                            variant={d.status === 'Approved' ? 'default' : 'secondary'}
-                            className="text-[10px]"
-                          >
-                            {d.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs font-mono font-bold text-purple-700 text-right">
-                          {formatCurrency(d.amount)}
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(d.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[580px]" ariaLabel="Pending disbursements table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Disbursement #</TableHead>
+                        <TableHead className="w-36">Category</TableHead>
+                        <TableHead className="w-32">Status</TableHead>
+                        <TableHead className="w-36 text-right">Created</TableHead>
+                        <TableHead className="w-40 text-right">Amount</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {pendingDisbursements.items.map((d) => (
+                        <TableRow key={d.id}>
+                          <TableCell className="font-medium text-[#1E293B] tabular-nums">
+                            {d.disbursement_number}
+                          </TableCell>
+                          <TableCell className="text-xs text-[#475569]">
+                            {d.category || 'General'}
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-[4px] border  text-xs font-medium ${
+                                d.status === 'Approved'
+                                  ? 'border-[#1D4ED8] bg-[#EFF6FF] text-[#1E40AF]'
+                                  : 'border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]'
+                              }`}
+                            >
+                              {d.status}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(d.created_at)}
+                          </TableCell>
+                          <TableCell className="text-right font-bold text-[#1E293B] tabular-nums">
+                            {formatCurrency(d.amount)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
 
             {/* Table 3: Stale Draft Transmittals */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileWarning className="w-3.5 h-3.5 text-cyan-600" />
-                  <span>Stale Draft Transmittals ({staleTransmittals.items.length})</span>
-                </h3>
-                <Badge variant="outline" className="text-cyan-700 border-cyan-200 bg-cyan-50 text-[10px]">
-                  Draft &gt; 7 Days
-                </Badge>
-              </div>
-
+            <ReportSection
+              id="section-monthly-stale-transmittals"
+              dataTestId="monthly-stale-transmittals-section"
+              title="Stale transmittals"
+              badgeCount={staleTransmittals.items.length}
+              collapsible
+            >
               {staleTransmittals.items.length === 0 ? (
-                <div className="p-8 text-center text-xs text-slate-400">
+                <div className="p-6 text-center text-xs text-[#475569]">
                   No stale draft transmittals. All draft transmittals are recent or dispatched.
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-xs font-semibold">Tracking #</TableHead>
-                      <TableHead className="text-xs font-semibold">Client Name</TableHead>
-                      <TableHead className="text-xs font-semibold">Status</TableHead>
-                      <TableHead className="text-xs font-semibold text-right">Created At</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {staleTransmittals.items.map((t) => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-xs font-mono font-semibold text-slate-900">
-                          {t.tracking_number}
-                        </TableCell>
-                        <TableCell className="text-xs font-medium text-slate-700">
-                          {t.clients?.name || 'Unknown Client'}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">
-                            {t.status || 'Draft'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-xs text-slate-500 font-mono text-right">
-                          {formatDate(t.created_at)}
-                        </TableCell>
+                <ReportTableContainer minWidth="min-w-[540px]" ariaLabel="Stale transmittals table">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Tracking #</TableHead>
+                        <TableHead>Client</TableHead>
+                        <TableHead className="w-32">Status</TableHead>
+                        <TableHead className="w-36 text-right">Created</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {staleTransmittals.items.map((t) => (
+                        <TableRow key={t.id}>
+                          <TableCell className="font-mono font-medium text-[#1E293B] tabular-nums">
+                            {t.tracking_number}
+                          </TableCell>
+                          <TableCell className="font-medium text-[#1E293B]">
+                            {t.clients?.name || 'Unknown Client'}
+                          </TableCell>
+                          <TableCell>
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] border border-[#FDE047] text-xs font-medium bg-[#FEFCE8] text-[#854D0E]">
+                              {t.status || 'Draft'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-[#475569] tabular-nums">
+                            {formatManilaDate(t.created_at)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </ReportTableContainer>
               )}
-            </div>
+            </ReportSection>
           </div>
         </>
       )}

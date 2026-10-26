@@ -39,7 +39,18 @@ describe('Adversarial Challenge: CDC Query Scoping & Isolation (Mission 1)', () 
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-m2-scope');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-test',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -296,7 +307,18 @@ describe('Adversarial Challenge: Task Mutation Co-Invalidations (Mission 2)', ()
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-m2-coinv');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-test',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -501,7 +523,18 @@ describe('Adversarial Challenge: Cross-Domain Co-Invalidations (Mission 3)', () 
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-m2-cross');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-test',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 
@@ -899,7 +932,18 @@ describe('Adversarial Stress: Mounted Hook & Interleaved Stream (Mission 1-4)', 
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
     resetTabIdForTesting('tab-challenger-m2-stress');
-    useSessionStore.setState({ activeEntity: 'ATA' });
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-test',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['*'],
+      activeEntity: 'ATA',
+    });
     vi.restoreAllMocks();
   });
 

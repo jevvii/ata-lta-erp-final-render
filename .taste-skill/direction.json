@@ -1,0 +1,14 @@
+{
+  "domain": "finance",
+  "style": "institutional-finance-ledger",
+  "synthesis": {
+    "layoutAndStructure": "brutalist-ui (consistent single-gutter shell, unified module headers, unified inner tab strips, structured reports & AR aging matrices)",
+    "surfaceAndTactility": "minimalist-ui (concentric 4px/6px/8px/12px radii, soft layered elevation, humanist sentence-case typography, calm overlays)",
+    "colorAndPolishSkills": [
+      "better-ui",
+      "better-colors"
+    ],
+    "brandAlignment": "ATA & LTA corporate blueish logo palette (#1E3A8A deep navy, #1D4ED8 institutional blue primary, #0369A1 cerulean LTA, #F8FAFC cool-alabaster ledger canvas)",
+    "ergonomics": "Middle-aged user friendliness (>=12px floor, 17.85:1 primary ink, 7.58:1 AAA muted ink, 4.76:1 input borders) + Jakob's Law enterprise conventions"
+  }
+}

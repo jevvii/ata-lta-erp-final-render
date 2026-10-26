@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
+import { MemoryRouter } from 'react-router-dom';
+import OperationsPage from '@/routes/operations';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ArchiveConfirmModal } from '../components/ArchiveConfirmModal';
 import { OperationsArchiveTab } from '../components/OperationsArchiveTab';
@@ -182,4 +184,32 @@ describe('Archive, Cancel, and Restore Blocking Flow', () => {
     expect(screen.getByText('Cancelled Audit Engagement')).toBeInTheDocument();
     expect(screen.queryByText('Completed SEC Filing 2024')).not.toBeInTheDocument();
   });
+
+  it('opens archived work request details from the operations archive route and closes back to the archive', async () => {
+    const archived = { ...mockArchivedRequests[0]!, tasks: [] };
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const path = new URL(String(url), 'http://localhost').pathname;
+      let data: unknown = [];
+      if (path.endsWith(`/work-requests/${archived.id}`)) data = archived;
+      else if (path.endsWith('/work-requests')) data = [archived];
+      else if (path.endsWith('/counts')) data = { archived: 1, active: 0 };
+      else if (path.endsWith('/related')) data = { billingStatements: [], disbursements: [], transmittals: [] };
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ data }) } as Response);
+    });
+    const { wrapper } = createHarness();
+    render(
+      <MemoryRouter initialEntries={['/operations?tab=archive']}>
+        <OperationsPage />
+      </MemoryRouter>,
+      { wrapper }
+    );
+    fireEvent.click(await screen.findByTitle('View Details'));
+    expect(await screen.findByTestId('wr-side-peek')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('wr-side-peek')).toHaveTextContent(archived.title));
+    expect(vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).includes(`/work-requests/${archived.id}`))).toBe(true);
+    fireEvent.click(screen.getByTestId('side-peek-close-btn'));
+    expect(screen.queryByTestId('wr-side-peek')).not.toBeInTheDocument();
+    expect(screen.getByTestId('operations-archive-tab')).toBeVisible();
+  });
+
 });

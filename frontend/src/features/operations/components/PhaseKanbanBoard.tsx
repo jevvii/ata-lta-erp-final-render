@@ -14,6 +14,7 @@ import {
   Plus,
   MoreVertical,
   Trash2,
+  PanelRightOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -51,11 +52,13 @@ import { RerouteModal } from './RerouteModal';
 import { WorkRequestModal } from './WorkRequestModal';
 import { TaskDetailModal } from './TaskDetailModal';
 import { QuickAddCard } from './QuickAddCard';
+import { TaskTypeBadge } from '../lib/taskTypes';
 import { operationsKeys } from '../api/queryKeys';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
 import { useSearchParams, useInRouterContext } from 'react-router-dom';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
+import { getTaskDeletionReason } from '../lib/taskDeletion';
 import { isUserAdmin } from '../lib/taskScope';
 import type {
   Phase,
@@ -74,6 +77,7 @@ const PHASES: Array<{ id: Phase; label: string; number: number }> = [
 export interface PhaseKanbanBoardProps {
   initialWorkRequestId?: string;
   onEditWorkRequest?: (wr: WorkRequest) => void;
+  onBackToSidePeek?: (wrId: string) => void;
 }
 
 interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
@@ -84,6 +88,7 @@ interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
 function PhaseKanbanBoardInner({
   initialWorkRequestId,
   onEditWorkRequest,
+  onBackToSidePeek,
   searchParams,
   setSearchParams,
 }: PhaseKanbanBoardInnerProps) {
@@ -168,9 +173,17 @@ function PhaseKanbanBoardInner({
     assigneeName?: string | null;
   } | null>(null);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleConfirmDeleteTask = async () => {
     if (!taskToDelete) return;
+    const latestTask = tasks.find((task) => task.id === taskToDelete.id);
+    const reason = latestTask ? getTaskDeletionReason(latestTask, currentWr) : null;
+    if (reason) {
+      setDeleteError(reason);
+      return;
+    }
+    setDeleteError(null);
     setIsDeletingTask(true);
     try {
       await deleteTask(taskToDelete.id);
@@ -179,7 +192,7 @@ function PhaseKanbanBoardInner({
       }
       setTaskToDelete(null);
     } catch (err) {
-      console.error('Failed to delete task:', err);
+      setDeleteError(err instanceof Error ? err.message : 'Unable to delete task. Please try again.');
     } finally {
       setIsDeletingTask(false);
     }
@@ -385,7 +398,7 @@ function PhaseKanbanBoardInner({
 
   if (isLoadingWrs) {
     return (
-      <div className="p-12 text-center text-xs text-slate-400 bg-white border border-slate-200 rounded-lg">
+      <div className="p-12 text-center text-xs tracking-normal text-[#475569] bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]">
         Loading operations kanban board...
       </div>
     );
@@ -394,14 +407,16 @@ function PhaseKanbanBoardInner({
   if (workRequests.length === 0) {
     return (
       <div
-        className="p-12 text-center bg-white border border-slate-200 rounded-lg space-y-3"
+        className="p-12 text-center bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] space-y-3"
         data-testid="kanban-empty-state"
       >
-        <Layers className="h-8 w-8 text-slate-400 mx-auto" />
-        <h4 className="text-sm font-semibold text-slate-800">
+        <div className="p-3 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] text-[#1E293B] w-fit mx-auto">
+          <Layers className="h-8 w-8" />
+        </div>
+        <h4 className="text-sm font-bold text-[#1E293B] tracking-normal">
           No active work requests found
         </h4>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-[#475569]">
           Create a new work request to view and govern its 4-phase lifecycle kanban board.
         </p>
       </div>
@@ -411,20 +426,20 @@ function PhaseKanbanBoardInner({
   return (
     <div className="space-y-4" data-testid="phase-kanban-board">
       {/* 1. Header Toolbar & Work Request Selector */}
-      <div className="p-4 bg-white border border-slate-200 rounded-lg shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[8px] shadow-card flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-72">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+            <label className="text-xs tracking-normal font-bold text-[#1E293B] block mb-1">
               Select Work Request
             </label>
             <Select value={effectiveWrId} onValueChange={handleSelectWr}>
               <SelectTrigger
-                className="h-9 text-xs bg-slate-50 font-medium"
+                className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]"
                 data-testid="kanban-wr-select"
               >
                 <SelectValue placeholder="Choose a work request" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
                 {workRequests.map((wr) => (
                   <SelectItem key={wr.id} value={wr.id} className="text-xs">
                     {wr.title} ({wr.entity})
@@ -439,18 +454,20 @@ function PhaseKanbanBoardInner({
               <Badge variant={activeWr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
                 {activeWr.entity}
               </Badge>
-              <Badge
-                variant={
-                  activeWr.priority === 'Urgent'
-                    ? 'destructive'
-                    : activeWr.priority === 'High'
-                      ? 'warning'
-                      : 'secondary'
-                }
-                size="compact"
-              >
-                {activeWr.priority.endsWith('Priority') ? activeWr.priority : `${activeWr.priority} Priority`}
-              </Badge>
+              {activeWr.priority && (
+                <Badge
+                  variant={
+                    activeWr.priority === 'Urgent'
+                      ? 'destructive'
+                      : activeWr.priority === 'High'
+                        ? 'warning'
+                        : 'secondary'
+                  }
+                  size="compact"
+                >
+                  {activeWr.priority.endsWith('Priority') ? activeWr.priority : `${activeWr.priority} Priority`}
+                </Badge>
+              )}
               {(() => {
                 const phaseInfo = getPhaseBadgeInfo(activeWr.phase);
                 const statusInfo = getStatusBadgeInfo(activeWr.status);
@@ -459,24 +476,24 @@ function PhaseKanbanBoardInner({
                 return (
                   <>
                     <span
-                      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${phaseInfo.badgeClass}`}
-                      title={`Phase: ${phaseInfo.label}`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
-                      <PhaseIcon className="w-3.5 h-3.5 shrink-0" />
-                      <span>Phase: {phaseInfo.label}</span>
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium border ${statusInfo.badgeClass}`}
-                      title={`Status: ${statusInfo.label}`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
-                      <StatusIcon className="w-3 h-3 shrink-0" />
-                      <span>{statusInfo.label}</span>
-                    </span>
+    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] border text-xs font-semibold ${phaseInfo.badgeClass}`}
+    title={`Phase: ${phaseInfo.label}`}
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
+    <PhaseIcon className="w-3.5 h-3.5 shrink-0" />
+    <span>Phase: {phaseInfo.label}</span>
+  </span>
+  <span
+    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] border text-xs font-semibold ${statusInfo.badgeClass}`}
+    title={`Status: ${statusInfo.label}`}
+  >
+    <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
+    <StatusIcon className="w-3 h-3 shrink-0" />
+    <span>{statusInfo.label}</span>
+  </span>
                     {activeWr.dueDate && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                        <Calendar className="w-3 h-3 text-slate-500" />
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] tabular-nums text-xs font-bold bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]">
+                        <Calendar className="w-3 h-3 text-[#475569]" />
                         <span>Due: {new Date(activeWr.dueDate).toLocaleDateString()}</span>
                       </span>
                     )}
@@ -489,6 +506,33 @@ function PhaseKanbanBoardInner({
 
         <div className="flex items-center gap-2">
           {effectiveWrId && <PresenceAvatars roomId={effectiveWrId} />}
+          {activeWr && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (onBackToSidePeek) {
+                  onBackToSidePeek(activeWr.id);
+                } else {
+                  setSearchParams((prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set('tab', 'work-requests');
+                    next.set('view', 'list');
+                    next.set('peekWrId', activeWr.id);
+                    next.delete('wrId');
+                    return next;
+                  });
+                }
+              }}
+              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs"
+              data-testid="kanban-back-sidepeek-btn"
+              title="Go back to Work Request Side Peek"
+            >
+              <PanelRightOpen className="h-3.5 w-3.5 text-[#475569]" />
+              Work Request Details
+            </Button>
+          )}
           {activeWr && canEdit && activeWr.status !== 'Completed' && activeWr.phase !== 'completion' && (
             <Button
               type="button"
@@ -498,20 +542,24 @@ function PhaseKanbanBoardInner({
                 if (onEditWorkRequest) onEditWorkRequest(activeWr);
                 else setIsEditModalOpen(true);
               }}
-              className="text-xs gap-1.5"
+              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs"
               data-testid="kanban-edit-wr-btn"
             >
-              <Edit3 className="h-3.5 w-3.5 text-slate-500" />
+              <Edit3 className="h-3.5 w-3.5 text-[#475569]" />
               Edit Work Request
             </Button>
           )}
         </div>
       </div>
 
-      {/* 2. 4-Phase Kanban Grid */}
+      {/* 4-Phase Kanban Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4" data-testid="kanban-phase-grid">
         {PHASES.map((col) => {
           const isCurrentPhase = currentPhase === col.id;
+          const currentPhaseIndex = PHASES.findIndex((p) => p.id === currentPhase);
+          const colIndex = PHASES.findIndex((p) => p.id === col.id);
+          const isPastPhase = colIndex < currentPhaseIndex;
+          const isUpcomingPhase = colIndex > currentPhaseIndex;
 
           // Filter tasks belonging to this phase zone
           const phaseTasks = tasks.filter((t) => {
@@ -557,28 +605,46 @@ function PhaseKanbanBoardInner({
               onDrop={(e) => {
                 e.preventDefault();
               }}
-              className={`flex flex-col bg-slate-50 border rounded-lg p-3 min-h-[560px] space-y-3 transition-colors ${
+              className={`flex flex-col rounded-[6px] p-3 min-h-[560px] space-y-3 transition-none ${
                 isCurrentPhase
-                  ? 'border-blue-400 ring-1 ring-blue-200 bg-blue-50/20'
-                  : 'border-slate-200'
+                  ? 'bg-[#EFF6FF]/75 border-2 border-[#2563EB] ring-4 ring-[#2563EB]/10 shadow-card'
+                  : isPastPhase
+                  ? 'bg-[#F0FDF4]/60 border border-[#BBF7D0]'
+                  : 'bg-[#F8FAFC] border border-dashed border-[#E2E8F0]'
               }`}
               data-testid={`kanban-phase-column-${col.id}`}
             >
               {/* Phase Column Header */}
-              <div className="space-y-1.5 border-b border-slate-200 pb-2">
+              <div className={`space-y-1.5 pb-2 border-b ${
+                isCurrentPhase
+                  ? 'bg-[#DBEAFE]/80 border-[#93C5FD] -mx-3 -mt-3 p-3 rounded-t-[5px]'
+                  : isPastPhase
+                  ? 'border-[#BBF7D0]'
+                  : 'border-[#E2E8F0]'
+              }`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-bold text-slate-400">
+                    <span className={`text-xs font-bold ${isCurrentPhase ? 'text-[#1D4ED8]' : isPastPhase ? 'text-[#166534]' : 'text-[#64748B]'}`}>
                       #{col.number}
                     </span>
-                    <h3 className="font-bold text-xs text-slate-900 tracking-tight">
+                    <h3 className={`font-semibold text-xs tracking-normal ${isCurrentPhase ? 'text-[#1E40AF]' : 'text-[#1E293B]'}`}>
                       {col.label}
                     </h3>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {isCurrentPhase && (
-                      <Badge variant="default" size="compact" className="text-[9px] px-1 py-0">
-                        Current
+                      <Badge variant="default" size="compact" className="text-xs font-semibold rounded-[6px] px-2 py-0.5 bg-[#1D4ED8] text-[#FFFFFF] shadow-2xs">
+                        Active Phase
+                      </Badge>
+                    )}
+                    {isPastPhase && (
+                      <Badge variant="outline" size="compact" className="text-xs font-semibold rounded-[6px] px-2 py-0.5 bg-[#F0FDF4] text-[#166534] border-[#BBF7D0]">
+                        Completed
+                      </Badge>
+                    )}
+                    {isUpcomingPhase && (
+                      <Badge variant="outline" size="compact" className="text-xs font-medium rounded-[6px] px-2 py-0.5 bg-[#F8FAFC] text-[#64748B] border-[#E2E8F0]">
+                        Upcoming
                       </Badge>
                     )}
                     {canAddTask && activeWr && activeWr.status !== 'Completed' && (col.id === 'pre_processing' || col.id === 'processing') && (
@@ -593,7 +659,7 @@ function PhaseKanbanBoardInner({
                             setQuickAddPhase(col.id);
                           }
                         }}
-                        className="h-5 w-5 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50"
+                        className="h-5 w-5 p-0 rounded-[6px] text-[#1E293B] hover:bg-[#F8FAFC] hover:border hover:border-[#E2E8F0]"
                         title={`Quick-add task to ${col.label}`}
                         data-testid={`quick-add-task-${col.id}`}
                       >
@@ -604,17 +670,13 @@ function PhaseKanbanBoardInner({
                 </div>
 
                 {/* Gate Progress Indicator */}
-                <div className="flex items-center justify-between text-[11px] text-slate-500">
-                  <span className="flex items-center gap-1 font-medium">
-                    <CheckSquare className="h-3 w-3 text-slate-400" />
+                <div className="flex items-center justify-between text-xs text-[#475569]">
+                  <span className="flex items-center gap-1 font-bold tracking-normal">
+                    <CheckSquare className="h-3 w-3 text-[#475569]" />
                     Gate Progress:
                   </span>
                   <span
-                    className={`font-semibold ${
-                      completedCount === totalCount && totalCount > 0
-                        ? 'text-emerald-700'
-                        : 'text-slate-700'
-                    }`}
+                    className="font-bold text-[#1E293B] tabular-nums"
                     data-testid={`gate-progress-${col.id}`}
                   >
                     {totalCount === 0 ? '0/0' : `${completedCount}/${totalCount} completed`}
@@ -624,11 +686,11 @@ function PhaseKanbanBoardInner({
                 {/* Gate Blocker Warning */}
                 {isCurrentPhase && hasGateBlockers && (
                   <div
-                    className="p-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800 flex items-center gap-1 cursor-help"
+                    className="p-1.5 bg-[#FEF2F2] border-[#FCA5A5] rounded-[6px] text-xs text-[#DC2626] flex items-center gap-1 cursor-help"
                     title={blockerTooltip}
                     data-testid={`gate-blocker-${col.id}`}
                   >
-                    <AlertTriangle className="h-3 w-3 text-amber-600 shrink-0" />
+                    <AlertTriangle className="h-3 w-3 text-[#DC2626] shrink-0" />
                     <span>{incompleteGateTasks.length} task(s) block advancement</span>
                   </div>
                 )}
@@ -639,7 +701,7 @@ function PhaseKanbanBoardInner({
                     <Badge
                       variant="destructive"
                       size="compact"
-                      className="text-[10px] gap-1 font-bold"
+                      className="text-xs gap-1 font-bold uppercase rounded-[6px] bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs border-[#E2E8F0]"
                       data-testid="qa-column-failed-badge"
                     >
                       <XCircle className="h-3 w-3" />
@@ -665,11 +727,12 @@ function PhaseKanbanBoardInner({
                   />
                 )}
                 {phaseTasks.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-slate-400 italic">
+                  <div className="p-6 text-center text-xs text-[#475569] italic">
                     No tasks in this phase
                   </div>
                 ) : (
                   phaseTasks.map((task) => {
+                    const deletionReason = getTaskDeletionReason(task, activeWr);
                     const isTaskFailed = task.qaStatus === 'failed';
                     const isTaskPassed = task.qaStatus === 'passed';
 
@@ -678,26 +741,35 @@ function PhaseKanbanBoardInner({
                         key={task.id}
                         draggable={false}
                         onClick={() => setSelectedTask(task)}
-                        className={`p-3 bg-white border rounded-md shadow-2xs space-y-2 hover:border-blue-400 hover:shadow-xs transition-all cursor-pointer ${
+                        className={`p-3 bg-[#FFFFFF] border rounded-[8px] shadow-card space-y-2 hover:bg-[#F8FAFC] hover:border-[#E2E8F0] transition-none cursor-pointer ${
                           isTaskFailed
-                            ? 'border-red-300 bg-red-50/20'
+                            ? 'border-2 border-[#FCA5A5] bg-[#DC2626]/5'
                             : isTaskPassed
-                              ? 'border-emerald-300 bg-emerald-50/20'
-                              : 'border-slate-200'
+                              ? 'border-[#E2E8F0] bg-[#FFFFFF]'
+                              : 'border-[#E2E8F0]'
                         }`}
                         data-testid={`kanban-task-card-${task.id}`}
                       >
                         {/* Task Card Header */}
                         <div className="flex items-start justify-between gap-1.5">
-                          <span className="font-semibold text-xs text-slate-900 leading-tight">
-                            {task.title}
-                          </span>
+                          <div className="min-w-0 flex-1 flex items-center gap-1.5">
+                            <TaskTypeBadge
+                              value={
+                                task.requiredLinkType ??
+                                (task as unknown as { required_link_type?: string | null }).required_link_type
+                              }
+                              data-testid={`kanban-task-type-${task.id}`}
+                            />
+                            <span className="font-semibold text-xs text-[#1E293B] leading-tight block">
+                              {task.title}
+                            </span>
+                          </div>
 
                           <div className="flex items-center gap-1 shrink-0">
                             <Badge
                               variant={task.status === 'Completed' ? 'success' : 'secondary'}
                               size="compact"
-                              className="text-[10px]"
+                              className="text-xs font-medium rounded-[6px]"
                             >
                               {task.status}
                             </Badge>
@@ -709,7 +781,7 @@ function PhaseKanbanBoardInner({
                                     type="button"
                                     variant="ghost"
                                     size="xs"
-                                    className="h-5 w-5 p-0 text-slate-400 hover:text-slate-600 focus:outline-none"
+                                    className="h-5 w-5 p-0 rounded-[6px] text-[#475569] hover:text-[#1E293B] focus:outline-none"
                                     onClick={(e) => e.stopPropagation()}
                                     data-testid={`task-menu-btn-${task.id}`}
                                     aria-label="Task options"
@@ -717,11 +789,14 @@ function PhaseKanbanBoardInner({
                                     <MoreVertical className="h-3.5 w-3.5" />
                                   </Button>
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                                <DropdownMenuContent align="end" className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" onClick={(e) => e.stopPropagation()}>
                                   <DropdownMenuItem
-                                    className="text-xs text-red-600 focus:text-red-700 focus:bg-red-50 cursor-pointer gap-1.5"
+                                    className="text-xs tracking-normal text-[#DC2626] focus:text-[#FFFFFF] focus:bg-[#DC2626] cursor-pointer gap-1.5 rounded-[6px]"
+                                    disabled={Boolean(deletionReason)}
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      if (deletionReason) return;
+                                      setDeleteError(null);
                                       setTaskToDelete({
                                         id: task.id,
                                         title: task.title,
@@ -733,6 +808,11 @@ function PhaseKanbanBoardInner({
                                     <Trash2 className="h-3.5 w-3.5" />
                                     Delete Task
                                   </DropdownMenuItem>
+                                  {deletionReason && (
+                                    <p className="max-w-64 px-2 py-1.5 text-sm text-[#475569]" data-testid={`task-delete-reason-${task.id}`}>
+                                      {deletionReason}
+                                    </p>
+                                  )}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             )}
@@ -740,22 +820,22 @@ function PhaseKanbanBoardInner({
                         </div>
 
                         {task.description && (
-                          <p className="text-[11px] text-slate-600 line-clamp-2">
+                          <p className="text-xs text-[#475569] line-clamp-2">
                             {task.description}
                           </p>
                         )}
 
                         {/* Task Meta Footer */}
-                        <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-slate-500">
+                        <div className="flex items-center justify-between pt-1 border-t border-[#E2E8F0] text-xs text-[#475569]">
                           <div className="flex items-center gap-1 truncate max-w-32">
-                            <User className="h-3 w-3 text-slate-400 shrink-0" />
+                            <User className="h-3 w-3 text-[#475569] shrink-0" />
                             <span className="truncate">
                               {task.assigneeName || 'Unassigned'}
                             </span>
                           </div>
                           {task.dueDate && (
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3 text-slate-400" />
+                            <div className="flex items-center gap-1 tabular-nums">
+                              <Calendar className="h-3 w-3 text-[#475569]" />
                               <span>{new Date(task.dueDate).toLocaleDateString()}</span>
                             </div>
                           )}
@@ -764,23 +844,30 @@ function PhaseKanbanBoardInner({
                         {/* QA Compliance Controls (in Quality Assurance column) */}
                         {col.id === 'quality_assurance' && (
                           <div
-                            className="pt-2 border-t border-slate-100 space-y-1.5"
+                            className="pt-2 border-t border-[#E2E8F0] space-y-1.5"
                             data-testid={`qa-task-controls-${task.id}`}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <div className="flex items-center justify-between text-[10px] font-semibold text-slate-600">
+                            <div className="flex items-center justify-between text-xs uppercase font-bold text-[#1E293B]">
                               <span>QA Compliance:</span>
-                              {task.qaStatus ? (
+                              {task.qaStatus === 'passed' || task.qaStatus === 'failed' ? (
                                 <Badge
                                   variant={task.qaStatus === 'passed' ? 'success' : 'destructive'}
                                   size="compact"
-                                  className="text-[9px]"
+                                  className="text-xs font-bold uppercase rounded-[6px]"
                                   data-testid={`qa-status-badge-${task.id}`}
                                 >
                                   {task.qaStatus === 'passed' ? 'Passed' : 'Failed'}
                                 </Badge>
                               ) : (
-                                <span className="text-slate-400 italic">Pending Review</span>
+                                <Badge
+                                  variant="secondary"
+                                  size="compact"
+                                  className="text-xs font-bold uppercase rounded-[6px] bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]"
+                                  data-testid={`qa-status-badge-${task.id}`}
+                                >
+                                  Under Review
+                                </Badge>
                               )}
                             </div>
 
@@ -795,10 +882,10 @@ function PhaseKanbanBoardInner({
                                     e.stopPropagation();
                                     handleQaReview(task.id, 'passed');
                                   }}
-                                  className="flex-1 text-[10px] h-6 gap-1"
+                                  className="flex-1 text-xs tracking-normal font-bold h-6 gap-1 rounded-[8px] border-[#E2E8F0] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
                                   data-testid={`qa-pass-btn-${task.id}`}
                                 >
-                                  <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                                  <CheckCircle2 className="h-3 w-3" />
                                   Pass
                                 </Button>
                                 <Button
@@ -809,10 +896,10 @@ function PhaseKanbanBoardInner({
                                     e.stopPropagation();
                                     handleQaReview(task.id, 'failed');
                                   }}
-                                  className="flex-1 text-[10px] h-6 gap-1"
+                                  className="flex-1 text-xs tracking-normal font-bold h-6 gap-1 rounded-[6px] bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs"
                                   data-testid={`qa-fail-btn-${task.id}`}
                                 >
-                                  <XCircle className="h-3 w-3 text-red-600" />
+                                  <XCircle className="h-3 w-3" />
                                   Fail
                                 </Button>
                               </div>
@@ -828,7 +915,7 @@ function PhaseKanbanBoardInner({
               {/* Phase Footer Actions */}
               {isCurrentPhase && (
                 <div
-                  className="pt-2 border-t border-slate-200 space-y-2"
+                  className="pt-2 border-t border-[#E2E8F0] space-y-2"
                   data-testid={`phase-footer-${col.id}`}
                 >
                   {/* Pre-processing -> Processing */}
@@ -845,10 +932,10 @@ function PhaseKanbanBoardInner({
                           onClick={() =>
                             handleRequestTransition('pre_processing', 'processing')
                           }
-                          className="w-full text-xs font-semibold gap-1.5 bg-white text-slate-800"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
                           data-testid="manager-notify-admin-btn"
                         >
-                          <Send className="h-3.5 w-3.5 text-blue-600" />
+                          <Send className="h-3.5 w-3.5 text-[#1E293B]" />
                           Notify Admin — ready for review
                         </Button>
                       )}
@@ -861,7 +948,7 @@ function PhaseKanbanBoardInner({
                           disabled={!gateInfo.pre.canAdvance}
                           title={blockerTooltip}
                           onClick={() => handleAdvance('processing')}
-                          className="w-full text-xs font-semibold gap-1.5"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
                           data-testid="admin-advance-btn"
                         >
                           <ArrowRight className="h-3.5 w-3.5" />
@@ -884,10 +971,10 @@ function PhaseKanbanBoardInner({
                           onClick={() =>
                             handleRequestTransition('processing', 'quality_assurance')
                           }
-                          className="w-full text-xs font-semibold gap-1.5 bg-white text-slate-800"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
                           data-testid="manager-notify-admin-btn"
                         >
-                          <Send className="h-3.5 w-3.5 text-blue-600" />
+                          <Send className="h-3.5 w-3.5 text-[#1E293B]" />
                           Notify Admin — ready for review
                         </Button>
                       )}
@@ -899,7 +986,7 @@ function PhaseKanbanBoardInner({
                           disabled={!gateInfo.proc.canAdvance}
                           title={blockerTooltip}
                           onClick={() => handleAdvance('quality_assurance')}
-                          className="w-full text-xs font-semibold gap-1.5"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
                           data-testid="admin-advance-btn"
                         >
                           <ArrowRight className="h-3.5 w-3.5" />
@@ -919,10 +1006,10 @@ function PhaseKanbanBoardInner({
                           variant="outline"
                           size="sm"
                           onClick={() => setIsRerouteOpen(true)}
-                          className="w-full text-xs font-semibold gap-1.5 text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-300"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] hover:bg-[#E2E8F0] text-[#1E293B]"
                           data-testid="qa-reroute-btn"
                         >
-                          <RotateCcw className="h-3.5 w-3.5 text-amber-600" />
+                          <RotateCcw className="h-3.5 w-3.5 text-[#1E293B]" />
                           Reroute
                         </Button>
                       )}
@@ -939,7 +1026,7 @@ function PhaseKanbanBoardInner({
                               : 'All tasks must be Completed and marked Passed before advancing to Completion'
                           }
                           onClick={() => handleAdvance('completion')}
-                          className="w-full text-xs font-semibold gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                          className="w-full text-xs tracking-normal font-bold gap-1.5 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
                           data-testid="admin-advance-completion-btn"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
@@ -951,7 +1038,7 @@ function PhaseKanbanBoardInner({
 
                   {/* Completion Status */}
                   {col.id === 'completion' && (
-                    <div className="p-2 bg-emerald-50 border border-emerald-200 rounded text-center text-xs text-emerald-800 font-semibold">
+                    <div className="p-2 bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs rounded-[6px] text-center text-xs tracking-normal font-bold">
                       Work Request Completed
                     </div>
                   )}
@@ -1000,44 +1087,47 @@ function PhaseKanbanBoardInner({
         onOpenChange={(open) => !open && setTaskToDelete(null)}
       >
         <DialogContent
-          className="max-w-md"
+          className="max-w-md rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float p-6"
           data-testid="delete-task-modal"
         >
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-600 text-base">
-              <AlertTriangle className="h-5 w-5 text-red-600 shrink-0" />
+          <DialogHeader className="border-b border-[#E2E8F0] pb-3">
+            <DialogTitle className="flex items-center gap-2 text-[#DC2626] text-base font-semibold uppercase tracking-tight">
+              <AlertTriangle className="h-5 w-5 text-[#DC2626] shrink-0" />
               Delete Task
             </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500 pt-1">
+            <DialogDescription className="text-xs text-[#475569] pt-1">
               Are you sure you want to delete this task? This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
 
           {taskToDelete && (
-            <div className="p-3 bg-red-50/50 border border-red-100 rounded-md text-xs space-y-1.5">
-              <div className="text-slate-800">
-                <span className="font-semibold">Task: </span>
-                <span className="font-medium text-slate-900">{taskToDelete.title}</span>
+            <div className="p-3 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-xs space-y-1.5">
+              <div className="text-[#1E293B]">
+                <span className="font-bold">Task: </span>
+                <span className="font-medium text-[#1E293B]">{taskToDelete.title}</span>
               </div>
               {taskToDelete.assigneeName && (
-                <div className="text-slate-600">
-                  <span className="font-semibold">Assignee: </span>
+                <div className="text-[#475569]">
+                  <span className="font-bold">Assignee: </span>
                   <span>{taskToDelete.assigneeName}</span>
                 </div>
               )}
-              <div className="text-[11px] text-amber-700 font-medium pt-0.5">
+              <div className="text-xs text-[#DC2626] font-bold pt-0.5">
                 Warning: Any dependencies or records linked to this task will be affected.
               </div>
             </div>
           )}
 
-          <DialogFooter className="gap-2 sm:gap-0">
+          {deleteError && <p role="alert" className="text-sm text-[#DC2626]">{deleteError}</p>}
+
+          <DialogFooter className="gap-2 sm:gap-0 pt-2 border-t border-[#E2E8F0]">
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={() => setTaskToDelete(null)}
               disabled={isDeletingTask}
+              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B]"
               data-testid="cancel-delete-task-btn"
             >
               Cancel
@@ -1048,6 +1138,7 @@ function PhaseKanbanBoardInner({
               size="sm"
               onClick={handleConfirmDeleteTask}
               disabled={isDeletingTask}
+              className="text-xs tracking-normal font-bold rounded-[6px] bg-[#DC2626] hover:bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
               data-testid="confirm-delete-task-btn"
             >
               {isDeletingTask ? 'Deleting...' : 'Delete Task'}
