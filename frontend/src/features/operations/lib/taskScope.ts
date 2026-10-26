@@ -20,8 +20,17 @@ export function isTaskAssignee(user: UserProfile | string | null | undefined, ta
     coAssignees?: unknown; co_assignees?: unknown;
     relationalAssignees?: unknown; relational_assignees?: unknown;
   };
-  const lists = [task.assignees, task.taskAssignees, task.task_assignees,
-    aliases.coAssignees, aliases.co_assignees, aliases.relationalAssignees, aliases.relational_assignees];
+  const lists = [
+    task.assignees,
+    task.assigneeDetails,
+    task.assignee_details,
+    task.taskAssignees,
+    task.task_assignees,
+    aliases.coAssignees,
+    aliases.co_assignees,
+    aliases.relationalAssignees,
+    aliases.relational_assignees,
+  ];
   if (lists.some((list) => Array.isArray(list) && list.some((entry: unknown) => {
     if (typeof entry === 'string') return entry === userId;
     if (!entry || typeof entry !== 'object') return false;

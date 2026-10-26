@@ -131,6 +131,14 @@ export interface TaskAssignee {
   userRole?: string;
 }
 
+export interface TaskAssigneeDetail {
+  userId: string;
+  user_id?: string;
+  userName?: string | null;
+  user_name?: string | null;
+  isPrimary?: boolean;
+}
+
 export interface ChecklistItem {
   id: string;
   text: string;
@@ -215,6 +223,8 @@ export interface Task {
   assigneeId: string | null;
   assigneeName: string | null;
   assignees: string[]; // List of user UUIDs
+  assigneeDetails?: TaskAssigneeDetail[];
+  assignee_details?: TaskAssigneeDetail[];
   taskAssignees?: TaskAssignee[];
   task_assignees?: TaskAssignee[];
   predecessors: string[];
