@@ -806,17 +806,17 @@ const createDisbursement = async ({ entityId, entityCode, userId, user, data }) 
   }
 
   // Authorize task target BEFORE receipt reservation claim! (F02, Correction 4, 7)
-  if (effectiveTaskId) {
-    await resolveAndAuthorizeTaskTarget({
-      entityId,
-      user: effectiveUser,
-      userId,
-      targetTaskId: effectiveTaskId,
-      targetWorkRequestId: effectiveWrId,
-      clientId: data.clientId,
-      allowNoTask: true,
-    });
-  }
+  await resolveAndAuthorizeTaskTarget({
+    entityId,
+    user: effectiveUser,
+    userId,
+    targetTaskId: effectiveTaskId,
+    targetWorkRequestId: effectiveWrId,
+    clientId: data.clientId,
+    allowNoTask: false,
+    recordType: 'disbursement',
+    enforceSelectability: true,
+  });
 
   await validateReferenceScope(entityId, data, null, effectiveWrId);
 
@@ -1128,6 +1128,9 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     });
   }
 
+  const candidateWrId = payloadWrId !== undefined ? payloadWrId : existing.linked_work_request_id;
+  await validateReferenceScope(existing.entity_id, data, existing, candidateWrId);
+
   // Authorize relink / linkage change (Correction 1, 5)
   const relinkResult = await authorizeTaskRelink({
     entityId: existing.entity_id,
@@ -1137,6 +1140,8 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     payloadTaskId,
     payloadWrId,
     clientId: data.clientId,
+    recordType: 'disbursement',
+    allowNoTask: false,
   });
 
   const effectiveWrId = relinkResult.isLinkageChanged
@@ -1149,8 +1154,6 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     : payloadTaskId !== undefined
       ? payloadTaskId
       : undefined;
-
-  await validateReferenceScope(existing.entity_id, data, existing, effectiveWrId);
 
   // Handle receipt reservation claim & paired metadata
   let receiptReservationClaim = null;
