@@ -15,6 +15,10 @@ const WR_ALIAS_KEYS = [
   'linkedWorkRequestId',
   'linked_work_request_id',
 ];
+const PHASE_SEQUENCE = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
 /**
  * Resolves the existing stored task ID from a record using canonical nullish precedence.
@@ -303,6 +307,73 @@ const assertTaskSelectable = (taskRow, recordType = 'other') => {
 };
 
 /**
+ * Enforces task phase and prerequisite selectability rules on new or changed linkages.
+ *
+ * @param {object} taskRow
+ * @param {object|null} wrRow
+ * @param {string} [recordType='other']
+ */
+const assertTaskPhaseAndPrerequisitesSelectable = async (taskRow, wrRow, recordType = 'other') => {
+  if (!taskRow) return;
+
+  const taskPhase = typeof taskRow.phase === 'string' ? taskRow.phase.trim() : '';
+  const wrPhase = typeof wrRow?.phase === 'string' ? wrRow.phase.trim() : '';
+
+  if (taskPhase && wrPhase) {
+    if (recordType === 'invoice') {
+      const taskPhaseIdx = PHASE_SEQUENCE.indexOf(taskPhase);
+      const wrPhaseIdx = PHASE_SEQUENCE.indexOf(wrPhase);
+      if (taskPhaseIdx !== -1 && wrPhaseIdx !== -1 && taskPhaseIdx > wrPhaseIdx) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Task belongs to a future phase that has not started on the work request',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
+    } else if (taskPhase !== wrPhase) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Task belongs to a phase that is not currently active on the work request',
+        code: 'TASK_NOT_SELECTABLE',
+      });
+    }
+  }
+
+  if (Array.isArray(taskRow.predecessors) && taskRow.predecessors.length > 0) {
+    const validPredIds = taskRow.predecessors.filter(isValidUUID);
+    if (validPredIds.length > 0) {
+      const { data: predTasks, error: predErr } = await supabaseAdmin
+        .from('tasks')
+        .select('id, title, status, deleted_at')
+        .in('id', validPredIds)
+        .is('deleted_at', null);
+
+      if (predErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: predErr.message,
+        });
+      }
+
+      for (const pred of predTasks || []) {
+        const normStatus = String(pred.status || '').trim().toLowerCase();
+        if (normStatus !== 'cancelled' && normStatus !== 'completed' && normStatus !== 'done') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Task is blocked by incomplete prerequisite task(s)',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+      }
+    }
+  }
+};
+
+/**
  * Resolves and validates a target task and its parent work request.
  * Enforces entity boundaries and assignment authorization.
  *
@@ -362,7 +433,7 @@ const resolveAndAuthorizeTaskTarget = async ({
   // 1. Fetch and validate task
   const { data: taskRow, error: taskErr } = await supabaseAdmin
     .from('tasks')
-    .select('id, work_request_id, assignee_id, status, deleted_at')
+    .select('id, work_request_id, assignee_id, status, phase, predecessors, deleted_at')
     .eq('id', targetTaskId)
     .maybeSingle();
 
@@ -406,7 +477,7 @@ const resolveAndAuthorizeTaskTarget = async ({
   // 3. Fetch and validate parent work request
   const { data: wrRow, error: wrErr } = await supabaseAdmin
     .from('work_requests')
-    .select('id, client_id, entity_id, deleted_at')
+    .select('id, client_id, entity_id, phase, deleted_at')
     .eq('id', effectiveWrId)
     .maybeSingle();
 
@@ -449,6 +520,7 @@ const resolveAndAuthorizeTaskTarget = async ({
   // 4. Task selectability (only for new/changed linkages on mandatory-task records)
   if (enforceSelectability) {
     assertTaskSelectable(taskRow, recordType);
+    await assertTaskPhaseAndPrerequisitesSelectable(taskRow, wrRow, recordType);
   }
 
   // 5. Task Assignment authorization
@@ -622,6 +694,8 @@ module.exports = {
   normalizeTaskAndParentAliases,
   isUserAssignedToTask,
   resolveTrustedUser,
+  assertTaskSelectable,
+  assertTaskPhaseAndPrerequisitesSelectable,
   resolveAndAuthorizeTaskTarget,
   authorizeTaskRelink,
 };

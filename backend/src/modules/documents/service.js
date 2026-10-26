@@ -12,7 +12,11 @@ const { getSignedUploadUrl, getSignedDownloadUrl } = require('../../services/sto
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 const { getUserConcernedWorkRequestIds, fetchInPages } = require('../../lib/userScope');
-const { resolveTrustedUser, isUserAssignedToTask } = require('../../lib/taskAssignment');
+const {
+  resolveTrustedUser,
+  isUserAssignedToTask,
+  assertTaskPhaseAndPrerequisitesSelectable,
+} = require('../../lib/taskAssignment');
 const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
 const {
   validateRecordProjectLinkage,
@@ -255,7 +259,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
   if (data.linkedTaskId) {
     const { data: task, error: taskError } = await supabaseAdmin
       .from('tasks')
-      .select('id, work_request_id, assignee_id, status, deleted_at')
+      .select('id, work_request_id, assignee_id, status, phase, predecessors, deleted_at')
       .eq('id', data.linkedTaskId)
       .maybeSingle();
 
@@ -296,6 +300,18 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
         });
       }
     }
+
+    const effectiveWrId = data.workRequestId || task.work_request_id;
+    let wrRow = null;
+    if (effectiveWrId) {
+      const { data: wr } = await supabaseAdmin
+        .from('work_requests')
+        .select('id, phase, deleted_at')
+        .eq('id', effectiveWrId)
+        .maybeSingle();
+      wrRow = wr || null;
+    }
+    await assertTaskPhaseAndPrerequisitesSelectable(task, wrRow, 'document');
 
     // Role check: Admin bypasses
     const { data: uploader } = await supabaseAdmin
@@ -487,7 +503,7 @@ const updateDocument = async ({ entityId, id, userId, data, user, caller, intern
     if (isTaskChanged && effectiveTaskId) {
       const { data: task, error: taskError } = await supabaseAdmin
         .from('tasks')
-        .select('id, work_request_id, assignee_id, status, deleted_at')
+        .select('id, work_request_id, assignee_id, status, phase, predecessors, deleted_at')
         .eq('id', effectiveTaskId)
         .maybeSingle();
 
@@ -528,6 +544,18 @@ const updateDocument = async ({ entityId, id, userId, data, user, caller, intern
           });
         }
       }
+
+      const targetWrId = effectiveWrId || task.work_request_id;
+      let wrRow = null;
+      if (targetWrId) {
+        const { data: wr } = await supabaseAdmin
+          .from('work_requests')
+          .select('id, phase, deleted_at')
+          .eq('id', targetWrId)
+          .maybeSingle();
+        wrRow = wr || null;
+      }
+      await assertTaskPhaseAndPrerequisitesSelectable(task, wrRow, 'document');
 
       if (effectiveUser?.role !== 'Admin') {
         const isAssigned = await isUserAssignedToTask(effectiveTaskId, userId);
