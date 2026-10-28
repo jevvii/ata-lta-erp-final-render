@@ -7,7 +7,7 @@
  * Reuses DocumentViewerModal from Operations.
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen,
@@ -38,6 +38,10 @@ import {
   useUnarchiveDocument,
   useDeleteDocument,
 } from '@/features/documents/api/useDocuments';
+import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
+import { useClients } from '@/features/operations/api/useClients';
+import { useTeam } from '@/features/operations/api/useTeam';
+import { matchesDueDate } from '@/lib/dateFilters';
 import { apiRequest } from '@/lib/api';
 import type { DmsDocument, DocumentLifecycle } from '@/features/documents/api/types';
 
@@ -50,6 +54,10 @@ export default function DocumentsPage() {
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [category, setCategory] = useState(searchParams.get('category') || '');
   const [lifecycle, setLifecycle] = useState(searchParams.get('lifecycle') || '');
+  const [workRequest, setWorkRequest] = useState<string>('all');
+  const [client, setClient] = useState<string>('all');
+  const [employee, setEmployee] = useState<string>('all');
+  const [dueDate, setDueDate] = useState<string>('all');
   const [page, setPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const limit = 50;
 
@@ -59,6 +67,8 @@ export default function DocumentsPage() {
   const [lifecycleDoc, setLifecycleDoc] = useState<DmsDocument | null>(null);
 
   // RBAC permissions
+  const user = useSessionStore((state) => state.user);
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
   const permissions = useSessionStore((state) => state.permissions);
   const canView = hasPermission(permissions, 'dms:view');
   const canEdit = hasPermission(permissions, 'dms:edit');
@@ -70,6 +80,12 @@ export default function DocumentsPage() {
   const archiveMutation = useArchiveDocument();
   const unarchiveMutation = useUnarchiveDocument();
   const deleteMutation = useDeleteDocument();
+
+  // Queries
+  const { data: rawWrs } = useWorkRequests({ archived: false });
+  const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
+  const { data: clientsData = [] } = useClients();
+  const { data: teamData = [] } = useTeam();
 
   // Queries
   const { data: countsData } = useDocumentCounts({ enabled: canView });
@@ -101,6 +117,10 @@ export default function DocumentsPage() {
     setSearch('');
     setCategory('');
     setLifecycle('');
+    setWorkRequest('all');
+    setClient('all');
+    setEmployee('all');
+    setDueDate('all');
     setPage(1);
   };
 
@@ -165,7 +185,31 @@ export default function DocumentsPage() {
     return <Forbidden requiredPermission="dms:view" />;
   }
 
-  const documents = listResponse?.data ?? [];
+  const rawDocuments = listResponse?.data ?? [];
+  const documents = useMemo(() => {
+    return rawDocuments.filter((doc) => {
+      if (workRequest !== 'all') {
+        const wrId = doc.work_request_id || doc.workRequestId;
+        if (wrId !== workRequest) return false;
+      }
+      if (client !== 'all') {
+        const cId = doc.client_id || doc.clientId;
+        if (cId !== client) return false;
+      }
+      if (employee !== 'all') {
+        const empId =
+          doc.uploader_id ||
+          doc.uploaderId ||
+          doc.created_by;
+        if (empId !== employee) return false;
+      }
+      if (dueDate !== 'all') {
+        const dateVal = doc.created_at || doc.createdAt || doc.upload_date;
+        if (!matchesDueDate(dateVal, dueDate, doc.archived)) return false;
+      }
+      return true;
+    });
+  }, [rawDocuments, workRequest, client, employee, dueDate]);
   const total = listResponse?.meta?.total ?? 0;
 
   return (
@@ -249,6 +293,18 @@ export default function DocumentsPage() {
         onCategoryChange={setCategory}
         lifecycle={lifecycle}
         onLifecycleChange={setLifecycle}
+        workRequest={workRequest}
+        onWorkRequestChange={setWorkRequest}
+        client={client}
+        onClientChange={setClient}
+        employee={employee}
+        onEmployeeChange={setEmployee}
+        dueDate={dueDate}
+        onDueDateChange={setDueDate}
+        workRequests={workRequests}
+        clients={clientsData}
+        team={teamData}
+        isAdmin={isAdmin}
         onReset={handleResetFilters}
       />
 

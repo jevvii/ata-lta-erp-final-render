@@ -77,7 +77,7 @@ describe('DocumentViewerModal (UAT2-14)', () => {
     file_name: 'compliance_report_2026.pdf',
     original_name: 'Compliance Report 2026.pdf',
     work_request_id: 'wr-1',
-    linked_task_id: null,
+    linked_task_id: 'task-1',
     client_id: 'cli-1',
     document_type: 'Annual Compliance Report',
     category: 'SEC',
@@ -426,7 +426,42 @@ describe('DocumentViewerModal (UAT2-14)', () => {
       expect(mockMutateAsyncUpload).toHaveBeenCalledTimes(1);
     });
 
+    expect(mockMutateAsyncUpload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: validFile,
+        metadata: expect.objectContaining({
+          workRequestId: 'wr-1',
+          linkedTaskId: 'task-1',
+          clientId: 'cli-1',
+        }),
+      })
+    );
     expect(onUploadSuccess).toHaveBeenCalledWith(uploadedResult);
+  });
+
+  it('disables Replace / Upload button with explanatory tooltip when document has no linked task', () => {
+    const legacyFloatingDoc: DmsDocument = {
+      ...baseDoc,
+      id: 'doc-legacy-floating',
+      linked_task_id: null,
+    };
+
+    render(
+      <DocumentViewerModal
+        isOpen={true}
+        onClose={vi.fn()}
+        document={legacyFloatingDoc}
+      />,
+      { wrapper }
+    );
+
+    const replaceBtn = screen.getByTestId('upload-doc-btn');
+    expect(replaceBtn).toBeDisabled();
+    expect(replaceBtn).toHaveAttribute(
+      'title',
+      'Cannot replace a legacy document that has no linked task'
+    );
+    expect(screen.getByTestId('viewer-file-input')).toBeDisabled();
   });
 
   it('respects readOnly mode by hiding upload button and comment form', () => {

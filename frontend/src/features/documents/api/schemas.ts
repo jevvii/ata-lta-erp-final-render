@@ -61,8 +61,10 @@ export const createDocumentSchema = z.object({
     .nullable()
     .optional(),
   originalName: z.string().max(255).optional(),
-  workRequestId: z.string().uuid('Invalid work request ID').nullable().optional(),
-  linkedTaskId: z.string().uuid('Invalid task ID').nullable().optional(),
+  workRequestId: z.string().uuid('Work request is required'),
+  linkedTaskId: z.string().uuid('A valid linked task is required'),
+  taskId: z.string().uuid('Invalid task ID').nullable().optional(),
+  task_id: z.string().uuid('Invalid task ID').nullable().optional(),
   clientId: z.string().uuid('Invalid client ID').nullable().optional(),
   documentType: z.string().max(100).optional(),
   category: z.enum(ALL_DOCUMENT_CATEGORIES).optional(),

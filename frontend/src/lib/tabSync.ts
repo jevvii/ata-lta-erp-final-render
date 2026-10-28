@@ -244,17 +244,30 @@ export function handleIncomingTabSyncMessage(
 
   // Handle ENTITY_MUTATED
   if (entityData !== undefined && entityData !== null) {
+    // For operations domain: cross-tab mutations must invalidate/refetch, not inject raw permission-bearing rows
+    if (domain === 'operations') {
+      void queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey;
+          return (
+            Array.isArray(key) &&
+            key[0] === 'operations' &&
+            (key.includes(entityId) ||
+              key.includes('workRequests') ||
+              key.includes('tasks') ||
+              key.includes('requests') ||
+              key.includes('creationApprovals'))
+          );
+        },
+      });
+      void queryClient.invalidateQueries({ queryKey: ['operations', 'workRequests', 'counts'] });
+      void queryClient.invalidateQueries({ queryKey: ['operations', 'counts'] });
+      void queryClient.invalidateQueries({ queryKey: ['operations', 'requests', 'counts'] });
+      return;
+    }
+
     // 1. Explicit domain detail cache updates
     switch (domain) {
-      case 'operations':
-        queryClient.setQueryData(
-          ['operations', 'workRequests', 'detail', entityId],
-          (old: unknown) =>
-            old && typeof old === 'object'
-              ? { ...old, ...(entityData as object) }
-              : entityData
-        );
-        break;
       case 'billing':
         queryClient.setQueryData(
           ['billing', 'invoices', 'detail', entityId],
@@ -345,10 +358,6 @@ export function handleIncomingTabSyncMessage(
 
     // 3. Reconcile secondary counters (Spec §4.2)
     void queryClient.invalidateQueries({ queryKey: [domain, 'counts'] });
-    if (domain === 'operations') {
-      void queryClient.invalidateQueries({ queryKey: ['operations', 'workRequests', 'counts'] });
-      void queryClient.invalidateQueries({ queryKey: ['operations', 'requests', 'counts'] });
-    }
   } else {
     // If entityData is not provided, mark stale / invalidate the entity and list queries
     void queryClient.invalidateQueries({

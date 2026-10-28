@@ -31,6 +31,10 @@ import {
 } from '@/components/ui/select';
 import { useInvoices } from '../api/useInvoices';
 import { useClients } from '@/features/operations/api/useClients';
+import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
+import { useTeam } from '@/features/operations/api/useTeam';
+import { useSessionStore } from '@/lib/session';
+import { matchesDueDate, DUE_DATE_FILTER_OPTIONS } from '@/lib/dateFilters';
 import { useDebounce } from '../hooks/useDebounce';
 import { usePermission } from '@/lib/permissions';
 import { formatCurrency, getStatusBadgeVariant } from '../utils/formatters';
@@ -70,6 +74,9 @@ export function InvoiceList({
   // Filter state
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | 'All'>('All');
   const [clientFilter, setClientFilter] = useState<string>('all');
+  const [workRequestFilter, setWorkRequestFilter] = useState<string>('all');
+  const [employeeFilter, setEmployeeFilter] = useState<string>('all');
+  const [dueDateFilter, setDueDateFilter] = useState<string>('all');
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
 
@@ -79,10 +86,15 @@ export function InvoiceList({
 
   // Permissions (hooks must be unconditional)
   const canRecordPayment = usePermission('billing:payments');
+  const user = useSessionStore((state) => state.user);
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
 
   // Queries
   const { data: clientsData } = useClients();
   const clientsList = clientsData || [];
+  const { data: rawWrs } = useWorkRequests({ archived: false });
+  const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
+  const { data: teamData = [] } = useTeam();
 
   const effectiveStatus = statusFilter === 'Approved' ? 'Sent' : statusFilter;
   const { data: invoicesResponse, isLoading } = useInvoices({
@@ -94,7 +106,30 @@ export function InvoiceList({
     limit: pageSize,
   });
 
-  const invoices = useMemo(() => invoicesResponse?.data || [], [invoicesResponse?.data]);
+  const rawInvoices = useMemo(() => invoicesResponse?.data || [], [invoicesResponse?.data]);
+  const invoices = useMemo(() => {
+    return rawInvoices.filter((inv) => {
+      if (workRequestFilter !== 'all') {
+        const wrId = inv.work_request_id || inv.work_request?.id;
+        if (wrId !== workRequestFilter) return false;
+      }
+      if (employeeFilter !== 'all') {
+        const creator =
+          inv.work_request?.creatorName ||
+          inv.work_request_creator_name ||
+          (inv as unknown as Record<string, unknown>).created_by;
+        const matchesNameOrId =
+          creator === employeeFilter ||
+          teamData.find((t) => t.id === employeeFilter)?.name === creator;
+        if (!matchesNameOrId) return false;
+      }
+      if (dueDateFilter !== 'all') {
+        const isFinished = inv.status === 'Paid' || inv.status === 'Cancelled';
+        if (!matchesDueDate(inv.due_date, dueDateFilter, isFinished)) return false;
+      }
+      return true;
+    });
+  }, [rawInvoices, workRequestFilter, employeeFilter, dueDateFilter, teamData]);
   const totalCount = invoicesResponse?.meta?.total || 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -123,12 +158,20 @@ export function InvoiceList({
   const resetFilters = () => {
     setStatusFilter('All');
     setClientFilter('all');
+    setWorkRequestFilter('all');
+    setEmployeeFilter('all');
+    setDueDateFilter('all');
     setSearchInput('');
     setPage(1);
   };
 
   const hasActiveFilters =
-    statusFilter !== 'All' || clientFilter !== 'all' || searchInput.trim().length > 0;
+    statusFilter !== 'All' ||
+    clientFilter !== 'all' ||
+    workRequestFilter !== 'all' ||
+    employeeFilter !== 'all' ||
+    dueDateFilter !== 'all' ||
+    searchInput.trim().length > 0;
 
   return (
     <div className="space-y-4" data-testid="invoice-list-container">
@@ -231,7 +274,7 @@ export function InvoiceList({
           </div>
 
           {/* Client Filter */}
-          <div className="w-[180px]">
+          <div className="w-[140px] sm:w-[160px]">
             <Select
               value={clientFilter}
               onValueChange={(val) => {
@@ -247,6 +290,76 @@ export function InvoiceList({
                 {clientsList.map((c) => (
                   <SelectItem key={c.id} value={c.id}>
                     {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Work Request Filter */}
+          <div className="w-[140px] sm:w-[160px]">
+            <Select
+              value={workRequestFilter}
+              onValueChange={(val) => {
+                setWorkRequestFilter(val);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="h-9 text-xs" data-testid="work-request-filter-select">
+                <SelectValue placeholder="All Work Requests" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Work Requests</SelectItem>
+                {workRequests.map((wr) => (
+                  <SelectItem key={wr.id} value={wr.id}>
+                    {wr.title || wr.work_order_number || wr.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Employee Filter (Admin only) */}
+          {isAdmin && (
+            <div className="w-[140px] sm:w-[160px]">
+              <Select
+                value={employeeFilter}
+                onValueChange={(val) => {
+                  setEmployeeFilter(val);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="h-9 text-xs" data-testid="employee-filter-select">
+                  <SelectValue placeholder="All Employees" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Employees</SelectItem>
+                  {teamData.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Due Date Filter */}
+          <div className="w-[130px] sm:w-[150px]">
+            <Select
+              value={dueDateFilter}
+              onValueChange={(val) => {
+                setDueDateFilter(val);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="h-9 text-xs" data-testid="due-date-filter-select">
+                <SelectValue placeholder="All Due Dates" />
+              </SelectTrigger>
+              <SelectContent>
+                {DUE_DATE_FILTER_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
                   </SelectItem>
                 ))}
               </SelectContent>

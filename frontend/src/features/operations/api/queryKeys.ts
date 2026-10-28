@@ -13,6 +13,10 @@ export const operationsKeys = {
     [...operationsKeys.workRequests(), 'counts', entity] as const,
   workRequestRelated: (id: string) =>
     [...operationsKeys.workRequestDetail(id), 'related'] as const,
+  workRequestCreationApprovals: (status?: string, scope?: string) =>
+    (status !== undefined || scope !== undefined)
+      ? ([...operationsKeys.workRequests(), 'creationApprovals', status ?? 'all', scope ?? 'default'] as const)
+      : ([...operationsKeys.workRequests(), 'creationApprovals'] as const),
 
   // Aliases for compatibility with PROJECT.md contract
   list: (filters?: WorkRequestFilters) =>

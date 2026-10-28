@@ -1,3 +1,4 @@
+import { operationsViewerRefresh } from './viewerRefresh';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, ApiError } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
@@ -15,6 +16,8 @@ import type {
 // ============================================================================
 // Queries
 // ============================================================================
+
+
 
 export function useOperationsRequests(
   filters?: OperationsRequestFilters,
@@ -41,10 +44,11 @@ export function useOperationsRequests(
       return res;
     },
     enabled: options?.enabled ?? true,
+    ...operationsViewerRefresh,
   });
 }
 
-export function useOperationsRequestCounts() {
+export function useOperationsRequestCounts(options?: { enabled?: boolean }) {
   const activeEntity = useSessionStore((state) => state.activeEntity);
 
   return useQuery({
@@ -55,6 +59,8 @@ export function useOperationsRequestCounts() {
       );
       return res.data;
     },
+    enabled: options?.enabled ?? true,
+    ...operationsViewerRefresh,
   });
 }
 

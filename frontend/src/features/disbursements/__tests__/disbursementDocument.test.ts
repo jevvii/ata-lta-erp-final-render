@@ -3,6 +3,7 @@ import { PRINT_PAGE_CSS, wrapPrintPage } from '@/lib/printPage';
 import {
   buildDisbursementDocument,
   disbursementAmountInWords,
+  formatMmDdYyyy,
   getDisbursementPrintDetails,
   printDisbursementDocument,
   DISBURSEMENT_PAGE_CSS,
@@ -47,10 +48,32 @@ describe('Canonical expense document', () => {
       expect(html).toContain('A. Reyes');
       expect(html).toContain('R. Tan');
       expect(html).toContain('1,500.50');
-      expect(html).toContain('FIFTY CENTAVOS');
-      expect(html).toContain('2026-10-15');
+      expect(html).not.toContain('Amount in Words');
+      expect(html).not.toContain('amount-in-words');
+      expect(html).toContain('10/15/2026');
       expect(html).toContain('Manila audit');
     }
+  });
+
+  it('formats dates as mmddyyyy (MM/DD/YYYY) across print details and edge cases', () => {
+    expect(formatMmDdYyyy('2026-10-25')).toBe('10/25/2026');
+    expect(formatMmDdYyyy('2026-01-05T08:30:00.000Z')).toBe('01/05/2026');
+    expect(formatMmDdYyyy('10/25/2026')).toBe('10/25/2026');
+    expect(formatMmDdYyyy('')).toBe('');
+    expect(formatMmDdYyyy(null)).toBe('');
+    expect(formatMmDdYyyy(undefined)).toBe('');
+
+    const details = getDisbursementPrintDetails({
+      id: 'd-test-dates',
+      category: 'Meals',
+      description: 'Client lunch',
+      amount: 450,
+      status: 'Funded',
+      created_at: '2026-10-26T04:12:00Z',
+      payment_date: '2026-10-28',
+    });
+    expect(details.submittedDate).toBe('10/26/2026');
+    expect(details.paymentDate).toBe('10/28/2026');
   });
   it('escapes notes, description, and editable names and preserves intentional blank fields', () => {
     const html = buildDisbursementDocument({

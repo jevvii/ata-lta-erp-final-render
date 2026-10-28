@@ -131,6 +131,17 @@ export function extractViewers(
   return Array.from(viewerMap.values());
 }
 
+// Module-level shared presence hub registry
+// Prevents duplicate channel subscriptions and "cannot add presence callbacks after subscribe()" errors
+// when multiple components (e.g. Kanban Board + SidePeek) view the same presence room simultaneously.
+interface PresenceHub {
+  channel: ReturnType<typeof supabase.channel>;
+  subscribers: Set<(viewers: ViewerPresence[]) => void>;
+  lastViewers: ViewerPresence[];
+}
+
+const presenceHubs = new Map<string, PresenceHub>();
+
 export function PresenceAvatars({
   roomId,
   domain,
@@ -157,123 +168,196 @@ export function PresenceAvatars({
     const channelName = cleanRoomId.startsWith('presence:')
       ? cleanRoomId
       : `presence:${effectiveDomain}:${cleanRoomId}`;
-    const channel = supabase.channel(channelName);
 
-    const updateFromState = (payload?: unknown) => {
-      if (!isMounted) return;
-      try {
-        let state: Record<string, unknown> = { ...channel.presenceState() };
-        if (payload && typeof payload === 'object') {
-          const p = payload as Record<string, unknown>;
-          if (p.state && typeof p.state === 'object') {
-            state = { ...state, ...(p.state as Record<string, unknown>) };
-          } else if (p.currentPresences && Array.isArray(p.currentPresences) && p.key) {
-            const k = String(p.key).trim();
-            if (k) state[k] = p.currentPresences;
-          } else if (p.newPresences && Array.isArray(p.newPresences) && p.key) {
-            const k = String(p.key).trim();
-            if (k && !state[k]) state[k] = p.newPresences;
+    let hub = presenceHubs.get(channelName);
+
+    // If an external cleanup (e.g. supabase.removeAllChannels in test runners) removed the channel, purge the stale hub
+    if (hub && !supabase.getChannels().some((c) => c.topic === hub!.channel.topic || c === hub!.channel)) {
+      presenceHubs.delete(channelName);
+      hub = undefined;
+    }
+
+    if (!hub) {
+      // If a non-hub channel with this name exists in supabase, remove it first to attach fresh callbacks cleanly
+      const existingChannels = supabase.getChannels();
+      const existing = existingChannels.find(
+        (c) => c.topic === channelName || c.topic === `realtime:${channelName}`
+      );
+      if (existing) {
+        try {
+          void supabase.removeChannel(existing);
+        } catch {
+          // ignore
+        }
+      }
+
+      const channel = supabase.channel(channelName);
+      hub = {
+        channel,
+        subscribers: new Set(),
+        lastViewers: [],
+      };
+      presenceHubs.set(channelName, hub);
+
+      const notifySubscribers = (viewers: ViewerPresence[]) => {
+        const currentHub = presenceHubs.get(channelName);
+        if (!currentHub) return;
+        currentHub.lastViewers = viewers;
+        for (const sub of currentHub.subscribers) {
+          try {
+            sub(viewers);
+          } catch {
+            // ignore subscriber callback error
           }
         }
-        const viewers = extractViewers(state, user.id, user.email);
-        if (isMounted) {
-          setOtherViewers((prev) => {
-            if (prev.length === 0 && viewers.length === 0) return prev;
-            return viewers;
-          });
-        }
-      } catch {
-        // purely in-memory presence
-      }
-    };
-
-    const handleLeave = (payload?: unknown) => {
-      if (!isMounted) return;
-      const p = payload as Record<string, unknown> | undefined;
-
-      const remainingPresences = (p?.currentPresences && Array.isArray(p.currentPresences))
-        ? p.currentPresences
-        : [];
-      if (remainingPresences.length > 0) {
-        updateFromState(payload);
-        return;
-      }
-
-      const leftKeys = new Set<string>();
-      if (p?.leftPresences && Array.isArray(p.leftPresences)) {
-        for (const lp of p.leftPresences) {
-          if (lp && typeof lp === 'object') {
-            const rec = lp as Record<string, unknown>;
-            const id = String(rec.userId || rec.id || '').trim();
-            if (id) leftKeys.add(id);
-            const email = String(rec.email || '').trim().toLowerCase();
-            if (email) leftKeys.add(email);
-            const name = String(rec.name || rec.displayName || '').trim();
-            if (name) leftKeys.add(name);
-          }
-        }
-      }
-      if (p?.key) {
-        const trimmedKey = String(p.key).trim();
-        if (trimmedKey) leftKeys.add(trimmedKey);
-      }
-
-      const isLeaving = (v: ViewerPresence) => {
-        const idMatches = Boolean(v.userId && leftKeys.has(v.userId));
-        const emailMatches = Boolean(v.email && leftKeys.has(v.email.toLowerCase()));
-        const nameMatches = Boolean(v.name && leftKeys.has(v.name));
-        return idMatches || emailMatches || nameMatches;
       };
 
-      const rawState = channel.presenceState();
-      if (rawState && typeof rawState === 'object' && Object.keys(rawState).length > 0) {
-        const viewers = extractViewers(rawState, user.id, user.email);
-        setOtherViewers(viewers.filter((v) => !isLeaving(v)));
-      } else {
-        setOtherViewers((prev) => prev.filter((v) => !isLeaving(v)));
+      const updateFromState = (payload?: unknown) => {
+        try {
+          let state: Record<string, unknown> = { ...channel.presenceState() };
+          if (payload && typeof payload === 'object') {
+            const p = payload as Record<string, unknown>;
+            if (p.state && typeof p.state === 'object') {
+              state = { ...state, ...(p.state as Record<string, unknown>) };
+            } else if (p.currentPresences && Array.isArray(p.currentPresences) && p.key) {
+              const k = String(p.key).trim();
+              if (k) state[k] = p.currentPresences;
+            } else if (p.newPresences && Array.isArray(p.newPresences) && p.key) {
+              const k = String(p.key).trim();
+              if (k && !state[k]) state[k] = p.newPresences;
+            }
+          }
+          const viewers = extractViewers(state, user.id, user.email);
+          notifySubscribers(viewers);
+        } catch {
+          // purely in-memory presence
+        }
+      };
+
+      const handleLeave = (payload?: unknown) => {
+        const p = payload as Record<string, unknown> | undefined;
+
+        const remainingPresences = (p?.currentPresences && Array.isArray(p.currentPresences))
+          ? p.currentPresences
+          : [];
+        if (remainingPresences.length > 0) {
+          updateFromState(payload);
+          return;
+        }
+
+        const leftKeys = new Set<string>();
+        if (p?.leftPresences && Array.isArray(p.leftPresences)) {
+          for (const lp of p.leftPresences) {
+            if (lp && typeof lp === 'object') {
+              const rec = lp as Record<string, unknown>;
+              const id = String(rec.userId || rec.id || '').trim();
+              if (id) leftKeys.add(id);
+              const email = String(rec.email || '').trim().toLowerCase();
+              if (email) leftKeys.add(email);
+              const name = String(rec.name || rec.displayName || '').trim();
+              if (name) leftKeys.add(name);
+            }
+          }
+        }
+        if (p?.key) {
+          const trimmedKey = String(p.key).trim();
+          if (trimmedKey) leftKeys.add(trimmedKey);
+        }
+
+        const isLeaving = (v: ViewerPresence) => {
+          const idMatches = Boolean(v.userId && leftKeys.has(v.userId));
+          const emailMatches = Boolean(v.email && leftKeys.has(v.email.toLowerCase()));
+          const nameMatches = Boolean(v.name && leftKeys.has(v.name));
+          return idMatches || emailMatches || nameMatches;
+        };
+
+        const rawState = channel.presenceState();
+        if (rawState && typeof rawState === 'object' && Object.keys(rawState).length > 0) {
+          const viewers = extractViewers(rawState, user.id, user.email);
+          notifySubscribers(viewers.filter((v) => !isLeaving(v)));
+        } else {
+          const currentHub = presenceHubs.get(channelName);
+          notifySubscribers(currentHub ? currentHub.lastViewers.filter((v) => !isLeaving(v)) : []);
+        }
+      };
+
+      try {
+        channel
+          .on('presence', { event: 'sync' }, updateFromState)
+          .on('presence', { event: 'join' }, updateFromState)
+          .on('presence', { event: 'leave' }, handleLeave);
+      } catch {
+        // Safe fallback if channel is already joined/joining
+      }
+
+      try {
+        channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            try {
+              await channel.track({
+                userId: user.id,
+                name: user.name || 'User',
+                email: user.email,
+                role: user.role || 'Staff',
+                avatarUrl: user.avatarUrl,
+                joinedAt: new Date().toISOString(),
+              });
+              updateFromState();
+            } catch {
+              // in-memory presence
+            }
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            notifySubscribers([]);
+          }
+        });
+      } catch {
+        // Safe fallback if already subscribed
+      }
+    }
+
+    const onViewerUpdate = (viewers: ViewerPresence[]) => {
+      if (isMounted) {
+        setOtherViewers((prev) => {
+          if (prev.length === 0 && viewers.length === 0) return prev;
+          return viewers;
+        });
       }
     };
 
-    channel
-      .on('presence', { event: 'sync' }, updateFromState)
-      .on('presence', { event: 'join' }, updateFromState)
-      .on('presence', { event: 'leave' }, handleLeave)
-      .subscribe(async (status) => {
-        if (!isMounted) return;
-        if (status === 'SUBSCRIBED') {
-          try {
-            await channel.track({
-              userId: user.id,
-              name: user.name || 'User',
-              email: user.email,
-              role: user.role || 'Staff',
-              avatarUrl: user.avatarUrl,
-              joinedAt: new Date().toISOString(),
-            });
-            if (!isMounted) {
-              void channel.untrack();
-            } else {
-              updateFromState();
-            }
-          } catch {
-            // in-memory presence
-          }
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          if (isMounted) setOtherViewers([]);
+    hub.subscribers.add(onViewerUpdate);
+
+    // Seed initial state from hub or channel presenceState
+    if (hub.lastViewers.length > 0) {
+      setOtherViewers(hub.lastViewers);
+    } else {
+      try {
+        const initial = extractViewers(hub.channel.presenceState(), user.id, user.email);
+        if (initial.length > 0) {
+          setOtherViewers(initial);
         }
-      });
+      } catch {
+        // ignore
+      }
+    }
 
     return () => {
       isMounted = false;
-      try {
-        void channel.untrack();
-      } catch {
-        // ignore unmount errors
-      }
-      try {
-        void supabase.removeChannel(channel);
-      } catch {
-        // ignore unmount errors
+      const currentHub = presenceHubs.get(channelName);
+      if (!currentHub) return;
+      currentHub.subscribers.delete(onViewerUpdate);
+
+      if (currentHub.subscribers.size === 0) {
+        presenceHubs.delete(channelName);
+        try {
+          void currentHub.channel.untrack();
+        } catch {
+          // ignore unmount errors
+        }
+        try {
+          void supabase.removeChannel(currentHub.channel);
+        } catch {
+          // ignore unmount errors
+        }
       }
     };
   }, [roomId, domain, user, isSyncEnabled]);

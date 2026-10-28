@@ -609,10 +609,12 @@ function invalidateCounts(queryClient: QueryClient, table: string): void {
     case 'work_requests':
       void queryClient.invalidateQueries({ queryKey: ['operations', 'workRequests', 'counts'] });
       void queryClient.invalidateQueries({ queryKey: ['operations', 'counts'] });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCreationApprovals() });
       break;
     case 'tasks':
       void queryClient.invalidateQueries({ queryKey: ['operations', 'workRequests', 'counts'] });
       void queryClient.invalidateQueries({ queryKey: ['operations', 'counts'] });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCreationApprovals() });
       break;
     case 'invoices':
       void queryClient.invalidateQueries({ queryKey: ['billing', 'counts'] });
@@ -1206,11 +1208,12 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       invalidateAllProjectProtectedCaches(queryClient, activeEntity);
     }
   } else if (
-    String(useSessionStore.getState().user?.role || '').trim().toLowerCase() !== 'admin' &&
-    ['work_requests', 'tasks', 'invoices', 'disbursements', 'transmittals', 'documents', 'time_entries', 'task_time_logs', 'operations_requests', 'task_assignees'].includes(options.table)
+    ['work_requests', 'tasks', 'operations_requests'].includes(options.table) ||
+    (String(useSessionStore.getState().user?.role || '').trim().toLowerCase() !== 'admin' &&
+    ['invoices', 'disbursements', 'transmittals', 'documents', 'time_entries', 'task_time_logs', 'task_assignees'].includes(options.table))
   ) {
     // 360° Shared Project Team Visibility Rule (F01–F10, Directive 3):
-    // For non-admin users (and null users), raw CDC INSERT/UPDATE payloads must NOT be injected directly into query caches.
+    // For operations tables and non-admin users, raw CDC INSERT/UPDATE payloads must NOT be injected directly into query caches.
     // Instead, invalidate queries so TanStack Query refetches freshly authorized data through backend authorization.
     if (detailKey) {
       void queryClient.invalidateQueries({ queryKey: detailKey });
@@ -1226,6 +1229,8 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       let targetWrId = (
         payloadObj.new?.work_request_id ??
         payloadObj.new?.workRequestId ??
+        payloadObj.old?.work_request_id ??
+        payloadObj.old?.workRequestId ??
         incomingRecord.work_request_id ??
         incomingRecord.workRequestId
       ) as string | undefined;
@@ -1234,13 +1239,24 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       }
       if (targetWrId) {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(targetWrId) });
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.taskDetail(targetWrId, id) });
         void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(targetWrId) });
       }
+      void queryClient.invalidateQueries({ queryKey: [...operationsKeys.workRequests(), 'list'] });
       void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(id) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
     }
     if (options.table === 'work_requests') {
       void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(id) });
       void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestRelated(id) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequests() });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCreationApprovals() });
+    }
+    if (options.table === 'operations_requests') {
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.requests() });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.requestCounts(activeEntity) });
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.requestDetail(id) });
     }
 
     // Check for assignment changes on work_requests, tasks, or task_assignees
@@ -1730,6 +1746,10 @@ export function useEntityRealtimeSync<T = Record<string, unknown>>(
             clearTimeout(newEntry.reconnectTimer);
             newEntry.reconnectTimer = undefined;
             reconnectAttempt = 0;
+            // Reconcile changes missed while this operations channel was disconnected.
+            if (['work_requests', 'tasks', 'operations_requests'].includes(options.table)) {
+              void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
+            }
             return;
           }
           const error = err as { message?: string; cause?: { code?: number; wasClean?: boolean } } | undefined;

@@ -281,139 +281,137 @@ export default function DisbursementsPage() {
           </select>
         </div>
 
-        {/* 2. Segmented Control (TabsList) styled consistently with Billing: full width, no extra container */}
-        <TabsList
-          className="w-full justify-start rounded-[8px] bg-sidebar p-1 border border-border gap-1 h-auto overflow-x-auto scrollbar-none flex flex-nowrap"
-          data-testid="queue-selector-segmented"
-        >
-          {isAllowedPendingApprovals && (
-            <TabsTrigger
-              value="pending-approvals"
-              className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-              data-testid="tab-pending-approvals"
-            >
-              <Clock className="h-3.5 w-3.5 text-warning" />
-              <span>{isAdmin ? 'Pending Approvals' : 'Funding Tracking'}</span>
-              <Badge
-                variant="secondary"
-                className="text-xs px-1.5 py-0 bg-warning-surface text-warning border border-warning-border"
-                data-testid="badge-pending-approvals"
-              >
-                {isAdmin ? initialRequestsCount + paymentReleasesCount : paymentReleasesCount}
-              </Badge>
-            </TabsTrigger>
-          )}
-
-          <TabsTrigger
-            value="all"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-all"
-          >
-            All
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="drafts"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-drafts"
-          >
-            <span>Drafts</span>
-            {needsCorrectionCount > 0 && (
-              <Badge
-                variant="secondary"
-                className="text-xs px-1.5 py-0 bg-warning-surface text-warning border border-warning-border ml-1.5"
-                data-testid="badge-needs-correction-count"
-              >
-                {needsCorrectionCount}
-              </Badge>
-            )}
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="approved"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-approved"
-          >
-            <FileCheck2 className="h-3.5 w-3.5" />
-            <span>Approved</span>
-            {readyForFundingCount > 0 && (
-              <Badge
-                variant="secondary"
-                className="text-xs px-1.5 py-0 bg-selected text-primary-hover"
-                data-testid="badge-approved-count"
-              >
-                {readyForFundingCount}
-              </Badge>
-            )}
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="funded"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-funded"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            <span>Funded</span>
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="released"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-released"
-          >
-            <DollarSign className="h-3.5 w-3.5 text-info" />
-            <span>Released</span>
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="rejected"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-rejected"
-          >
-            <XCircle className="h-3.5 w-3.5 text-danger-solid" />
-            <span>Rejected</span>
-          </TabsTrigger>
-
-          <TabsTrigger
-            value="archive"
-            className="rounded-[6px] px-3.5 py-2 text-xs sm:text-sm font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
-            data-testid="tab-archive"
-          >
-            <Archive className="h-3.5 w-3.5" />
-            <span>Archive</span>
-            {archivedCount > 0 && (
-              <Badge
-                variant="secondary"
-                className="text-xs tabular-nums px-1.5 py-0 rounded-[4px] border border-border bg-hover/70 text-ink font-medium"
-                data-testid="badge-archived-count"
-              >
-                {archivedCount}
-              </Badge>
-            )}
-          </TabsTrigger>
-        </TabsList>
-
-        {/* Queue Bar Controls / KPI Chips (Under the tabs, consistent with system modules) */}
+        {/* 2. Segmented Control (TabsList) & Inline KPI Chips (Always in line with inner navbar regardless of screen size) */}
         <div
-          className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 w-full"
+          className="flex items-center justify-between gap-2 w-full overflow-x-auto scrollbar-none flex-nowrap"
           data-testid="disbursements-queue-bar"
         >
+          <TabsList
+            className="w-auto justify-start rounded-[8px] bg-sidebar p-0.5 border border-border gap-0.5 h-auto flex flex-nowrap shrink-0"
+            data-testid="queue-selector-segmented"
+          >
+            {isAllowedPendingApprovals && (
+              <TabsTrigger
+                value="pending-approvals"
+                className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+                data-testid="tab-pending-approvals"
+              >
+                <Clock className="h-3 w-3 text-warning" />
+                <span>{isAdmin ? 'Pending Approvals' : 'Funding Tracking'}</span>
+                <Badge
+                  variant="secondary"
+                  className="text-[11px] px-1 py-0 bg-warning-surface text-warning border border-warning-border"
+                  data-testid="badge-pending-approvals"
+                >
+                  {isAdmin ? initialRequestsCount + paymentReleasesCount : paymentReleasesCount}
+                </Badge>
+              </TabsTrigger>
+            )}
 
-          {/* Right: Compact KPI Chips (Responsive & scrollable on narrower screens) */}
+            <TabsTrigger
+              value="all"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-all"
+            >
+              All
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="drafts"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-drafts"
+            >
+              <span>Drafts</span>
+              {needsCorrectionCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="text-[11px] px-1 py-0 bg-warning-surface text-warning border border-warning-border ml-1"
+                  data-testid="badge-needs-correction-count"
+                >
+                  {needsCorrectionCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="approved"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-approved"
+            >
+              <FileCheck2 className="h-3 w-3" />
+              <span>Approved</span>
+              {readyForFundingCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="text-[11px] px-1 py-0 bg-selected text-primary-hover"
+                  data-testid="badge-approved-count"
+                >
+                  {readyForFundingCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="funded"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-funded"
+            >
+              <CheckCircle2 className="h-3 w-3" />
+              <span>Funded</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="released"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-released"
+            >
+              <DollarSign className="h-3 w-3 text-info" />
+              <span>Released</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="rejected"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-rejected"
+            >
+              <XCircle className="h-3 w-3 text-danger-solid" />
+              <span>Rejected</span>
+            </TabsTrigger>
+
+            <TabsTrigger
+              value="archive"
+              className="rounded-[6px] px-2 sm:px-2.5 py-1 text-xs font-medium text-muted hover:bg-hover/70 hover:text-ink data-[state=active]:bg-surface data-[state=active]:text-primary-hover data-[state=active]:font-semibold data-[state=active]:shadow-2xs data-[state=active]:border-b-2 data-[state=active]:border-primary transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+              data-testid="tab-archive"
+            >
+              <Archive className="h-3 w-3" />
+              <span>Archive</span>
+              {archivedCount > 0 && (
+                <Badge
+                  variant="secondary"
+                  className="text-[11px] tabular-nums px-1 py-0 rounded-[4px] border border-border bg-hover/70 text-ink font-medium"
+                  data-testid="badge-archived-count"
+                >
+                  {archivedCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Right: Inline KPI Chips (Always in line with inner navbar regardless of screen size) */}
           <div
-            className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto scrollbar-none py-0.5 shrink-0 flex-nowrap sm:flex-wrap max-w-full"
+            className="flex items-center gap-1 sm:gap-1.5 shrink-0 flex-nowrap py-0.5"
             data-testid="queue-bar-kpi-chips"
           >
-            <div className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-[6px] bg-sidebar border border-border text-xs shrink-0">
-              <Layers className="h-3.5 w-3.5 text-primary shrink-0" />
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-[5px] bg-sidebar border border-border text-[11px] shrink-0">
+              <Layers className="h-3 w-3 text-primary shrink-0" />
               <span className="text-muted font-medium whitespace-nowrap">Active:</span>
               <span className="font-semibold tabular-nums text-ink" data-testid="kpi-active-count">
                 {activeCount}
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-[6px] bg-sidebar border border-border text-xs shrink-0">
-              <DollarSign className="h-3.5 w-3.5 text-primary shrink-0" />
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-[5px] bg-sidebar border border-border text-[11px] shrink-0">
+              <DollarSign className="h-3 w-3 text-primary shrink-0" />
               <span className="text-muted font-medium whitespace-nowrap">Awaiting:</span>
               <span
                 className="font-semibold tabular-nums text-ink"
@@ -423,8 +421,8 @@ export default function DisbursementsPage() {
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-[6px] bg-danger-surface border border-danger-border text-xs shrink-0">
-              <XCircle className="h-3.5 w-3.5 text-danger-solid shrink-0" />
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-[5px] bg-danger-surface border border-danger-border text-[11px] shrink-0">
+              <XCircle className="h-3 w-3 text-danger-solid shrink-0" />
               <span className="text-danger font-medium whitespace-nowrap">Rejected:</span>
               <span
                 className="font-semibold tabular-nums text-danger"
@@ -434,8 +432,8 @@ export default function DisbursementsPage() {
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-[6px] bg-sidebar border border-border text-xs shrink-0">
-              <Archive className="h-3.5 w-3.5 text-muted shrink-0" />
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded-[5px] bg-sidebar border border-border text-[11px] shrink-0">
+              <Archive className="h-3 w-3 text-muted shrink-0" />
               <span className="text-muted font-medium whitespace-nowrap">Archived:</span>
               <span
                 className="font-semibold tabular-nums text-muted"
@@ -445,12 +443,6 @@ export default function DisbursementsPage() {
               </span>
             </div>
           </div>
-
-          {/* Right: Search Slot Container */}
-          <div
-            className="flex items-center gap-2 empty:hidden"
-            data-testid="queue-bar-search-slot"
-          />
         </div>
 
         {/* 3. Eyeshare-Style Multi-Pane Workspace */}

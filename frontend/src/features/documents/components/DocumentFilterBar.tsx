@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/select';
 import { DOCUMENT_CATEGORIES, DOCUMENT_LIFECYCLE_STAGES } from '../api/types';
 import { CATEGORY_LABELS, LIFECYCLE_LABELS } from '../constants';
-
+import { DUE_DATE_FILTER_OPTIONS } from '@/lib/dateFilters';
 
 export interface DocumentFilterBarProps {
   search: string;
@@ -25,6 +25,18 @@ export interface DocumentFilterBarProps {
   onCategoryChange: (value: string) => void;
   lifecycle: string;
   onLifecycleChange: (value: string) => void;
+  workRequest?: string;
+  onWorkRequestChange?: (value: string) => void;
+  client?: string;
+  onClientChange?: (value: string) => void;
+  employee?: string;
+  onEmployeeChange?: (value: string) => void;
+  dueDate?: string;
+  onDueDateChange?: (value: string) => void;
+  workRequests?: Array<{ id: string; title: string; work_order_number?: string | null }>;
+  clients?: Array<{ id: string; name: string }>;
+  team?: Array<{ id: string; name: string }>;
+  isAdmin?: boolean;
   onReset: () => void;
   onUploadClick?: () => void;
   canUpload?: boolean;
@@ -37,11 +49,31 @@ export function DocumentFilterBar({
   onCategoryChange,
   lifecycle,
   onLifecycleChange,
+  workRequest,
+  onWorkRequestChange,
+  client,
+  onClientChange,
+  employee,
+  onEmployeeChange,
+  dueDate,
+  onDueDateChange,
+  workRequests = [],
+  clients = [],
+  team = [],
+  isAdmin = false,
   onReset,
   onUploadClick,
   canUpload = false,
 }: DocumentFilterBarProps) {
-  const isFiltered = Boolean(search || category || lifecycle);
+  const isFiltered = Boolean(
+    search ||
+      category ||
+      lifecycle ||
+      (workRequest && workRequest !== 'all') ||
+      (client && client !== 'all') ||
+      (employee && employee !== 'all') ||
+      (dueDate && dueDate !== 'all')
+  );
 
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-[#FFFFFF] p-3 border-[#E2E8F0] rounded-[6px]">
@@ -79,7 +111,7 @@ export function DocumentFilterBar({
         </div>
 
         {/* Lifecycle Select */}
-        <div className="w-[180px]">
+        <div className="w-[150px] sm:w-[170px]">
           <Select
             value={lifecycle || 'all'}
             onValueChange={(val) => onLifecycleChange(val === 'all' ? '' : val)}
@@ -97,6 +129,93 @@ export function DocumentFilterBar({
             </SelectContent>
           </Select>
         </div>
+
+        {/* Work Request Filter */}
+        {onWorkRequestChange && (
+          <div className="w-[150px] sm:w-[170px]">
+            <Select
+              value={workRequest || 'all'}
+              onValueChange={(val) => onWorkRequestChange(val === 'all' ? '' : val)}
+            >
+              <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-work-request-filter">
+                <SelectValue placeholder="All Work Requests" />
+              </SelectTrigger>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                <SelectItem value="all">All Work Requests</SelectItem>
+                {workRequests.map((wr) => (
+                  <SelectItem key={wr.id} value={wr.id}>
+                    {wr.title || wr.work_order_number || wr.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Client Filter */}
+        {onClientChange && (
+          <div className="w-[140px] sm:w-[160px]">
+            <Select
+              value={client || 'all'}
+              onValueChange={(val) => onClientChange(val === 'all' ? '' : val)}
+            >
+              <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-client-filter">
+                <SelectValue placeholder="All Clients" />
+              </SelectTrigger>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                <SelectItem value="all">All Clients</SelectItem>
+                {clients.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Employee Filter (Admin only) */}
+        {isAdmin && onEmployeeChange && (
+          <div className="w-[140px] sm:w-[160px]">
+            <Select
+              value={employee || 'all'}
+              onValueChange={(val) => onEmployeeChange(val === 'all' ? '' : val)}
+            >
+              <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-employee-filter">
+                <SelectValue placeholder="All Employees" />
+              </SelectTrigger>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                <SelectItem value="all">All Employees</SelectItem>
+                {team.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {/* Due Date Filter */}
+        {onDueDateChange && (
+          <div className="w-[130px] sm:w-[150px]">
+            <Select
+              value={dueDate || 'all'}
+              onValueChange={(val) => onDueDateChange(val === 'all' ? '' : val)}
+            >
+              <SelectTrigger className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" data-testid="document-due-date-filter">
+                <SelectValue placeholder="All Due Dates" />
+              </SelectTrigger>
+              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                {DUE_DATE_FILTER_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
 
         {/* Reset Filters Button */}
         {isFiltered && (

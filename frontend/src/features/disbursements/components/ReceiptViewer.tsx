@@ -11,7 +11,6 @@ import {
   Receipt,
   AlertCircle,
   FileText,
-  Eye,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -49,6 +48,43 @@ export function ReceiptViewer({
   const [rotation, setRotation] = useState(0);
   const [imageLoadError, setImageLoadError] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!receiptData?.url || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      const response = await fetch(receiptData.url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch file: ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const tempLink = document.createElement('a');
+      tempLink.href = objectUrl;
+      tempLink.download = fileName || 'receipt';
+      document.body.appendChild(tempLink);
+      tempLink.click();
+      document.body.removeChild(tempLink);
+      setTimeout(() => {
+        if (typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(objectUrl);
+        }
+      }, 100);
+    } catch {
+      const fallbackLink = document.createElement('a');
+      fallbackLink.href = receiptData.url;
+      fallbackLink.download = fileName || 'receipt';
+      fallbackLink.target = '_blank';
+      fallbackLink.rel = 'noopener noreferrer';
+      document.body.appendChild(fallbackLink);
+      fallbackLink.click();
+      document.body.removeChild(fallbackLink);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   useEffect(() => {
     setImageLoadError(false);
@@ -69,7 +105,6 @@ export function ReceiptViewer({
       /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName)
   );
 
-  const fileType = isPdf ? 'PDF receipt' : isImage ? 'Image receipt' : 'Receipt attachment';
   const unavailable = receiptData?.status === 'unavailable';
   const canView = Boolean(receiptData?.url && !isReceiptError && !unavailable);
 
@@ -146,54 +181,6 @@ export function ReceiptViewer({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col space-y-2.5 h-full" data-testid="receipt-viewer-container">
-      {/* Compact attachment row */}
-      <div
-        className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-surface p-2.5 shrink-0"
-        data-testid="receipt-attachment-row"
-      >
-        <FileText className="h-4 w-4 shrink-0 text-muted" />
-        <div className="min-w-0 flex-1 basis-32">
-          <p className="break-words text-xs font-medium text-ink" data-testid="receipt-file-name">
-            {fileName}
-          </p>
-          <p className="text-[11px] text-muted">{fileType}</p>
-        </div>
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="group"
-          aria-label="Receipt attachment actions"
-        >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!canView}
-            onClick={() => setIsModalOpen(true)}
-            className="h-7 px-2.5 text-xs font-medium text-ink hover:bg-hover inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
-            data-testid="btn-preview-receipt"
-            aria-label="View"
-            title="Open canonical document viewer modal"
-          >
-            <Eye className="h-3 w-3" />
-            <span>View</span>
-          </Button>
-          {canView && (
-            <a
-              href={receiptData?.url}
-              download={fileName}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border px-2.5 text-xs font-medium text-ink hover:bg-hover"
-              data-testid="btn-download-receipt"
-              aria-label="Download"
-            >
-              <Download className="h-3 w-3" />
-              <span>Download</span>
-            </a>
-          )}
-        </div>
-      </div>
-
       {/* Loading signed URL status */}
       {(isLoadingReceipt || (isFetchingReceipt && !receiptData?.url)) && (
         <p role="status" className="text-xs text-muted">
@@ -237,7 +224,7 @@ export function ReceiptViewer({
         <>
           {/* Compact Viewer Toolbar */}
           <div
-            className="flex items-center gap-1 p-1 bg-sidebar rounded-[4px] border border-border overflow-x-auto scrollbar-none shrink-0"
+            className="flex items-center gap-0.5 sm:gap-1 p-0.5 sm:p-1 bg-sidebar rounded-[4px] border border-border overflow-x-auto scrollbar-none shrink-0"
             role="toolbar"
             aria-label="Receipt document controls"
           >
@@ -255,7 +242,7 @@ export function ReceiptViewer({
             </Button>
 
             <div
-              className="h-6 px-1 flex items-center justify-center text-[10px] font-mono tabular-nums text-text-secondary bg-surface rounded-[4px] border border-border min-w-[36px] select-none shrink-0 whitespace-nowrap"
+              className="h-6 px-1 flex items-center justify-center text-[10px] font-mono tabular-nums text-text-secondary bg-surface rounded-[4px] border border-border min-w-[32px] select-none shrink-0 whitespace-nowrap"
               title="Current zoom level"
             >
               {zoom}%
@@ -279,7 +266,7 @@ export function ReceiptViewer({
               variant="outline"
               size="sm"
               onClick={handleFit}
-              className="h-6 px-1.5 text-xs font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
+              className="h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-0.5 cursor-pointer shrink-0 whitespace-nowrap"
               title="Reset zoom and rotation to 100%"
               aria-label="Fit"
             >
@@ -292,7 +279,7 @@ export function ReceiptViewer({
               variant="outline"
               size="sm"
               onClick={handleRotate}
-              className="h-6 px-1.5 text-xs font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
+              className="h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-0.5 cursor-pointer shrink-0 whitespace-nowrap"
               title="Rotate 90 degrees clockwise"
               aria-label="Rotate"
             >
@@ -308,7 +295,7 @@ export function ReceiptViewer({
               data-testid="btn-open-modal-receipt"
               aria-label="Open modal viewer"
               title="Open full document modal viewer"
-              className="h-6 px-1.5 text-xs font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-1 cursor-pointer shrink-0 whitespace-nowrap"
+              className="h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border hover:bg-hover flex items-center gap-0.5 cursor-pointer shrink-0 whitespace-nowrap"
             >
               <Maximize className="h-3 w-3 text-muted shrink-0" />
               <span>Modal</span>
@@ -318,13 +305,31 @@ export function ReceiptViewer({
               href={receiptData.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="h-6 px-1.5 text-xs font-medium text-ink bg-surface border-border rounded-[4px] hover:bg-hover inline-flex items-center gap-1 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
+              className="h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border rounded-[4px] hover:bg-hover inline-flex items-center gap-0.5 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
               data-testid="btn-open-newtab-receipt"
               title="Open receipt in a new browser tab"
               aria-label="Open in new tab"
             >
               <ExternalLink className="h-3 w-3 text-muted shrink-0" />
               <span>New tab</span>
+            </a>
+
+            <a
+              href={receiptData.url}
+              download={fileName}
+              onClick={handleDownload}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cn(
+                'h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border rounded-[4px] hover:bg-hover inline-flex items-center gap-0.5 cursor-pointer transition-colors shrink-0 whitespace-nowrap',
+                isDownloading && 'opacity-60 pointer-events-none'
+              )}
+              data-testid="btn-download-receipt"
+              title="Download receipt"
+              aria-label="Download"
+            >
+              <Download className={cn('h-3 w-3 text-muted shrink-0', isDownloading && 'animate-spin')} />
+              <span>{isDownloading ? 'Saving…' : 'Download'}</span>
             </a>
 
             <Button
@@ -349,7 +354,7 @@ export function ReceiptViewer({
           {/* Document Well */}
           {isImage ? (
             <div
-              className="w-full flex-1 min-h-[220px] bg-viewer-bg rounded-[4px] border border-border p-2 overflow-auto flex items-center justify-center relative overscroll-contain"
+              className="w-full flex-1 min-h-[160px] max-h-[340px] sm:max-h-[380px] bg-viewer-bg rounded-[4px] border border-border p-1.5 overflow-auto flex items-center justify-center relative overscroll-contain"
               data-testid="receipt-preview-viewport"
             >
               {imageLoadError ? (
@@ -401,7 +406,7 @@ export function ReceiptViewer({
             </div>
           ) : isPdf ? (
             <div
-              className="w-full flex-1 min-h-[220px] bg-viewer-bg rounded-[4px] border border-border overflow-hidden flex flex-col"
+              className="w-full flex-1 min-h-[160px] max-h-[340px] sm:max-h-[380px] bg-viewer-bg rounded-[4px] border border-border overflow-hidden flex flex-col"
               data-testid="receipt-preview-viewport"
             >
               <object

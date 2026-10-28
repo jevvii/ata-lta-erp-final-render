@@ -67,9 +67,7 @@ export const createTransmittalSchema = z
       .nullable(),
     linkedTaskId: z
       .string()
-      .uuid('Linked task ID must be a valid UUID')
-      .optional()
-      .nullable(),
+      .uuid('Linked task ID must be a valid UUID'),
     boardOrder: z.number().int().optional().default(0),
     status: z.never({ message: 'status forgery is prohibited: server assigns initial Draft status' }).optional(),
   })
@@ -87,34 +85,42 @@ export const createTransmittalSchema = z
  * Schema for updating an existing transmittal.
  * In non-Draft status, backend allows only boardOrder updates.
  */
-export const updateTransmittalSchema = z.object({
-  clientId: z.string().uuid('Client ID must be a valid UUID').optional(),
-  workRequestId: z.string().uuid('Work request ID must be a valid UUID').optional().nullable(),
-  trackingNumber: z
-    .string()
-    .min(1, 'Tracking number is required')
-    .max(50, 'Tracking number must be at most 50 characters')
-    .optional(),
-  items: z.array(transmittalItemSchema).min(1, 'Items array if provided must contain at least 1 item').optional(),
-  notes: z.string().max(2000, 'Notes must be at most 2000 characters').optional().nullable(),
-  recipientName: z
-    .string()
-    .max(255, 'Recipient name must be at most 255 characters')
-    .optional()
-    .nullable(),
-  recipientDetails: z
-    .string()
-    .max(1000, 'Recipient details must be at most 1000 characters')
-    .optional()
-    .nullable(),
-  linkedTaskId: z
-    .string()
-    .uuid('Linked task ID must be a valid UUID')
-    .optional()
-    .nullable(),
-  boardOrder: z.number().int().optional(),
-  expectedVersion: z.number().int().positive().optional(),
-});
+export const updateTransmittalSchema = z
+  .object({
+    clientId: z.string().uuid('Client ID must be a valid UUID').optional(),
+    workRequestId: z.string().uuid('Work request ID must be a valid UUID').optional(),
+    trackingNumber: z
+      .string()
+      .min(1, 'Tracking number is required')
+      .max(50, 'Tracking number must be at most 50 characters')
+      .optional(),
+    items: z
+      .array(transmittalItemSchema)
+      .min(1, 'Items array if provided must contain at least 1 item')
+      .optional(),
+    notes: z.string().max(2000, 'Notes must be at most 2000 characters').optional().nullable(),
+    recipientName: z
+      .string()
+      .max(255, 'Recipient name must be at most 255 characters')
+      .optional()
+      .nullable(),
+    recipientDetails: z
+      .string()
+      .max(1000, 'Recipient details must be at most 1000 characters')
+      .optional()
+      .nullable(),
+    linkedTaskId: z.string().uuid('Linked task ID must be a valid UUID').optional(),
+    boardOrder: z.number().int().optional(),
+    expectedVersion: z.number().int().positive().optional(),
+  })
+  .refine((data) => !data.workRequestId || Boolean(data.linkedTaskId), {
+    message: 'Linked task is required when a work request is associated',
+    path: ['linkedTaskId'],
+  })
+  .refine((data) => !data.linkedTaskId || Boolean(data.workRequestId), {
+    message: 'Work request is required when a linked task is associated',
+    path: ['workRequestId'],
+  });
 
 /**
  * Schema for send action body.

@@ -3,6 +3,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { create } from 'zustand';
 import { Loader2, AlertCircle, CheckCircle2, RotateCcw } from 'lucide-react';
 import { ApiError, queryClient } from '@/lib/api';
+import { isConcurrencyConflictError } from '@/components/common/ConflictResolutionModal';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -301,9 +302,27 @@ export async function runBlockingAction<T>(options: RunBlockingActionOptions<T>)
   } catch (err: unknown) {
     if (timerId) clearTimeout(timerId);
 
+    const isConflict =
+      isConcurrencyConflictError(err) ||
+      (err instanceof ApiError && err.status === 409);
+
+    // Invalidate caches immediately upon 409 conflict so UI updates to latest authoritative state
+    if (isConflict && options.invalidateQueries && options.invalidateQueries.length > 0) {
+      void Promise.all(
+        options.invalidateQueries.map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey })
+        )
+      );
+    }
+
     // Extract verbatim RFC 7807 error details
     const errorDetails = extractRfc7807Error(err);
     store.setError(errorDetails);
+
+    // If conflict, disable blind replay without auto-rebasing
+    if (isConflict) {
+      useBlockingModalStore.setState({ onRetry: null });
+    }
 
     throw err;
   }

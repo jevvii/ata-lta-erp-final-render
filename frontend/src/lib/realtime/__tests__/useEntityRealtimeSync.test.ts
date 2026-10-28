@@ -40,6 +40,7 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
         queries: { retry: false },
       },
     });
+    vi.spyOn(queryClient, 'invalidateQueries');
     localStorage.clear();
     clearLocalMutationsForTesting();
     clearChannelRegistryForTesting();
@@ -81,6 +82,16 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(channelSpy).toHaveBeenCalledWith('cdc_work_requests');
     });
 
+    it('refetches authorized operations queries when a realtime channel reconnects', async () => {
+      const { unmount } = renderHook(() => useEntityRealtimeSync({ table: 'work_requests' }), { wrapper: createWrapper() });
+      await act(async () => { await Promise.resolve(); });
+      vi.mocked(queryClient.invalidateQueries).mockClear();
+      const channel = supabase.channel('cdc_work_requests') as unknown as MockRealtimeChannel;
+      act(() => channel.emitStatus('SUBSCRIBED'));
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.all });
+      unmount();
+    });
+
     it('receives and processes live postgres_changes events for work_requests', () => {
       useSessionStore.setState({
       activeEntity: 'ATA',
@@ -110,7 +121,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       });
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-live-1'));
-      expect(cached?.title).toBe('Live Update WR');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-live-1') }));
     });
 
     it('receives and processes live postgres_changes events for invoices', () => {
@@ -259,7 +271,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-1'));
-      expect(cached?.title).toBe('ATA Updated');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-1') }));
     });
 
     it('processes events when activeEntity is ALL regardless of payload entity', () => {
@@ -275,7 +288,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-2'));
-      expect(cached?.title).toBe('LTA Handled Under ALL');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-2') }));
     });
 
     it('gracefully allows tables without entity_id such as tasks', () => {
@@ -301,7 +315,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.taskDetail('wr-1', 'task-1'));
-      expect(cached?.title).toBe('Task Updated');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.taskDetail('wr-1', 'task-1') }));
     });
 
     it('discards payloads with entity_id: null when activeEntity is ATA', () => {
@@ -350,7 +365,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-uuid'));
-      expect(cached?.title).toBe('UUID Match');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-uuid') }));
     });
 
     it('discards tenant-scoped payloads when activeEntity is null in unassigned session', () => {
@@ -403,7 +419,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       const cached = queryClient.getQueryData<TestRecord>(
         operationsKeys.workRequestDetail('wr-ata-cdc')
       );
-      expect(cached?.title).toBe('ATA Live CDC Update');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-ata-cdc') }));
     });
 
     it('discards payload with raw LTA entity_id UUID when activeEntity is ATA (without activeEntityUUID)', () => {
@@ -466,7 +483,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       const cached = queryClient.getQueryData<TestRecord>(
         operationsKeys.workRequestDetail('wr-lta-match')
       );
-      expect(cached?.title).toBe('LTA Live Match');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-lta-match') }));
     });
 
     it('discards payload with raw ATA entity_id UUID when activeEntity is LTA', () => {
@@ -522,7 +540,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       const cached = queryClient.getQueryData<TestRecord>(
         operationsKeys.workRequestDetail('wr-casing-cdc')
       );
-      expect(cached?.title).toBe('Casing Match');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-casing-cdc') }));
     });
   });
 
@@ -592,7 +611,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-10'));
-      expect(cached?.title).toBe('Duplicate V5');
+      expect(cached?.title).toBe('Original V5');
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-10'))?.isInvalidated).toBe(true);
       expect(cached?.version).toBe(5);
     });
 
@@ -659,8 +679,9 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-10'));
-      expect(cached?.title).toBe('Newer V6');
-      expect(cached?.version).toBe(6);
+      expect(cached?.title).toBe('Original V5');
+      expect(cached?.version).toBe(5);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-10'))?.isInvalidated).toBe(true);
     });
 
     it('accepts payloads when cached version is undefined or cache is empty', () => {
@@ -685,7 +706,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-new-unversioned'));
-      expect(cached?.title).toBe('Uncached');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-new-unversioned') }));
     });
   });
 
@@ -783,7 +805,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-25'));
-      expect(cached?.title).toBe('Peer Tab Write');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-25') }));
     });
   });
 
@@ -791,7 +814,7 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
   // Criterion 6: TanStack Query Cache Reconciliation
   // =========================================================================
   describe('Criterion 6: TanStack Query Cache Reconciliation', () => {
-    it('patches detail and list caches on UPDATE', () => {
+    it('invalidates operations detail and list caches without injecting unauthorized row data', () => {
       useSessionStore.setState({
       activeEntity: 'ATA',
       user: {
@@ -829,12 +852,14 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(processed).toBe(true);
 
       const updatedDetail = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-100'));
-      expect(updatedDetail?.title).toBe('Updated Title');
-      expect(updatedDetail?.version).toBe(2);
+      expect(updatedDetail?.title).toBe('Initial Title');
+      expect(updatedDetail?.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-100'))?.isInvalidated).toBe(true);
 
       const updatedList = queryClient.getQueryData<{ data: TestRecord[] }>(operationsKeys.workRequestsList('ATA'));
-      expect(updatedList?.data?.[0]?.title).toBe('Updated Title');
-      expect(updatedList?.data?.[0]?.version).toBe(2);
+      expect(updatedList?.data?.[0]?.title).toBe('Initial Title');
+      expect(updatedList?.data?.[0]?.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestsList('ATA'))?.isInvalidated).toBe(true);
       expect(updatedList?.data?.[1]?.title).toBe('Other Title');
     });
 
@@ -1038,7 +1063,7 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       expect(list?.data?.[0]?.id).toBe('inv-infer-ins');
     });
 
-    it('updates nested task inside work request phases cache on task UPDATE', () => {
+    it('invalidates parent phases on task UPDATE while preserving the authorized nested task', () => {
       useSessionStore.setState({
       activeEntity: 'ATA',
       user: {
@@ -1084,8 +1109,10 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
 
       const list = queryClient.getQueryData<{ data: TestRecord[] }>(operationsKeys.workRequestsList('ATA'));
       const updatedPhaseTask = list?.data?.[0]?.phases?.[0]?.tasks?.[0];
-      expect(updatedPhaseTask?.title).toBe('Updated Nested Task');
-      expect(updatedPhaseTask?.status).toBe('Done');
+      expect(updatedPhaseTask?.title).toBe('Initial Task');
+      expect(updatedPhaseTask?.status).toBe('Pending');
+      expect(queryClient.getQueryState(operationsKeys.workRequestsList('ATA'))?.isInvalidated).toBe(true);
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.tasks('wr-parent') }));
     });
   });
 
@@ -1139,7 +1166,8 @@ describe('useEntityRealtimeSync and Three-Guard CDC Engine (R4 Criteria)', () =>
       });
 
       const cached = queryClient.getQueryData<TestRecord>(operationsKeys.workRequestDetail('wr-multiplex-1'));
-      expect(cached?.title).toBe('Hook B Alive');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ queryKey: operationsKeys.workRequestDetail('wr-multiplex-1') }));
 
       // Now unmount Hook B
       hookB.unmount();

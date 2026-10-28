@@ -63,7 +63,27 @@ const esc = (value: unknown): string =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-const dateOnly = (value?: string | null): string => value?.slice(0, 10) ?? '';
+export function formatMmDdYyyy(value?: string | null): string {
+  if (!value) return '';
+  const trimmed = String(value).trim();
+  if (!trimmed) return '';
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const [, y, m, d] = match;
+    return `${m}/${d}/${y}`;
+  }
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    const y = parsed.getFullYear();
+    return `${m}/${d}/${y}`;
+  }
+  return trimmed;
+}
 
 export function getDisbursementPrintDetails(d: DisbursementDocumentData): DisbursementPrintDetails {
   const requester =
@@ -75,13 +95,13 @@ export function getDisbursementPrintDetails(d: DisbursementDocumentData): Disbur
     d.createdByName ||
     '';
   const paid = ['Released', 'Funded'].includes(d.status);
-  return {
+  const details: DisbursementPrintDetails = {
     requesterName: requester,
     referenceNumber: d.disbursement_number || d.disbursementNumber || d.id,
-    submittedDate: dateOnly(d.created_at || d.createdAt),
+    submittedDate: formatMmDdYyyy(d.created_at || d.createdAt),
     workRequestName: d.linked_work_request_name || d.linked_work_request_order_number || '',
     paymentDate: paid
-      ? dateOnly(d.payment_date || d.paymentDate || d.released_at || d.releasedAt)
+      ? formatMmDdYyyy(d.payment_date || d.paymentDate || d.released_at || d.releasedAt)
       : '',
     paymentMethod: paid ? d.payment_method || d.paymentMethod || '' : '',
     paymentReference: paid ? d.payment_reference || d.paymentReference || '' : '',
@@ -91,6 +111,13 @@ export function getDisbursementPrintDetails(d: DisbursementDocumentData): Disbur
     releasedBy: d.released_by_name || d.releasedByName || '',
     ...d.print_details,
   };
+  if (details.submittedDate) {
+    details.submittedDate = formatMmDdYyyy(details.submittedDate);
+  }
+  if (details.paymentDate) {
+    details.paymentDate = formatMmDdYyyy(details.paymentDate);
+  }
+  return details;
 }
 
 export function disbursementAmountInWords(amount: number): string {
@@ -171,7 +198,7 @@ export const DISBURSEMENT_DOCUMENT_CSS = `
 .disbursement-document .voucher-items th { background: #f5f5f5; font-weight: 700; }
 .disbursement-document .voucher-items .voucher-number { text-align: right; font-variant-numeric: tabular-nums; }
 .disbursement-document .voucher-totals { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
-.disbursement-document .voucher-total { border: 3px double #111; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; }
+.disbursement-document .voucher-total { grid-column: 2; border: 3px double #111; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; }
 .disbursement-document .voucher-total-amount { font-size: 16pt; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .disbursement-document .voucher-payment { margin-bottom: 24px; break-inside: avoid; }
 .disbursement-document .voucher-payment-fields { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 16px; }
@@ -205,7 +232,7 @@ export function buildDisbursementDocument(
   return `<header class="voucher-header"><div class="voucher-company">${includeCompany ? `${options.noLogo ? '' : `<img class="voucher-logo" src="/ERP_Assets/${entity}-LOGO.jpg" alt="${entity} Logo">`}<div class="voucher-company-name">${esc(company)}</div>` : ''}</div><div><h1 class="voucher-title">Expense Report</h1><p class="voucher-subtitle">Payment Voucher</p></div></header>
   <div class="voucher-meta"><section class="voucher-box" data-testid="requester-box"><h3 class="voucher-label">Employee / Requester</h3><p class="voucher-field"><strong>${esc(details.requesterName)}</strong></p><p class="voucher-field">Status: ${esc(d.status)}</p><p class="voucher-field">Fund Source: ${esc(d.fund_source || d.fundSource || 'Firm Fund')}</p></section><section class="voucher-box">${metadata('Ref No.:', details.referenceNumber)}${metadata('Date Submitted:', details.submittedDate)}${details.workRequestName ? `<div data-testid="print-work-request">${metadata('Work Request:', details.workRequestName)}</div>` : ''}</section></div>
   <table class="voucher-items" data-testid="disbursement-items-table"><colgroup><col style="width:22%"><col style="width:40%"><col style="width:18%"><col style="width:20%"></colgroup><thead><tr><th>Category</th><th>Description</th><th>Fund Source</th><th class="voucher-number">Amount</th></tr></thead><tbody><tr><td>${esc(d.category)}</td><td style="white-space:pre-wrap">${esc(d.description)}</td><td>${esc(d.fund_source || d.fundSource || 'Firm Fund')}</td><td class="voucher-number">₱${esc(formatAmount(d.amount))}</td></tr></tbody></table>
-  <div class="voucher-totals"><section class="voucher-box"><span class="voucher-label">Amount in Words</span><p data-testid="amount-in-words">${esc(disbursementAmountInWords(d.amount))}</p></section><section class="voucher-total"><strong>Total Amount:</strong><div>PHP <span class="voucher-total-amount" data-testid="disbursement-total-amount">${esc(formatAmount(d.amount))}</span></div></section></div>
+  <div class="voucher-totals"><div class="voucher-totals-spacer" aria-hidden="true"></div><section class="voucher-total"><strong>Total Amount:</strong><div>PHP <span class="voucher-total-amount" data-testid="disbursement-total-amount">${esc(formatAmount(d.amount))}</span></div></section></div>
   <section class="voucher-box voucher-payment"><h4 class="voucher-label">Payment Details</h4><div class="voucher-payment-fields">${payment('Date:', details.paymentDate)}${payment('Method:', details.paymentMethod)}${payment('Check/Ref No.:', details.paymentReference)}${payment('Bank/Branch:', details.paymentBank)}</div></section>
   ${d.notes ? `<section class="voucher-notes"><strong>Notes:</strong><p>${esc(d.notes)}</p></section>` : ''}
   <div class="voucher-signatures" data-testid="signatures-section">${signature('Prepared By', details.preparedBy, 'sig-prepared-by')}${signature('Approved By', details.approvedBy, 'sig-approved-by')}${signature('Released By', details.releasedBy, 'sig-released-by')}</div>`;

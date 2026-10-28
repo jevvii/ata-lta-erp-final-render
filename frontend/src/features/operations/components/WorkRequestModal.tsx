@@ -32,7 +32,7 @@ import { isChecklistEditor } from '../lib/taskScope';
 import { validateDependencies } from '../utils/dependencyValidator';
 import { parseTaskDelimiterInput } from '../hooks/useTokenizer';
 import { useSessionStore } from '@/lib/session';
-import { Lock } from 'lucide-react';
+import { Lock, Clock, XCircle } from 'lucide-react';
 import type {
   WorkRequest,
   Priority,
@@ -79,14 +79,18 @@ export function WorkRequestModal({
 }: WorkRequestModalProps) {
   const isEditMode = Boolean(workRequest?.id);
   const isCompleted = workRequest?.status === 'Completed';
+  const isResubmitMode = isEditMode && workRequest?.creationApprovalStatus === 'rejected';
   const activeSessionEntity = useSessionStore((state) => state.activeEntity);
 
   const user = useSessionStore((state) => state.user);
+  const isAuthorizedCreator = user?.role === 'Admin' || user?.role === 'Manager';
+  const isManagerCreation = !isEditMode && user?.role === 'Manager';
   const checklistEditable = isChecklistEditor(user);
 
   // Queries
-  const { data: team = [] } = useTeam();
-  const { createWorkRequest, updateWorkRequest } = useWorkRequestMutations();
+  const { data: rawTeam } = useTeam();
+  const team = useMemo(() => (Array.isArray(rawTeam) ? rawTeam : []), [rawTeam]);
+  const { createWorkRequest, updateWorkRequest, resubmitCreation } = useWorkRequestMutations();
   const { createTask, updateTask, deleteTask } = useTaskMutations(workRequest?.id);
 
   // Form State
@@ -96,7 +100,8 @@ export function WorkRequestModal({
   );
   const [clientId, setClientId] = useState<string>('');
   const [clientError, setClientError] = useState<string | null>(null);
-  const { data: clients = [] } = useClients({ entity }, { enabled: isOpen });
+  const { data: rawClients } = useClients({ entity }, { enabled: isOpen });
+  const clients = useMemo(() => (Array.isArray(rawClients) ? rawClients : []), [rawClients]);
   const [priority, setPriority] = useState<Priority>('Normal');
   const [dueDateError, setDueDateError] = useState<string | null>(null);
   const [dueDate, setDueDate] = useState<string>('');
@@ -368,11 +373,25 @@ export function WorkRequestModal({
       return;
     }
 
+    if (!isEditMode && !isAuthorizedCreator) {
+      return;
+    }
+
     // 5. Submit via Blocking Modal
     await runBlockingAction({
-      title: isEditMode ? 'Saving Work Request' : 'Creating Work Request',
-      message: isEditMode
+      title: isResubmitMode
+        ? 'Resubmitting Work Request'
+        : isEditMode
+        ? 'Saving Work Request'
+        : isManagerCreation
+        ? 'Submitting Work Request'
+        : 'Creating Work Request',
+      message: isResubmitMode
+        ? `Please wait while "${title}" is being resubmitted for approval...`
+        : isEditMode
         ? `Please wait while "${title}" is being updated...`
+        : isManagerCreation
+        ? 'Please wait while the work request is submitted for Admin approval...'
         : 'Please wait while the work request is being created...',
       apiCall: async () => {
         if (isEditMode && workRequest) {
@@ -394,11 +413,23 @@ export function WorkRequestModal({
             coAssignees,
             expectedVersion: workRequest.version,
           };
-          const savedWr = await updateWorkRequest({
-            id: workRequest.id,
-            data: updatePayload,
-            entity,
-          });
+          const savedWr = isResubmitMode
+            ? await resubmitCreation({
+                id: workRequest.id,
+                expectedVersion: workRequest.version,
+                data: updatePayload,
+              })
+            : await updateWorkRequest({
+                id: workRequest.id,
+                data: updatePayload,
+                entity,
+              });
+
+          // In resubmit mode, dedicated resubmitCreation atomically updates the WR header
+          // and re-enters pending state. Ordinary task endpoints would reject mutations on a pending WR.
+          if (isResubmitMode) {
+            return savedWr;
+          }
 
           // Sync task modifications per operations@2.0.0 §3.8
           const existingTasks = workRequest.tasks || [];
@@ -590,13 +621,24 @@ export function WorkRequestModal({
           return createWorkRequest(createPayload);
         }
       },
-      successTitle: isEditMode ? 'Work Request Updated' : 'Work Request Created',
-      successMessage: isEditMode
+      successTitle: isResubmitMode
+        ? 'Work Request Resubmitted'
+        : isEditMode
+        ? 'Work Request Updated'
+        : isManagerCreation
+        ? 'Work Request Submitted for Approval'
+        : 'Work Request Created',
+      successMessage: isResubmitMode
+        ? 'Your corrected work request has been resubmitted for Admin approval.'
+        : isEditMode
         ? 'Work request has been successfully updated.'
+        : isManagerCreation
+        ? 'Work request has been submitted for Admin approval. Track its review under Pending Approvals.'
         : 'Work request has been successfully created.',
       invalidateQueries: [
         operationsKeys.workRequests(),
         operationsKeys.workRequestCounts(activeSessionEntity),
+        operationsKeys.workRequestCreationApprovals(),
         ...(isEditMode && workRequest
           ? [
               operationsKeys.workRequestDetail(workRequest.id),
@@ -628,10 +670,50 @@ export function WorkRequestModal({
         <DialogHeader className="px-6 py-4 border-b border-[#E2E8F0]">
           <div className="flex items-center justify-between">
             <DialogTitle className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
-              {isEditMode ? 'Edit Work Request' : 'New Work Request'}
+              {isResubmitMode
+                ? 'Resubmit Work Request'
+                : isEditMode
+                ? 'Edit Work Request'
+                : 'New Work Request'}
             </DialogTitle>
           </div>
         </DialogHeader>
+
+        {/* Unauthorized Creator Banner */}
+        {!isEditMode && !isAuthorizedCreator && (
+          <div
+            className="px-6 py-2.5 bg-[#FEF2F2] border-b border-[#FCA5A5] flex items-center gap-2 text-xs font-semibold text-[#DC2626]"
+            data-testid="unauthorized-wr-creator-banner"
+          >
+            <Lock className="h-4 w-4 shrink-0" />
+            <span>Work Request creation is restricted to Admin and Manager roles.</span>
+          </div>
+        )}
+
+        {/* Manager Creation Pending Approval Notice */}
+        {isManagerCreation && (
+          <div
+            className="px-6 py-2.5 bg-[#FEFCE8] border-b border-[#FDE047] flex items-center gap-2 text-xs font-medium text-[#854D0E]"
+            data-testid="manager-wr-pending-notice"
+          >
+            <Clock className="h-4 w-4 text-[#D97706] shrink-0" />
+            <span>Work requests created by Managers require Admin approval before appearing on the active board.</span>
+          </div>
+        )}
+
+        {/* Rejection Reason Banner for Resubmit */}
+        {isResubmitMode && Boolean(workRequest?.rejectionReason) && (
+          <div
+            className="px-6 py-2.5 bg-[#FEF2F2] border-b border-[#FCA5A5] flex flex-col gap-1 text-xs text-[#DC2626]"
+            data-testid="rejection-reason-banner"
+          >
+            <div className="font-semibold flex items-center gap-1.5">
+              <XCircle className="h-4 w-4 shrink-0" />
+              <span>Rejection Reason from Admin:</span>
+            </div>
+            <p className="pl-5.5 text-[#991B1B] font-medium">{workRequest?.rejectionReason}</p>
+          </div>
+        )}
 
         {/* Completed Work Request Locked Banner */}
         {isCompleted && (
@@ -872,16 +954,31 @@ export function WorkRequestModal({
           </div>
 
           {/* Task Line Items (Notion-style) */}
+          {isResubmitMode && (
+            <div
+              className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[6px] text-xs text-[#475569] space-y-1"
+              data-testid="resubmit-task-lock-notice"
+            >
+              <span className="font-semibold text-[#1E293B] flex items-center gap-1.5">
+                <Lock className="h-3.5 w-3.5 text-[#64748B]" />
+                Initial Tasks Locked During Resubmission
+              </span>
+              <p>
+                Initial tasks are read-only during work request resubmission. Correct the header details, client, priority, due date, and assigned lead above to resubmit for review.
+              </p>
+            </div>
+          )}
           <TaskLineItems
             tasks={tasks}
             onChange={(newTasks) => {
+              if (isResubmitMode) return;
               setTasks(newTasks);
               setIsDirty(true);
             }}
             projectTeam={projectTeam}
-            disabled={isCompleted}
+            disabled={isCompleted || isResubmitMode}
             isEditMode={isEditMode}
-            checklistEditable={checklistEditable}
+            checklistEditable={checklistEditable && !isResubmitMode}
             defaultPhase={workRequest?.phase === 'processing' ? 'processing' : 'pre_processing'}
           />
           </fieldset>
@@ -902,11 +999,17 @@ export function WorkRequestModal({
             variant="default"
             size="sm"
             onClick={handleSubmit}
-            disabled={isCompleted}
+            disabled={isCompleted || (!isEditMode && !isAuthorizedCreator)}
             data-testid="wr-modal-submit-btn"
             className="text-xs tracking-normal font-bold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
           >
-            {isEditMode ? 'Save Changes' : 'Create Work Request'}
+            {isResubmitMode
+              ? 'Resubmit for Approval'
+              : isEditMode
+              ? 'Save Changes'
+              : isManagerCreation
+              ? 'Submit for Approval'
+              : 'Create Work Request'}
           </Button>
         </DialogFooter>
       </DialogContent>

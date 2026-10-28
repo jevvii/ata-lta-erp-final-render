@@ -22,6 +22,7 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
         amount: 25000.5,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
         clientId: validUuid,
         dueDate: '2026-11-01',
         notes: 'Pre-approved by managing partner',
@@ -31,8 +32,21 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       expect(parsed.amount).toBe(25000.5);
       expect(parsed.category).toBe('Professional Fee');
       expect(parsed.fundSource).toBe('Firm Fund');
+      expect(parsed.linkedTaskId).toBe(validUuid);
       // Verify status is undefined
       expect((parsed as Record<string, unknown>).status).toBeUndefined();
+    });
+
+    it('rejects payload missing linkedTaskId (Mandatory Linked Task)', () => {
+      const payloadWithoutTask = {
+        category: 'Professional Fee',
+        description: 'Retainer fee for external tax counsel',
+        amount: 25000.5,
+        fundSource: 'Firm Fund' as const,
+        linkedWorkRequestId: validUuid,
+      };
+
+      expect(createDisbursementSchema.safeParse(payloadWithoutTask).success).toBe(false);
     });
 
     it('rejects payload with explicit status (Status Anti-Forgery Guard)', () => {

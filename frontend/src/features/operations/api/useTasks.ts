@@ -1,6 +1,8 @@
+import { operationsViewerRefresh } from './viewerRefresh';
 import { dashboardKeys } from '@/features/dashboard/api/queryKeys';
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { apiRequest, ApiError } from '@/lib/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiRequest, ApiError, getScopeGeneration } from '@/lib/api';
+import { isConcurrencyConflictError } from '@/components/common/ConflictResolutionModal';
 import { useSessionStore } from '@/lib/session';
 import { broadcastEntityChange } from '@/lib/tabSync';
 import { operationsKeys } from './queryKeys';
@@ -24,6 +26,8 @@ export type {
   TaskRelatedTransmittal,
 };
 
+
+
 // ============================================================================
 // Queries
 // ============================================================================
@@ -46,8 +50,10 @@ export function useWorkRequestTasks(
       return res.data;
     },
     enabled: Boolean(workRequestId) && (options?.enabled ?? true),
-    // Instant feel: kanban columns/list keep previous rows during refetch.
-    placeholderData: keepPreviousData,
+    ...operationsViewerRefresh,
+  // Instant feel: kanban columns/list keep previous rows during refetch of the SAME WR.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey?.[3] === workRequestId ? previousData : undefined,
   });
 }
 
@@ -68,11 +74,22 @@ export function useTaskDetail(
         { signal }
       );
       if (Array.isArray(res?.data)) {
-        return (res.data.find((t) => t?.id === taskId) || res.data[0] || null) as Task | null;
+        const found = res.data.find((t) => t?.id === taskId);
+        if (!found) return null;
+        const taskWrId = found.workRequestId ?? (found as { work_request_id?: string }).work_request_id;
+        if (taskWrId && taskWrId !== workRequestId) return null;
+        return found as Task;
       }
-      return (res?.data ?? null) as Task | null;
+      const single = (res?.data ?? null) as Task | null;
+      if (single) {
+        if (single.id !== taskId) return null;
+        const taskWrId = single.workRequestId ?? (single as { work_request_id?: string }).work_request_id;
+        if (taskWrId && taskWrId !== workRequestId) return null;
+      }
+      return single;
     },
     enabled: Boolean(workRequestId && taskId) && (options?.enabled ?? true),
+    ...operationsViewerRefresh,
     // Instant feel: seed from the work request's task list cache while the
     // detail fetch completes. Placeholder never persists into the cache.
     placeholderData: (_prev): Task | undefined => {
@@ -137,6 +154,21 @@ export interface AddTimeLogsVariables {
   logs: TaskTimeLogInput[];
 }
 
+export interface TaskCreationApprovalVariables {
+  workRequestId?: string;
+  taskId: string;
+  decision: 'approve' | 'reject';
+  reason?: string;
+  expectedVersion: number;
+}
+
+export interface ResubmitTaskCreationVariables {
+  workRequestId?: string;
+  taskId: string;
+  expectedVersion: number;
+  data?: UpdateTaskInput;
+}
+
 export function useTaskMutations(boundWorkRequestId?: string) {
   const queryClient = useQueryClient();
   const activeEntity = useSessionStore((state) => state.activeEntity);
@@ -173,7 +205,7 @@ export function useTaskMutations(boundWorkRequestId?: string) {
     Task,
     ApiError,
     UpdateTaskVariables,
-    { wrId: string; prevList?: Task[]; prevDetail?: Task } | undefined
+    { wrId: string; prevList?: Task[]; prevDetail?: Task; scopeGeneration: number; optimisticStatus?: string } | undefined
   >({
     mutationFn: async ({ workRequestId = boundWorkRequestId, taskId, data }) => {
       if (!workRequestId) throw new Error('Work request ID is required');
@@ -189,6 +221,7 @@ export function useTaskMutations(boundWorkRequestId?: string) {
       return res.data;
     },
     onMutate: async (variables) => {
+      const scopeGeneration = getScopeGeneration();
       const wrId = variables.workRequestId || boundWorkRequestId;
       if (!wrId) return undefined;
 
@@ -197,19 +230,25 @@ export function useTaskMutations(boundWorkRequestId?: string) {
         queryKey: operationsKeys.taskDetail(wrId, variables.taskId),
       });
 
-      const prevList = queryClient.getQueryData<Task[]>(operationsKeys.tasks(wrId));
+      // Recheck scope generation after await cancelQueries before writing to optimistic cache
+      if (scopeGeneration !== getScopeGeneration()) {
+        throw new ApiError(499, 'Action cancelled: account or entity changed.');
+      }
+
+      const prevList = queryClient.getQueryData<Task[]>(operationsKeys.tasks(wrId, activeEntity))
+        ?? queryClient.getQueryData<Task[]>(operationsKeys.tasks(wrId));
       const prevDetail = queryClient.getQueryData<Task>(
         operationsKeys.taskDetail(wrId, variables.taskId)
       );
 
       const dataKeys = Object.keys(variables.data);
-      if (dataKeys.length === 1 && dataKeys[0] === 'status') {
+      const optimisticStatus = variables.data.status && dataKeys.every((key) => ['status', 'expectedVersion'].includes(key))
+        ? variables.data.status : undefined;
+      if (optimisticStatus) {
         const status = (variables.data as { status: TaskStatus }).status;
-        if (prevList) {
-          queryClient.setQueryData<Task[]>(
-            operationsKeys.tasks(wrId),
-            prevList.map((t) => (t.id === variables.taskId ? { ...t, status } : t))
-          );
+        for (const [key, rows] of queryClient.getQueriesData<Task[]>({ queryKey: operationsKeys.tasks(wrId) })) {
+          if (Array.isArray(rows)) queryClient.setQueryData(key,
+            rows.map((row) => row.id === variables.taskId ? { ...row, status } : row));
         }
         if (prevDetail) {
           queryClient.setQueryData<Task>(
@@ -219,35 +258,45 @@ export function useTaskMutations(boundWorkRequestId?: string) {
         }
       }
 
-      return { wrId, prevList, prevDetail };
+      return { wrId, prevList, prevDetail, scopeGeneration, optimisticStatus };
     },
     onError: (_err, variables, context) => {
       if (!context) return;
-      if (context.prevList) {
-        queryClient.setQueryData(operationsKeys.tasks(context.wrId), context.prevList);
+      if (context.scopeGeneration !== getScopeGeneration()) {
+        return;
       }
-      if (context.prevDetail) {
-        queryClient.setQueryData(
-          operationsKeys.taskDetail(context.wrId, variables.taskId),
-          context.prevDetail
-        );
+      if (context.optimisticStatus) {
+        const restore = (current: Task, previous?: Task) =>
+          previous && current.id === variables.taskId &&
+          current.status === context.optimisticStatus &&
+          (current.version ?? 0) <= (previous.version ?? 0)
+            ? previous : current;
+        for (const [key, rows] of queryClient.getQueriesData<Task[]>({ queryKey: operationsKeys.tasks(context.wrId) })) {
+          if (Array.isArray(rows)) queryClient.setQueryData(key, rows.map((row) =>
+            restore(row, context.prevList?.find((previous) => previous.id === row.id))));
+        }
+        queryClient.setQueryData<Task>(operationsKeys.taskDetail(context.wrId, variables.taskId),
+          (current) => current ? restore(current, context.prevDetail) : current);
       }
+      // An error can mean another viewer won; reconcile instead of replaying.
+      void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(context.wrId) });
     },
-    onSuccess: (updatedTask, variables) => {
+    onSuccess: (updatedTask, variables, context) => {
+      if (context?.scopeGeneration !== undefined && context.scopeGeneration !== getScopeGeneration()) {
+        return;
+      }
       const wrId = variables.workRequestId || boundWorkRequestId || updatedTask.workRequestId;
       if (wrId) {
         // Pin authoritative server truth into detail cache
         queryClient.setQueryData<Task>(
           operationsKeys.taskDetail(wrId, updatedTask.id),
-          updatedTask
+          (current) => current && (current.version ?? 0) > (updatedTask.version ?? 0) ? current : updatedTask
         );
         // Pin authoritative server truth into task list cache
-        const currentList = queryClient.getQueryData<Task[]>(operationsKeys.tasks(wrId));
-        if (currentList) {
-          queryClient.setQueryData<Task[]>(
-            operationsKeys.tasks(wrId),
-            currentList.map((t) => (t.id === updatedTask.id ? { ...t, ...updatedTask } : t))
-          );
+        for (const [key, rows] of queryClient.getQueriesData<Task[]>({ queryKey: operationsKeys.tasks(wrId) })) {
+          if (Array.isArray(rows)) queryClient.setQueryData(key, rows.map((row) =>
+            row.id === updatedTask.id && (row.version ?? 0) <= (updatedTask.version ?? 0)
+              ? { ...row, ...updatedTask } : row));
         }
       }
 
@@ -258,7 +307,10 @@ export function useTaskMutations(boundWorkRequestId?: string) {
         entityData: updatedTask,
       });
     },
-    onSettled: (task, _err, variables) => {
+    onSettled: (task, _err, variables, context) => {
+      if (context?.scopeGeneration !== undefined && context.scopeGeneration !== getScopeGeneration()) {
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: dashboardKeys.assignedTasks.all });
       const wrId = variables.workRequestId || boundWorkRequestId || task?.workRequestId;
       if (!wrId) return;
@@ -338,6 +390,95 @@ export function useTaskMutations(boundWorkRequestId?: string) {
     },
   });
 
+  // 6. Task Creation Approval (Lead Manager decision)
+  const creationApprovalMutation = useMutation<Task, ApiError, TaskCreationApprovalVariables>({
+    mutationFn: async ({
+      workRequestId = boundWorkRequestId,
+      taskId,
+      decision,
+      reason,
+      expectedVersion,
+    }) => {
+      if (!workRequestId) throw new Error('Work request ID is required');
+      const res = await apiRequest<{ data: Task }>(
+        `/operations/work-requests/${workRequestId}/tasks/${taskId}/creation-approval`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ decision, reason, expectedVersion }),
+        }
+      );
+      return res.data;
+    },
+    onSuccess: (updatedTask, variables) => {
+      const wrId = variables.workRequestId || boundWorkRequestId || updatedTask.workRequestId;
+      if (wrId) {
+        queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(wrId) });
+        queryClient.invalidateQueries({
+          queryKey: operationsKeys.taskDetail(wrId, updatedTask.id),
+        });
+        queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(wrId) });
+        queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+      }
+    },
+    onError: (err, variables) => {
+      if (isConcurrencyConflictError(err)) {
+        const wrId = variables.workRequestId || boundWorkRequestId;
+        if (wrId) {
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(wrId) });
+          void queryClient.invalidateQueries({
+            queryKey: operationsKeys.taskDetail(wrId, variables.taskId),
+          });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(wrId) });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+        }
+      }
+    },
+  });
+
+  // 7. Resubmit Task Creation (Creator correction after rejection)
+  const resubmitCreationMutation = useMutation<Task, ApiError, ResubmitTaskCreationVariables>({
+    mutationFn: async ({
+      workRequestId = boundWorkRequestId,
+      taskId,
+      expectedVersion,
+      data,
+    }) => {
+      if (!workRequestId) throw new Error('Work request ID is required');
+      const res = await apiRequest<{ data: Task }>(
+        `/operations/work-requests/${workRequestId}/tasks/${taskId}/resubmit-creation`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ expectedVersion, data }),
+        }
+      );
+      return res.data;
+    },
+    onSuccess: (updatedTask, variables) => {
+      const wrId = variables.workRequestId || boundWorkRequestId || updatedTask.workRequestId;
+      if (wrId) {
+        queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(wrId) });
+        queryClient.invalidateQueries({
+          queryKey: operationsKeys.taskDetail(wrId, updatedTask.id),
+        });
+        queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(wrId) });
+        queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+      }
+    },
+    onError: (err, variables) => {
+      if (isConcurrencyConflictError(err)) {
+        const wrId = variables.workRequestId || boundWorkRequestId;
+        if (wrId) {
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.tasks(wrId) });
+          void queryClient.invalidateQueries({
+            queryKey: operationsKeys.taskDetail(wrId, variables.taskId),
+          });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestDetail(wrId) });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCounts(activeEntity) });
+        }
+      }
+    },
+  });
+
   return {
     createTask: async (arg: CreateTaskInput | CreateTaskVariables) => {
       const payload: CreateTaskVariables =
@@ -365,16 +506,22 @@ export function useTaskMutations(boundWorkRequestId?: string) {
     },
     reorderTasks: reorderMutation.mutateAsync,
     addTimeLogs: addTimeLogsMutation.mutateAsync,
+    approveOrRejectTaskCreation: creationApprovalMutation.mutateAsync,
+    resubmitTaskCreation: resubmitCreationMutation.mutateAsync,
     createMutation,
     updateMutation,
     deleteMutation,
     reorderMutation,
     addTimeLogsMutation,
+    creationApprovalMutation,
+    resubmitCreationMutation,
     isPending:
       createMutation.isPending ||
       updateMutation.isPending ||
       deleteMutation.isPending ||
       reorderMutation.isPending ||
-      addTimeLogsMutation.isPending,
+      addTimeLogsMutation.isPending ||
+      creationApprovalMutation.isPending ||
+      resubmitCreationMutation.isPending,
   };
 }

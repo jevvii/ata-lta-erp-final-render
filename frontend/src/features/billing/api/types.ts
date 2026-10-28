@@ -54,6 +54,8 @@ export interface Invoice {
   invoice_number: string;
   client_id: string;
   work_request_id?: string | null;
+  task_id?: string | null;
+  taskId?: string | null;
   linked_task_id?: string | null;
   linked_transmittal_id?: string | null;
   issue_date: string;

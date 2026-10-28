@@ -19,7 +19,6 @@ import {
   Building,
   ChevronDown,
   Check,
-  User,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -151,6 +150,7 @@ export function WorkRequestList({
   const permissions = useSessionStore((state) => state.permissions);
   const user = useSessionStore((state) => state.user);
   const canEdit = hasPermission(permissions, 'workflow:edit');
+  const canCreateWr = (user?.role === 'Admin' || user?.role === 'Manager') && canEdit;
   const canAdvance = hasPermission(permissions, 'workflow:phase_transition');
   const isAdmin = isUserAdmin(user);
 
@@ -163,14 +163,21 @@ export function WorkRequestList({
     if (Array.isArray(rawWorkRequests)) return rawWorkRequests;
     return rawWorkRequests?.data ?? [];
   }, [rawWorkRequests]);
-  const { data: clients = [] } = useClients();
-  const { data: team = [] } = useTeam();
+  const { data: rawClients } = useClients();
+  const clients = Array.isArray(rawClients) ? rawClients : [];
+  const { data: rawTeam } = useTeam();
+  const team = Array.isArray(rawTeam) ? rawTeam : [];
   const { advancePhase } = usePhaseTransitions();
   const { archiveWorkRequest, cancelWorkRequest, statusOptimistic } = useWorkRequestMutations();
 
   // Filter application
   const filteredRequests = useMemo(() => {
     return workRequests.filter((wr) => {
+      // Creation Gate Filter: exclude pending or rejected WRs from regular list
+      if (wr.creationApprovalStatus === 'pending' || wr.creationApprovalStatus === 'rejected') {
+        return false;
+      }
+
       // Phase Filter
       if (phaseFilter !== 'all' && wr.phase !== phaseFilter) return false;
 
@@ -459,7 +466,7 @@ export function WorkRequestList({
             </div>
 
             {/* + New Work Request */}
-            {canEdit && onCreateNew && (
+            {canCreateWr && onCreateNew && (
               <Button
                 type="button"
                 size="sm"
@@ -590,23 +597,6 @@ export function WorkRequestList({
             </SelectContent>
           </Select>
 
-          {/* Assigned to Me Toggle (Task B.10) */}
-          {user?.id && (
-            <Button
-              type="button"
-              variant={assigneeFilter === user.id ? 'default' : 'outline'}
-              size="xs"
-              onClick={() => {
-                setAssigneeFilter(assigneeFilter === user.id ? 'all' : user.id);
-                setPage(1);
-              }}
-              className={`h-7 text-xs tracking-normal font-bold gap-1 shrink-0 rounded-[8px] border-[#E2E8F0] ${assigneeFilter === user.id ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs' : 'bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC]'}`}
-              data-testid="assigned-to-me-btn"
-            >
-              <User className="h-3 w-3" />
-              Assigned to Me
-            </Button>
-          )}
 
           {/* Due Date Filter */}
           <Select
@@ -722,7 +712,7 @@ export function WorkRequestList({
               <p className="text-xs text-[#475569] max-w-sm mx-auto">
                 Create your first work request to start tracking client deliverables and phase progress.
               </p>
-              {canEdit && onCreateNew && (
+              {canCreateWr && onCreateNew && (
                 <Button
                   type="button"
                   size="sm"
@@ -1282,7 +1272,10 @@ export function WorkRequestList({
           }
         }}
         onEdit={onEdit}
-        onViewInBoard={onViewDetails}
+        onViewInBoard={(wrId) => {
+          setPeekWrId(null);
+          onViewDetails?.(wrId);
+        }}
       />
 
       {/* OCC Concurrency Conflict Resolution Modal */}

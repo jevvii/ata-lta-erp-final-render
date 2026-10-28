@@ -6,7 +6,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { apiRequest, type ApiError } from '@/lib/api';
+import { apiRequest, ApiError } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
 import { runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { clientKeys } from './queryKeys';
@@ -197,6 +197,90 @@ export function useCreateClient() {
     createClient: mutation.mutateAsync,
     createWithBlocking,
   };
+}
+
+export interface ImportRowResult {
+  rowNum: number;
+  name: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface ImportClientsProgress {
+  current: number;
+  total: number;
+  currentRow?: { rowNum: number; name: string };
+}
+
+/**
+ * 4b. Dedicated non-blocking helper hook for CSV bulk import.
+ * Avoids firing runBlockingAction for each row while respecting active entity scope
+ * and invalidating client list + counts query keys once upon completion.
+ */
+export function useImportClients() {
+  const queryClient = useQueryClient();
+  const activeEntity = useSessionStore((state) => state.activeEntity);
+
+  const importClients = async (
+    records: Array<{ rowNum: number; record: CreateClientInput }>,
+    onProgress?: (progress: ImportClientsProgress) => void
+  ): Promise<{ results: ImportRowResult[]; successCount: number; failCount: number }> => {
+    const results: ImportRowResult[] = [];
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < records.length; i++) {
+      const item = records[i];
+      if (!item) continue;
+      const { rowNum, record } = item;
+      onProgress?.({
+        current: i + 1,
+        total: records.length,
+        currentRow: { rowNum, name: record.name },
+      });
+
+      try {
+        const validated = createClientSchema.parse(record);
+        const res = await apiRequest<ClientDetailResponse>('/clients', {
+          method: 'POST',
+          headers: {
+            'X-Active-Entity': validated.entity,
+          },
+          body: JSON.stringify(validated),
+        });
+        clientSchema.parse(res.data);
+        results.push({ rowNum, name: record.name, success: true });
+        successCount++;
+      } catch (err: unknown) {
+        let errorMsg = 'Server error';
+        if (err instanceof ApiError) {
+          errorMsg = err.detail || err.message;
+        } else if (err instanceof Error) {
+          errorMsg = err.message;
+        }
+        results.push({
+          rowNum,
+          name: record.name,
+          success: false,
+          error: errorMsg,
+        });
+        failCount++;
+      }
+    }
+
+    // Invalidate client lists and counts across all entities (ATA, LTA, ALL)
+    queryClient.invalidateQueries({ queryKey: clientKeys.all });
+    queryClient.invalidateQueries({ queryKey: clientKeys.lists() });
+    queryClient.invalidateQueries({ queryKey: [...clientKeys.all, 'counts'] });
+    queryClient.invalidateQueries({ queryKey: clientKeys.counts(activeEntity) });
+    queryClient.invalidateQueries({ queryKey: clientKeys.counts('ATA') });
+    queryClient.invalidateQueries({ queryKey: clientKeys.counts('LTA') });
+    queryClient.invalidateQueries({ queryKey: clientKeys.counts('ALL') });
+
+    return { results, successCount, failCount };
+  };
+
+  return { importClients };
 }
 
 /**

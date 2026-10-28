@@ -519,6 +519,7 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
           onClose={() => {}}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
           defaultClientId="c1111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );

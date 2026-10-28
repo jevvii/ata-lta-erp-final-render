@@ -299,6 +299,11 @@ export function DocumentViewerModal({
     }
   };
 
+  const docWorkRequestId =
+    workRequest?.id || doc?.work_request_id || doc?.workRequestId || undefined;
+  const docLinkedTaskId = doc?.linked_task_id || doc?.linkedTaskId || undefined;
+  const canReplaceDocument = Boolean(docWorkRequestId && docLinkedTaskId);
+
   // File Upload Handler (3-step signed upload)
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -309,14 +314,21 @@ export function DocumentViewerModal({
       setUploadError('File size exceeds maximum allowed limit of 50 MB.');
       return;
     }
+
+    if (!docWorkRequestId || !docLinkedTaskId) {
+      setUploadError('Cannot replace a legacy document that has no linked task');
+      return;
+    }
+
     setUploadError(null);
 
     try {
       const uploadedDoc = await uploadMutation.mutateAsync({
         file,
         metadata: {
-          workRequestId: workRequest?.id || doc?.work_request_id || undefined,
-          clientId: workRequest?.clientId || doc?.client_id || undefined,
+          workRequestId: docWorkRequestId,
+          linkedTaskId: docLinkedTaskId,
+          clientId: workRequest?.clientId || doc?.client_id || doc?.clientId || undefined,
           category: doc?.category || 'OTHER',
           fileName: file.name,
           originalName: file.name,
@@ -669,6 +681,7 @@ export function DocumentViewerModal({
               type="file"
               ref={fileInputRef}
               onChange={handleFileSelect}
+              disabled={!canReplaceDocument}
               className="hidden"
               data-testid="viewer-file-input"
             />
@@ -677,7 +690,17 @@ export function DocumentViewerModal({
                 type="button"
                 variant="outline"
                 size="xs"
-                onClick={() => fileInputRef.current?.click()}
+                disabled={!canReplaceDocument}
+                title={
+                  !canReplaceDocument
+                    ? 'Cannot replace a legacy document that has no linked task'
+                    : undefined
+                }
+                onClick={() => {
+                  if (canReplaceDocument) {
+                    fileInputRef.current?.click();
+                  }
+                }}
                 className="gap-1 text-xs text-[#1E293B] border-[#E2E8F0] hover:bg-[#F8FAFC]"
                 data-testid="upload-doc-btn"
               >

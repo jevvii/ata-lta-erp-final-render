@@ -129,6 +129,21 @@ const mockWorkRequests: WorkRequest[] = [
   },
 ];
 
+const mockTasksForContext = (url: string) => {
+  const match = mockWorkRequests.find((r) => url.includes(r.id));
+  const wrId = match ? match.id : mockWorkRequests[0]?.id;
+  return [
+    {
+      id: '55555555-5555-4555-8555-555555555555',
+      workRequestId: wrId,
+      title: 'Active Task',
+      status: 'In Progress',
+      assigneeId: '11111111-1111-1111-1111-111111111111',
+      assignees: ['11111111-1111-1111-1111-111111111111'],
+    },
+  ];
+};
+
 describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
   const originalFetch = global.fetch;
 
@@ -215,6 +230,15 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
       }
 
       interceptedRequests.push({ url, method, headers: headersRecord, body: parsedBody });
+
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
 
       if (url.includes('/operations/work-requests')) {
         return {
@@ -398,6 +422,15 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
 
       interceptedRequests.push({ url, method, headers: headersRecord, body: parsedBody });
 
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
+
       if (url.includes('/operations/work-requests')) {
         return {
           ok: true,
@@ -570,6 +603,15 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
         }
       }
 
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
+
       if (url.includes('/operations/work-requests')) {
         return {
           ok: true,
@@ -698,6 +740,12 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
       target: { value: '11111111-1111-4111-8111-111111111111' },
     });
 
+    await waitFor(() => {
+      expect(screen.getByTestId('select-work-request-task')).toHaveValue(
+        '55555555-5555-4555-8555-555555555555'
+      );
+    });
+
     // 2nd submit -> must NOT reuse ATA receipt key! Must issue fresh upload reservation with LTA
     fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
 
@@ -715,6 +763,15 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
     global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method || 'GET';
+
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
 
       if (url.includes('/operations/work-requests')) {
         return {
@@ -847,6 +904,14 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
       if (url.includes('/receipt-uploads')) {
         uploadAttempted = true;
       }
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
       return {
         ok: true,
         status: 200,
@@ -867,6 +932,7 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('select-work-request')).toHaveValue('11111111-1111-4111-8111-111111111111');
+      expect(screen.getByTestId('select-work-request-task')).toHaveValue('55555555-5555-4555-8555-555555555555');
     });
 
     fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '1000' } });
@@ -891,6 +957,15 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
     global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method || 'GET';
+
+      if (url.includes('/tasks')) {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: mockTasksForContext(url) }),
+        };
+      }
 
       if (url.includes('/operations/work-requests')) {
         return {

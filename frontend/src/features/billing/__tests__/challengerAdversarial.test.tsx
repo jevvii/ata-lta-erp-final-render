@@ -250,6 +250,7 @@ describe('Challenger Adversarial Stress Tests: Billing Module', () => {
       const validPayload = {
         clientId: '11111111-1111-1111-1111-111111111111',
         workRequestId: '33333333-3333-3333-3333-333333333333',
+        linkedTaskId: '44444444-4444-4444-4444-444444444444',
         invoiceNumber: 'INV-TEST-001',
         issueDate: '2026-10-01',
         dueDate: '2026-10-31',

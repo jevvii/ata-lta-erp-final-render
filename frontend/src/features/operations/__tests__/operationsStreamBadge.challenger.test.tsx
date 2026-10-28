@@ -31,6 +31,7 @@ import type { OperationsRequest } from '../api/types';
 
 describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
   let queryClient: QueryClient;
+  let mockServerPendingCreations = 0;
   let mockServerPendingCount = 0;
   let mockServerFulfilledCount = 0;
   let mockServerRejectedCount = 0;
@@ -55,6 +56,7 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
     clearChannelRegistryForTesting();
 
     // Default mock counts & state
+    mockServerPendingCreations = 0;
     mockServerPendingCount = 0;
     mockServerFulfilledCount = 0;
     mockServerRejectedCount = 0;
@@ -112,6 +114,13 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
         } as Response);
       }
 
+      if (u.includes('/operations/work-requests/creation-approvals')) {
+        return Promise.resolve({ ok: true, status: 200,
+          json: async () => ({ data: Array.from({ length: mockServerPendingCreations }, (_, i) =>
+            ({ id: `pending-wr-${i}`, creationApprovalStatus: 'pending' })) }),
+        } as Response);
+      }
+
       if (u.includes('/operations/work-requests')) {
         return Promise.resolve({
           ok: true,
@@ -166,6 +175,30 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
       </QueryClientProvider>
     );
   }
+
+  it.each(['Admin', 'Manager'])('includes pending WR creations in the %s navigation count and removes them after resolution', async (role) => {
+    useSessionStore.getState().updateUser?.({ role });
+    mockServerPendingCount = 2;
+    mockServerPendingCreations = 3;
+    renderOperations();
+    await waitFor(() => expect(screen.getByTestId('tab-pending-badge')).toHaveTextContent('5'));
+    const creationCalls = vi.mocked(global.fetch).mock.calls.filter(([url]) => String(url).includes('/creation-approvals'));
+    expect(creationCalls.some(([url]) => String(url).includes(`scope=${role === 'Admin' ? 'all' : 'mine'}`))).toBe(true);
+    mockServerPendingCreations = 0;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: operationsKeys.workRequestCreationApprovals() }); });
+    await waitFor(() => expect(screen.getByTestId('tab-pending-badge')).toHaveTextContent('2'));
+    mockServerPendingCount = 0;
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: operationsKeys.requestCounts('ATA') }); });
+    await waitFor(() => expect(screen.queryByTestId('tab-pending-badge')).not.toBeInTheDocument());
+  });
+
+  it('does not fetch or count WR creation approvals for other approval roles', async () => {
+    mockServerPendingCount = 1;
+    mockServerPendingCreations = 4;
+    renderOperations();
+    await waitFor(() => expect(screen.getByTestId('tab-pending-badge')).toHaveTextContent('1'));
+    expect(vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).includes('/creation-approvals'))).toBe(false);
+  });
 
   // ==========================================================================
   // Test 1: Reactive Increment and DOM Mount of Tab Badge on CDC INSERT
@@ -509,8 +542,8 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
   // ==========================================================================
   // Test 5: Duplicate Replayed CDC Event Idempotency
   // ==========================================================================
-  it('Test 5: replayed duplicate CDC events do not create list query duplicate entries', async () => {
-    // Explicit Admin context for raw cache-patching deduplication test
+  it('Test 5: duplicate CDC hints refetch counts once without injecting duplicate operations rows', async () => {
+    // Admin also uses authoritative API refetch instead of raw row injection.
     useSessionStore.getState().setSession({
       user: {
         id: 'u-ops-admin-1',
@@ -551,15 +584,17 @@ describe('Operations Stream & Tab Badge Adversarial Challenger Suite', () => {
       },
     };
 
+    mockServerPendingCount = 1;
     // Emit same event twice
     act(() => {
       channel?.emit('postgres_changes', cdcPayload);
       channel?.emit('postgres_changes', cdcPayload);
     });
 
-    // List cache must have exactly 1 record, not duplicates
-    const listData = queryClient.getQueryData<OperationsRequest[]>(operationsKeys.requests());
-    expect(listData?.filter((r) => r.id === 'op-replayed-1')).toHaveLength(1);
+    await waitFor(() => expect(screen.getByTestId('tab-pending-badge')).toHaveTextContent('1'));
+    // A raw event must never fabricate a list row, even for Admin.
+    expect(queryClient.getQueryData(operationsKeys.requests())).toEqual([]);
+    expect(queryClient.getQueryState(operationsKeys.requests())?.isInvalidated).toBe(true);
   });
 
   // ==========================================================================

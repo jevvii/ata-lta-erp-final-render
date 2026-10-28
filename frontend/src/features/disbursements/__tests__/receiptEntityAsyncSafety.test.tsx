@@ -72,7 +72,22 @@ function harness(block: Stage) {
       response = json({ data: { receiptS3Key: reservation.key, receiptFilename: reservation.filename } });
     } else if (path.endsWith('/disbursements') && init?.method === 'POST') {
       stage = 'create'; response = json({ data: { id: 'created-voucher', status: 'Draft' } }, 201);
-    } else if (path.includes('/operations/work-requests') && !path.endsWith('/tasks')) {
+    } else if (path.includes('/tasks')) {
+      const match = requests.find((r) => path.includes(r.id));
+      const wrId = match ? match.id : requests[0]?.id;
+      return json({
+        data: [
+          {
+            id: '22222222-2222-4222-8222-222222222222',
+            workRequestId: wrId,
+            title: 'Safety Task',
+            status: 'In Progress',
+            assigneeId: 'admin-1',
+            assignees: ['admin-1'],
+          },
+        ],
+      });
+    } else if (path.includes('/operations/work-requests')) {
       return json({ data: requests });
     } else if (path.endsWith('/clients')) {
       return json({ data: requests.map(wr => ({ id: wr.clientId, name: wr.clientName })) });

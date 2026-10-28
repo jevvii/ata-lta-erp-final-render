@@ -249,6 +249,10 @@ describe('CHALLENGER FIN 2: Billing WR-Task Link Empirical Verification Suite', 
         { wrapper }
       );
 
+      await waitFor(() => {
+        expect(taskFetchCalls.some((c) => c.includes(WR_A1.id))).toBe(true);
+      });
+
       // Fill in mandatory item description
       const descInput = screen.getByTestId('line-item-desc-0');
       fireEvent.change(descInput, { target: { value: 'Professional Tax Filing Services' } });
@@ -267,7 +271,7 @@ describe('CHALLENGER FIN 2: Billing WR-Task Link Empirical Verification Suite', 
       expect(capturedPostPayload).not.toHaveProperty('task_id');
     });
 
-    it('submits linkedTaskId as null when no task is selected', async () => {
+    it('rejects submission when no task is selected (mandatory task rule)', async () => {
       const { wrapper } = createHarness();
       render(
         <InvoiceCreateModal
@@ -289,14 +293,12 @@ describe('CHALLENGER FIN 2: Billing WR-Task Link Empirical Verification Suite', 
       fireEvent.click(submitBtn);
 
       await waitFor(() => {
-        expect(capturedPostPayload).not.toBeNull();
+        expect(screen.getByTestId('invoice-create-error')).toHaveTextContent(
+          /linked task is required/i
+        );
       });
 
-      expect(capturedPostPayload!.workRequestId).toBe(WR_A1.id);
-      expect(capturedPostPayload!.clientId).toBe(CLIENT_A.id);
-      // linkedTaskId must strictly be null
-      expect(capturedPostPayload!.linkedTaskId).toBeNull();
-      expect(capturedPostPayload).not.toHaveProperty('task_id');
+      expect(capturedPostPayload).toBeNull();
     });
 
     it('verifies SUPPORT_TASK_ID_PAYLOAD is false and documented with GAP note', () => {
@@ -327,14 +329,14 @@ describe('CHALLENGER FIN 2: Billing WR-Task Link Empirical Verification Suite', 
         expect(taskTrigger).not.toBeDisabled();
       });
 
-      // Radix UI maintains a hidden select populated with options
+      // Radix UI maintains a hidden select populated with options (without __none__)
       await waitFor(() => {
         const selectEl = taskTrigger.parentElement?.querySelector(
           'select'
         ) as HTMLSelectElement | null;
         expect(selectEl).toBeInTheDocument();
         const optionValues = Array.from(selectEl?.options || []).map((o) => o.value);
-        expect(optionValues).toContain('__none__');
+        expect(optionValues).not.toContain('__none__');
         expect(optionValues).toContain(TASKS_WR_A1[0]!.id);
         expect(optionValues).toContain(TASKS_WR_A1[1]!.id);
       });

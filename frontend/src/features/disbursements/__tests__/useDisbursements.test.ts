@@ -210,6 +210,7 @@ describe('Disbursements Data Layer & Zero Optimistic Updates Doctrine', () => {
         amount: 1200,
         fundSource: 'Firm Fund' as const,
         linkedWorkRequestId: '11111111-1111-1111-1111-111111111111',
+        linkedTaskId: '22222222-2222-2222-2222-222222222222',
       };
 
       const res = await result.current.createDisbursement(payload);

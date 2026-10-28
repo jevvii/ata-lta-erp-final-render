@@ -16,9 +16,13 @@ import {
   Archive,
   ArchiveRestore,
   Search,
-  Filter,
   FileText,
+  RotateCcw,
 } from 'lucide-react';
+import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
+import { useClients } from '@/features/operations/api/useClients';
+import { useTeam } from '@/features/operations/api/useTeam';
+import { matchesDueDate, DUE_DATE_FILTER_OPTIONS } from '@/lib/dateFilters';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -78,12 +82,63 @@ export function TransmittalTable({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [workRequestFilter, setWorkRequestFilter] = useState<string>('all');
+  const [clientFilter, setClientFilter] = useState<string>('all');
+  const [employeeFilter, setEmployeeFilter] = useState<string>('all');
+  const [dueDateFilter, setDueDateFilter] = useState<string>('all');
+
+  const { data: rawWrs } = useWorkRequests({ archived: false });
+  const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
+  const { data: clientsData = [] } = useClients();
+  const { data: teamData = [] } = useTeam();
+
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setWorkRequestFilter('all');
+    setClientFilter('all');
+    setEmployeeFilter('all');
+    setDueDateFilter('all');
+  };
+
+  const hasActiveFilters =
+    Boolean(searchTerm.trim()) ||
+    statusFilter !== 'all' ||
+    workRequestFilter !== 'all' ||
+    clientFilter !== 'all' ||
+    employeeFilter !== 'all' ||
+    dueDateFilter !== 'all';
 
   const filteredTransmittals = useMemo(() => {
     return transmittals.filter((t) => {
       // Status filter
       if (statusFilter !== 'all' && t.status !== statusFilter) {
         return false;
+      }
+
+      // Work Request filter
+      if (workRequestFilter !== 'all') {
+        const wrId = t.work_request_id || t.workRequestId;
+        if (wrId !== workRequestFilter) return false;
+      }
+
+      // Client filter
+      if (clientFilter !== 'all') {
+        const cId = t.client_id || t.clientId;
+        if (cId !== clientFilter) return false;
+      }
+
+      // Employee filter (Admin only)
+      if (employeeFilter !== 'all') {
+        const empId = t.created_by || t.createdBy || t.sent_by || t.sentBy;
+        if (empId !== employeeFilter) return false;
+      }
+
+      // Due Date filter
+      if (dueDateFilter !== 'all') {
+        const targetDate = t.sent_at || t.sentAt || t.created_at || t.createdAt;
+        const isFinished = t.status === 'Acknowledged' || t.status === 'Cancelled';
+        if (!matchesDueDate(targetDate, dueDateFilter, isFinished)) return false;
       }
 
       // Search filter
@@ -100,40 +155,129 @@ export function TransmittalTable({
 
       return true;
     });
-  }, [transmittals, statusFilter, searchTerm]);
+  }, [
+    transmittals,
+    statusFilter,
+    workRequestFilter,
+    clientFilter,
+    employeeFilter,
+    dueDateFilter,
+    searchTerm,
+  ]);
 
   return (
     <div className="space-y-4" data-testid="transmittal-table-container">
       {/* Search and Filters Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3.5 rounded-[8px] border-[#E2E8F0]">
-        <div className="relative w-full sm:w-80">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[#475569]" />
-          <Input
-            placeholder="Search tracking, client, recipient..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="pl-9 h-9 text-xs"
-            data-testid="transmittal-search-input"
-          />
-        </div>
-
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <div className="flex items-center gap-1.5 text-xs text-[#475569] shrink-0">
-            <Filter className="h-3.5 w-3.5" />
-            <span>Status:</span>
+      <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 bg-white p-3 rounded-[8px] border-[#E2E8F0]">
+        <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
+          <div className="relative min-w-[180px] flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-[#475569]" />
+            <Input
+              placeholder="Search tracking, client, recipient..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9 h-9 text-xs"
+              data-testid="transmittal-search-input"
+            />
           </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-9 w-36 text-xs" data-testid="transmittal-status-filter">
-              <SelectValue placeholder="All Statuses" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="Draft">Draft</SelectItem>
-              <SelectItem value="Sent">Sent</SelectItem>
-              <SelectItem value="Acknowledged">Acknowledged</SelectItem>
-              <SelectItem value="Cancelled">Cancelled</SelectItem>
-            </SelectContent>
-          </Select>
+
+          {/* Status Filter */}
+          <div className="w-[125px] sm:w-[135px]">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-9 text-xs" data-testid="transmittal-status-filter">
+                <SelectValue placeholder="All Statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Statuses</SelectItem>
+                <SelectItem value="Draft">Draft</SelectItem>
+                <SelectItem value="Sent">Sent</SelectItem>
+                <SelectItem value="Acknowledged">Acknowledged</SelectItem>
+                <SelectItem value="Cancelled">Cancelled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Work Request Filter */}
+          <div className="w-[135px] sm:w-[150px]">
+            <Select value={workRequestFilter} onValueChange={setWorkRequestFilter}>
+              <SelectTrigger className="h-9 text-xs" data-testid="transmittal-work-request-filter">
+                <SelectValue placeholder="All Work Requests" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Work Requests</SelectItem>
+                {workRequests.map((wr) => (
+                  <SelectItem key={wr.id} value={wr.id}>
+                    {wr.title || wr.work_order_number || wr.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Client Filter */}
+          <div className="w-[130px] sm:w-[145px]">
+            <Select value={clientFilter} onValueChange={setClientFilter}>
+              <SelectTrigger className="h-9 text-xs" data-testid="transmittal-client-filter">
+                <SelectValue placeholder="All Clients" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Clients</SelectItem>
+                {clientsData.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Employee Filter (Admin only) */}
+          {isAdmin && (
+            <div className="w-[130px] sm:w-[145px]">
+              <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
+                <SelectTrigger className="h-9 text-xs" data-testid="transmittal-employee-filter">
+                  <SelectValue placeholder="All Employees" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Employees</SelectItem>
+                  {teamData.map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Due Date Filter */}
+          <div className="w-[125px] sm:w-[135px]">
+            <Select value={dueDateFilter} onValueChange={setDueDateFilter}>
+              <SelectTrigger className="h-9 text-xs" data-testid="transmittal-due-date-filter">
+                <SelectValue placeholder="All Due Dates" />
+              </SelectTrigger>
+              <SelectContent>
+                {DUE_DATE_FILTER_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleResetFilters}
+              className="h-9 text-xs text-[#475569] hover:text-[#1E293B] px-2 cursor-pointer shrink-0"
+              data-testid="transmittal-reset-filters-btn"
+            >
+              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+              Reset
+            </Button>
+          )}
         </div>
       </div>
 

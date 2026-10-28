@@ -220,7 +220,7 @@ describe('DisbursementCodingGrid Component (design/disb-06)', () => {
       expect(screen.getByTestId('coding-grid-amount')).toHaveTextContent('₱1,500.00');
     });
 
-    it('resolves work request title when linked_work_request_name is a raw UUID and applies pr-16 for floating timer clearance', async () => {
+    it('resolves work request title when linked_work_request_name is a raw UUID and spans full-width without right padding clipping', async () => {
       const rawUuidVoucher = {
         ...mockDraftVoucher,
         linked_work_request_id: '39ae64ae-17e5-47e5-b31d-6ed488ba65cb',
@@ -254,9 +254,9 @@ describe('DisbursementCodingGrid Component (design/disb-06)', () => {
       const { wrapper } = createHarness();
       render(<DisbursementCodingGrid disbursement={rawUuidVoucher} />, { wrapper });
 
-      // Verifies pr-16 clearance for floating time studio button
-      expect(screen.getByTestId('coding-summary-strip').parentElement).toHaveClass('pr-16');
-      expect(screen.getByTestId('disbursement-coding-content')).toHaveClass('pr-16');
+      // Verifies full-width layout without artificial right clipping padding
+      expect(screen.getByTestId('coding-summary-strip').parentElement).not.toHaveClass('pr-16');
+      expect(screen.getByTestId('disbursement-coding-content')).not.toHaveClass('pr-16');
 
       // Verifies resolution to human-readable work request name and never displays the raw UUID
       expect(await screen.findByText(/BIR Annual Return 2026/)).toBeInTheDocument();

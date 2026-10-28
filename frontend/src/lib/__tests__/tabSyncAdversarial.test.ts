@@ -337,11 +337,13 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       // Check that the corrupted list patched the valid item while preserving other items
       const updatedList = queryClient.getQueryData<{ data: Array<unknown> }>(weirdListKey);
       expect(updatedList).toBeDefined();
-      expect(updatedList?.data[5]).toEqual({ id: 'target-item', title: 'New Valid Title' });
+      expect(updatedList?.data[5]).toEqual({ id: 'target-item', title: 'Old' });
+      expect(queryClient.getQueryState(weirdListKey)?.isInvalidated).toBe(true);
 
       // Check raw list
       const updatedRaw = queryClient.getQueryData<Array<unknown>>(rawListKey);
-      expect(updatedRaw?.[2]).toEqual({ id: 'target-item', title: 'New Valid Title' });
+      expect(updatedRaw?.[2]).toEqual({ id: 'target-item', title: 'Old Raw' });
+      expect(queryClient.getQueryState(rawListKey)?.isInvalidated).toBe(true);
 
       // Perform ENTITY_DELETED on corrupted list
       expect(() => {
@@ -394,7 +396,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
     it('immediately halts broadcast dispatching and incoming message handling when tab_sync is disabled dynamically', async () => {
       resetTabIdForTesting('tab-runtime');
       const cleanup = setupTabSyncListener(queryClient);
-      const setQuerySpy = vi.spyOn(queryClient, 'setQueryData');
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const sender = new BroadcastChannel(TAB_SYNC_CHANNEL_NAME);
 
       // Verify working initially
@@ -408,9 +410,9 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       });
 
       await vi.waitFor(() => {
-        expect(setQuerySpy).toHaveBeenCalled();
+        expect(invalidateSpy).toHaveBeenCalled();
       });
-      setQuerySpy.mockClear();
+      invalidateSpy.mockClear();
 
       // Now dynamically disable tab_sync via localStorage override
       localStorage.setItem('erp_feature_override_tab_sync', 'false');
@@ -434,7 +436,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       });
 
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(setQuerySpy).not.toHaveBeenCalled();
+      expect(invalidateSpy).not.toHaveBeenCalled();
 
       sender.close();
       cleanup();
@@ -457,6 +459,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         receivedCounts[0] = (receivedCounts[0] ?? 0) + 1;
         return qc0;
       });
+      vi.spyOn(qc0, 'invalidateQueries').mockImplementation(async () => { receivedCounts[0] = (receivedCounts[0] ?? 0) + 1; });
       const cleanup0 = setupTabSyncListener(qc0);
       cleanups.push(cleanup0);
 
@@ -473,6 +476,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
           return peerQc;
         });
 
+        vi.spyOn(peerQc, 'invalidateQueries').mockImplementation(async () => { receivedCounts[tabIndex] = (receivedCounts[tabIndex] ?? 0) + 1; });
         const listener = (event: MessageEvent<TabSyncMessage<unknown>>) => {
           // Peer tab origin deduplication
           if (event.data?.originTabId === peerTabId) {
@@ -535,6 +539,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       // Peer Tab 2 must NOT have received its own 5 messages
       expect(receivedCounts[2]).toBe(tab2PrevCount);
 
+      const beforeReflected = receivedCounts[0];
       // 3. Peer Tab 1 sends a message with Tab 0's ID (simulating reflected self message)
       channels[0]!.postMessage({
         type: 'ENTITY_MUTATED',
@@ -555,6 +560,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         return Array.isArray(key) && key.includes('wr-reflected-self');
       });
       expect(reflectedProcessed).toBe(false);
+      expect(receivedCounts[0]).toBe(beforeReflected);
 
       // Teardown
       cleanups.forEach((c) => c());
@@ -573,7 +579,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       queryClient.clear();
     });
 
-    it('preserves existing entity fields when entityData provides partial updates', () => {
+    it('preserves authorized entity fields and invalidates when a tab provides partial rows', () => {
       const detailKey = ['operations', 'workRequests', 'detail', 'wr-partial'];
       queryClient.setQueryData(detailKey, {
         id: 'wr-partial',
@@ -600,12 +606,12 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         clientName: 'Big Corp',
         budget: 50000,
         tags: ['tax', 'audit'],
-        status: 'Under Review',
-        version: 4,
+        version: 3,
       });
+      expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     });
 
-    it('preserves list metadata (pagination, filters, counts) while patching items', () => {
+    it('preserves list metadata while invalidating permission-sensitive operations rows', () => {
       const listKey = ['operations', 'workRequests', 'list', 'filter-active'];
       queryClient.setQueryData(listKey, {
         data: [
@@ -628,7 +634,8 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       const updatedList = queryClient.getQueryData<any>(listKey);
       expect(updatedList.pagination).toEqual({ page: 1, limit: 20, total: 2 });
       expect(updatedList.summary).toEqual({ totalAmount: 12500 });
-      expect(updatedList.data[1].status).toBe('Completed');
+      expect(updatedList.data[1].status).toBe('Pending');
+      expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
       expect(updatedList.data[0].status).toBe('Pending');
     });
 

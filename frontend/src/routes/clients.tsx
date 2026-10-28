@@ -8,7 +8,7 @@
 
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Building2, Plus } from 'lucide-react';
+import { Building2, Plus, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Forbidden } from '@/components/common/Forbidden';
 import { ModulePlaceholder } from '@/components/common/ModulePlaceholder';
@@ -21,6 +21,7 @@ import {
   ClientTable,
   ClientDetailModal,
   ClientModal,
+  ClientImportModal,
 } from '@/features/clients/components';
 import {
   useClientsList,
@@ -52,6 +53,7 @@ export default function ClientsPage() {
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
 
   // Queries & Mutations
@@ -156,17 +158,30 @@ export default function ClientsPage() {
         {/* Action Button: Gated on clients:edit */}
         <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
           {canEditClients && (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={handleCreate}
-              className="text-xs font-medium bg-[#1D4ED8] hover:bg-[#1E40AF] text-[#FFFFFF] rounded-[6px] h-9 gap-1.5 shadow-2xs cursor-pointer"
-              data-testid="new-client-btn"
-            >
-              <Plus className="h-4 w-4" />
-              New Client
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsImportModalOpen(true)}
+                className="text-xs font-medium border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] rounded-[6px] h-9 gap-1.5 shadow-2xs cursor-pointer"
+                data-testid="import-clients-btn"
+              >
+                <Upload className="h-4 w-4 text-[#475569]" />
+                Import
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={handleCreate}
+                className="text-xs font-medium bg-[#1D4ED8] hover:bg-[#1E40AF] text-[#FFFFFF] rounded-[6px] h-9 gap-1.5 shadow-2xs cursor-pointer"
+                data-testid="new-client-btn"
+              >
+                <Plus className="h-4 w-4" />
+                New Client
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -215,6 +230,14 @@ export default function ClientsPage() {
             setIsFormModalOpen(false);
             setEditingClient(null);
           }}
+        />
+      )}
+
+      {/* Import Clients Modal */}
+      {canEditClients && (
+        <ClientImportModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
         />
       )}
 

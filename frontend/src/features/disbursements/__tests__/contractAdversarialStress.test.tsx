@@ -190,6 +190,7 @@ describe('Adversarial Contract & Data Layer Stress Test Harness', () => {
         amount: 250,
         fundSource: 'Firm Fund' as const,
         linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
       };
 
       // Omitted status

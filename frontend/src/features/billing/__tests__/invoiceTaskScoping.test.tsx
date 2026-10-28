@@ -65,6 +65,13 @@ function setupMockFetch(posts: { url: string; body: Record<string, unknown> }[])
             assignees: [CALLER_USER_ID],
           },
           {
+            id: 'task-assigned-2',
+            workRequestId: WR_1,
+            title: 'Second Assigned Task',
+            assigneeId: CALLER_USER_ID,
+            assignees: [CALLER_USER_ID],
+          },
+          {
             id: TASK_UNASSIGNED,
             workRequestId: WR_1,
             title: 'Unassigned Other Task',
@@ -144,10 +151,15 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     const taskSelectTrigger = await screen.findByTestId('select-work-request-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-    // Assigned task MUST be present
-    expect(await screen.findByRole('option', { name: 'Assigned Billing Task' })).toBeInTheDocument();
-    // Unassigned task MUST NOT be present for non-admin
-    expect(screen.queryByRole('option', { name: 'Unassigned Other Task' })).not.toBeInTheDocument();
+    // Assigned task MUST be present and enabled
+    const assignedOpt = await screen.findByRole('option', { name: /Assigned Billing Task/i });
+    expect(assignedOpt).toBeInTheDocument();
+    expect(assignedOpt).not.toHaveAttribute('aria-disabled', 'true');
+
+    // Unassigned task MUST be present but disabled with "(Not assigned to you)" for non-admin
+    const unassignedOpt = await screen.findByRole('option', { name: /Unassigned Other Task.*Not assigned to you/i });
+    expect(unassignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('shows all tasks for Admin users', async () => {
@@ -177,9 +189,13 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     const taskSelectTrigger = await screen.findByTestId('select-work-request-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-    // Both tasks are available to Admin
-    expect(await screen.findByRole('option', { name: 'Assigned Billing Task' })).toBeInTheDocument();
-    expect(await screen.findByRole('option', { name: 'Unassigned Other Task' })).toBeInTheDocument();
+    // Both tasks are available to Admin without "(Not assigned to you)"
+    const assignedOpt = await screen.findByRole('option', { name: /Assigned Billing Task/i });
+    const unassignedOpt = await screen.findByRole('option', { name: /Unassigned Other Task/i });
+    expect(assignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).not.toHaveAttribute('aria-disabled', 'true');
+    expect(unassignedOpt.textContent).not.toContain('Not assigned to you');
   });
 
   it('denies admin exemption to lorein@ata-lta.ph when authenticated role is Staff (Correction 4)', async () => {
@@ -209,9 +225,12 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     const taskSelectTrigger = await screen.findByTestId('select-work-request-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-    // Only assigned task visible, unassigned task excluded despite email
-    expect(await screen.findByRole('option', { name: 'Assigned Billing Task' })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: 'Unassigned Other Task' })).not.toBeInTheDocument();
+    // Only assigned task selectable, unassigned task disabled with Not assigned to you despite email
+    const assignedOpt = await screen.findByRole('option', { name: /Assigned Billing Task/i });
+    expect(assignedOpt).toBeInTheDocument();
+    const unassignedOpt = await screen.findByRole('option', { name: /Unassigned Other Task.*Not assigned to you/i });
+    expect(unassignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('blocks submission and shows visible error for invalid/unassigned prefilled task without converting to WR-only (Correction 5)', async () => {
@@ -258,7 +277,7 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     expect(posts).toHaveLength(0);
   });
 
-  it('allows WR-only invoice submission when explicit None is selected', async () => {
+  it('enforces mandatory linked task: rejects invoice submission when no task is selected', async () => {
     useSessionStore.getState().setSession({
       user: {
         id: CALLER_USER_ID,
@@ -278,22 +297,17 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
 
     render(
       <QueryClientProvider client={client}>
-        <InvoiceCreateModal isOpen onClose={vi.fn()} prefill={{ workRequestId: WR_1, clientId: CLIENT_1 }} />
+        <InvoiceCreateModal isOpen onClose={vi.fn()} />
       </QueryClientProvider>
     );
 
-    await waitFor(() => {
-      expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls.some(([url]) => String(url).includes(`/operations/work-requests/${WR_1}/tasks`))).toBe(true);
-    });
-
-    // Submit with default None (No linked task)
+    // Attempt submit with no task selected
     fireEvent.click(screen.getByTestId('btn-submit-invoice'));
 
-    await waitFor(() => expect(posts).toHaveLength(1));
-    expect(posts[0]!.body).toMatchObject({
-      workRequestId: WR_1,
-      linkedTaskId: null,
+    await waitFor(() => {
+      expect(screen.getByTestId('invoice-create-error')).toHaveTextContent(/linked task is required/i);
     });
+    expect(posts).toHaveLength(0);
   });
 
   it('InvoiceCreateModal: assigned task-linked invoice creation successfully POSTs proper task ID', async () => {
@@ -389,11 +403,11 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       expect(qState?.status).toBe('success');
     });
 
-    // Unlink the task
+    // Relink the task
     const taskSelectTrigger = await screen.findByTestId('select-edit-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
-    const noneOption = await screen.findByRole('option', { name: /None \(No linked task\)/i });
-    fireEvent.click(noneOption);
+    const otherOption = await screen.findByRole('option', { name: /Second Assigned Task/i });
+    fireEvent.click(otherOption);
 
     // Attempt save
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));
@@ -457,11 +471,11 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       expect(qState?.status).toBe('success');
     });
 
-    // Unlink the task
+    // Relink the task
     const taskSelectTrigger = await screen.findByTestId('select-edit-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
-    const noneOption = await screen.findByRole('option', { name: /None \(No linked task\)/i });
-    fireEvent.click(noneOption);
+    const otherOption = await screen.findByRole('option', { name: /Second Assigned Task/i });
+    fireEvent.click(otherOption);
 
     // Attempt save
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));
@@ -525,11 +539,11 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       expect(qState?.status).toBe('success');
     });
 
-    // Unlink own task to None
+    // Relink own task to another assigned task
     const taskSelectTrigger = await screen.findByTestId('select-edit-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
-    const noneOption = await screen.findByRole('option', { name: /None \(No linked task\)/i });
-    fireEvent.click(noneOption);
+    const secondOption = await screen.findByRole('option', { name: /Second Assigned Task/i });
+    fireEvent.click(secondOption);
 
     // Save
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));
@@ -538,7 +552,7 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       const putRequests = posts.filter((p) => p.url.includes('/invoices/inv-valid-relink'));
       expect(putRequests).toHaveLength(1);
       expect(putRequests[0]!.body).toMatchObject({
-        linkedTaskId: null,
+        linkedTaskId: 'task-assigned-2',
       });
     });
   });
@@ -658,11 +672,11 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       </QueryClientProvider>
     );
 
-    // Unlink the task
+    // Relink the task
     const taskSelectTrigger = await screen.findByTestId('select-edit-task');
     fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
-    const noneOption = await screen.findByRole('option', { name: /None \(No linked task\)/i });
-    fireEvent.click(noneOption);
+    const otherOption = await screen.findByRole('option', { name: /Second Assigned Task/i });
+    fireEvent.click(otherOption);
 
     // Save
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));

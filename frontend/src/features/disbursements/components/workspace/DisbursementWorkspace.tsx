@@ -114,7 +114,7 @@ export function DisbursementWorkspace({
       {/* Bottom Coding Pane Slot (Desktop >=1024px only) spanning full browser width as sticky footer over left sidebar */}
       <div
         className={cn(
-          'hidden lg:block fixed bottom-0 inset-x-0 z-40 w-full bg-surface border-t border-border shadow-float shrink-0 overflow-hidden pb-16 lg:pb-20 pr-16',
+          'hidden lg:block fixed bottom-0 inset-x-0 z-40 w-full bg-surface border-t border-border shadow-float shrink-0 overflow-hidden pb-16 lg:pb-20',
           !bottom && 'hidden'
         )}
         data-testid="disbursement-workspace-bottom"

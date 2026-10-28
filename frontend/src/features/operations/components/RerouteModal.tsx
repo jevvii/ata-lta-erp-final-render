@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { AlertCircle, RotateCcw, AlertTriangle } from 'lucide-react';
+import type { Phase } from '../api/types';
 import { useQaReview } from '../api/useQaReview';
 import { runBlockingAction } from './BlockingActionModal';
 import { operationsKeys } from '../api/queryKeys';
@@ -25,7 +26,7 @@ export interface RerouteModalProps {
   isOpen: boolean;
   onClose: () => void;
   workRequestId: string;
-  failedTasks: Array<{ id: string; title: string }>;
+  failedTasks: Array<{ id: string; title: string; phase?: Phase | null }>;
   onSuccess?: () => void;
 }
 
@@ -40,6 +41,13 @@ export function RerouteModal({
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  const canRerouteToProcessing =
+    failedTasks.length > 0 &&
+    failedTasks.every((t) => t.phase === 'processing');
+
+  const effectivePhase: 'pre_processing' | 'processing' =
+    !canRerouteToProcessing ? 'pre_processing' : toPhase;
+
   const { submitReroute } = useQaReview(workRequestId);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -51,18 +59,20 @@ export function RerouteModal({
     }
     setError(null);
 
+    const targetPhase = effectivePhase;
+
     await runBlockingAction({
       title: 'Rerouting Work Request',
-      message: `Rerouting to ${toPhase === 'pre_processing' ? 'Pre-processing' : 'Processing'} and reopening failed tasks...`,
+      message: `Rerouting to ${targetPhase === 'pre_processing' ? 'Pre-processing' : 'Processing'} and reopening failed tasks...`,
       apiCall: async () => {
         return await submitReroute({
           workRequestId,
-          to_phase: toPhase,
+          to_phase: targetPhase,
           reason: trimmed,
         });
       },
       successTitle: 'Work Request Rerouted',
-      successMessage: `Successfully rerouted work request back to ${toPhase.replace('_', ' ')}.`,
+      successMessage: `Successfully rerouted work request back to ${targetPhase.replace('_', ' ')}.`,
       invalidateQueries: [
         operationsKeys.workRequestDetail(workRequestId),
         operationsKeys.tasks(workRequestId),
@@ -103,21 +113,44 @@ export function RerouteModal({
               Return to Phase *
             </label>
             <Select
-              value={toPhase}
+              value={effectivePhase}
               onValueChange={(val) => setToPhase(val as 'pre_processing' | 'processing')}
             >
               <SelectTrigger className="w-full h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B]" data-testid="reroute-to-phase-select">
                 <SelectValue placeholder="Select target phase" />
               </SelectTrigger>
               <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                <SelectItem value="processing" className="text-xs">
+                <SelectItem
+                  value="processing"
+                  disabled={!canRerouteToProcessing}
+                  className="text-xs"
+                  data-testid="reroute-option-processing"
+                >
                   Processing (Phase 2)
                 </SelectItem>
-                <SelectItem value="pre_processing" className="text-xs">
+                <SelectItem
+                  value="pre_processing"
+                  className="text-xs"
+                  data-testid="reroute-option-pre-processing"
+                >
                   Pre-processing (Phase 1)
                 </SelectItem>
               </SelectContent>
             </Select>
+            {!canRerouteToProcessing && (
+              <p
+                className="text-xs text-[#475569] flex items-center gap-1.5 pt-1"
+                data-testid="reroute-processing-disabled-explanation"
+                role="status"
+              >
+                <AlertCircle className="h-3.5 w-3.5 text-[#EAB308] shrink-0" />
+                <span>
+                  {failedTasks.length === 0
+                    ? 'Mark failed tasks in QA before rerouting to Processing.'
+                    : 'Processing is available only when every failed task belongs to Processing. Reroute to Pre-processing to address these failures.'}
+                </span>
+              </p>
+            )}
           </div>
 
           {/* Reopened Tasks Summary */}

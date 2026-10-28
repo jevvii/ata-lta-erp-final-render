@@ -338,7 +338,7 @@ export function DisbursementCodingGrid({
       data-testid="disbursement-coding-grid"
     >
       {/* 1. Summary Strip & Controls Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-2 bg-sidebar/50 border-b border-border pr-16">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-2 bg-sidebar/50 border-b border-border">
         {/* Left: Summary Strip */}
         <div
           className="flex items-center flex-wrap gap-x-4 gap-y-1 text-[13px]"
@@ -438,7 +438,7 @@ export function DisbursementCodingGrid({
       {!isCollapsed && (
         <div
           id="disbursement-coding-table"
-          className="w-full overflow-x-auto max-h-[140px] overscroll-contain pr-16"
+          className="w-full overflow-x-auto max-h-[140px] overscroll-contain"
           data-testid="disbursement-coding-content"
         >
           <table

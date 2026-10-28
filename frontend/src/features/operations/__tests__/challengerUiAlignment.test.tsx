@@ -305,6 +305,34 @@ describe('Adversarial Verification 2: Transmittal Task Select Tampering', () => 
       activeEntity: 'ATA',
     });
 
+    const secondAssignedTask: Task = {
+      ...baseTask,
+      id: 't-101',
+      title: 'Second Assigned Task',
+    };
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes('/tasks') || u.includes('/operations/work-requests/wr-100/tasks')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [baseTask, secondAssignedTask, unassignedTask] }),
+        });
+      }
+      if (u.includes('/operations/work-requests')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ data: [baseWr] }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: [] }),
+      });
+    });
+
     const { wrapper } = createHarness();
     render(
       <TransmittalFormModal
@@ -324,7 +352,7 @@ describe('Adversarial Verification 2: Transmittal Task Select Tampering', () => 
 
     await waitFor(() => {
       const errorMsg = screen.getByTestId('task-error-message');
-      expect(errorMsg).toHaveTextContent('Task selection is required for Documentation users');
+      expect(errorMsg).toHaveTextContent(/A valid linked task is required/i);
     });
   });
 

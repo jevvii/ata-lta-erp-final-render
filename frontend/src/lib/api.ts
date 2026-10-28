@@ -73,7 +73,8 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30 * 1000,
-      retry: 1,
+      retry: (failureCount, error) =>
+        ![401, 403, 404].includes((error as ApiError).status) && failureCount < 1,
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
     },
@@ -84,27 +85,61 @@ export const queryClient = new QueryClient({
 setupTabSyncListener(queryClient);
 
 
+function areSetsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const item of a) {
+    if (!b.has(item)) return false;
+  }
+  return true;
+}
+
+function areStringArraysEqual(a?: string[] | null, b?: string[] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return a === b;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 let currentScopeGeneration = 0;
 
 export const getScopeGeneration = (): number => currentScopeGeneration;
 
 /**
- * Entity or User switch ⇒ cancel in-flight queries and refresh/reset cache.
- * Tracks currentScopeGeneration to ensure stale in-flight fetches are rejected.
+ * Entity, User, Role, Status, Departments, Entities, or Permissions switch ⇒ cancel in-flight queries and refresh/reset cache.
+ * Tracks currentScopeGeneration to ensure stale in-flight fetches/rollbacks are rejected.
+ * Value-checks permissions and array fields to avoid clearing cache on same-value /me refreshes.
  */
 useSessionStore.subscribe((state, prevState) => {
-  const userChanged = state.user?.id !== prevState.user?.id;
+  const user = state.user;
+  const prevUser = prevState.user;
+
+  const userChanged = user?.id !== prevUser?.id;
+  const roleChanged = user?.role !== prevUser?.role;
+  const isActiveChanged = user?.isActive !== prevUser?.isActive;
+  const entitiesChanged = !areStringArraysEqual(user?.entities, prevUser?.entities);
+  const deptsChanged = !areStringArraysEqual(user?.departments, prevUser?.departments);
+  const permsChanged = !areSetsEqual(state.permissions, prevState.permissions);
   const entityChanged = state.activeEntity !== prevState.activeEntity;
 
-  if (userChanged || entityChanged) {
+  const authorityChanged =
+    userChanged ||
+    roleChanged ||
+    isActiveChanged ||
+    entitiesChanged ||
+    deptsChanged ||
+    permsChanged;
+
+  if (authorityChanged || entityChanged) {
     currentScopeGeneration++;
-    if (userChanged) {
-      void queryClient.cancelQueries();
-      queryClient.clear();
-    } else if (entityChanged) {
-      void queryClient.cancelQueries();
-      void queryClient.resetQueries();
-    }
+    void queryClient.cancelQueries();
+    // Keep active observers attached so private rows disappear immediately.
+    // clear() removes queries without notifying their mounted observers.
+    queryClient.removeQueries({ type: 'inactive' });
+    void queryClient.resetQueries();
   }
 });
 

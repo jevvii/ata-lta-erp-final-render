@@ -131,6 +131,14 @@ export interface TaskAssignee {
   userRole?: string;
 }
 
+export interface TaskAssigneeDetail {
+  userId: string;
+  user_id?: string;
+  userName?: string | null;
+  user_name?: string | null;
+  isPrimary?: boolean;
+}
+
 export interface ChecklistItem {
   id: string;
   text: string;
@@ -201,6 +209,19 @@ export interface TaskDocumentAttachment {
 // 3. Core Task & Work Request Entities
 // ============================================================================
 
+export type TaskApprovalStatus = 'approved' | 'pending' | 'rejected';
+
+export interface TaskCreationApprovalInput {
+  decision: 'approve' | 'reject';
+  reason?: string;
+  expectedVersion: number;
+}
+
+export interface ResubmitTaskCreationInput {
+  expectedVersion: number;
+  data?: UpdateTaskInput;
+}
+
 export interface Task {
   id: string;
   workRequestId: string;
@@ -215,9 +236,13 @@ export interface Task {
   assigneeId: string | null;
   assigneeName: string | null;
   assignees: string[]; // List of user UUIDs
+  assigneeDetails?: TaskAssigneeDetail[];
+  assignee_details?: TaskAssigneeDetail[];
   taskAssignees?: TaskAssignee[];
   task_assignees?: TaskAssignee[];
   predecessors: string[];
+  predecessorDetails?: Array<{ id: string; title?: string; status?: TaskStatus | string | null }>;
+  predecessor_details?: Array<{ id: string; title?: string; status?: TaskStatus | string | null }>;
   dueDate: string | null;
   requiredLinkType: string | null;
   displayOrder: number;
@@ -230,6 +255,20 @@ export interface Task {
   timeLogs?: TaskTimeLog[];
   taskDocuments?: TaskDocumentAttachment[];
   hasDocuments?: boolean;
+  approvalStatus?: TaskApprovalStatus;
+  approval_status?: TaskApprovalStatus;
+  createdBy?: string | null;
+  created_by?: string | null;
+  reviewedBy?: string | null;
+  reviewed_by?: string | null;
+  reviewedAt?: string | null;
+  reviewed_at?: string | null;
+  rejectionReason?: string | null;
+  rejection_reason?: string | null;
+  canReview?: boolean;
+  can_review?: boolean;
+  canResubmit?: boolean;
+  can_resubmit?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -243,6 +282,24 @@ export interface WorkRequestPhases {
   processing: PhaseContainer;
   quality_assurance?: PhaseContainer;
   completion?: PhaseContainer;
+}
+
+export type CreationApprovalStatus = 'approved' | 'pending' | 'rejected';
+
+export interface WorkRequestCreationApprovalsParams {
+  status?: 'pending' | 'rejected' | 'approved';
+  scope?: 'mine' | 'all';
+}
+
+export interface WorkRequestCreationApprovalInput {
+  decision: 'approve' | 'reject';
+  reason?: string;
+  expectedVersion: number;
+}
+
+export interface ResubmitWorkRequestCreationInput {
+  expectedVersion: number;
+  data?: UpdateWorkRequestInput;
 }
 
 export interface WorkRequest {
@@ -276,6 +333,22 @@ export interface WorkRequest {
   version: number;
   tasks?: Task[];
   phases?: WorkRequestPhases;
+  creationApprovalStatus?: CreationApprovalStatus;
+  creation_approval_status?: CreationApprovalStatus;
+  createdBy?: string | null;
+  created_by?: string | null;
+  reviewedBy?: string | null;
+  reviewed_by?: string | null;
+  reviewedAt?: string | null;
+  reviewed_at?: string | null;
+  rejectionReason?: string | null;
+  rejection_reason?: string | null;
+  canReviewCreation?: boolean;
+  can_review_creation?: boolean;
+  canResubmit?: boolean;
+  can_resubmit?: boolean;
+  hasManagerLead?: boolean;
+  has_manager_lead?: boolean;
 }
 
 // ============================================================================

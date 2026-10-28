@@ -8,6 +8,8 @@ import {
   Clock,
   AlertTriangle,
   CheckCircle2,
+  XCircle,
+  Pencil,
   Edit,
   Columns,
   FileText,
@@ -46,15 +48,23 @@ import {
   useWorkRequestMutations,
   useWorkRequestRelated,
 } from '../api/useWorkRequests';
-import { useWorkRequestTasks } from '../api/useTasks';
+import { useWorkRequestTasks, useTaskMutations } from '../api/useTasks';
 import { useDocuments, useDocumentDownloadUrl } from '../api/useDocuments';
 import { useTeam } from '../api/useTeam';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
-import { isUserAdmin } from '../lib/taskScope';
+import {
+  isUserAdmin,
+  canReviewTaskCreation,
+  isTaskRejected,
+  isTaskPendingApproval,
+  canResubmitTask,
+} from '../lib/taskScope';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
 import { TaskDetailModal } from './TaskDetailModal';
 import { DocumentViewerModal } from './DocumentViewerModal';
+import { RejectReasonModal } from './RejectReasonModal';
+import { TaskResubmitModal } from './TaskResubmitModal';
 import { parseExternalUrl } from '@/features/documents';
 import {
   ConflictResolutionModal,
@@ -185,8 +195,10 @@ export function WorkRequestSidePeek({
 
   const isCurrentWrErrorDenied = Boolean(
     isWrError &&
-      ((wrError as { status?: number })?.status === 403 ||
+      ((wrError as { status?: number })?.status === 401 ||
+        (wrError as { status?: number })?.status === 403 ||
         (wrError as { status?: number })?.status === 404 ||
+        String(wrError?.message || '').includes('401') ||
         String(wrError?.message || '').includes('403') ||
         String(wrError?.message || '').includes('404'))
   );
@@ -227,6 +239,34 @@ export function WorkRequestSidePeek({
   const workRequest = isWrDenied ? null : rawWorkRequest;
 
   const { statusOptimistic, isStatusOptimisticPending: isUpdatingWr } = useWorkRequestMutations();
+  const { approveOrRejectTaskCreation } = useTaskMutations(workRequestId || '');
+  const [taskToReject, setTaskToReject] = useState<Task | null>(null);
+  const [taskToResubmit, setTaskToResubmit] = useState<Task | null>(null);
+
+  // Clear pending review dialogs on WR, entity, or account context switch to prevent stale retargeting
+  useEffect(() => {
+    setTaskToReject(null);
+    setTaskToResubmit(null);
+  }, [workRequestId, activeEntity, user?.id, user?.role]);
+
+  const handleApproveTask = async (task: Task) => {
+    if (!workRequestId) return;
+    if (task.workRequestId && task.workRequestId !== workRequestId) {
+      toast.error('Task does not belong to the active work request');
+      return;
+    }
+    try {
+      await approveOrRejectTaskCreation({
+        workRequestId,
+        taskId: task.id,
+        decision: 'approve',
+        expectedVersion: task.version ?? 1,
+      });
+      toast.success('Task creation approved');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to approve task creation');
+    }
+  };
 
   // Fetch tasks (suppressed when WR is denied)
   const {
@@ -243,7 +283,7 @@ export function WorkRequestSidePeek({
   );
 
   const documents = useMemo(() => {
-    return Array.isArray(rawDocs) ? rawDocs : rawDocs?.data ?? [];
+    return Array.isArray(rawDocs) ? rawDocs : (Array.isArray(rawDocs?.data) ? rawDocs.data : []);
   }, [rawDocs]);
 
   // Fetch WR-level related records: 360° Shared Project Team Visibility (Directive 4)
@@ -324,8 +364,13 @@ export function WorkRequestSidePeek({
 
   // Compute blocker info
   const blockerInfo = useMemo(() => {
-    if (!workRequest || !tasks.length) return { hasBlockers: false, incomplete: [] };
-    const activeTasks = tasks.filter((t) => t.status !== 'Cancelled');
+    if (!workRequest || !tasks.length) return { hasBlockers: false, incomplete: [], reviewBlockers: [] };
+    const nonDeletedTasks = tasks.filter((t) => {
+      const record = t as Task & { deletedAt?: string | null; deleted_at?: string | null };
+      return !record.deletedAt && !record.deleted_at;
+    });
+    const reviewBlockers = nonDeletedTasks.filter((t) => isTaskPendingApproval(t) || isTaskRejected(t));
+    const activeTasks = nonDeletedTasks.filter((t) => t.status !== 'Cancelled');
     const phase = workRequest.phase as Phase;
 
     let incomplete: Task[] = [];
@@ -344,8 +389,9 @@ export function WorkRequestSidePeek({
     }
 
     return {
-      hasBlockers: incomplete.length > 0,
+      hasBlockers: incomplete.length > 0 || reviewBlockers.length > 0,
       incomplete,
+      reviewBlockers,
     };
   }, [workRequest, tasks]);
 
@@ -354,6 +400,10 @@ export function WorkRequestSidePeek({
   // verbatim server error surfaces via toast.
   const handleStatusChange = async (newStatus: WorkRequestStatus) => {
     if (!workRequest || workRequest.status === newStatus) return;
+    if (newStatus === 'Completed' && blockerInfo.reviewBlockers.length > 0) {
+      toast.error('Manager lead approval is required before completing this work request.');
+      return;
+    }
     try {
       await statusOptimistic({
         id: workRequest.id,
@@ -620,7 +670,6 @@ export function WorkRequestSidePeek({
                     size="sm"
                     onClick={() => {
                       onViewInBoard(workRequestId);
-                      onClose();
                     }}
                     className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1.5"
                     data-testid="side-peek-board-btn"
@@ -692,8 +741,9 @@ export function WorkRequestSidePeek({
                         <span>Phase Advancement Blocked</span>
                       </div>
                       <p className="text-xs text-[#DC2626] pl-6 leading-relaxed">
-                        {blockerInfo.incomplete.length} task(s) in phase &quot;
-                        {workRequest.phase.replace('_', ' ')}&quot; must be completed before advancing.
+                        {blockerInfo.reviewBlockers.length > 0
+                          ? `${blockerInfo.reviewBlockers.length} task(s) require Manager lead approval before phase sign-off or completion.`
+                          : `${blockerInfo.incomplete.length} task(s) in phase "${workRequest.phase.replace('_', ' ')}" must be completed before advancing.`}
                       </p>
                     </div>
                   )}
@@ -847,23 +897,29 @@ export function WorkRequestSidePeek({
                           const isTaskActivePhase = task.phase === workRequest?.phase;
                           const isTaskPastPhase = taskPhaseIndex < currentWrPhaseIndex;
                           const taskPhaseInfo = getPhaseBadgeInfo(task.phase);
+                          const isTaskPending = isTaskPendingApproval(task);
+                          const isRejected = isTaskRejected(task);
+                          const canLeadReview = canReviewTaskCreation(user, task, workRequest);
+                          const canResubmit = canResubmitTask(user, task, workRequest);
 
                           return (
                             <div
                               key={task.id}
                               className={`group transition-colors ${
-                                isTaskActivePhase
-                                  ? 'border-l-4 border-l-[#2563EB] bg-[#EFF6FF]/25 hover:bg-[#EFF6FF]/40'
-                                  : 'hover:bg-[#F8FAFC]'
+                                isRejected
+                                  ? 'border-l-4 border-l-[#DC2626] bg-[#FEF2F2]/25 hover:bg-[#FEF2F2]/40'
+                                  : isTaskActivePhase
+                                    ? 'border-l-4 border-l-[#2563EB] bg-[#EFF6FF]/25 hover:bg-[#EFF6FF]/40'
+                                    : 'hover:bg-[#F8FAFC]'
                               }`}
                               data-testid={`side-peek-task-${task.id}`}
                             >
                               <div
-                                className="p-3.5 flex items-center justify-between gap-3 text-xs cursor-pointer"
+                                className="p-3.5 flex flex-col sm:flex-row sm:items-start justify-between gap-3 text-xs cursor-pointer"
                                 onClick={() => setSelectedTask(task)}
                                 title="Click to view full task details, log time, and upload documents"
                               >
-                                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                                <div className="flex items-start gap-2.5 min-w-0 w-full sm:flex-1">
                                   <CheckCircle2
                                     className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${
                                       isCompleted ? 'text-[#1E293B]' : 'text-[#94A3B8]'
@@ -877,6 +933,15 @@ export function WorkRequestSidePeek({
                                     >
                                       {task.title}
                                     </span>
+
+                                    {isRejected && (
+                                      <p
+                                        className="text-xs text-[#DC2626] bg-[#FEF2F2] px-2 py-1 rounded-[4px] border border-[#FCA5A5] mt-1"
+                                        data-testid={`side-peek-task-rejection-reason-${task.id}`}
+                                      >
+                                        Reason: {task.rejectionReason ?? (task as { rejection_reason?: string }).rejection_reason ?? 'No reason provided'}
+                                      </p>
+                                    )}
 
                                     <div className="flex flex-wrap items-center gap-2 text-xs text-[#475569] pt-1">
                                       <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border text-xs font-medium ${taskPhaseInfo.badgeClass}`}>
@@ -921,7 +986,76 @@ export function WorkRequestSidePeek({
                                   </div>
                                 </div>
 
-                                <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 w-full sm:w-auto sm:shrink-0 justify-start sm:justify-end">
+                                  {isTaskPending && (
+                                    <Badge
+                                      variant="outline"
+                                      size="compact"
+                                      className="text-xs rounded-[6px] bg-[#FFFBEB] text-[#92400E] border-[#FDE68A] flex items-center gap-1"
+                                      data-testid={`side-peek-task-approval-${task.id}`}
+                                    >
+                                      <Clock className="h-3 w-3" />
+                                      <span>Pending Review</span>
+                                    </Badge>
+                                  )}
+                                  {isRejected && (
+                                    <Badge
+                                      variant="destructive"
+                                      size="compact"
+                                      className="text-xs rounded-[6px] bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5] flex items-center gap-1"
+                                      data-testid={`side-peek-task-approval-${task.id}`}
+                                    >
+                                      <XCircle className="h-3 w-3" />
+                                      <span>Rejected</span>
+                                    </Badge>
+                                  )}
+                                  {isTaskPending && canLeadReview && (
+                                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                      <Button
+                                        type="button"
+                                        size="xs"
+                                        className="h-6 text-xs font-bold gap-1 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF]"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleApproveTask(task);
+                                        }}
+                                        data-testid={`side-peek-task-approve-${task.id}`}
+                                      >
+                                        <CheckCircle2 className="h-3 w-3" />
+                                        <span>Approve</span>
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="xs"
+                                        variant="outline"
+                                        className="h-6 text-xs font-bold gap-1 rounded-[6px] border-[#DC2626] text-[#DC2626] hover:bg-[#FEF2F2]"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setTaskToReject(task);
+                                        }}
+                                        data-testid={`side-peek-task-reject-${task.id}`}
+                                      >
+                                        <XCircle className="h-3 w-3" />
+                                        <span>Reject</span>
+                                      </Button>
+                                    </div>
+                                  )}
+                                  {isRejected && canResubmit && (
+                                    <Button
+                                      type="button"
+                                      size="xs"
+                                      variant="outline"
+                                      className="h-6 text-xs font-bold gap-1 rounded-[6px] border-[#1D4ED8] text-[#1D4ED8] hover:bg-[#EFF6FF]"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setTaskToResubmit(task);
+                                      }}
+                                      data-testid={`side-peek-task-resubmit-${task.id}`}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                      <span>Resubmit</span>
+                                    </Button>
+                                  )}
                                   {task.qaStatus === 'passed' || task.qaStatus === 'failed' ? (
                                     <Badge
                                       variant={task.qaStatus === 'passed' ? 'success' : 'destructive'}
@@ -1338,7 +1472,6 @@ export function WorkRequestSidePeek({
                     size="sm"
                     onClick={() => {
                       onViewInBoard(workRequestId);
-                      onClose();
                     }}
                     className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#F8FAFC] gap-1.5"
                   >
@@ -1403,6 +1536,48 @@ export function WorkRequestSidePeek({
         }}
         onCancel={() => setConflictModalState((prev) => ({ ...prev, isOpen: false }))}
       />
+
+      {/* Task Creation Reject Modal */}
+      {taskToReject && (
+        <RejectReasonModal
+          isOpen={Boolean(taskToReject)}
+          requestId={taskToReject.id}
+          workRequestTitle={workRequest?.title}
+          title="Reject Task Creation"
+          description="Provide a required explanation for why this task creation is being rejected."
+          submitLabel="Reject Task"
+          successTitle="Task Rejected"
+          successMessage="The task creation has been rejected."
+          onClose={() => setTaskToReject(null)}
+          onReject={async (taskId, reason) => {
+            if (!workRequestId) return;
+            if (taskToReject.workRequestId && taskToReject.workRequestId !== workRequestId) {
+              throw new Error('Task does not belong to the active work request');
+            }
+            await approveOrRejectTaskCreation({
+              workRequestId,
+              taskId,
+              decision: 'reject',
+              reason,
+              expectedVersion: taskToReject.version ?? 1,
+            });
+          }}
+          invalidateQueries={[
+            operationsKeys.tasks(workRequestId || ''),
+            operationsKeys.workRequestDetail(workRequestId || ''),
+          ]}
+        />
+      )}
+
+      {/* Task Resubmit Modal */}
+      {taskToResubmit && (
+        <TaskResubmitModal
+          isOpen={Boolean(taskToResubmit)}
+          task={taskToResubmit}
+          workRequest={workRequest}
+          onClose={() => setTaskToResubmit(null)}
+        />
+      )}
     </>
   );
 }

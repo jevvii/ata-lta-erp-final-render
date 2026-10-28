@@ -13,6 +13,10 @@ import {
 import { cn } from '@/lib/utils';
 import { DISBURSEMENT_CATEGORIES, DISBURSEMENT_STATUSES, FUND_SOURCES } from '../api/schemas';
 import { useDisbursementsList } from '../api/useDisbursements';
+import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
+import { useClients } from '@/features/operations/api/useClients';
+import { useTeam } from '@/features/operations/api/useTeam';
+import { matchesDueDate, DUE_DATE_FILTER_OPTIONS } from '@/lib/dateFilters';
 import { DisbursementStatusBadge } from './DisbursementStatusBadge';
 import { FundsReleaseActions } from './FundsReleaseActions';
 import { calculateDeadline } from '../lib/deadline';
@@ -40,8 +44,20 @@ export function DisbursementsTable({
   const [selectedStatus, setSelectedStatus] = useState<DisbursementStatus | ''>(statusFilter || '');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [selectedFundSource, setSelectedFundSource] = useState<FundSource | ''>('');
+  const [selectedWorkRequest, setSelectedWorkRequest] = useState<string>('');
+  const [selectedClient, setSelectedClient] = useState<string>('');
+  const [selectedEmployee, setSelectedEmployee] = useState<string>('');
+  const [selectedDueDate, setSelectedDueDate] = useState<string>('all');
   const [page, setPage] = useState(1);
   const limit = 20;
+
+  const user = useSessionStore((state) => state.user);
+  const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
+
+  const { data: rawWrs } = useWorkRequests({ archived: false });
+  const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
+  const { data: clientsData = [] } = useClients();
+  const { data: teamData = [] } = useTeam();
 
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const activeSelectedId = selectedId !== undefined ? selectedId : internalSelectedId;
@@ -87,7 +103,42 @@ export function DisbursementsTable({
   ]);
 
   const { data: response, isLoading, isFetching, isError, error, refetch } = useDisbursementsList(queryFilters);
-  const disbursements = useMemo(() => response?.data ?? [], [response]);
+  const rawDisbursements = useMemo(() => response?.data ?? [], [response]);
+
+  const disbursements = useMemo(() => {
+    return rawDisbursements.filter((d) => {
+      if (selectedWorkRequest) {
+        const wrId = d.linked_work_request_id || d.linkedWorkRequestId;
+        if (wrId !== selectedWorkRequest) return false;
+      }
+      if (selectedClient) {
+        const cId = d.client_id || d.clientId;
+        if (cId !== selectedClient) return false;
+      }
+      if (selectedEmployee) {
+        const empId =
+          d.employee_id ||
+          d.employeeId ||
+          d.requested_by ||
+          d.requestedBy ||
+          (d as unknown as Record<string, unknown>).created_by;
+        if (empId !== selectedEmployee) return false;
+      }
+      if (selectedDueDate && selectedDueDate !== 'all') {
+        const dd = d.due_date || d.dueDate;
+        const isFinished =
+          d.status === 'Funded' || d.status === 'Cancelled' || d.status === 'Rejected';
+        if (!matchesDueDate(dd, selectedDueDate, isFinished)) return false;
+      }
+      return true;
+    });
+  }, [
+    rawDisbursements,
+    selectedWorkRequest,
+    selectedClient,
+    selectedEmployee,
+    selectedDueDate,
+  ]);
   const total = response?.meta?.total ?? 0;
   const totalPages = Math.ceil(total / limit) || 1;
 
@@ -173,26 +224,41 @@ export function DisbursementsTable({
     if (!statusFilter) setSelectedStatus('');
     setSelectedCategory('');
     setSelectedFundSource('');
+    setSelectedWorkRequest('');
+    setSelectedClient('');
+    setSelectedEmployee('');
+    setSelectedDueDate('all');
     setPage(1);
   };
+
+  const hasActiveFilters = Boolean(
+    search ||
+      (!statusFilter && selectedStatus) ||
+      selectedCategory ||
+      selectedFundSource ||
+      selectedWorkRequest ||
+      selectedClient ||
+      selectedEmployee ||
+      (selectedDueDate && selectedDueDate !== 'all')
+  );
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden" data-testid="disbursements-table-container">
       {/* Compact Filter and Search Toolbar (Flush border, no gaps) */}
-      <div className="flex items-center justify-between px-2.5 py-1 gap-2 bg-table-header border-b border-border shrink-0 h-8">
-        <div className="flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto scrollbar-none">
+      <div className="flex items-center justify-between px-2 py-1 gap-1.5 bg-table-header border-b border-border shrink-0 h-8">
+        <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scrollbar-none">
           {/* Search */}
-          <div className="relative w-44 shrink-0">
-            <Search className="h-3 w-3 absolute left-2 top-1.5 text-muted" />
+          <div className="relative w-28 sm:w-32 lg:w-36 shrink-0">
+            <Search className="h-2.5 w-2.5 absolute left-1.5 top-1.5 text-muted" />
             <Input
               type="text"
-              placeholder="Search description, number..."
+              placeholder="Search..."
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
                 setPage(1);
               }}
-              className="pl-6 text-xs h-6 rounded-[4px] bg-surface border-border"
+              className="pl-5 text-[11px] h-6 rounded-[4px] bg-surface border-border py-0"
               data-testid="search-disbursements-input"
             />
           </div>
@@ -205,7 +271,7 @@ export function DisbursementsTable({
                 setSelectedStatus(e.target.value as DisbursementStatus | '');
                 setPage(1);
               }}
-              className="text-xs h-6 px-2 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0"
+              className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[76px] sm:max-w-[86px] truncate"
               data-testid="filter-status-select"
             >
               <option value="">All Statuses</option>
@@ -224,7 +290,7 @@ export function DisbursementsTable({
               setSelectedCategory(e.target.value);
               setPage(1);
             }}
-            className="text-xs h-6 px-2 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0"
+            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[80px] sm:max-w-[92px] truncate"
             data-testid="filter-category-select"
           >
             <option value="">All Categories</option>
@@ -242,7 +308,7 @@ export function DisbursementsTable({
               setSelectedFundSource(e.target.value as FundSource | '');
               setPage(1);
             }}
-            className="text-xs h-6 px-2 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0"
+            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[82px] sm:max-w-[94px] truncate"
             data-testid="filter-fund-source-select"
           >
             <option value="">All Fund Sources</option>
@@ -253,16 +319,90 @@ export function DisbursementsTable({
             ))}
           </select>
 
-          {(search ||
-            (!statusFilter && selectedStatus) ||
-            selectedCategory ||
-            selectedFundSource) && (
+          {/* Work Request Filter */}
+          <select
+            value={selectedWorkRequest}
+            onChange={(e) => {
+              setSelectedWorkRequest(e.target.value);
+              setPage(1);
+            }}
+            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[88px] sm:max-w-[102px] truncate"
+            data-testid="filter-work-request-select"
+            title="Filter by Work Request"
+          >
+            <option value="">All Work Requests</option>
+            {workRequests.map((wr) => (
+              <option key={wr.id} value={wr.id}>
+                {wr.title || wr.work_order_number || wr.id}
+              </option>
+            ))}
+          </select>
+
+          {/* Clients Filter */}
+          <select
+            value={selectedClient}
+            onChange={(e) => {
+              setSelectedClient(e.target.value);
+              setPage(1);
+            }}
+            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[76px] sm:max-w-[88px] truncate"
+            data-testid="filter-client-select"
+            title="Filter by Client"
+          >
+            <option value="">All Clients</option>
+            {clientsData.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Employee Filter (Admin only) */}
+          {isAdmin && (
+            <select
+              value={selectedEmployee}
+              onChange={(e) => {
+                setSelectedEmployee(e.target.value);
+                setPage(1);
+              }}
+              className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[76px] sm:max-w-[88px] truncate"
+              data-testid="filter-employee-select"
+              title="Filter by Employee (Admin only)"
+            >
+              <option value="">All Employees</option>
+              {teamData.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Due Date Filter */}
+          <select
+            value={selectedDueDate}
+            onChange={(e) => {
+              setSelectedDueDate(e.target.value);
+              setPage(1);
+            }}
+            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[76px] sm:max-w-[86px] truncate"
+            data-testid="filter-due-date-select"
+            title="Filter by Due Date"
+          >
+            {DUE_DATE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+
+          {hasActiveFilters && (
             <Button
               type="button"
               variant="ghost"
               size="sm"
               onClick={resetFilters}
-              className="text-xs h-6 px-1.5 text-muted hover:text-ink cursor-pointer shrink-0"
+              className="text-[11px] h-6 px-1 text-muted hover:text-ink cursor-pointer shrink-0"
               data-testid="reset-filters-btn"
             >
               Reset

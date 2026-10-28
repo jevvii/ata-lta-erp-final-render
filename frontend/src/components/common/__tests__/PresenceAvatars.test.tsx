@@ -878,5 +878,43 @@ describe('PresenceAvatars Component (Parcel F - Ephemeral Collaboration)', () =>
         expect(img).toHaveAttribute('src', 'https://example.com/snake-presence.png');
       });
     });
+
+    it('safely handles concurrent mounting of multiple PresenceAvatars for the same room (Board + SidePeek parity)', async () => {
+      // Instance 1: Board mounts PresenceAvatars
+      const { unmount: unmountBoard } = render(
+        <div data-testid="board-wrapper">
+          <PresenceAvatars roomId="wr-concurrent-test" />
+        </div>
+      );
+
+      const channel = supabase.channel('presence:work_request:wr-concurrent-test') as unknown as MockRealtimeChannel;
+
+      act(() => {
+        channel.setPresenceState({
+          [otherUserA.userId]: [otherUserA],
+        });
+        channel.emit('presence', { event: 'sync' });
+      });
+
+      // Instance 2: SidePeek opens and mounts PresenceAvatars for the SAME room while Board is still mounted
+      const { unmount: unmountSidePeek } = render(
+        <div data-testid="sidepeek-wrapper">
+          <PresenceAvatars roomId="wr-concurrent-test" />
+        </div>
+      );
+
+      // Both instances must render active viewers without crashing
+      await waitFor(() => {
+        expect(screen.getAllByTestId(`presence-avatar-${otherUserA.userId}`).length).toBe(2);
+      });
+
+      // Closing SidePeek should not tear down the channel for the Board
+      unmountSidePeek();
+      expect(screen.getAllByTestId(`presence-avatar-${otherUserA.userId}`).length).toBe(1);
+
+      // Navigating away from Board removes the channel completely
+      unmountBoard();
+      expect(screen.queryByTestId(`presence-avatar-${otherUserA.userId}`)).toBeNull();
+    });
   });
 });

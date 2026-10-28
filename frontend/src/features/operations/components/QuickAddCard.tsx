@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { getEligibleStaff, useTeam } from '../api/useTeam';
 import { TaskTypeSelect } from '../lib/taskTypes';
+import { canEmployeeCreateTask } from '../lib/taskScope';
+import { useSessionStore } from '@/lib/session';
 import type { CreatablePhase, CreateTaskInput, WorkRequest } from '../api/types';
 
 interface QuickAddCardProps {
@@ -26,6 +28,8 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
   const [assigneeId, setAssigneeId] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const currentUser = useSessionStore((state) => state.user);
+  const canCreate = canEmployeeCreateTask(currentUser, workRequest);
   const submitting = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -69,6 +73,10 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
       workRequest.status === 'Completed'
     )
       return;
+    if (!canCreate) {
+      setError('Task creation requires an assigned Manager lead on this work request.');
+      return;
+    }
     submitting.current = true;
     setPending(true);
     setError('');
@@ -115,6 +123,15 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
         }
       }}
     >
+      {!canCreate && (
+        <div
+          role="alert"
+          className="p-2 rounded-[6px] bg-[#FEF2F2] border border-[#FCA5A5] text-[#DC2626] text-xs font-medium"
+          data-testid="missing-lead-warning"
+        >
+          Task creation is disabled because this work request does not have an assigned Manager lead.
+        </div>
+      )}
       <div className="flex items-start gap-1">
         <textarea
           ref={titleRef}
@@ -126,14 +143,14 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
               event.currentTarget.form?.requestSubmit();
             }
           }}
-          placeholder="What needs to be done?"
+          placeholder={canCreate ? 'What needs to be done?' : 'Task creation disabled (missing Manager lead)'}
           aria-label="Task title"
-          className="min-h-15 w-full resize-none border-0 bg-transparent p-1 text-sm text-[#1E293B] placeholder:text-[#475569] focus:outline-none"
+          className="min-h-15 w-full resize-none border-0 bg-transparent p-1 text-sm text-[#1E293B] placeholder:text-[#475569] focus:outline-none disabled:opacity-50"
           rows={2}
           maxLength={255}
           required
-          autoFocus
-          disabled={pending}
+          autoFocus={canCreate}
+          disabled={pending || !canCreate}
           data-testid={`quick-add-title-input-${phase}`}
         />
         <button
@@ -213,7 +230,7 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
         <button
           type="submit"
           aria-label="Create task"
-          disabled={pending || !title.trim()}
+          disabled={pending || !canCreate || !title.trim()}
           className="ml-auto flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs disabled:bg-[#F8FAFC] disabled:text-[#475569]/50"
           data-testid={`quick-add-submit-btn-${phase}`}
         >

@@ -247,6 +247,7 @@ describe('Disbursements UI Components & Integration', () => {
           isOpen={true}
           onClose={onClose}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
@@ -379,6 +380,7 @@ describe('Disbursements UI Components & Integration', () => {
           isOpen={true}
           onClose={() => {}}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
@@ -477,6 +479,7 @@ describe('Disbursements UI Components & Integration', () => {
           isOpen={true}
           onClose={() => {}}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
@@ -547,6 +550,7 @@ describe('Disbursements UI Components & Integration', () => {
           isOpen={true}
           onClose={() => {}}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );
@@ -635,6 +639,7 @@ describe('Disbursements UI Components & Integration', () => {
           isOpen={true}
           onClose={() => {}}
           defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+          defaultTaskId="22222222-2222-2222-2222-222222222222"
         />,
         { wrapper }
       );

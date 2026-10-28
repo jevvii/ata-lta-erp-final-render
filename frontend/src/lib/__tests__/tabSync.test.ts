@@ -293,7 +293,7 @@ describe('Parcel A: Feature Flags & Cross-Tab Sync Engine', () => {
       queryClient.clear();
     });
 
-    it('patches detail cache and list cache on ENTITY_MUTATED with entityData', () => {
+    it('invalidates operations detail and list caches without injecting cross-tab row data', () => {
       // Seed detail and list caches
       const detailKey = ['operations', 'workRequests', 'detail', 'wr-200'];
       const listKey = ['operations', 'workRequests', 'list', 'ATA', {}];
@@ -325,9 +325,10 @@ describe('Parcel A: Feature Flags & Cross-Tab Sync Engine', () => {
 
       // Verify detail cache is patched
       const updatedDetail = queryClient.getQueryData<{ title: string; status: string; version: number }>(detailKey);
-      expect(updatedDetail?.title).toBe('Updated Title');
-      expect(updatedDetail?.status).toBe('Approved');
-      expect(updatedDetail?.version).toBe(2);
+      expect(updatedDetail?.title).toBe('Original Title');
+      expect(updatedDetail?.status).toBe('Pending');
+      expect(updatedDetail?.version).toBe(1);
+      expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
 
       // Verify list item is patched while other items are preserved
       const updatedList = queryClient.getQueryData<{ data: Array<{ id: string; title: string; status: string }> }>(listKey);
@@ -335,8 +336,9 @@ describe('Parcel A: Feature Flags & Cross-Tab Sync Engine', () => {
       expect(updatedList!.data[0]?.id).toBe('wr-199');
       expect(updatedList!.data[0]?.title).toBe('Other WR');
       expect(updatedList!.data[1]?.id).toBe('wr-200');
-      expect(updatedList!.data[1]?.title).toBe('Updated Title');
-      expect(updatedList!.data[1]?.status).toBe('Approved');
+      expect(updatedList!.data[1]?.title).toBe('Original Title');
+      expect(updatedList!.data[1]?.status).toBe('Pending');
+      expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
     });
 
     it('patches raw array list caches on ENTITY_MUTATED', () => {
@@ -470,7 +472,14 @@ describe('Parcel A: Feature Flags & Cross-Tab Sync Engine', () => {
       const defaultOptions = apiQueryClient.getDefaultOptions();
 
       expect(defaultOptions.queries?.staleTime).toBe(30 * 1000);
-      expect(defaultOptions.queries?.retry).toBe(1);
+      const retry = defaultOptions.queries?.retry;
+      expect(typeof retry).toBe('function');
+      if (typeof retry !== 'function') throw new Error('Expected an access-aware retry policy');
+      expect(retry(0, new Error('Temporary failure'))).toBe(true);
+      expect(retry(1, new Error('Temporary failure'))).toBe(false);
+      for (const status of [401, 403, 404]) {
+        expect(retry(0, Object.assign(new Error('Access denied'), { status }))).toBe(false);
+      }
       expect(defaultOptions.queries?.refetchOnWindowFocus).toBe(true);
       expect(defaultOptions.queries?.refetchOnReconnect).toBe(true);
     });

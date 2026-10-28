@@ -125,6 +125,77 @@ export function DisbursementEditModal({
     setConflict(false);
   }, [isOpen, disbursement, contextKey]);
 
+  useEffect(() => {
+    if (!isOpen || !canEdit) return;
+
+    const handlePaste = (e: ClipboardEvent) => {
+      if (saving || isUploadingReceipt) return;
+
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      let imageFile: File | null = null;
+      const files = clipboardData.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file && file.type.startsWith('image/')) {
+            imageFile = file;
+            break;
+          }
+        }
+      }
+
+      if (!imageFile && clipboardData.items) {
+        for (let i = 0; i < clipboardData.items.length; i++) {
+          const item = clipboardData.items[i];
+          if (item && item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            if (blob) {
+              imageFile = blob;
+              break;
+            }
+          }
+        }
+      }
+
+      if (imageFile) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const ext = imageFile.type === 'image/jpeg' ? 'jpg' : 'png';
+        const rawName = imageFile.name;
+        const finalName =
+          rawName && rawName !== 'image.png' && rawName !== 'blob'
+            ? rawName
+            : `clipboard-receipt-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-4)}.${ext}`;
+
+        const namedFile =
+          imageFile.name === finalName
+            ? imageFile
+            : new File([imageFile], finalName, { type: imageFile.type || 'image/png' });
+
+        if (!isValidReceiptMimeType(namedFile.type, namedFile.name)) {
+          setError('Only PDF, PNG, and JPEG files are allowed');
+          return;
+        }
+        if (namedFile.size > 10 * 1024 * 1024) {
+          setError('File size cannot exceed 10 MiB');
+          return;
+        }
+
+        setReceiptFile(namedFile);
+        setReceiptFilename(namedFile.name);
+        setError('');
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+    };
+  }, [isOpen, canEdit, saving, isUploadingReceipt]);
+
   if (!isOpen || !canEdit) return null;
 
   const save = async (event: React.FormEvent) => {

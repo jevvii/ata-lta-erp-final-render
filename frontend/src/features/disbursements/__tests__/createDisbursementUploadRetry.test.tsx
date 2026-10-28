@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CreateDisbursementModal } from '../components/CreateDisbursementModal';
 import { useSessionStore } from '@/lib/session';
@@ -234,6 +234,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -385,6 +386,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -510,6 +512,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -590,6 +593,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -673,6 +677,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -775,6 +780,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -841,6 +847,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -903,6 +910,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -951,6 +959,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         isOpen={true}
         onClose={vi.fn()}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -1094,6 +1103,7 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
         onClose={onClose}
         onSuccess={onSuccess}
         defaultWorkRequestId="11111111-1111-1111-1111-111111111111"
+        defaultTaskId="22222222-2222-4222-8222-222222222222"
       />,
       { wrapper }
     );
@@ -1137,5 +1147,214 @@ describe('CreateDisbursementModal Upload Retention on Retry (R7 / V8 & R5)', () 
     expect(createPayloads[0]!.receiptFilename).toBe('receipt.pdf');
     expect(onClose).toHaveBeenCalled();
     expect(onSuccess).toHaveBeenCalled();
+  });
+
+  it('automatically attaches copied image from clipboard when user pastes (CTRL + V) in open modal', async () => {
+    const { wrapper } = createHarness();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    render(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />,
+      { wrapper }
+    );
+
+    const pastedImage = new File(['fake-png-bytes'], 'pasted-screenshot.png', { type: 'image/png' });
+
+    fireEvent.paste(window, {
+      clipboardData: {
+        files: [pastedImage],
+        items: [
+          {
+            type: 'image/png',
+            getAsFile: () => pastedImage,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('pasted-screenshot.png');
+    });
+  });
+
+  it('automatically attaches image from clipboard items if clipboard files list is empty', async () => {
+    const { wrapper } = createHarness();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    render(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />,
+      { wrapper }
+    );
+
+    const blobFile = new File(['fake-png-bytes'], 'image.png', { type: 'image/png' });
+
+    fireEvent.paste(window, {
+      clipboardData: {
+        files: [],
+        items: [
+          {
+            type: 'image/png',
+            getAsFile: () => blobFile,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      const filenameEl = screen.getByTestId('receipt-attached-filename');
+      expect(filenameEl.textContent).toMatch(/clipboard-receipt-.*\.png/);
+    });
+  });
+
+  it('preserves pasted receipt on initial modal open when session user or prefill updates, preventing missing document warning modal', async () => {
+    const { wrapper } = createHarness();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    const { rerender } = render(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+        defaultWorkRequestId="wr-1"
+        prefill={{ workRequestId: 'wr-1' }}
+      />,
+      { wrapper }
+    );
+
+    const pastedImage = new File(['fake-png-bytes'], 'initial-pasted-receipt.png', { type: 'image/png' });
+
+    fireEvent.paste(window, {
+      clipboardData: {
+        files: [pastedImage],
+        items: [
+          {
+            type: 'image/png',
+            getAsFile: () => pastedImage,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('initial-pasted-receipt.png');
+    });
+
+    // Simulate parent re-render with new prefill object reference (e.g. TaskDetailModal re-renders)
+    rerender(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+        defaultWorkRequestId="wr-1"
+        prefill={{ workRequestId: 'wr-1' }}
+      />
+    );
+
+    // Simulate session store user settlement on initial load
+    act(() => {
+      useSessionStore.getState().setSession({
+        user: {
+          id: 'usr-twinkle-settled',
+          email: 'twinkle@example.com',
+          name: 'Twinkle Marquez',
+          role: 'Admin',
+          departments: ['Accounting'],
+          entities: ['ATA', 'LTA'],
+        },
+        permissions: ['disbursement:create', 'disbursement:view'],
+        activeEntity: 'ATA',
+      });
+    });
+
+    // Receipt must NOT be wiped by re-renders or session sync
+    expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('initial-pasted-receipt.png');
+
+    // Fill form and submit
+    fireEvent.change(screen.getByTestId('textarea-description'), {
+      target: { value: 'Transportation fee for BIR filing' },
+    });
+    fireEvent.change(screen.getByTestId('input-amount'), {
+      target: { value: '150.00' },
+    });
+
+    fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
+
+    // Missing supporting document dialog must NOT appear
+    await waitFor(() => {
+      expect(screen.queryByTestId('no-receipt-confirm-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('attaches image from clipboard files with empty mime type but image extension', async () => {
+    const { wrapper } = createHarness();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    render(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />,
+      { wrapper }
+    );
+
+    const fileWithoutMime = new File(['fake-jpg-bytes'], 'scan-receipt.jpg', { type: '' });
+
+    fireEvent.paste(window, {
+      clipboardData: {
+        files: [fileWithoutMime],
+        items: [
+          {
+            type: '',
+            kind: 'file',
+            getAsFile: () => fileWithoutMime,
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('scan-receipt.jpg');
+    });
+  });
+
+  it('supports pasting directly onto the receipt dropzone', async () => {
+    const { wrapper } = createHarness();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    render(
+      <CreateDisbursementModal
+        isOpen={true}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />,
+      { wrapper }
+    );
+
+    const pastedFile = new File(['fake-png-bytes'], 'dropzone-paste.png', { type: 'image/png' });
+    const dropzone = screen.getByTestId('receipt-dropzone');
+
+    fireEvent.paste(dropzone, {
+      clipboardData: {
+        files: [pastedFile],
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('receipt-attached-filename')).toHaveTextContent('dropzone-paste.png');
+    });
   });
 });

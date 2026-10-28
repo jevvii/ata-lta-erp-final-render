@@ -134,6 +134,38 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
     });
   });
 
+  it.each([
+    { approvalStatus: 'pending', status: 'Completed', blocked: true },
+    { approvalStatus: 'rejected', status: 'Cancelled', blocked: true },
+    { approvalStatus: 'approved', status: 'Completed', blocked: false },
+    { approvalStatus: undefined, status: 'Completed', blocked: false },
+  ] as const)('keeps review sign-off separate from execution: $approvalStatus / $status', async ({ approvalStatus, status, blocked }) => {
+    const { wrapper } = createTestHarness();
+    const taskRows = mockPreTasks.map((task, index) => ({
+      ...task,
+      status: index === 0 ? status : 'Completed',
+      approvalStatus: index === 0 ? approvalStatus : undefined,
+    }));
+    vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      const data = url.includes('/wr-101/tasks') ? taskRows
+        : url.includes('/operations/work-requests?') ? mockWorkRequests
+          : url.includes('/operations/work-requests/wr-101') ? mockWorkRequests[0] : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+    const advance = await screen.findByTestId('admin-advance-btn');
+    await waitFor(() => {
+      if (blocked) {
+        expect(advance).toBeDisabled();
+        expect(screen.getByTestId('task-review-signoff-blocker')).toHaveTextContent('Manager lead approval');
+      } else {
+        expect(advance).toBeEnabled();
+        expect(screen.queryByTestId('task-review-signoff-blocker')).not.toBeInTheDocument();
+      }
+    });
+  });
+
   it('renders all 4 phase columns and displays gate progress', async () => {
     const { wrapper } = createTestHarness();
 
@@ -467,6 +499,42 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
     });
   });
 
+  it.each(['passed', 'failed'] as const)('disables the current QA action for a %s task and reacts to updated task data', async (qaStatus) => {
+    const { queryClient, wrapper } = createTestHarness();
+    const qaWr = { ...mockWorkRequests[0]!, phase: 'quality_assurance' };
+    const task = { ...mockPreTasks[0]!, status: 'Completed', qaStatus };
+    const reviewBodies: unknown[] = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/qa-review')) {
+        reviewBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ data: qaWr }), { status: 200 });
+      }
+      const data = url.includes('/wr-101/tasks') ? [task]
+        : url.includes('/work-requests?') ? [qaWr]
+          : url.includes('/work-requests/wr-101') ? qaWr : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+    const current = await screen.findByTestId(`qa-${qaStatus === 'passed' ? 'pass' : 'fail'}-btn-${task.id}`);
+    const opposite = screen.getByTestId(`qa-${qaStatus === 'passed' ? 'fail' : 'pass'}-btn-${task.id}`);
+    expect(current).toBeDisabled();
+    expect(opposite).toBeEnabled();
+    fireEvent.click(current);
+    expect(reviewBodies).toEqual([]);
+
+    const nextStatus = qaStatus === 'passed' ? 'failed' : 'passed';
+    fireEvent.click(opposite);
+    await waitFor(() => expect(reviewBodies).toEqual([{
+      results: [{ task_id: task.id, qa_status: nextStatus, taskId: task.id, qaStatus: nextStatus }],
+    }]));
+    act(() => {
+      queryClient.setQueryData(operationsKeys.tasks('wr-101'), [{ ...task, qaStatus: nextStatus }]);
+    });
+    await waitFor(() => expect(opposite).toBeDisabled());
+    expect(current).toBeEnabled();
+  });
+
   it('RerouteModal requires a non-empty reason and submits reroute payload', async () => {
     let rerouteBody: unknown = null;
     vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
@@ -492,7 +560,7 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
         isOpen={true}
         onClose={onClose}
         workRequestId="wr-101"
-        failedTasks={[{ id: 'task-failed-1', title: 'Withholding Tax Calculation' }]}
+        failedTasks={[{ id: 'task-failed-1', title: 'Withholding Tax Calculation', phase: 'processing' }]}
         onSuccess={onSuccess}
       />,
       { wrapper }
@@ -524,6 +592,91 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
         to_phase: 'processing',
         reason: 'Discrepancy in line 14 deductions requires recalculation',
       });
+    });
+  });
+
+  describe('RerouteModal phase gate', () => {
+    const procFailure = { id: 'proc1', title: 'Failed Processing task', phase: 'processing' as const };
+    const preFailure = { id: 'pre1', title: 'Failed Pre-processing task', phase: 'pre_processing' as const };
+
+    it.each([
+      { label: 'Processing only', failedTasks: [procFailure], allowed: true },
+      { label: 'Pre-processing only', failedTasks: [preFailure], allowed: false },
+      { label: 'mixed phases', failedTasks: [procFailure, preFailure], allowed: false },
+      { label: 'missing phase', failedTasks: [{ id: 'unknown', title: 'Missing phase' }], allowed: false },
+      { label: 'null phase', failedTasks: [{ id: 'unknown', title: 'Null phase', phase: null }], allowed: false },
+      { label: 'no failures', failedTasks: [], allowed: false },
+    ])('gates the option and submits the safe destination for $label', async ({ failedTasks, allowed }) => {
+      let rerouteBody: unknown = null;
+      vi.spyOn(global, 'fetch').mockImplementation(async (_input, init) => {
+        rerouteBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ data: { id: 'wr-101' } }), { status: 200 });
+      });
+      const { queryClient, wrapper } = createTestHarness();
+      const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+      const onClose = vi.fn();
+      render(<RerouteModal isOpen onClose={onClose} workRequestId="wr-101" failedTasks={failedTasks} />, { wrapper });
+
+      const trigger = screen.getByTestId('reroute-to-phase-select');
+      expect(trigger).toHaveTextContent(allowed ? 'Processing (Phase 2)' : 'Pre-processing (Phase 1)');
+      expect(Boolean(screen.queryByTestId('reroute-processing-disabled-explanation'))).toBe(!allowed);
+      fireEvent.keyDown(trigger, { key: 'ArrowDown', code: 'ArrowDown' });
+      const option = await screen.findByTestId('reroute-option-processing');
+      if (allowed) expect(option).not.toHaveAttribute('aria-disabled', 'true');
+      else expect(option).toHaveAttribute('aria-disabled', 'true');
+      expect(screen.getByTestId('reroute-option-pre-processing')).not.toHaveAttribute('aria-disabled', 'true');
+      fireEvent.keyDown(option, { key: 'Escape' });
+
+      fireEvent.change(screen.getByTestId('reroute-reason-input'), { target: { value: 'Correct QA failure' } });
+      fireEvent.click(screen.getByTestId('confirm-reroute-btn'));
+      await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+      expect(rerouteBody).toEqual({ to_phase: allowed ? 'processing' : 'pre_processing', reason: 'Correct QA failure' });
+      for (const key of [operationsKeys.workRequestDetail('wr-101'), operationsKeys.tasks('wr-101'), operationsKeys.workRequests()]) {
+        expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
+      }
+    });
+
+    it.each([
+      { status: 'Completed', deletedAt: undefined, blocked: true },
+      { status: 'Cancelled', deletedAt: undefined, blocked: true },
+      { status: 'Completed', deletedAt: '2026-10-01T00:00:00Z', blocked: false },
+    ] as const)('rechecks an open dialog after a cached Pre-processing failure arrives ($status, deleted=$deletedAt)', async ({ status, deletedAt, blocked }) => {
+      const { queryClient, wrapper } = createTestHarness();
+      const qaWr = { ...mockWorkRequests[0]!, phase: 'quality_assurance' };
+      const initialTasks = [
+        { ...mockPreTasks[0]!, id: 'pre1', title: preFailure.title, status: 'Completed', qaStatus: 'passed' },
+        { ...mockPreTasks[1]!, ...procFailure, status: 'Completed', qaStatus: 'failed' },
+      ];
+      let rerouteBody: unknown = null;
+      vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/reroute')) {
+          rerouteBody = JSON.parse(String(init?.body));
+          return new Response(JSON.stringify({ data: qaWr }), { status: 200 });
+        }
+        const data = url.includes('/wr-101/tasks') ? initialTasks
+          : url.includes('/work-requests?') ? [qaWr]
+            : url.includes('/work-requests/wr-101') ? qaWr : [];
+        return new Response(JSON.stringify({ data }), { status: 200 });
+      });
+      render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+      await screen.findAllByTestId('kanban-task-card-proc1');
+      fireEvent.click(screen.getByTestId('qa-reroute-btn'));
+      expect(screen.getByTestId('reroute-to-phase-select')).toHaveTextContent('Processing (Phase 2)');
+
+      act(() => {
+        queryClient.setQueryData(operationsKeys.tasks('wr-101'), [
+          { ...initialTasks[0], status, deletedAt, qaStatus: 'failed' }, initialTasks[1],
+        ]);
+      });
+      await waitFor(() => expect(screen.getByTestId('reroute-to-phase-select')).toHaveTextContent(
+        blocked ? 'Pre-processing (Phase 1)' : 'Processing (Phase 2)'
+      ));
+      fireEvent.change(screen.getByTestId('reroute-reason-input'), { target: { value: 'Correct latest QA failures' } });
+      fireEvent.click(screen.getByTestId('confirm-reroute-btn'));
+      await waitFor(() => expect(rerouteBody).toEqual({
+        to_phase: blocked ? 'pre_processing' : 'processing', reason: 'Correct latest QA failures',
+      }));
     });
   });
 
@@ -598,12 +751,12 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
 
     // Simulate TanStack Query cache update from a work_requests CDC event changing phase to processing
     act(() => {
-      queryClient.setQueryData(
+      queryClient.setQueryData<WorkRequest>(
         operationsKeys.workRequestDetail('wr-101'),
-        (old: any) => ({
+        (old) => old ? ({
           ...old,
           phase: 'processing',
-        })
+        }) : old
       );
     });
 

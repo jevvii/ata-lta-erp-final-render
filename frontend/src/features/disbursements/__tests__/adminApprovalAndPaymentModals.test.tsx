@@ -586,8 +586,8 @@ describe('Direct Admin Approval & Payment Details Corrections (R3 / D2)', () => 
         { wrapper }
       );
 
-      await waitFor(() => expect(screen.getByTestId('btn-preview-receipt')).toBeEnabled());
-      fireEvent.click(screen.getByTestId('btn-preview-receipt'));
+      await waitFor(() => expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('btn-open-modal-receipt'));
       await waitFor(() => {
         expect(screen.getByTestId('doc-preview-image')).toBeInTheDocument();
       });

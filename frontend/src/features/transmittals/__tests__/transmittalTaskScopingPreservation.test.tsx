@@ -55,6 +55,13 @@ function setupMockFetch(posts: { url: string; body: Record<string, unknown> }[])
             assignees: [CALLER_USER_ID],
           },
           {
+            id: 'task-assigned-2',
+            workRequestId: WR_1,
+            title: 'Second Assigned Doc Task',
+            assigneeId: CALLER_USER_ID,
+            assignees: [CALLER_USER_ID],
+          },
+          {
             id: TASK_UNASSIGNED,
             workRequestId: WR_1,
             title: 'Unassigned Other Task',
@@ -138,8 +145,12 @@ describe('Transmittal Task Scoping & Documentation Boundary Preservation', () =>
     fireEvent.click(screen.getByTestId('task-select'));
 
     await waitFor(() => {
-      expect(screen.getByRole('option', { name: /Assigned Doc Task/i })).toBeInTheDocument();
-      expect(screen.queryByRole('option', { name: /Unassigned Other Task/i })).not.toBeInTheDocument();
+      const assignedOpt = screen.getByRole('option', { name: /^Assigned Doc Task/i });
+      expect(assignedOpt).toBeInTheDocument();
+      expect(assignedOpt).not.toHaveAttribute('aria-disabled', 'true');
+      const unassignedOpt = screen.getByRole('option', { name: /Unassigned Other Task.*Not assigned to you/i });
+      expect(unassignedOpt).toBeInTheDocument();
+      expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
     });
   });
 
@@ -172,12 +183,12 @@ describe('Transmittal Task Scoping & Documentation Boundary Preservation', () =>
       target: { value: 'BIR Form 1701' },
     });
 
-    // Submit without selecting a task
+    // Submit without selecting a task (WR has multiple tasks, neither auto-selected)
     fireEvent.click(screen.getByTestId('submit-transmittal-btn'));
 
     await waitFor(() => {
       expect(screen.getByTestId('task-error-message')).toHaveTextContent(
-        'Task selection is required for Documentation users'
+        /A valid linked task is required/i
       );
     });
 
@@ -266,7 +277,8 @@ describe('Transmittal Task Scoping & Documentation Boundary Preservation', () =>
     });
   });
 
-  it('Manager user: direct transmittal issuance boundary preserved (sees all tasks, no mandatory task enforcement)', async () => {
+  it('Admin bypasses task assignment; non-Admin Manager requires task assignment', async () => {
+    // 1. Manager is non-Admin: unassigned tasks are disabled with Not assigned to you
     useSessionStore.getState().setSession({
       user: {
         id: 'manager-user-id',
@@ -283,6 +295,38 @@ describe('Transmittal Task Scoping & Documentation Boundary Preservation', () =>
     const posts: { url: string; body: Record<string, unknown> }[] = [];
     setupMockFetch(posts);
 
+    const { unmount } = renderModal({
+      prefill: { workRequestId: WR_1, clientId: CLIENT_1 },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('task-select')).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByTestId('task-select'));
+
+    await waitFor(() => {
+      const unassignedOpt = screen.getByRole('option', { name: /Unassigned Other Task.*Not assigned to you/i });
+      expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
+    });
+
+    unmount();
+    cleanup();
+
+    // 2. Admin can pick any task
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'admin-user-id',
+        email: 'admin@ata-lta.ph',
+        name: 'Admin User',
+        role: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+      permissions: ['transmittal:view', 'transmittal:create'],
+      activeEntity: 'ATA',
+    });
+
     renderModal({
       prefill: { workRequestId: WR_1, clientId: CLIENT_1 },
     });
@@ -291,31 +335,12 @@ describe('Transmittal Task Scoping & Documentation Boundary Preservation', () =>
       expect(screen.getByTestId('task-select')).not.toBeDisabled();
     });
 
-    // Manager task dropdown includes both assigned and unassigned tasks
     fireEvent.click(screen.getByTestId('task-select'));
 
     await waitFor(() => {
-      expect(screen.getByRole('option', { name: /Assigned Doc Task/i })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: /Unassigned Other Task/i })).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: /None \(No linked task\)/i })).toBeInTheDocument();
-    });
-
-    // Fill valid document row description
-    fireEvent.change(screen.getByTestId('item-description-input-0'), {
-      target: { value: 'Manager Direct Notice' },
-    });
-
-    // Manager can submit without a task (linkedTaskId: null)
-    fireEvent.click(screen.getByTestId('submit-transmittal-btn'));
-
-    await waitFor(() => {
-      expect(posts).toHaveLength(1);
-    });
-
-    expect(posts[0]!.body).toMatchObject({
-      clientId: CLIENT_1,
-      workRequestId: WR_1,
-      linkedTaskId: null,
+      const opt = screen.getByRole('option', { name: /Unassigned Other Task/i });
+      expect(opt).not.toHaveAttribute('aria-disabled', 'true');
+      expect(opt.textContent).not.toContain('Not assigned to you');
     });
   });
 });

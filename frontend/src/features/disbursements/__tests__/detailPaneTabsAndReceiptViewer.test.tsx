@@ -238,7 +238,7 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
       expect(attachmentTab).toHaveAttribute('data-state', 'active');
 
       await waitFor(() => {
-        expect(screen.getByTestId('btn-preview-receipt')).toBeInTheDocument();
+        expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument();
       });
     });
 
@@ -467,15 +467,15 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
       expect(screen.getByText('No receipt attached')).toBeInTheDocument();
     });
 
-    it('renders a compact attachment row with View, Download, and inline preview', async () => {
+    it('renders a compact toolbar with Modal, Download, and inline preview', async () => {
       const { wrapper } = createHarness();
       render(<DisbursementDetailBody isOpen initialDisbursement={mockDisbWithImageReceipt} onClose={vi.fn()} />, { wrapper });
-      await waitFor(() => expect(screen.getByTestId('btn-preview-receipt')).toBeEnabled());
-      expect(screen.getByTestId('receipt-file-name')).toHaveTextContent('taxi_receipt.png');
-      expect(screen.getByRole('link', { name: 'Download' })).toHaveAttribute('href', 'https://storage.test/receipts/taxi_receipt.png');
+      await waitFor(() => expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument());
+      expect(screen.queryByTestId('receipt-attachment-row')).not.toBeInTheDocument();
+      expect(screen.getByTestId('btn-download-receipt')).toHaveAttribute('href', 'https://storage.test/receipts/taxi_receipt.png');
       expect(screen.getByRole('img')).toBeInTheDocument();
-      expect(screen.getByTestId('receipt-attachment-row')).not.toHaveTextContent('entities/');
-      fireEvent.click(screen.getByTestId('btn-preview-receipt'));
+      expect(screen.getByTestId('receipt-viewer-container').textContent).not.toContain('entities/');
+      fireEvent.click(screen.getByTestId('btn-open-modal-receipt'));
       expect(await screen.findByTestId('doc-preview-image')).toHaveAttribute('src', 'https://storage.test/receipts/taxi_receipt.png');
       expect(screen.queryByTestId('document-details-panel')).not.toBeInTheDocument();
       expect(screen.queryByTestId('comments-scroll-container')).not.toBeInTheDocument();
@@ -484,8 +484,8 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
     it('opens the canonical viewer, expands, returns to windowed mode and closes', async () => {
       const { wrapper } = createHarness();
       render(<DisbursementDetailBody isOpen initialDisbursement={mockDisbWithImageReceipt} onClose={vi.fn()} />, { wrapper });
-      await waitFor(() => expect(screen.getByTestId('btn-preview-receipt')).toBeEnabled());
-      fireEvent.click(screen.getByTestId('btn-preview-receipt'));
+      await waitFor(() => expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('btn-open-modal-receipt'));
       const modal = await screen.findByTestId('document-viewer-modal');
       fireEvent.click(screen.getByTestId('toggle-fullpage-preview'));
       expect(modal).toHaveClass('w-screen');
@@ -493,7 +493,7 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
       expect(modal).not.toHaveClass('w-screen');
       fireEvent.click(within(modal).getAllByRole('button', { name: 'Close' })[0]!);
       await waitFor(() => expect(screen.queryByTestId('document-viewer-modal')).not.toBeInTheDocument());
-      expect(screen.getByTestId('receipt-attachment-row')).toBeInTheDocument();
+      expect(screen.getByTestId('receipt-viewer-container')).toBeInTheDocument();
     });
 
     it('opens PDF in the canonical modal viewer', async () => {
@@ -507,8 +507,8 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
         { wrapper }
       );
 
-      await waitFor(() => expect(screen.getByTestId('btn-preview-receipt')).toBeEnabled());
-      fireEvent.click(screen.getByTestId('btn-preview-receipt'));
+      await waitFor(() => expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('btn-open-modal-receipt'));
       const iframe = await screen.findByTestId('doc-preview-pdf');
       expect(iframe).toHaveAttribute('src', 'https://storage.test/receipts/official_invoice.pdf');
     });
@@ -541,7 +541,7 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
       expect(screen.getByTestId('tab-log')).toBeInTheDocument();
 
       await waitFor(() => {
-        expect(screen.getByTestId('btn-preview-receipt')).toBeEnabled();
+        expect(screen.getByTestId('btn-open-modal-receipt')).toBeInTheDocument();
       });
     });
   });

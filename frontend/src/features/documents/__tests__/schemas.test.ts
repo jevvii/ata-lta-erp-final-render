@@ -12,12 +12,17 @@ import {
 
 describe('Documents Zod Schemas (documents@2.0.0)', () => {
   describe('createDocumentSchema', () => {
-    it('validates valid file creation metadata', () => {
+    const validWrId = '22222222-2222-4222-8222-222222222222';
+    const validTaskId = '44444444-4444-4444-8444-444444444444';
+
+    it('validates valid file creation metadata with mandatory workRequestId and linkedTaskId', () => {
       const valid = {
         fileName: 'BIR_Form_2307.pdf',
         contentType: 'application/pdf',
         fileSize: 1024 * 500,
         originalName: 'BIR Form 2307 Q3.pdf',
+        workRequestId: validWrId,
+        linkedTaskId: validTaskId,
         category: 'BIR',
         documentType: 'Tax Form',
         description: 'Withholding tax certificate for Q3',
@@ -28,18 +33,50 @@ describe('Documents Zod Schemas (documents@2.0.0)', () => {
 
     it('rejects missing fileName or empty fileName', () => {
       expect(createDocumentSchema.safeParse({}).success).toBe(false);
-      expect(createDocumentSchema.safeParse({ fileName: '' }).success).toBe(false);
+      expect(
+        createDocumentSchema.safeParse({
+          fileName: '',
+          workRequestId: validWrId,
+          linkedTaskId: validTaskId,
+        }).success
+      ).toBe(false);
+    });
+
+    it('rejects missing workRequestId or linkedTaskId (no floating documents)', () => {
+      expect(
+        createDocumentSchema.safeParse({
+          fileName: 'test.pdf',
+          linkedTaskId: validTaskId,
+        }).success
+      ).toBe(false);
+      expect(
+        createDocumentSchema.safeParse({
+          fileName: 'test.pdf',
+          workRequestId: validWrId,
+        }).success
+      ).toBe(false);
+      expect(
+        createDocumentSchema.safeParse({
+          fileName: 'test.pdf',
+          workRequestId: null,
+          linkedTaskId: null,
+        }).success
+      ).toBe(false);
     });
 
     it('enforces 50 MB max file size limit', () => {
       const underLimit = {
         fileName: 'test.pdf',
+        workRequestId: validWrId,
+        linkedTaskId: validTaskId,
         fileSize: MAX_FILE_SIZE_BYTES,
       };
       expect(createDocumentSchema.safeParse(underLimit).success).toBe(true);
 
       const overLimit = {
         fileName: 'large.pdf',
+        workRequestId: validWrId,
+        linkedTaskId: validTaskId,
         fileSize: MAX_FILE_SIZE_BYTES + 1,
       };
       const res = createDocumentSchema.safeParse(overLimit);
@@ -49,6 +86,8 @@ describe('Documents Zod Schemas (documents@2.0.0)', () => {
     it('allows externalUrl for linked web documents', () => {
       const ext = {
         fileName: 'SEC Online GIS',
+        workRequestId: validWrId,
+        linkedTaskId: validTaskId,
         externalUrl: 'https://sec.gov.ph/gis-portal/12345',
         category: 'SEC',
       };

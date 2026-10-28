@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { usePendingWorkRequestCreationCount } from '../api/useWorkRequests';
+import { useState, useMemo, useEffect } from 'react';
 import {
   CheckCircle2,
   XCircle,
@@ -15,31 +16,38 @@ import {
   Receipt,
   Send,
   CreditCard,
+  Calendar,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { RejectReasonModal } from './RejectReasonModal';
 import { runBlockingAction } from './BlockingActionModal';
+import { WorkRequestModal } from './WorkRequestModal';
 import {
   useOperationsRequests,
   useOperationsRequestCounts,
   usePhaseTransitions,
 } from '../api/usePhaseTransitions';
-import { useWorkRequestDetail } from '../api/useWorkRequests';
+import {
+  useWorkRequestDetail,
+  useWorkRequestCreationApprovals,
+  useWorkRequestMutations,
+} from '../api/useWorkRequests';
 import { useTeam } from '../api/useTeam';
 import { operationsKeys } from '../api/queryKeys';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { isUserAdmin } from '../lib/taskScope';
 import { useEntityRealtimeSync } from '@/lib/realtime';
-import type { Phase, OperationsRequest } from '../api/types';
+import type { Phase, OperationsRequest, WorkRequest } from '../api/types';
 
 export interface PendingApprovalsInboxProps {
   onNavigateToWr?: (wrId: string) => void;
 }
 
 export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxProps) {
+  const [category, setCategory] = useState<'transitions' | 'wr-creations'>('transitions');
   const [activeSubTab, setActiveSubTab] = useState<'pending' | 'rejected' | 'fulfilled' | 'all'>('pending');
   const [search, setSearch] = useState('');
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
@@ -52,6 +60,18 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
   const currentUser = useSessionStore((state) => state.user);
   const currentUserId = currentUser?.id;
   const isAdmin = isUserAdmin(currentUser);
+  const isManager = currentUser?.role === 'Manager';
+
+  // WR Creation Approvals State
+  const [wrCreationTab, setWrCreationTab] = useState<'pending' | 'rejected' | 'approved'>('pending');
+  const [wrSearch, setWrSearch] = useState('');
+  const [selectedWrId, setSelectedWrId] = useState<string | null>(null);
+  const [rejectingWrIntent, setRejectingWrIntent] = useState<{
+    id: string;
+    expectedVersion: number;
+    title: string;
+  } | null>(null);
+  const [resubmitWr, setResubmitWr] = useState<WorkRequest | null>(null);
 
   const canApprove = hasPermission(permissions, 'workflow:phase_transition');
   const canRequest = hasPermission(permissions, 'workflow:transition_request');
@@ -65,10 +85,19 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
   });
 
   // Queries
-  const { data: rawRequests, isLoading, isError, refetch } = useOperationsRequests({
+  const { data: rawRequests, isLoading, isError, error: reqError, refetch } = useOperationsRequests({
     status: activeSubTab === 'all' ? undefined : activeSubTab,
   });
+
+  const isReqErrorDenied = Boolean(
+    isError &&
+      ((reqError as { status?: number })?.status === 401 ||
+        (reqError as { status?: number })?.status === 403 ||
+        (reqError as { status?: number })?.status === 404)
+  );
+
   const requests = useMemo((): OperationsRequest[] => {
+    if (isReqErrorDenied) return [];
     if (Array.isArray(rawRequests)) return rawRequests as OperationsRequest[];
     if (
       rawRequests &&
@@ -78,8 +107,8 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
     ) {
       return (rawRequests as { data: OperationsRequest[] }).data;
     }
-    return (rawRequests?.data as OperationsRequest[]) ?? [];
-  }, [rawRequests]);
+    return [];
+  }, [rawRequests, isReqErrorDenied]);
 
   const { data: counts } = useOperationsRequestCounts();
   const pendingCount = counts?.pending ?? 0;
@@ -116,6 +145,117 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
 
   // Mutations
   const { fulfillRequest, cancelRequest, requestTransition } = usePhaseTransitions();
+  const { approveOrRejectCreation } = useWorkRequestMutations();
+
+  // WR Creation Approvals Queries & Mutations
+  const wrScope = isAdmin ? 'all' : 'mine';
+  const {
+    data: rawCreationApprovals,
+    isLoading: isLoadingCreationApprovals,
+    isError: isCreationApprovalsError,
+    error: creationApprovalsError,
+    refetch: refetchCreationApprovals,
+  } = useWorkRequestCreationApprovals(
+    {
+      status: wrCreationTab,
+      scope: wrScope,
+    },
+    { enabled: isAdmin || isManager }
+  );
+
+  const isCreationDenied = Boolean(
+    isCreationApprovalsError &&
+      ((creationApprovalsError as { status?: number })?.status === 401 ||
+        (creationApprovalsError as { status?: number })?.status === 403 ||
+        (creationApprovalsError as { status?: number })?.status === 404)
+  );
+
+  const creationApprovals = useMemo((): WorkRequest[] => {
+    if (isCreationDenied) return [];
+    if (Array.isArray(rawCreationApprovals)) return rawCreationApprovals;
+    return (rawCreationApprovals as unknown as { data?: WorkRequest[] })?.data ?? [];
+  }, [rawCreationApprovals, isCreationDenied]);
+
+  const pendingWrCreationCount = usePendingWorkRequestCreationCount();
+
+  const filteredCreationApprovals = useMemo(() => {
+    return creationApprovals.filter((wr) => {
+      const q = wrSearch.toLowerCase();
+      const title = wr.title || '';
+      const client = wr.clientName || wr.client?.name || '';
+      const creator = wr.assignedToName || resolveName(wr.assignedTo);
+      return (
+        title.toLowerCase().includes(q) ||
+        client.toLowerCase().includes(q) ||
+        creator.toLowerCase().includes(q)
+      );
+    });
+  }, [creationApprovals, wrSearch, resolveName]);
+
+  const selectedWr = useMemo(() => {
+    if (!selectedWrId && filteredCreationApprovals.length > 0) {
+      return filteredCreationApprovals[0] || null;
+    }
+    return (
+      filteredCreationApprovals.find((w) => w.id === selectedWrId) ||
+      null
+    );
+  }, [filteredCreationApprovals, selectedWrId]);
+
+  // Clear dialogs and selections on account, entity, or category change to prevent stale retargeting
+  useEffect(() => {
+    setIsRejectModalOpen(false);
+    setRejectingWrIntent(null);
+    setResubmitWr(null);
+    setSelectedWrId(null);
+    setSelectedRequestId(null);
+  }, [activeEntity, currentUserId, category, activeSubTab, wrCreationTab]);
+
+  const handleApproveWrCreation = async (wr: WorkRequest) => {
+    await runBlockingAction({
+      title: 'Approving Work Request',
+      message: `Approving "${wr.title}" and activating it on the active board...`,
+      apiCall: async () => {
+        return await approveOrRejectCreation({
+          id: wr.id,
+          decision: 'approve',
+          expectedVersion: wr.version,
+        });
+      },
+      successTitle: 'Work Request Approved',
+      successMessage: 'The work request has been approved and is now active.',
+      invalidateQueries: [
+        operationsKeys.workRequests(),
+        operationsKeys.workRequestCounts(activeEntity),
+        operationsKeys.workRequestCreationApprovals(),
+      ],
+      onSuccess: () => {
+        void refetchCreationApprovals();
+      },
+    });
+  };
+
+  const handleRejectWrCreation = async (wrId: string, reason: string) => {
+    // Exact match verification against captured review intent
+    if (!rejectingWrIntent || rejectingWrIntent.id !== wrId) {
+      setRejectingWrIntent(null);
+      return;
+    }
+    const wr = creationApprovals.find((w) => w.id === wrId);
+    if (!wr) {
+      // Intended WR removed or changed; abort without retargeting any other WR
+      setRejectingWrIntent(null);
+      return;
+    }
+    await approveOrRejectCreation({
+      id: wr.id,
+      decision: 'reject',
+      reason,
+      expectedVersion: rejectingWrIntent.expectedVersion,
+    });
+    setRejectingWrIntent(null);
+    void refetchCreationApprovals();
+  };
 
   // Filter requests
   const filteredRequests = useMemo(() => {
@@ -277,8 +417,52 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
 
   return (
     <div className="flex flex-col h-[700px] border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] overflow-hidden" data-testid="pending-approvals-inbox">
-      {/* Top Bar with Sub-Tabs */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+      {/* Category Navigation Bar (Phase Transitions vs WR Creation Approvals / Submissions) */}
+      {(isAdmin || isManager) && (
+        <div className="flex items-center justify-between px-4 py-2 border-b border-[#E2E8F0] bg-[#FFFFFF]" data-testid="inbox-category-toggle">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setCategory('transitions')}
+              className={`px-3 py-1 rounded-[6px] text-xs font-semibold cursor-pointer transition-colors ${
+                category === 'transitions'
+                  ? 'bg-[#1D4ED8] text-[#FFFFFF] shadow-2xs'
+                  : 'text-[#475569] hover:text-[#1E293B] hover:bg-[#F1F5F9]'
+              }`}
+              data-testid="inbox-category-transitions"
+            >
+              Phase Transitions
+            </button>
+            <button
+              type="button"
+              onClick={() => setCategory('wr-creations')}
+              className={`px-3 py-1 rounded-[6px] text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 ${
+                category === 'wr-creations'
+                  ? 'bg-[#1D4ED8] text-[#FFFFFF] shadow-2xs'
+                  : 'text-[#475569] hover:text-[#1E293B] hover:bg-[#F1F5F9]'
+              }`}
+              data-testid="inbox-category-wr-creation"
+            >
+              <span>{isAdmin ? 'WR Creation Approvals' : 'My WR Submissions'}</span>
+              {pendingWrCreationCount > 0 && (
+                <Badge
+                  variant="warning"
+                  size="compact"
+                  className="px-1.5 py-0 text-xs font-bold rounded-[4px] bg-[#FEFCE8] text-[#854D0E] border-[#FDE047]"
+                  data-testid="wr-creation-pending-badge"
+                >
+                  {pendingWrCreationCount}
+                </Badge>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {category === 'transitions' ? (
+        <>
+          {/* Top Bar with Sub-Tabs */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
         <div className="flex items-center gap-1.5" data-testid="inbox-subtabs">
           <Button
             type="button"
@@ -891,8 +1075,343 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
           )}
         </div>
       </div>
+      </>
+      ) : (
+        /* WR Creation Approvals / Submissions View */
+        <div className="flex flex-col flex-1 min-h-0" data-testid="wr-creation-inbox">
+          {/* Sub-tabs for WR Creation */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+            <div className="flex items-center gap-1.5" data-testid="wr-creation-subtabs">
+              {(['pending', 'rejected', 'approved'] as const).map((tab) => (
+                <Button
+                  key={tab}
+                  type="button"
+                  variant={wrCreationTab === tab ? 'default' : 'outline'}
+                  size="xs"
+                  onClick={() => setWrCreationTab(tab)}
+                  className={`text-xs tracking-normal rounded-[6px] capitalize gap-1.5 ${
+                    wrCreationTab === tab
+                      ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
+                      : 'border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] hover:bg-[#E2E8F0]'
+                  }`}
+                  data-testid={`wr-creation-tab-${tab}`}
+                >
+                  <span>{tab}</span>
+                </Button>
+              ))}
+            </div>
 
-      {/* Reject Reason Modal */}
+            <div className="w-64">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-[#475569]" />
+                <Input
+                  type="text"
+                  placeholder="Search work requests..."
+                  value={wrSearch}
+                  onChange={(e) => setWrSearch(e.target.value)}
+                  className="h-7 pl-8 text-xs border-[#E2E8F0] rounded-[6px] bg-[#FFFFFF] text-[#1E293B] placeholder:text-[#475569] focus-visible:ring-1 focus-visible:ring-[#1D4ED8]"
+                  data-testid="wr-creation-search-input"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Two-Pane Body for WR Creation */}
+          <div className="grid grid-cols-1 md:grid-cols-12 flex-1 min-h-0 overflow-hidden divide-y md:divide-y-0 md:divide-x divide-[#E2E8F0]">
+            {/* Left Column: Work Request List */}
+            <div className="md:col-span-4 h-full overflow-y-auto bg-[#FFFFFF] divide-y divide-[#E2E8F0]">
+              {isLoadingCreationApprovals ? (
+                <div className="p-8 text-center text-xs text-[#475569]">
+                  Loading work requests...
+                </div>
+              ) : filteredCreationApprovals.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#475569]">
+                  No work requests found for this filter.
+                </div>
+              ) : (
+                filteredCreationApprovals.map((wr) => (
+                  <div
+                    key={wr.id}
+                    onClick={() => setSelectedWrId(wr.id)}
+                    data-testid={`wr-creation-card-${wr.id}`}
+                    className={`p-3 cursor-pointer transition-colors ${
+                      selectedWr?.id === wr.id
+                        ? 'bg-[#EFF6FF] border-l-4 border-l-[#1D4ED8]'
+                        : 'hover:bg-[#F8FAFC]'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-1.5 pb-1">
+                      <div className="flex items-center gap-1.5">
+                        <Badge
+                          variant="secondary"
+                          size="compact"
+                          className="text-xs font-semibold px-1.5 py-0.5 rounded-[4px] border border-[#CBD5E1] bg-[#F1F5F9] text-[#1E293B]"
+                        >
+                          {wr.entity}
+                        </Badge>
+                        <Badge
+                          variant={
+                            wr.priority === 'Urgent' || wr.priority === 'High'
+                              ? 'destructive'
+                              : 'outline'
+                          }
+                          size="compact"
+                          className="text-xs font-semibold px-1.5 py-0.5 rounded-[4px]"
+                        >
+                          {wr.priority}
+                        </Badge>
+                      </div>
+                      {wr.creationApprovalStatus === 'rejected' ? (
+                        <Badge
+                          variant="destructive"
+                          size="compact"
+                          className="text-xs font-semibold px-1.5 py-0.5 rounded-[4px] bg-[#FEF2F2] text-[#DC2626] border border-[#FCA5A5]"
+                          data-testid={`wr-creation-status-rejected-${wr.id}`}
+                        >
+                          Rejected
+                        </Badge>
+                      ) : wr.creationApprovalStatus === 'approved' ? (
+                        <Badge
+                          variant="secondary"
+                          size="compact"
+                          className="text-xs font-semibold px-1.5 py-0.5 rounded-[4px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]"
+                          data-testid={`wr-creation-status-approved-${wr.id}`}
+                        >
+                          Approved
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="warning"
+                          size="compact"
+                          className="text-xs font-semibold px-1.5 py-0.5 rounded-[4px] bg-[#FEFCE8] text-[#854D0E] border border-[#FDE047]"
+                          data-testid={`wr-creation-status-pending-${wr.id}`}
+                        >
+                          Pending Review
+                        </Badge>
+                      )}
+                    </div>
+
+                    <h4 className="text-sm font-semibold text-[#1E293B] truncate pt-0.5">
+                      {wr.title}
+                    </h4>
+                    <p className="text-xs text-[#475569] truncate">
+                      {wr.clientName || wr.client?.name || 'Unassigned Client'}
+                    </p>
+
+                    <div className="flex items-center justify-between text-xs text-[#64748B] pt-1.5">
+                      <span className="flex items-center gap-1">
+                        <User className="h-3 w-3" />
+                        {wr.assignedToName || resolveName(wr.assignedTo)}
+                      </span>
+                      {wr.dueDate && (
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {new Date(wr.dueDate).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Right Column: Work Request Details */}
+            <div className="md:col-span-8 h-full overflow-y-auto bg-[#FFFFFF] flex flex-col">
+              {selectedWr ? (
+                <div className="flex flex-col h-full overflow-y-auto" data-testid="wr-creation-detail-pane">
+                  {/* Detail Header */}
+                  <div className="p-4 border-b border-[#E2E8F0] bg-[#F8FAFC] space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="secondary"
+                          size="compact"
+                          className="text-xs font-bold px-2 py-0.5 rounded-[4px] border border-[#94A3B8] bg-[#F1F5F9] text-[#1E293B]"
+                        >
+                          {selectedWr.entity}
+                        </Badge>
+                        <h3 className="text-base font-bold text-[#1E293B] tracking-tight">
+                          {selectedWr.title}
+                        </h3>
+                      </div>
+                      {selectedWr.creationApprovalStatus === 'rejected' ? (
+                        <Badge
+                          variant="destructive"
+                          size="compact"
+                          className="text-xs font-semibold px-2 py-1 rounded-[6px] bg-[#FEF2F2] text-[#DC2626] border border-[#FCA5A5]"
+                          data-testid="selected-wr-status-rejected"
+                        >
+                          Rejected
+                        </Badge>
+                      ) : selectedWr.creationApprovalStatus === 'approved' ? (
+                        <Badge
+                          variant="secondary"
+                          size="compact"
+                          className="text-xs font-semibold px-2 py-1 rounded-[6px] bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]"
+                          data-testid="selected-wr-status-approved"
+                        >
+                          Approved
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="warning"
+                          size="compact"
+                          className="text-xs font-semibold px-2 py-1 rounded-[6px] bg-[#FEFCE8] text-[#854D0E] border border-[#FDE047]"
+                          data-testid="selected-wr-status-pending"
+                        >
+                          Pending Admin Review
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4 text-xs text-[#475569]">
+                      <div>
+                        <span className="font-semibold text-[#1E293B]">Client: </span>
+                        {selectedWr.clientName || selectedWr.client?.name || 'None'}
+                      </div>
+                      <div>
+                        <span className="font-semibold text-[#1E293B]">Priority: </span>
+                        {selectedWr.priority}
+                      </div>
+                      <div>
+                        <span className="font-semibold text-[#1E293B]">Due Date: </span>
+                        {selectedWr.dueDate ? new Date(selectedWr.dueDate).toLocaleDateString() : 'None'}
+                      </div>
+                      <div>
+                        <span className="font-semibold text-[#1E293B]">Manager / Lead: </span>
+                        {selectedWr.assignedToName || resolveName(selectedWr.assignedTo)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rejection Alert Box */}
+                  {selectedWr.creationApprovalStatus === 'rejected' && (
+                    <div
+                      className="m-4 p-3 rounded-[6px] border border-[#FCA5A5] bg-[#FEF2F2] text-[#991B1B] text-xs space-y-1"
+                      data-testid="wr-creation-rejection-notice"
+                    >
+                      <div className="font-semibold flex items-center gap-1.5 text-[#DC2626]">
+                        <XCircle className="h-4 w-4 shrink-0" />
+                        <span>Rejection Reason:</span>
+                      </div>
+                      <p className="pl-5.5 text-xs text-[#991B1B]">
+                        {selectedWr.rejectionReason || 'No reason specified.'}
+                      </p>
+                      {selectedWr.reviewedAt && (
+                        <p className="pl-5.5 text-[11px] text-[#B91C1C]">
+                          Reviewed at {new Date(selectedWr.reviewedAt).toLocaleString()}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Description & Overview */}
+                  <div className="p-4 space-y-4 flex-1">
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-[#64748B] pb-1">
+                        Description
+                      </h4>
+                      <p className="text-xs text-[#1E293B] bg-[#F8FAFC] p-3 rounded-[6px] border border-[#E2E8F0]">
+                        {selectedWr.description || 'No description provided for this work request.'}
+                      </p>
+                    </div>
+
+                    {/* Tasks breakdown preview */}
+                    <div>
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-[#64748B] pb-2">
+                        Requested Tasks ({(selectedWr.tasks || []).length})
+                      </h4>
+                      <div className="space-y-2">
+                        {(selectedWr.tasks || []).length === 0 ? (
+                          <p className="text-xs text-[#64748B] italic">No tasks specified.</p>
+                        ) : (
+                          (selectedWr.tasks || []).map((t, idx) => (
+                            <div
+                              key={t.id || `task-${idx}`}
+                              className="p-2.5 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] flex items-center justify-between text-xs"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" size="compact" className="text-[11px] uppercase">
+                                  {t.phase === 'processing' ? 'Processing' : 'Pre-processing'}
+                                </Badge>
+                                <span className="font-medium text-[#1E293B]">{t.title}</span>
+                              </div>
+                              <div className="flex items-center gap-3 text-[#64748B]">
+                                <span>{t.assigneeName || resolveName(t.assigneeId)}</span>
+                                {t.dueDate && <span>{new Date(t.dueDate).toLocaleDateString()}</span>}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Footer */}
+                  <div className="p-4 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
+                    <div>
+                      <span className="text-xs text-[#64748B]">
+                        Version: {selectedWr.version}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {/* Admin Review Actions for Pending */}
+                      {selectedWr.creationApprovalStatus === 'pending' && isAdmin && (
+                        <div className="flex items-center gap-2" data-testid="admin-wr-creation-actions">
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => {
+                              setRejectingWrIntent({
+                                id: selectedWr.id,
+                                expectedVersion: selectedWr.version,
+                                title: selectedWr.title,
+                              });
+                            }}
+                            className="text-xs tracking-normal rounded-[6px] bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs gap-1"
+                            data-testid="reject-wr-creation-btn"
+                          >
+                            <X className="h-3.5 w-3.5" /> Reject
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => handleApproveWrCreation(selectedWr)}
+                            className="text-xs tracking-normal rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs gap-1"
+                            data-testid="approve-wr-creation-btn"
+                          >
+                            <Check className="h-3.5 w-3.5" /> Approve Work Request
+                          </Button>
+                        </div>
+                      )}
+
+                      {/* Manager Resubmit Action for Rejected */}
+                      {selectedWr.creationApprovalStatus === 'rejected' && (isManager || selectedWr.canResubmit) && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => setResubmitWr(selectedWr)}
+                          className="text-xs tracking-normal rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs gap-1"
+                          data-testid="resubmit-wr-creation-btn"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" /> Edit &amp; Resubmit
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center text-xs text-[#64748B]">
+                  Select a work request from the queue to inspect details.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Reason Modal for Phase Transitions */}
       {selectedRequest && (
         <RejectReasonModal
           isOpen={isRejectModalOpen}
@@ -902,6 +1421,44 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
             (selectedRequest as unknown as { workRequestTitle?: string }).workRequestTitle
           }
           onClose={() => setIsRejectModalOpen(false)}
+        />
+      )}
+
+      {/* Reject Reason Modal for WR Creation Approvals */}
+      {rejectingWrIntent && (
+        <RejectReasonModal
+          isOpen={Boolean(rejectingWrIntent)}
+          requestId={rejectingWrIntent.id}
+          workRequestTitle={rejectingWrIntent.title}
+          title="Reject Work Request Creation"
+          description="Please provide an explicit rejection reason for the submitter. This will be visible to the Manager to correct and resubmit."
+          submitLabel="Reject Work Request"
+          successTitle="Work Request Rejected"
+          successMessage="The work request creation has been rejected with feedback."
+          onReject={handleRejectWrCreation}
+          onClose={() => setRejectingWrIntent(null)}
+          onSuccess={() => {
+            setRejectingWrIntent(null);
+            void refetchCreationApprovals();
+          }}
+          invalidateQueries={[
+            operationsKeys.workRequests(),
+            operationsKeys.workRequestCounts(activeEntity),
+            operationsKeys.workRequestCreationApprovals(),
+          ]}
+        />
+      )}
+
+      {/* Work Request Resubmit Modal */}
+      {resubmitWr && (
+        <WorkRequestModal
+          isOpen={Boolean(resubmitWr)}
+          workRequest={resubmitWr}
+          onClose={() => setResubmitWr(null)}
+          onSuccess={() => {
+            setResubmitWr(null);
+            void refetchCreationApprovals();
+          }}
         />
       )}
     </div>

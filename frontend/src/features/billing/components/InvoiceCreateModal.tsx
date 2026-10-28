@@ -19,7 +19,8 @@ import {
 } from '@/components/ui/select';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
+import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import {
   isTaskAssignee,
@@ -112,30 +113,6 @@ export function InvoiceCreateModal({
   const isAdmin = isRoleAdmin(currentUser);
   const effectiveEntity = activeEntity !== 'ALL' ? activeEntity : undefined;
 
-  // Work Request Tasks query (UAT2-6: disabled/empty until WR chosen, entity-scoped)
-  const tasksQuery = useWorkRequestTasks(workRequestId || undefined, {
-    enabled: isOpen && Boolean(workRequestId),
-    entity: effectiveEntity,
-  });
-
-  // Exclude placeholder data and tasks without matching parent work request
-  const tasks = useMemo(() => {
-    if (tasksQuery.isPlaceholderData) return [];
-    const list = tasksQuery.data || [];
-    if (!workRequestId) return [];
-    return list.filter((t) => isTaskOfWorkRequest(t, workRequestId));
-  }, [tasksQuery.isPlaceholderData, tasksQuery.data, workRequestId]);
-
-  // Standalone task options: non-admins only see tasks where they are assigned/co-assigned
-  const availableTasks = useMemo(() => {
-    if (!workRequestId) return [];
-    if (isAdmin) return tasks;
-    return tasks.filter((t) => isTaskAssignee(currentUser, t));
-  }, [tasks, workRequestId, isAdmin, currentUser]);
-
-  // Existing Invoices for sequential number calculation
-  const { data: existingInvoicesData } = useInvoices({ limit: 100 }, { enabled: isOpen });
-
   // Prefill contract synchronization (UAT2-7-contract-side)
   useEffect(() => {
     if (isOpen) {
@@ -167,11 +144,13 @@ export function InvoiceCreateModal({
     setClientId(newClientId);
     setWorkRequestId('');
     setSelectedTaskId('');
+    setFormError(null);
   };
 
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
     setSelectedTaskId('');
+    setFormError(null);
     if (!prefill?.clientId) {
       const matchedWr = workRequests.find((w) => w.id === newWrId);
       if (matchedWr?.client_id) {
@@ -183,6 +162,37 @@ export function InvoiceCreateModal({
   const isClientLocked = Boolean(prefill?.clientId || prefill?.workRequestId);
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId);
+
+  const selectedWorkRequest = useMemo(
+    () => workRequests.find((w) => w.id === workRequestId),
+    [workRequests, workRequestId]
+  );
+
+  // Work Request Tasks query & selectability hook
+  const {
+    tasksQuery,
+    allWrTasks: tasks,
+    options: taskOptions,
+    blockingReason,
+    blockingMessage,
+    isBlocked: isTaskBlocked,
+    isNoTasksBlocked,
+    isNotAssignedBlocked,
+    isPhaseOrPrereqBlocked,
+  } = useSelectableTasks({
+    workRequestId: workRequestId || undefined,
+    workRequestPhase: selectedWorkRequest?.phase,
+    recordType: 'invoice',
+    isOpen,
+    entity: effectiveEntity,
+    currentTaskId: prefill?.taskId || null,
+    selectedTaskId,
+    onSelectTask: (taskId) => setSelectedTaskId(taskId),
+    isTaskLocked,
+  });
+
+  // Existing Invoices for sequential number calculation
+  const { data: existingInvoicesData } = useInvoices({ limit: 100 }, { enabled: isOpen });
 
   // Auto-generate sequential invoice number matching prototype
   useEffect(() => {
@@ -249,11 +259,27 @@ export function InvoiceCreateModal({
 
     const trimmedTaskId = selectedTaskId ? selectedTaskId.trim() : '';
 
-    if (trimmedTaskId) {
-      if (tasksQuery.isLoading || (tasksQuery.isFetching && tasks.length === 0)) {
-        setFormError('Tasks are still loading. Please wait.');
-        return;
-      }
+    if (!trimmedTaskId) {
+      setFormError('A valid linked task is required.');
+      return;
+    }
+
+    if (!isTaskLocked && (tasksQuery.isLoading || (tasksQuery.isFetching && tasks.length === 0))) {
+      setFormError('Tasks are still loading. Please wait.');
+      return;
+    }
+
+    if (isTaskBlocked) {
+      setFormError(
+        blockingMessage ||
+          (isNoTasksBlocked
+            ? 'This work request has no tasks — create one first.'
+            : "You're not assigned to any task on this work request. Ask the task owner or an Admin to add you.")
+      );
+      return;
+    }
+
+    if (tasks.length > 0) {
       const foundTask = tasks.find((t) => t.id === trimmedTaskId);
       if (!foundTask || !isTaskOfWorkRequest(foundTask, workRequestId)) {
         setFormError('Selected task does not belong to the selected work request.');
@@ -263,26 +289,26 @@ export function InvoiceCreateModal({
         setFormError('You are not assigned to the selected task.');
         return;
       }
+    }
 
-      // Live verification of exact current scoped query
-      const liveUser = useSessionStore.getState().user;
-      const liveIsAdmin = isRoleAdmin(liveUser);
-      if (!liveIsAdmin) {
-        const exactKey = operationsKeys.tasks(workRequestId, effectiveEntity);
-        const queryState = queryClient.getQueryState<Task[]>(exactKey);
-        if (!queryState || queryState.status !== 'success' || queryState.isInvalidated || !Array.isArray(queryState.data)) {
-          setFormError('Task assignment could not be verified. Please try again.');
-          return;
-        }
-        const liveTask = queryState.data.find((t) => t.id === trimmedTaskId);
-        if (!liveTask || !isTaskOfWorkRequest(liveTask, workRequestId)) {
-          setFormError('Selected task is no longer available in this work request.');
-          return;
-        }
-        if (!isTaskAssignee(liveUser, liveTask)) {
-          setFormError('You are not assigned to the selected task.');
-          return;
-        }
+    // Live verification of exact current scoped query
+    const liveUser = useSessionStore.getState().user;
+    const liveIsAdmin = isRoleAdmin(liveUser);
+    if (!liveIsAdmin) {
+      const exactKey = operationsKeys.tasks(workRequestId, effectiveEntity);
+      const queryState = queryClient.getQueryState<Task[]>(exactKey);
+      if (!queryState || queryState.status !== 'success' || queryState.isInvalidated || !Array.isArray(queryState.data)) {
+        setFormError('Task assignment could not be verified. Please try again.');
+        return;
+      }
+      const liveTask = queryState.data.find((t) => t.id === trimmedTaskId);
+      if (!liveTask || !isTaskOfWorkRequest(liveTask, workRequestId)) {
+        setFormError('Selected task is no longer available in this work request.');
+        return;
+      }
+      if (!isTaskAssignee(liveUser, liveTask)) {
+        setFormError('You are not assigned to the selected task.');
+        return;
       }
     }
 
@@ -320,8 +346,22 @@ export function InvoiceCreateModal({
       if (onCreated) {
         onCreated();
       }
-    } catch {
-      // Error handled by BlockingActionModal
+    } catch (err: unknown) {
+      const apiErr = err as { code?: string; message?: string };
+      if (apiErr?.code === 'TASK_REQUIRED') {
+        setFormError('A valid linked task is required.');
+      } else if (apiErr?.code === 'TASK_WR_MISMATCH') {
+        setFormError('Task does not belong to work request.');
+      } else if (apiErr?.code === 'TASK_NOT_SELECTABLE') {
+        setFormError('Selected task is not selectable.');
+      } else if (
+        apiErr?.code === 'TASK_ASSIGNMENT_REQUIRED' ||
+        apiErr?.code === 'FORBIDDEN_TASK_ATTACHMENT'
+      ) {
+        setFormError('You must be assigned to this task.');
+      } else {
+        setFormError(apiErr?.message || 'Failed to create invoice.');
+      }
     }
   };
 
@@ -413,12 +453,15 @@ export function InvoiceCreateModal({
                 htmlFor="create-invoice-task"
                 className="text-xs font-semibold text-[#1E293B] block mb-1"
               >
-                Linked Task (Optional)
+                Linked Task*
               </label>
               <Select
-                value={selectedTaskId || '__none__'}
-                onValueChange={(val) => setSelectedTaskId(val === '__none__' ? '' : val)}
-                disabled={isTaskLocked || !workRequestId}
+                value={selectedTaskId}
+                onValueChange={(val) => {
+                  setSelectedTaskId(val);
+                  setFormError(null);
+                }}
+                disabled={isTaskLocked || !workRequestId || isTaskBlocked}
               >
                 <SelectTrigger
                   id="create-invoice-task"
@@ -427,15 +470,14 @@ export function InvoiceCreateModal({
                 >
                   <SelectValue
                     placeholder={
-                      !workRequestId ? 'Select work request first...' : 'Select task (optional)...'
+                      !workRequestId ? 'Select work request first...' : 'Select task...'
                     }
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">None (No linked task)</SelectItem>
-                  {availableTasks.map((task) => (
-                    <SelectItem key={task.id} value={task.id}>
-                      {task.title}
+                  {taskOptions.map((opt) => (
+                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled}>
+                      {opt.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -500,6 +542,14 @@ export function InvoiceCreateModal({
               </div>
             </div>
           </div>
+
+          <TaskBlockingAlert
+            blockingReason={blockingReason}
+            isNoTasksBlocked={isNoTasksBlocked}
+            isNotAssignedBlocked={isNotAssignedBlocked}
+            isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
+            workRequestId={workRequestId}
+          />
 
           {/* 2. Dynamic Line Items Section */}
           <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
@@ -691,7 +741,8 @@ export function InvoiceCreateModal({
             <Button
               type="submit"
               size="sm"
-              className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs text-xs cursor-pointer"
+              disabled={isTaskBlocked}
+              className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs text-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="btn-submit-invoice"
             >
               Create Draft Invoice

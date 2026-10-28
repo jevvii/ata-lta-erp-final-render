@@ -17,8 +17,6 @@ import {
   CalendarRange,
   ListOrdered,
   Kanban,
-  User,
-  Users,
   Layers,
 } from 'lucide-react';
 import { useDashboardWorkRequests } from '../api/useDashboardWorkRequests';
@@ -846,33 +844,7 @@ export function PendingTasksCard({ onLogTimeForTask }: PendingTasksCardProps = {
               ))}
             </div>
 
-            {/* Assignee Filter Pills */}
-            <div className="flex items-center bg-[#F1F5F9] p-0.5 rounded-[6px] border border-[#CBD5E1] text-xs">
-              <button
-                type="button"
-                onClick={() => setAssigneeFilter('all')}
-                className={`px-2 py-0.5 rounded-[4px] font-medium transition-colors cursor-pointer flex items-center gap-1 ${
-                  assigneeFilter === 'all'
-                    ? 'bg-[#FFFFFF] text-[#0F172A] font-semibold shadow-2xs'
-                    : 'text-[#475569] hover:text-[#0F172A]'
-                }`}
-              >
-                <Users className="h-3 w-3" />
-                All Assignees
-              </button>
-              <button
-                type="button"
-                onClick={() => setAssigneeFilter('me')}
-                className={`px-2 py-0.5 rounded-[4px] font-medium transition-colors cursor-pointer flex items-center gap-1 ${
-                  assigneeFilter === 'me'
-                    ? 'bg-[#FFFFFF] text-[#0F172A] font-semibold shadow-2xs'
-                    : 'text-[#475569] hover:text-[#0F172A]'
-                }`}
-              >
-                <User className="h-3 w-3" />
-                Assigned to Me
-              </button>
-            </div>
+
           </div>
         </div>
       </CardHeader>
