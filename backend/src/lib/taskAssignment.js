@@ -15,6 +15,10 @@ const WR_ALIAS_KEYS = [
   'linkedWorkRequestId',
   'linked_work_request_id',
 ];
+const PHASE_SEQUENCE = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
 /**
  * Resolves the existing stored task ID from a record using canonical nullish precedence.
@@ -275,6 +279,101 @@ const resolveTrustedUser = async ({ user, userId }) => {
 };
 
 /**
+ * Enforces task status selectability rules on new or changed linkages.
+ * Cancelled tasks are never selectable. Completed/done tasks are only selectable for invoices.
+ *
+ * @param {object} taskRow
+ * @param {string} [recordType='other']
+ */
+const assertTaskSelectable = (taskRow, recordType = 'other') => {
+  if (!taskRow || !taskRow.status) return;
+  const normStatus = String(taskRow.status).trim().toLowerCase();
+  if (normStatus === 'cancelled') {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'Task is cancelled and cannot be linked',
+      code: 'TASK_NOT_SELECTABLE',
+    });
+  }
+  if ((normStatus === 'completed' || normStatus === 'done') && recordType !== 'invoice') {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'Completed tasks cannot be linked to this record',
+      code: 'TASK_NOT_SELECTABLE',
+    });
+  }
+};
+
+/**
+ * Enforces task phase and prerequisite selectability rules on new or changed linkages.
+ *
+ * @param {object} taskRow
+ * @param {object|null} wrRow
+ * @param {string} [recordType='other']
+ */
+const assertTaskPhaseAndPrerequisitesSelectable = async (taskRow, wrRow, recordType = 'other') => {
+  if (!taskRow) return;
+
+  const taskPhase = typeof taskRow.phase === 'string' ? taskRow.phase.trim() : '';
+  const wrPhase = typeof wrRow?.phase === 'string' ? wrRow.phase.trim() : '';
+
+  if (taskPhase && wrPhase) {
+    if (recordType === 'invoice') {
+      const taskPhaseIdx = PHASE_SEQUENCE.indexOf(taskPhase);
+      const wrPhaseIdx = PHASE_SEQUENCE.indexOf(wrPhase);
+      if (taskPhaseIdx !== -1 && wrPhaseIdx !== -1 && taskPhaseIdx > wrPhaseIdx) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'Task belongs to a future phase that has not started on the work request',
+          code: 'TASK_NOT_SELECTABLE',
+        });
+      }
+    } else if (taskPhase !== wrPhase) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Task belongs to a phase that is not currently active on the work request',
+        code: 'TASK_NOT_SELECTABLE',
+      });
+    }
+  }
+
+  if (Array.isArray(taskRow.predecessors) && taskRow.predecessors.length > 0) {
+    const validPredIds = taskRow.predecessors.filter(isValidUUID);
+    if (validPredIds.length > 0) {
+      const { data: predTasks, error: predErr } = await supabaseAdmin
+        .from('tasks')
+        .select('id, title, status, deleted_at')
+        .in('id', validPredIds)
+        .is('deleted_at', null);
+
+      if (predErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: predErr.message,
+        });
+      }
+
+      for (const pred of predTasks || []) {
+        const normStatus = String(pred.status || '').trim().toLowerCase();
+        if (normStatus !== 'cancelled' && normStatus !== 'completed' && normStatus !== 'done') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Task is blocked by incomplete prerequisite task(s)',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+      }
+    }
+  }
+};
+
+/**
  * Resolves and validates a target task and its parent work request.
  * Enforces entity boundaries and assignment authorization.
  *
@@ -286,6 +385,8 @@ const resolveTrustedUser = async ({ user, userId }) => {
  * @param {string|null} [params.targetWorkRequestId]
  * @param {string|null} [params.clientId]
  * @param {boolean} [params.allowNoTask=true]
+ * @param {string} [params.recordType='other'] - 'invoice' allows completed tasks when selectability is enforced
+ * @param {boolean} [params.enforceSelectability=false] - Reject cancelled (and, for non-invoices, completed) tasks
  * @returns {Promise<{ task: object|null, workRequest: object|null, effectiveTaskId: string|null, effectiveWrId: string|null }>}
  */
 const resolveAndAuthorizeTaskTarget = async ({
@@ -296,6 +397,8 @@ const resolveAndAuthorizeTaskTarget = async ({
   targetWorkRequestId,
   clientId,
   allowNoTask = true,
+  recordType = 'other',
+  enforceSelectability = false,
 }) => {
   const effectiveUser = await resolveTrustedUser({ user, userId });
 
@@ -330,7 +433,7 @@ const resolveAndAuthorizeTaskTarget = async ({
   // 1. Fetch and validate task
   const { data: taskRow, error: taskErr } = await supabaseAdmin
     .from('tasks')
-    .select('id, work_request_id, assignee_id, deleted_at')
+    .select('id, work_request_id, assignee_id, status, phase, predecessors, deleted_at')
     .eq('id', targetTaskId)
     .maybeSingle();
 
@@ -374,7 +477,7 @@ const resolveAndAuthorizeTaskTarget = async ({
   // 3. Fetch and validate parent work request
   const { data: wrRow, error: wrErr } = await supabaseAdmin
     .from('work_requests')
-    .select('id, client_id, entity_id, deleted_at')
+    .select('id, client_id, entity_id, phase, deleted_at')
     .eq('id', effectiveWrId)
     .maybeSingle();
 
@@ -414,7 +517,13 @@ const resolveAndAuthorizeTaskTarget = async ({
     });
   }
 
-  // 4. Task Assignment authorization
+  // 4. Task selectability (only for new/changed linkages on mandatory-task records)
+  if (enforceSelectability) {
+    assertTaskSelectable(taskRow, recordType);
+    await assertTaskPhaseAndPrerequisitesSelectable(taskRow, wrRow, recordType);
+  }
+
+  // 5. Task Assignment authorization
   const isAdmin = effectiveUser?.role === 'Admin';
   if (!isAdmin) {
     const callerId = effectiveUser?.id || userId;
@@ -452,6 +561,8 @@ const resolveAndAuthorizeTaskTarget = async ({
  * @param {string|null|undefined} params.payloadTaskId - Normalized target task ID from payload
  * @param {string|null|undefined} params.payloadWrId - Normalized work request ID from payload
  * @param {string|null} [params.clientId]
+ * @param {string} [params.recordType='other']
+ * @param {boolean} [params.allowNoTask=true]
  * @returns {Promise<{ isLinkageChanged: boolean, effectiveTaskId: string|null, effectiveWrId: string|null, canonicalPair: { task_id: string|null, linked_task_id: string|null }|null }>}
  */
 const authorizeTaskRelink = async ({
@@ -462,6 +573,8 @@ const authorizeTaskRelink = async ({
   payloadTaskId,
   payloadWrId,
   clientId,
+  recordType = 'other',
+  allowNoTask = true,
 }) => {
   const effectiveUser = await resolveTrustedUser({ user, userId });
 
@@ -470,9 +583,13 @@ const authorizeTaskRelink = async ({
 
   const isTaskSpecified = payloadTaskId !== undefined;
   const isWrSpecified = payloadWrId !== undefined;
+  const isLinkageInPayload = isTaskSpecified || isWrSpecified;
 
   const taskChanged = isTaskSpecified && payloadTaskId !== existingTaskId;
   const wrChanged = isWrSpecified && payloadWrId !== existingWrId;
+
+  const destinationTaskId = isTaskSpecified ? payloadTaskId : existingTaskId;
+  let destinationWrId = isWrSpecified ? payloadWrId : existingWrId;
 
   // An effective linkage change occurs when:
   // - task is changed (different task or explicitly unlinked to null)
@@ -480,6 +597,32 @@ const authorizeTaskRelink = async ({
   const isLinkageChanged = taskChanged || (Boolean(existingTaskId) && wrChanged);
 
   if (!isLinkageChanged) {
+    if (isLinkageInPayload && !allowNoTask && destinationWrId) {
+      if (!destinationTaskId) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'A valid linked task is required',
+          code: 'TASK_REQUIRED',
+        });
+      }
+
+      const { data: storedTask } = await supabaseAdmin
+        .from('tasks')
+        .select('id, deleted_at')
+        .eq('id', existingTaskId)
+        .maybeSingle();
+
+      if (!storedTask || Boolean(storedTask.deleted_at)) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'The previously linked task has been deleted. A valid linked task is required.',
+          code: 'TASK_REQUIRED',
+        });
+      }
+    }
+
     return {
       isLinkageChanged: false,
       effectiveTaskId: existingTaskId,
@@ -501,13 +644,22 @@ const authorizeTaskRelink = async ({
       targetWorkRequestId: existingWrId,
       clientId: originClientId,
       allowNoTask: true,
+      recordType,
+      enforceSelectability: false,
+    });
+  }
+
+  if (!destinationTaskId && destinationWrId && !allowNoTask) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'A valid linked task is required',
+      code: 'TASK_REQUIRED',
     });
   }
 
   // 2. Destination validation: validate destination task if provided (Correction 2, 3)
   // Destination validation must use effective client (existing client when omitted, explicit payload when provided)
-  const destinationTaskId = isTaskSpecified ? payloadTaskId : existingTaskId;
-  let destinationWrId = isWrSpecified ? payloadWrId : existingWrId;
   const destinationClientId = clientId !== undefined ? clientId : originClientId;
 
   if (destinationTaskId) {
@@ -518,7 +670,9 @@ const authorizeTaskRelink = async ({
       targetTaskId: destinationTaskId,
       targetWorkRequestId: destinationWrId,
       clientId: destinationClientId,
-      allowNoTask: true,
+      allowNoTask: false,
+      recordType,
+      enforceSelectability: true,
     });
     // Persist normalized derived parent consistently (Correction 2)
     destinationWrId = authDest.effectiveWrId;
@@ -540,6 +694,8 @@ module.exports = {
   normalizeTaskAndParentAliases,
   isUserAssignedToTask,
   resolveTrustedUser,
+  assertTaskSelectable,
+  assertTaskPhaseAndPrerequisitesSelectable,
   resolveAndAuthorizeTaskTarget,
   authorizeTaskRelink,
 };

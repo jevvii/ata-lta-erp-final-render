@@ -15,12 +15,12 @@ const { resetMock, seedDefaults, mockTables } = require('../../../fixtures/supab
 const ENTITY_ID = 'ent-ata';
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
-const TASK_ID_PRIMARY = 'task-primary-001';
-const TASK_ID_COASSIGNEE = 'task-coassignee-001';
-const TASK_ID_UNASSIGNED = 'task-unassigned-001';
+const TASK_ID_PRIMARY = 'd1111111-1111-4111-8111-111111111111';
+const TASK_ID_COASSIGNEE = 'd2222222-2222-4222-8222-222222222222';
+const TASK_ID_UNASSIGNED = 'd3333333-3333-4333-8333-333333333333';
 
-const DOC_USER_ID = 'doc-user-001';
-const ADMIN_USER_ID = 'admin-user-001';
+const DOC_USER_ID = 'd4444444-4444-4444-8444-444444444444';
+const ADMIN_USER_ID = 'd5555555-5555-4555-8555-555555555555';
 
 describe('Transmittals Service - Status Workflow', () => {
   describe('Valid transitions', () => {
@@ -192,16 +192,30 @@ describe('Transmittals Service - Task Assignment & Scoping Enforcement (F06, F07
       expect(result.status).toBe('Draft');
     });
 
-    it('allows Admin to create a transmittal without a linked task', async () => {
+    it('rejects Admin creating transmittal without a linked task (400 Bad Request)', async () => {
+      await expect(
+        service.createTransmittal({
+          entityId: ENTITY_ID,
+          userId: ADMIN_USER_ID,
+          user: adminUser,
+          data: { ...basePayload, linkedTaskId: null },
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        detail: 'A valid linked task is required for transmittals',
+      });
+    });
+
+    it('allows Admin to create a transmittal with an unassigned task (Admin bypass)', async () => {
       const result = await service.createTransmittal({
         entityId: ENTITY_ID,
         userId: ADMIN_USER_ID,
         user: adminUser,
-        data: { ...basePayload, linkedTaskId: null },
+        data: { ...basePayload, linkedTaskId: TASK_ID_UNASSIGNED },
       });
 
       expect(result.id).toBeDefined();
-      expect(result.linked_task_id).toBeNull();
+      expect(result.linked_task_id).toBe(TASK_ID_UNASSIGNED);
     });
   });
 
@@ -324,8 +338,10 @@ describe('Transmittals Service - Task Assignment & Scoping Enforcement (F06, F07
     });
 
     it('rejects send if Documentation user is not assigned to linked task (403 Forbidden)', async () => {
+      const otherDocUserId = 'd6666666-6666-4666-8666-666666666666';
+      mockTables.work_requests.get(WORK_REQUEST_ID).co_assignees = [otherDocUserId];
       const otherDocUser = {
-        id: 'unassigned-doc-user',
+        id: otherDocUserId,
         role: 'Documentation',
         departments: ['Documentation'],
       };
@@ -334,7 +350,7 @@ describe('Transmittals Service - Task Assignment & Scoping Enforcement (F06, F07
         service.sendTransmittal({
           entityId: ENTITY_ID,
           id: transmittalId,
-          userId: 'unassigned-doc-user',
+          userId: otherDocUserId,
           user: otherDocUser,
         })
       ).rejects.toMatchObject({

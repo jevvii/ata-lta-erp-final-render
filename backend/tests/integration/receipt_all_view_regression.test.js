@@ -48,6 +48,8 @@ const CLIENT_LTA = '88888888-8888-4888-8888-888888888888';
 
 const WR_ATA = '55555555-5555-4555-8555-555555555555';
 const WR_LTA = '66666666-6666-4666-8666-666666666666';
+const TASK_ATA = '33333333-3333-4333-8333-333333333331';
+const TASK_LTA = '33333333-3333-4333-8333-333333333332';
 
 let tokenAtaFirst;
 let tokenLtaFirst;
@@ -115,6 +117,20 @@ beforeEach(() => {
     title: 'LTA Tax Filing WR',
     deleted_at: null,
   });
+
+  mockTables.tasks.set(TASK_ATA, {
+    id: TASK_ATA,
+    work_request_id: WR_ATA,
+    title: 'ATA Task',
+    status: 'In Progress',
+  });
+
+  mockTables.tasks.set(TASK_LTA, {
+    id: TASK_LTA,
+    work_request_id: WR_LTA,
+    title: 'LTA Task',
+    status: 'In Progress',
+  });
 });
 
 afterEach(() => {
@@ -169,6 +185,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 350,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_LTA,
+        linkedTaskId: TASK_LTA,
         clientId: CLIENT_LTA,
         receiptS3Key,
         receiptFilename,
@@ -224,6 +241,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 120,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
         clientId: CLIENT_ATA,
         receiptS3Key,
         receiptFilename,
@@ -271,6 +289,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 80,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
         clientId: CLIENT_ATA,
         receiptS3Key,
         receiptFilename,
@@ -288,6 +307,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 90,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_ATA,
+        linkedTaskId: TASK_ATA,
         clientId: CLIENT_ATA,
         receiptS3Key,
         receiptFilename,
@@ -344,6 +364,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 200,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_LTA,
+        linkedTaskId: TASK_LTA,
         clientId: CLIENT_LTA,
         receiptS3Key: objectKey,
         receiptFilename: 'user_a.png',
@@ -386,6 +407,7 @@ describe('ALL-View Receipt Lifecycle Regressions', () => {
         amount: 150,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: WR_LTA,
+        linkedTaskId: TASK_LTA,
         clientId: CLIENT_LTA,
         receiptS3Key: objectKey,
         receiptFilename: 'ata_receipt.png',

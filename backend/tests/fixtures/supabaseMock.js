@@ -13,6 +13,10 @@ try {
   // mime compatibility shim optional
 }
 
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const mockUsers = new Map();
 const mockTokens = new Map();
 const mockTables = {
@@ -50,6 +54,7 @@ const mockTables = {
   status_history: new Map(),
   document_sequences: new Map(),
   notifications: new Map(),
+  task_creation_review_events: new Map(),
 };
 
 const mockStorageObjects = new Map();
@@ -184,7 +189,12 @@ const tableQuery = (table) => {
     if (fop === 'or') {
       return (filter.parts || []).some((p) => matchFilter(row, p));
     }
-    const rowValue = row[column];
+    let rowValue = row[column];
+    if (rowValue === undefined) {
+      if (column === 'creation_approval_status' || column === 'approval_status') {
+        rowValue = 'approved';
+      }
+    }
     if (fop === 'not') {
       return !matchFilter(row, { column, value, op: innerOp || 'eq' });
     }
@@ -321,6 +331,12 @@ const tableQuery = (table) => {
         const stored = { ...rec, id };
         if (VERSIONED_TABLES.has(table) && stored.version === undefined) {
           stored.version = 1;
+        }
+        if (table === 'work_requests' && stored.creation_approval_status === undefined) {
+          stored.creation_approval_status = 'approved';
+        }
+        if (table === 'tasks' && stored.approval_status === undefined) {
+          stored.approval_status = 'approved';
         }
         if (table === 'retainer_templates' && stored.template_type === undefined) {
           stored.template_type = 'retainer';
@@ -610,6 +626,448 @@ const tableQuery = (table) => {
  * Atomic RPC transition helpers for concurrency tests.
  */
 const rpcImpl = {
+  task_creation_review_decide: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const decision = params.p_decision;
+    const reason = params.p_reason;
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (actor.role === 'Admin') return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (actor.role !== 'Manager') return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (wr.assigned_to !== actorId) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+
+    // Entitlement
+    const actorEntities = Array.isArray(actor.entities) ? actor.entities : [];
+    if (!actorEntities.includes('ALL')) {
+      const ent = mockTables.entities.get(wr.entity_id);
+      const code = ent?.code || wr.entity_id;
+      if (!actorEntities.includes(code)) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    }
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    const currentStatus = task.approval_status || 'approved';
+    if (currentStatus !== 'pending') {
+      return fail('P0001', 'TASK_REVIEW_STATE');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT');
+    }
+
+    const isApprove = decision === 'approve' || decision === 'approved';
+    const isReject = decision === 'reject' || decision === 'rejected';
+    if (!isApprove && !isReject) {
+      return fail('22023', 'INVALID_DECISION');
+    }
+
+    if (isReject && (!reason || typeof reason !== 'string' || reason.trim().length === 0)) {
+      return fail('22023', 'REASON_REQUIRED');
+    }
+
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+    task.approval_status = isApprove ? 'approved' : 'rejected';
+    task.reviewed_by = actorId;
+    task.reviewed_at = now;
+    task.rejection_reason = isReject ? reason.trim() : null;
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
+  task_creation_review_resubmit: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const editData = params.p_data || {};
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    const creatorId =
+      task.created_by !== undefined && task.created_by !== null
+        ? task.created_by
+        : task.requested_by || null;
+    if (creatorId !== actorId) {
+      return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    }
+
+    const currentStatus = task.approval_status || 'approved';
+    if (currentStatus !== 'rejected') {
+      return fail('P0001', 'TASK_REVIEW_STATE');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT');
+    }
+
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+    task.approval_status = 'pending';
+    task.reviewed_by = null;
+    task.reviewed_at = null;
+    task.rejection_reason = null;
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    if (editData.title !== undefined) task.title = String(editData.title).trim();
+    if (editData.description !== undefined) task.description = editData.description;
+    if (editData.dueDate !== undefined) task.due_date = editData.dueDate;
+    if (editData.assigneeId !== undefined) task.assignee_id = editData.assigneeId;
+    if (editData.assignees !== undefined) task.assignees = editData.assignees;
+    if (editData.predecessors !== undefined) task.predecessors = editData.predecessors;
+    if (editData.requiredLinkType !== undefined) task.required_link_type = editData.requiredLinkType;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
+  task_creation_review_create: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const taskData = params.p_data || {};
+    const assignees = params.p_assignees;
+
+    if (!wrId || !entityId || !actorId) {
+      return fail('22023', 'TASK_REVIEW_CONFLICT: Missing required parameters');
+    }
+
+    const allowedKeys = new Set([
+      'id', 'title', 'description', 'status', 'phase', 'qa_status',
+      'due_date', 'dueDate', 'required_link_type', 'requiredLinkType',
+      'display_order', 'displayOrder', 'predecessors', 'assignee_id', 'assigneeId', 'assignees'
+    ]);
+    for (const key of Object.keys(taskData)) {
+      if (!allowedKeys.has(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported field in task data: ${key}`);
+      }
+    }
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Work request entity mismatch');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is not admitted');
+    }
+    if (wr.archived || wr.status === 'Cancelled' || wr.status === 'Completed') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is archived, cancelled, or completed');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Inactive or invalid actor');
+
+    // Entitlement
+    const actorEntities = Array.isArray(actor.entities) ? actor.entities : [];
+    if (!actorEntities.includes('ALL')) {
+      const ent = mockTables.entities.get(entityId);
+      const code = ent?.code || entityId;
+      if (!actorEntities.includes(code)) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Actor not entitled to entity');
+    }
+
+    // WR membership
+    if (actor.role !== 'Admin') {
+      let isMember = false;
+      if (wr.assigned_to === actorId) isMember = true;
+      else if (Array.isArray(wr.co_assignees) && wr.co_assignees.includes(actorId)) isMember = true;
+      else {
+        for (const t of mockTables.tasks.values()) {
+          if (t.work_request_id === wrId && !t.deleted_at && t.assignee_id === actorId) {
+            isMember = true;
+            break;
+          }
+        }
+        if (!isMember) {
+          for (const ta of mockTables.task_assignees.values()) {
+            if (ta.user_id === actorId) {
+              const parentTask = mockTables.tasks.get(ta.task_id);
+              if (parentTask && parentTask.work_request_id === wrId && !parentTask.deleted_at) {
+                isMember = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!isMember) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Actor is not a member of this work request');
+    }
+
+    const isEmployee = actor.role !== 'Admin' && actor.role !== 'Manager';
+    let approvalStatus = 'approved';
+    let reviewedBy = actorId;
+    let reviewedAt = nowIso();
+
+    if (isEmployee) {
+      if (!wr.assigned_to) {
+        return fail('42501', 'TASK_REVIEW_REQUIRED: Work request has no assigned Manager lead');
+      }
+      const lead = mockTables.users.get(wr.assigned_to);
+      if (!lead || lead.is_active === false || lead.role !== 'Manager') {
+        return fail('42501', 'TASK_REVIEW_REQUIRED: Work request assigned lead is not an active Manager');
+      }
+      const leadEntities = Array.isArray(lead.entities) ? lead.entities : [];
+      if (!leadEntities.includes('ALL')) {
+        const ent = mockTables.entities.get(entityId);
+        const code = ent?.code || entityId;
+        if (!leadEntities.includes(code)) {
+          return fail('42501', 'TASK_REVIEW_REQUIRED: Work request assigned lead is not entitled to entity');
+        }
+      }
+      approvalStatus = 'pending';
+      reviewedBy = null;
+      reviewedAt = null;
+    }
+
+    const taskId = taskData.id && isValidUUID(taskData.id) ? taskData.id : require('crypto').randomUUID();
+    const now = nowIso();
+
+    let assigneeList = [];
+    if (Array.isArray(assignees)) {
+      assigneeList = assignees.filter(isValidUUID);
+    } else if (Array.isArray(taskData.assignees)) {
+      assigneeList = taskData.assignees.filter(isValidUUID);
+    } else if (taskData.assignee_id) {
+      assigneeList = [taskData.assignee_id];
+    } else if (taskData.assigneeId) {
+      assigneeList = [taskData.assigneeId];
+    }
+
+    const primaryAssigneeId = assigneeList[0] || null;
+    let primaryAssigneeName = taskData.assignee_name || taskData.assigneeName || null;
+    if (primaryAssigneeId && (!primaryAssigneeName || isValidUUID(primaryAssigneeName))) {
+      const u = mockTables.users.get(primaryAssigneeId);
+      primaryAssigneeName = u?.name || primaryAssigneeName;
+    }
+
+    const newTask = {
+      id: taskId,
+      work_request_id: wrId,
+      title: String(taskData.title || '').trim(),
+      description: taskData.description || null,
+      status: taskData.status || 'Draft',
+      phase: taskData.phase || wr.phase || 'pre_processing',
+      qa_status: taskData.qa_status || taskData.qaStatus || 'none',
+      due_date: taskData.due_date || taskData.dueDate || null,
+      required_link_type: taskData.required_link_type || taskData.requiredLinkType || null,
+      display_order: taskData.display_order ?? taskData.displayOrder ?? 0,
+      predecessors: Array.isArray(taskData.predecessors) ? taskData.predecessors.filter(isValidUUID) : [],
+      assignee_id: primaryAssigneeId,
+      assignee_name: primaryAssigneeName,
+      assigned_by: primaryAssigneeId ? actorId : null,
+      assigned_at: primaryAssigneeId ? now : null,
+      approval_status: approvalStatus,
+      created_by: actorId,
+      reviewed_by: reviewedBy,
+      reviewed_at: reviewedAt,
+      rejection_reason: null,
+      version: 1,
+      created_at: now,
+      updated_at: now,
+    };
+
+    mockTables.tasks.set(taskId, newTask);
+
+    if (assigneeList.length > 0) {
+      for (const uid of assigneeList) {
+        const taId = require('crypto').randomUUID();
+        mockTables.task_assignees.set(taId, {
+          id: taId,
+          task_id: taskId,
+          user_id: uid,
+          assigned_by: actorId,
+          assigned_at: now,
+          created_at: now,
+        });
+      }
+    }
+
+    return { data: [JSON.parse(JSON.stringify(newTask))], error: null };
+  },
+  task_material_update: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const patch = params.p_data || {};
+    const assignees = params.p_assignees;
+
+    if (!taskId || !wrId || !entityId || !actorId) {
+      return fail('22023', 'TASK_REVIEW_CONFLICT: Missing required parameters');
+    }
+    if (!expectedVersion || expectedVersion <= 0) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT: expectedVersion is required and must be a positive integer');
+    }
+
+    const allowedMaterialKeys = new Set([
+      'title', 'description', 'status', 'phase', 'qa_status', 'due_date', 'dueDate',
+      'required_link_type', 'requiredLinkType', 'display_order', 'displayOrder',
+      'predecessors', 'assignee_id', 'assigneeId', 'assignees'
+    ]);
+    const privilegedKeys = [
+      'id', 'approval_status', 'created_by', 'reviewed_by', 'reviewed_at',
+      'rejection_reason', 'version', 'created_at', 'updated_at', 'deleted_at'
+    ];
+    for (const key of Object.keys(patch)) {
+      if (privilegedKeys.includes(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported or privileged field in task data: ${key}`);
+      }
+      if (!allowedMaterialKeys.has(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported field ${key}`);
+      }
+    }
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Work request entity mismatch');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is not admitted');
+    }
+    if (wr.archived || wr.status === 'Cancelled' || wr.status === 'Completed') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is archived, cancelled, or completed');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Inactive or invalid actor');
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT: Task version mismatch');
+    }
+
+    if (task.approval_status === 'rejected') {
+      return fail('P0002', 'TASK_REJECTED_LOCKED: Cannot modify rejected task without resubmission');
+    }
+
+    const isEmployee = actor.role !== 'Admin' && actor.role !== 'Manager';
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+
+    let isMaterialChange = false;
+    if (patch.title !== undefined) {
+      task.title = String(patch.title).trim();
+      isMaterialChange = true;
+    }
+    if (patch.description !== undefined) {
+      task.description = patch.description;
+      isMaterialChange = true;
+    }
+    if (patch.due_date !== undefined || patch.dueDate !== undefined) {
+      task.due_date = patch.due_date ?? patch.dueDate;
+      isMaterialChange = true;
+    }
+    if (patch.required_link_type !== undefined || patch.requiredLinkType !== undefined) {
+      task.required_link_type = patch.required_link_type ?? patch.requiredLinkType;
+      isMaterialChange = true;
+    }
+    if (patch.display_order !== undefined || patch.displayOrder !== undefined) {
+      task.display_order = patch.display_order ?? patch.displayOrder;
+    }
+    if (patch.predecessors !== undefined) {
+      task.predecessors = Array.isArray(patch.predecessors) ? patch.predecessors.filter(isValidUUID) : [];
+      isMaterialChange = true;
+    }
+
+    let assigneeList = null;
+    if (Array.isArray(assignees)) {
+      assigneeList = assignees.filter(isValidUUID);
+      isMaterialChange = true;
+    } else if (Array.isArray(patch.assignees)) {
+      assigneeList = patch.assignees.filter(isValidUUID);
+      isMaterialChange = true;
+    } else if (patch.assignee_id !== undefined || patch.assigneeId !== undefined) {
+      const raw = patch.assignee_id ?? patch.assigneeId;
+      assigneeList = raw ? [raw] : [];
+      isMaterialChange = true;
+    }
+
+    if (assigneeList !== null) {
+      task.assignee_id = assigneeList[0] || null;
+      if (task.assignee_id) {
+        const u = mockTables.users.get(task.assignee_id);
+        task.assignee_name = u?.name || task.assignee_name;
+      } else {
+        task.assignee_name = null;
+      }
+
+      for (const [taId, ta] of [...mockTables.task_assignees.entries()]) {
+        if (ta.task_id === taskId) mockTables.task_assignees.delete(taId);
+      }
+      for (const uid of assigneeList) {
+        const taId = require('crypto').randomUUID();
+        mockTables.task_assignees.set(taId, {
+          id: taId,
+          task_id: taskId,
+          user_id: uid,
+          assigned_by: actorId,
+          assigned_at: now,
+          created_at: now,
+        });
+      }
+    }
+
+    if (isEmployee && isMaterialChange && (task.approval_status === 'approved' || !task.approval_status)) {
+      task.approval_status = 'pending';
+      task.reviewed_by = null;
+      task.reviewed_at = null;
+      task.rejection_reason = null;
+
+      const eventId = require('crypto').randomUUID();
+      mockTables.task_creation_review_events.set(eventId, {
+        id: eventId,
+        task_id: taskId,
+        work_request_id: wrId,
+        entity_id: entityId,
+        event_type: 'material_update',
+        decision: null,
+        actor_id: actorId,
+        reason: null,
+        metadata: { changes: patch },
+        created_at: now,
+      });
+    }
+
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
   mutate_document_comment: (p) => {
     const fail = (code, message) => ({ data: null, error: { code, message } });
     const doc = mockTables.documents.get(p.p_document_id);

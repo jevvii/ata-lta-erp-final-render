@@ -91,7 +91,9 @@ describe('/v1/work-requests', () => {
     // whose legacy role maps to the Management department (workflow:edit)
     // and therefore reaches the VALID_TRANSITIONS check. The client fixture
     // needs clients:edit, which Management lacks, so an admin creates it.
+    const managerId = '22222222-2222-4222-8222-888888888888';
     const manager = registerUser({
+      id: managerId,
       email: 'manager-wr-transitions@ata-lta.ph',
       name: 'Manager WR Transitions',
       role: 'Manager',
@@ -107,9 +109,9 @@ describe('/v1/work-requests', () => {
 
     const wr = await request(app)
       .post('/v1/work-requests')
-      .set('Authorization', `Bearer ${manager}`)
+      .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ dueDate: '2026-12-31', title: 'Tax Filing', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Tax Filing', clientId: client.id, entity: 'ATA', assignedTo: managerId })
       .expect(201);
 
     await request(app)

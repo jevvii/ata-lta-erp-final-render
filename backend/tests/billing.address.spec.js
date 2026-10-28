@@ -19,6 +19,7 @@ const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
 const ACCOUNTING_USER_ID = '22222222-2222-4222-8222-222222222222';
 const OPERATIONS_USER_ID = '44444444-4444-4444-8444-444444444444';
+const TASK_ID = '55555555-5555-4555-8555-555555555555';
 
 const ORIGINAL_CLIENT_RECORD = {
   id: CLIENT_ID,
@@ -38,6 +39,7 @@ const validInvoicePayload = {
   invoiceNumber: 'ATA-SI-2026-0001',
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   issueDate: '2026-10-01',
   dueDate: '2026-10-31',
   status: 'Draft',
@@ -56,6 +58,18 @@ const seedData = () => {
     title: 'Acme Annual Audit',
     status: 'In Progress',
     co_assignees: [ACCOUNTING_USER_ID, OPERATIONS_USER_ID],
+  });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Audit Task',
+    status: 'In Progress',
+    assignee_id: ACCOUNTING_USER_ID,
+  });
+  mockTables.task_assignees.set('ta-ops', {
+    id: 'ta-ops',
+    task_id: TASK_ID,
+    user_id: OPERATIONS_USER_ID,
   });
 };
 

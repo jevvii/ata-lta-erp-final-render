@@ -54,6 +54,7 @@ const createDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       entityCode: req.entityCode,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.status(201).json({ data: result });

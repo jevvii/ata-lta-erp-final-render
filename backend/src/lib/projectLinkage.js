@@ -211,7 +211,7 @@ const validateRecordProjectLinkage = async ({
   if (effectiveWrId) {
     const { data: wr, error: wrErr } = await supabaseAdmin
       .from('work_requests')
-      .select('id, entity_id, deleted_at')
+      .select('id, entity_id, deleted_at, creation_approval_status')
       .eq('id', effectiveWrId)
       .maybeSingle();
 
@@ -224,6 +224,14 @@ const validateRecordProjectLinkage = async ({
     }
 
     if (!wr || wr.deleted_at) {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Parent work request not found or deleted',
+      });
+    }
+
+    if (!internal && wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
       throw new AppError({
         statusCode: 404,
         title: 'Not Found',
@@ -370,7 +378,7 @@ const filterValidProjectRecords = async (rows, { user, entityId, concernedWrIds 
     const chunk = wrIdsArray.slice(i, i + 500);
     const { data: wData, error: wErr } = await supabaseAdmin
       .from('work_requests')
-      .select('id, entity_id, deleted_at')
+      .select('id, entity_id, deleted_at, creation_approval_status')
       .in('id', chunk);
 
     if (wErr) {
@@ -405,6 +413,7 @@ const filterValidProjectRecords = async (rows, { user, entityId, concernedWrIds 
     if (effectiveWrId) {
       const wr = wrMap.get(effectiveWrId);
       if (!wr || wr.deleted_at) return false;
+      if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') return false;
       if (row.entity_id && wr.entity_id && row.entity_id !== wr.entity_id) return false;
 
       // Entity scope filtering

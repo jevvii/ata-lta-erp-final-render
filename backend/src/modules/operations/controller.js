@@ -18,6 +18,10 @@ const {
   qaReviewSchema,
   rerouteSchema,
   generateRetainerTemplateSchema,
+  creationApprovalDecisionSchema,
+  resubmitCreationSchema,
+  taskCreationApprovalDecisionSchema,
+  taskResubmitCreationSchema,
 } = require('./schema');
 const auditService = require('../../services/auditService');
 const { supabaseAdmin } = require('../../services/supabaseClient');
@@ -32,11 +36,14 @@ const validate = (schema, data) => {
     const isPhaseImmutable = result.error.issues.some(
       (i) => i.params?.code === 'TASK_PHASE_IMMUTABLE' || i.path.includes('phase')
     );
+    const isReasonRequired = result.error.issues.some(
+      (i) => i.params?.code === 'REASON_REQUIRED' || /reason is required/i.test(i.message)
+    );
     throw new AppError({
       statusCode: 400,
       title: 'Validation Error',
       detail: issues,
-      code: isPhaseImmutable ? 'TASK_PHASE_IMMUTABLE' : 'VALIDATION_ERROR',
+      code: isPhaseImmutable ? 'TASK_PHASE_IMMUTABLE' : isReasonRequired ? 'REASON_REQUIRED' : 'VALIDATION_ERROR',
     });
   }
   return result.data;
@@ -140,7 +147,26 @@ const create = async (req, res, next) => {
       }
     }
 
+    if (!req.user || (req.user.role !== 'Admin' && req.user.role !== 'Manager')) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'Only Admin or Manager roles can create work requests',
+      });
+    }
+
     const payload = validate(createWorkRequestSchema, req.body);
+    delete payload.creationApprovalStatus;
+    delete payload.creation_approval_status;
+    delete payload.reviewedBy;
+    delete payload.reviewed_by;
+    delete payload.reviewedAt;
+    delete payload.reviewed_at;
+    delete payload.rejectionReason;
+    delete payload.rejection_reason;
+    delete payload.canReviewCreation;
+    delete payload.canResubmit;
+    delete payload.hasManagerLead;
     let entityId = req.entityUUID;
 
     // Auto-detect entity if in ALL or if payload.entity is ALL/missing
@@ -246,6 +272,17 @@ const getById = async (req, res, next) => {
 const update = async (req, res, next) => {
   try {
     const payload = injectExpectedVersion(req, validate(updateWorkRequestSchema, req.body));
+    delete payload.creationApprovalStatus;
+    delete payload.creation_approval_status;
+    delete payload.reviewedBy;
+    delete payload.reviewed_by;
+    delete payload.reviewedAt;
+    delete payload.reviewed_at;
+    delete payload.rejectionReason;
+    delete payload.rejection_reason;
+    delete payload.canReviewCreation;
+    delete payload.canResubmit;
+    delete payload.hasManagerLead;
     const entityId = req.entityUUID;
 
     if (req.entityCode && req.entityCode !== 'ALL' && payload.entity && payload.entity !== req.entityCode) {
@@ -749,6 +786,91 @@ const rerouteWorkRequest = async (req, res, next) => {
   }
 };
 
+const listCreationApprovals = async (req, res, next) => {
+  try {
+    const { status, scope, page, limit } = req.query;
+    const result = await operationsService.listCreationApprovals({
+      entityId: req.entityUUID,
+      user: req.user,
+      status,
+      scope,
+      page,
+      limit,
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const decideCreationApproval = async (req, res, next) => {
+  try {
+    const payload = validate(creationApprovalDecisionSchema, injectExpectedVersion(req, req.body || {}));
+    const result = await operationsService.decideWorkRequestCreationApproval({
+      id: req.params.id,
+      entityId: req.entityUUID,
+      decision: payload.decision,
+      reason: payload.reason,
+      expectedVersion: payload.expectedVersion,
+      user: req.user,
+    });
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const resubmitCreation = async (req, res, next) => {
+  try {
+    const payload = validate(resubmitCreationSchema, injectExpectedVersion(req, req.body || {}));
+    const result = await operationsService.resubmitWorkRequestCreation({
+      id: req.params.id,
+      entityId: req.entityUUID,
+      expectedVersion: payload.expectedVersion,
+      data: payload.data,
+      user: req.user,
+    });
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const decideTaskCreationApproval = async (req, res, next) => {
+  try {
+    const payload = validate(taskCreationApprovalDecisionSchema, injectExpectedVersion(req, req.body || {}));
+    const result = await operationsService.decideTaskCreationApproval({
+      workRequestId: req.params.wrId || req.params.id,
+      taskId: req.params.taskId,
+      entityId: req.entityUUID,
+      decision: payload.decision,
+      reason: payload.reason,
+      expectedVersion: payload.expectedVersion,
+      user: req.user,
+    });
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const resubmitTaskCreation = async (req, res, next) => {
+  try {
+    const payload = validate(taskResubmitCreationSchema, injectExpectedVersion(req, req.body || {}));
+    const result = await operationsService.resubmitTaskCreation({
+      workRequestId: req.params.wrId || req.params.id,
+      taskId: req.params.taskId,
+      entityId: req.entityUUID,
+      expectedVersion: payload.expectedVersion,
+      data: payload.data,
+      user: req.user,
+    });
+    res.status(200).json({ data: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   operationsController: {
     list,
@@ -782,6 +904,11 @@ module.exports = {
     advanceWorkRequest,
     qaReviewWorkRequest,
     rerouteWorkRequest,
+    listCreationApprovals,
+    decideCreationApproval,
+    resubmitCreation,
+    decideTaskCreationApproval,
+    resubmitTaskCreation,
   },
 };
 

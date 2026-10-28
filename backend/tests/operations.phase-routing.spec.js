@@ -1671,6 +1671,114 @@ describe('P0-D: Phase-Lock Guards, Prerequisite Gates & Phase Routing Operations
       expect(rerouteNotif.payload.reason).toBe('Tax calculation mismatch on Proc Task 1');
       expect(rerouteNotif.payload.failed_task_ids).toEqual([proc1Id]);
     });
+
+    const seedQaReroute = async (taskOverrides) => {
+      const wr = await createWorkRequestWithPhases({
+        pre_processing: { tasks: [{ title: 'Passed preparation', local_id: 'passed' }] },
+        processing: {
+          tasks: taskOverrides.map((_, index) => ({
+            title: `QA task ${index + 1}`, local_id: `qa-${index}`, assignees: [staffUser.id],
+          })),
+        },
+      });
+      mockTables.work_requests.set(wr.id, {
+        ...mockTables.work_requests.get(wr.id), phase: 'quality_assurance', status: 'Under Review', version: 7,
+      });
+      const passedId = wr.phases.pre_processing.tasks[0].id;
+      mockTables.tasks.set(passedId, {
+        ...mockTables.tasks.get(passedId), status: 'Completed', qa_status: 'passed', version: 3,
+      });
+      wr.phases.processing.tasks.forEach((task, index) => {
+        mockTables.tasks.set(task.id, {
+          ...mockTables.tasks.get(task.id), status: 'Completed', qa_status: 'failed', version: 3,
+          ...taskOverrides[index],
+        });
+      });
+      mockTables.notifications.clear();
+      return {
+        id: wr.id,
+        beforeWr: structuredClone(mockTables.work_requests.get(wr.id)),
+        beforeTasks: structuredClone(Array.from(mockTables.tasks.values())),
+      };
+    };
+
+    it.each([
+      ['Pre-processing only', ['pre_processing']],
+      ['mixed phases', ['processing', 'pre_processing']],
+      ['missing phase', [undefined]],
+      ['null phase', [null]],
+      ['unknown phase', ['unknown']],
+      ['no failures', []],
+    ])('blocks Processing reroute for %s without changing state or emitting events', async (_label, phases) => {
+      const { id, beforeWr, beforeTasks } = await seedQaReroute(phases.map((phase) => ({ phase })));
+      const res = await request(app)
+        .post(`/v1/operations/work-requests/${id}/reroute`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ to_phase: 'processing', reason: 'QA corrections required' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('FAILED_TASKS_REQUIRE_PRE_PROCESSING');
+      expect(mockTables.work_requests.get(id)).toEqual(beforeWr);
+      expect(Array.from(mockTables.tasks.values())).toEqual(beforeTasks);
+      expect(Array.from(mockTables.notifications.values())).toEqual([]);
+      expect(Array.from(mockTables.audit_logs.values()).filter(
+        (row) => row.action === 'work_request.reroute' && row.record_id === id
+      )).toEqual([]);
+    });
+
+    it.each([
+      ['Pre-processing only', ['pre_processing']],
+      ['mixed phases', ['pre_processing', 'processing']],
+      ['Processing only', ['processing']],
+    ])('allows Pre-processing reroute for %s and preserves version increments', async (_label, phases) => {
+      const { id, beforeWr, beforeTasks } = await seedQaReroute(phases.map((phase) => ({ phase })));
+      const failedIds = beforeTasks.filter((task) => task.qa_status === 'failed').map((task) => task.id);
+      const res = await request(app)
+        .post(`/v1/operations/work-requests/${id}/reroute`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ to_phase: 'pre_processing', reason: 'Correct foundational QA failures' });
+
+      expect(res.status).toBe(200);
+      expect(mockTables.work_requests.get(id)).toMatchObject({
+        phase: 'pre_processing', status: 'Pre-processing', version: beforeWr.version + 1,
+      });
+      beforeTasks.forEach((task) => {
+        const after = mockTables.tasks.get(task.id);
+        if (failedIds.includes(task.id)) {
+          expect(after).toMatchObject({ status: 'In Progress', qa_status: 'none', version: task.version + 1 });
+        } else {
+          expect(after).toEqual(task);
+        }
+      });
+      expect(Array.from(mockTables.audit_logs.values())).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: 'work_request.reroute', details: expect.objectContaining({ reopened_task_ids: failedIds }) }),
+      ]));
+      expect(Array.from(mockTables.notifications.values())).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'wr.qa_reroute', payload: expect.objectContaining({ to_phase: 'pre_processing', failed_task_ids: failedIds }) }),
+      ]));
+    });
+
+    it('ignores soft-deleted Pre-processing failures when rerouting to Processing', async () => {
+      const { id, beforeWr, beforeTasks } = await seedQaReroute([
+        { phase: 'pre_processing', deleted_at: '2026-10-01T00:00:00Z' },
+        { phase: 'processing' },
+      ]);
+      const deletedTask = beforeTasks.find((task) => task.deleted_at);
+      const processingTask = beforeTasks.find((task) => task.phase === 'processing' && !task.deleted_at);
+      const res = await request(app)
+        .post(`/v1/operations/work-requests/${id}/reroute`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ to_phase: 'processing', reason: 'Only live Processing task failed' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.reopened_tasks).toEqual([processingTask.id]);
+      expect(mockTables.tasks.get(deletedTask.id)).toEqual(deletedTask);
+      expect(mockTables.tasks.get(processingTask.id).version).toBe(processingTask.version + 1);
+      expect(mockTables.work_requests.get(id).version).toBe(beforeWr.version + 1);
+    });
   });
 
   describe('10. Audit Trail Verification (Rule R8 & Spec §3.5/§3.6)', () => {

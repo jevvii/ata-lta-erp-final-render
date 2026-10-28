@@ -180,7 +180,7 @@ router.post(
 );
 
 router.get(
-  '/counts',
+  ['/work-requests/counts', '/counts'],
   resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
   operationsController.counts
@@ -198,6 +198,21 @@ router.post(
   requirePermission('workflow:edit'),
   audit('work_request.created', { table: 'work_requests' }),
   operationsController.create
+);
+router.get(
+  ['/work-requests/creation-approvals', '/creation-approvals'],
+  resolveEntity({ allowAll: true }),
+  operationsController.listCreationApprovals
+);
+router.post(
+  ['/work-requests/:id/creation-approval', '/:id/creation-approval'],
+  resolveEntity(),
+  operationsController.decideCreationApproval
+);
+router.post(
+  ['/work-requests/:id/resubmit-creation', '/:id/resubmit-creation'],
+  resolveEntity(),
+  operationsController.resubmitCreation
 );
 router.get(
   ['/work-requests/:id', '/:id'],
@@ -302,6 +317,16 @@ router.patch(
   operationsController.updateTask
 );
 router.post(
+  ['/work-requests/:wrId/tasks/:taskId/creation-approval', '/:wrId/tasks/:taskId/creation-approval'],
+  resolveEntity(),
+  operationsController.decideTaskCreationApproval
+);
+router.post(
+  ['/work-requests/:wrId/tasks/:taskId/resubmit-creation', '/:wrId/tasks/:taskId/resubmit-creation'],
+  resolveEntity(),
+  operationsController.resubmitTaskCreation
+);
+router.post(
   ['/work-requests/:wrId/tasks/:taskId/time-logs', '/:wrId/tasks/:taskId/time-logs', '/tasks/:taskId/time-logs'],
   resolveEntity(),
   requirePermission('timelog:create'),
@@ -339,6 +364,14 @@ tasksRouter.patch(
   requireWorkflowEditOrTaskAssignee,
   audit('task.updated', { table: 'tasks' }),
   operationsController.updateTask
+);
+tasksRouter.post(
+  '/:taskId/creation-approval',
+  operationsController.decideTaskCreationApproval
+);
+tasksRouter.post(
+  '/:taskId/resubmit-creation',
+  operationsController.resubmitTaskCreation
 );
 tasksRouter.delete(
   '/:taskId',

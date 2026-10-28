@@ -8,7 +8,7 @@
 
 const { supabaseAdmin } = require('../../services/supabaseClient');
 const _AppError = require('../../lib/AppError');
-const logger = require('../../lib/logger');
+const _logger = require('../../lib/logger');
 const { resolveEntityId, resolveEntityCode } = require('../../lib/entityResolver');
 const {
   getUserConcernedWorkRequestIds,
@@ -122,7 +122,8 @@ const computeAnalytics = async (entityId, user) => {
   let wrQuery = supabaseAdmin
     .from('work_requests')
     .select('*', { count: 'exact', head: true })
-    .is('deleted_at', null);
+    .is('deleted_at', null)
+    .or('creation_approval_status.is.null,creation_approval_status.eq.approved');
 
   if (entityId && entityId !== 'ALL') {
     clientsQuery = clientsQuery.eq('entity_id', entityId);
@@ -305,6 +306,7 @@ const loadCalendarItemsForEntity = async (entityUuid, user) => {
         'id, title, status, due_date, client_id, assigned_to, requested_by, submitted_by, entity_id'
       )
       .eq('entity_id', entityUuid)
+      .or('creation_approval_status.is.null,creation_approval_status.eq.approved')
       .is('deleted_at', null)
       .not('due_date', 'is', null)
       .gte('due_date', today)
@@ -317,6 +319,7 @@ const loadCalendarItemsForEntity = async (entityUuid, user) => {
         'id, title, status, due_date, client_id, assigned_to, requested_by, submitted_by, entity_id'
       )
       .eq('entity_id', entityUuid)
+      .or('creation_approval_status.is.null,creation_approval_status.eq.approved')
       .is('deleted_at', null)
       .not('due_date', 'is', null)
       .lt('due_date', today)
@@ -487,22 +490,9 @@ const getDashboardSummary = async ({ entityId, user }) => {
       return { ...analytics, calendar: await calendarPromise };
     }
 
-    try {
-      const { data, error } = await supabaseAdmin.rpc('get_dashboard_summary', {
-        entity_id: resolved,
-      });
-      if (!error && data) {
-        const result = Array.isArray(data) ? data[0] : data;
-        if (result && typeof result === 'object') {
-          const { calendar: _ignoredCalendar, ...analytics } = result;
-          setCachedAnalytics(resolved, analytics);
-          return { ...analytics, calendar: await calendarPromise };
-        }
-      }
-    } catch (rpcErr) {
-      logger.warn('getDashboardSummary rpc fallback', { entityId, error: rpcErr.message });
-    }
-
+    // Gate/replace raw get_dashboard_summary RPC: the stored procedure does not filter
+    // creation_approval_status = 'approved', which would leak unadmitted work requests to Admin.
+    // Use the filtered computeAnalytics query aggregation instead.
     const analytics = await computeAnalytics(resolved, user);
     setCachedAnalytics(resolved, analytics);
     return { ...analytics, calendar: await calendarPromise };
@@ -584,6 +574,7 @@ const getDailyReport = async ({ entityId, date, user }) => {
       .from('work_requests')
       .select('id, title, status, created_at, entity_id')
       .is('deleted_at', null)
+      .or('creation_approval_status.is.null,creation_approval_status.eq.approved')
       .gte('created_at', dayStart)
       .lte('created_at', dayEnd);
     if (entityId && entityId !== 'ALL') wrQ = wrQ.eq('entity_id', entityId);
@@ -767,6 +758,7 @@ const getWeeklyReport = async ({ entityId, date, user }) => {
       .from('work_requests')
       .select('id, title, status, created_at, entity_id')
       .is('deleted_at', null)
+      .or('creation_approval_status.is.null,creation_approval_status.eq.approved')
       .gte('created_at', weekStart)
       .lte('created_at', weekEnd);
     if (entityId && entityId !== 'ALL') wrQ = wrQ.eq('entity_id', entityId);

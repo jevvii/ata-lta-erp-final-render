@@ -149,7 +149,7 @@ const getUserConcernedWorkRequestIds = async (user, options = {}) => {
   const workRequests = await fetchInPages(() => {
     let q = supabaseAdmin
       .from('work_requests')
-      .select('id, assigned_to, co_assignees, entity_id')
+      .select('id, assigned_to, co_assignees, entity_id, creation_approval_status')
       .is('deleted_at', null);
 
     if (entityId && entityId !== 'ALL') {
@@ -158,7 +158,11 @@ const getUserConcernedWorkRequestIds = async (user, options = {}) => {
     return q;
   });
 
-  const activeWrMap = new Map((workRequests || []).map((w) => [w.id, w]));
+  const activeWrMap = new Map(
+    (workRequests || [])
+      .filter((w) => !w.creation_approval_status || w.creation_approval_status === 'approved')
+      .map((w) => [w.id, w])
+  );
 
   const directWrIds = (workRequests || [])
     .filter((wr) => {
@@ -216,7 +220,7 @@ const isUserMemberOfWorkRequest = async (workRequestId, user, options = {}) => {
   // Verify the work request actually exists, is not deleted, and matches entity scope
   let wrQuery = supabaseAdmin
     .from('work_requests')
-    .select('id, entity_id, deleted_at')
+    .select('id, entity_id, deleted_at, creation_approval_status')
     .eq('id', workRequestId)
     .is('deleted_at', null);
 
@@ -237,6 +241,10 @@ const isUserMemberOfWorkRequest = async (workRequestId, user, options = {}) => {
   // Even Admin must have entity entitlement for the target WR
   const entitled = await isUserEntitledToEntity(wr.entity_id, user);
   if (!entitled) return false;
+
+  if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+    return false;
+  }
 
   if (user.role === 'Admin') return true;
 

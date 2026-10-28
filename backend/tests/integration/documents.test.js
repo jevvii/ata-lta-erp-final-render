@@ -11,17 +11,36 @@ const request = require('supertest');
 const { app } = require('../helpers/testServer');
 const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtures/supabaseMock');
 
+const DEFAULT_WR_ID = '00000000-0000-4000-8000-000000000001';
+const DEFAULT_TASK_ID = '00000000-0000-4000-8000-000000000002';
+
 const validDocument = {
   fileName: 'contract.pdf',
   contentType: 'application/pdf',
   fileSize: 1024,
   originalName: 'Contract.pdf',
+  workRequestId: DEFAULT_WR_ID,
+  linkedTaskId: DEFAULT_TASK_ID,
 };
 
 describe('/v1/documents', () => {
   beforeEach(() => {
     resetMock();
     seedDefaults();
+    mockTables.work_requests.set(DEFAULT_WR_ID, {
+      id: DEFAULT_WR_ID,
+      entity_id: 'ent-ata',
+      title: 'Default WR',
+      status: 'In Progress',
+      deleted_at: null,
+    });
+    mockTables.tasks.set(DEFAULT_TASK_ID, {
+      id: DEFAULT_TASK_ID,
+      work_request_id: DEFAULT_WR_ID,
+      title: 'Default Task',
+      status: 'In Progress',
+      deleted_at: null,
+    });
   });
 
   it('creates a document linked to a task and lists by linkedTaskId', async () => {
@@ -33,7 +52,7 @@ describe('/v1/documents', () => {
     });
 
     const taskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-    mockTables.tasks.set(taskId, { id: taskId, work_request_id: null });
+    mockTables.tasks.set(taskId, { id: taskId, work_request_id: DEFAULT_WR_ID });
 
     const created = await request(app)
       .post('/v1/documents')
@@ -64,8 +83,8 @@ describe('/v1/documents', () => {
 
     const taskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
     const otherTaskId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
-    mockTables.tasks.set(taskId, { id: taskId, work_request_id: null });
-    mockTables.tasks.set(otherTaskId, { id: otherTaskId, work_request_id: null });
+    mockTables.tasks.set(taskId, { id: taskId, work_request_id: DEFAULT_WR_ID });
+    mockTables.tasks.set(otherTaskId, { id: otherTaskId, work_request_id: DEFAULT_WR_ID });
 
     const created = await request(app)
       .post('/v1/documents')
@@ -154,6 +173,8 @@ describe('/v1/documents', () => {
         fileName: 'link-attachment',
         originalName: 'Link Attachment',
         externalUrl: 'https://google.com/drive/folder',
+        workRequestId: DEFAULT_WR_ID,
+        linkedTaskId: DEFAULT_TASK_ID,
       })
       .expect(201);
 
@@ -279,7 +300,7 @@ describe('/v1/documents', () => {
     const taskId = 'aaaaaaaa-1111-2222-3333-444444444444';
     mockTables.tasks.set(taskId, {
       id: taskId,
-      work_request_id: null,
+      work_request_id: DEFAULT_WR_ID,
       assignee_id: '11111111-2222-3333-4444-555555555555',
     });
 
@@ -322,6 +343,8 @@ describe('/v1/documents', () => {
         originalName: 'Google Drive Contract.pdf',
         externalUrl: 'https://drive.google.com/file/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs/view?usp=sharing',
         category: 'CONTRACT',
+        workRequestId: DEFAULT_WR_ID,
+        linkedTaskId: DEFAULT_TASK_ID,
       })
       .expect(201);
 
@@ -355,6 +378,8 @@ describe('/v1/documents', () => {
         fileName: 'google-sheets-tracker.xlsx',
         externalUrl: 'https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs/edit',
         category: 'FINANCIAL',
+        workRequestId: DEFAULT_WR_ID,
+        linkedTaskId: DEFAULT_TASK_ID,
       })
       .expect(201);
 
@@ -389,6 +414,8 @@ describe('/v1/documents', () => {
         originalName: 'Company Pitch.pptx',
         externalUrl: '  https://docs.google.com/presentation/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs/edit  ',
         category: 'OTHER',
+        workRequestId: DEFAULT_WR_ID,
+        linkedTaskId: DEFAULT_TASK_ID,
       })
       .expect(201);
 
@@ -422,6 +449,8 @@ describe('/v1/documents', () => {
         fileName: 'contract.pdf',
         externalUrl: 'https://example.com/contract.pdf',
         category: 'CONTRACT',
+        workRequestId: DEFAULT_WR_ID,
+        linkedTaskId: DEFAULT_TASK_ID,
       })
       .expect(201);
 

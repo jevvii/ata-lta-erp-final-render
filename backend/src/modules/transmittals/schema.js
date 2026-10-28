@@ -51,7 +51,7 @@ const createTransmittalSchema = z.object({
  */
 const updateTransmittalSchema = z.object({
   clientId: z.string().uuid().optional(),
-  workRequestId: z.string().uuid().optional().nullable(),
+  workRequestId: linkedTaskIdSchema,
   items: z.array(transmittalItemSchema).min(1).optional(),
   notes: z.string().max(2000).optional().nullable(),
   recipientName: z.string().max(255).optional().nullable(),

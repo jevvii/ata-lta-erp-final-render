@@ -863,7 +863,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       expect(updateRes.body.detail).toBe('You are not assigned to this task');
     });
 
-    test('3.8 Admin can create whole-project transmittal without task selection', async () => {
+    test('3.8 Admin creating transmittal with WR but without task selection is rejected with 400 TASK_REQUIRED', async () => {
       const res = await request(app)
         .post('/v1/transmittals')
         .set('Authorization', `Bearer ${adminToken}`)
@@ -875,8 +875,8 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
           items: [{ description: 'Whole project master docket' }],
         });
 
-      expect(res.status).toBe(201);
-      expect(res.body.data.linked_task_id).toBeNull();
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('TASK_REQUIRED');
     });
 
     test('3.9 Cross-WR task hijacking probe: attempting to pair assigned task from WR 1 with foreign WR 2', async () => {

@@ -57,15 +57,15 @@ describe('document comment HTTP API', () => {
     [peer, peerId] = makeUser('Peer', 'Employee');
     [admin] = makeUser('Admin', 'Admin');
     [viewer, viewerId] = makeUser('Viewer', 'Operations', false);
-    const created = await request(app).post('/v1/documents').set('Authorization', `Bearer ${admin}`)
-      .set('X-Active-Entity', 'ATA').send({ fileName: 'review.txt' }).expect(201);
-    id = created.body.data.document.id;
-    // Keep the standalone document inside a shared project: orphan documents
-    // are intentionally inaccessible to non-admins under project visibility.
     const wrId = randomUUID();
+    const taskId = randomUUID();
     mockTables.work_requests.set(wrId, { id: wrId, entity_id: entityIds.ATA,
       co_assignees: [authorId, peerId, viewerId], deleted_at: null });
-    mockTables.documents.get(id).work_request_id = wrId;
+    mockTables.tasks.set(taskId, { id: taskId, work_request_id: wrId, assignee_id: authorId, deleted_at: null });
+    mockTables.task_assignees.set(randomUUID(), { id: randomUUID(), task_id: taskId, user_id: peerId });
+    const created = await request(app).post('/v1/documents').set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ATA').send({ fileName: 'review.txt', workRequestId: wrId, linkedTaskId: taskId }).expect(201);
+    id = created.body.data.document.id;
     if (pool) {
       await pool.query('TRUNCATE documents, users');
       for (const user of mockTables.users.values()) {

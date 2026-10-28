@@ -349,9 +349,17 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
     };
 
     beforeEach(async () => {
+      const docWrId = '22222222-2222-4222-8222-222222222222';
+      mockTables.work_requests.set(docWrId, {
+        id: docWrId,
+        entity_id: 'ent-ata',
+        title: 'Doc Auth WR',
+        status: 'In Progress',
+        deleted_at: null,
+      });
       mockTables.tasks.set(validTaskId, {
         id: validTaskId,
-        work_request_id: null,
+        work_request_id: docWrId,
         assignee_id: staffId,
       });
       taskAssignedToStaff = mockTables.tasks.get(validTaskId);
