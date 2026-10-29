@@ -183,15 +183,29 @@ const validateReferenceScope = async (
       code: 'CLIENT_WR_MISMATCH',
       detail: 'The client must match the selected work request.',
     });
-  for (const [field, table] of [
-    ['clientId', 'clients'],
-    ['linkedInvoiceId', 'invoices'],
-    ['linkedTransmittalId', 'transmittals'],
+
+  if (data.linkedInvoiceId !== undefined || data.linked_invoice_id !== undefined) {
+    data.linkedInvoiceId =
+      data.linkedInvoiceId !== undefined
+        ? data.linkedInvoiceId || null
+        : data.linked_invoice_id || null;
+  }
+  if (data.linkedTransmittalId !== undefined || data.linked_transmittal_id !== undefined) {
+    data.linkedTransmittalId =
+      data.linkedTransmittalId !== undefined
+        ? data.linkedTransmittalId || null
+        : data.linked_transmittal_id || null;
+  }
+
+  for (const [field, table, selectCols] of [
+    ['clientId', 'clients', 'id,entity_id,deleted_at'],
+    ['linkedInvoiceId', 'invoices', 'id,entity_id,work_request_id,deleted_at'],
+    ['linkedTransmittalId', 'transmittals', 'id,entity_id,work_request_id,deleted_at'],
   ]) {
     if (!data[field]) continue;
     const { data: row, error } = await supabaseAdmin
       .from(table)
-      .select('id,entity_id,deleted_at')
+      .select(selectCols)
       .eq('id', data[field])
       .maybeSingle();
     if (error)
@@ -204,9 +218,22 @@ const validateReferenceScope = async (
       throw new AppError({
         statusCode: 400,
         title: 'Validation Error',
-        code: 'INVALID_ENTITY_LINK',
+        code: row?.deleted_at ? 'INVALID_REFERENCE_SCOPE' : 'INVALID_ENTITY_LINK',
         detail: 'Linked records must belong to the current entity.',
       });
+    if (
+      (field === 'linkedInvoiceId' || field === 'linkedTransmittalId') &&
+      wrId &&
+      row.work_request_id &&
+      row.work_request_id !== wrId
+    ) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        code: 'REFERENCE_WR_MISMATCH',
+        detail: 'Referenced record belongs to a different work request.',
+      });
+    }
   }
 };
 
@@ -519,6 +546,11 @@ const enrichDisbursementExtras = async (rows = []) => {
   const wrIds = [
     ...new Set(rows.map((r) => r.linked_work_request_id || r.work_request_id).filter(Boolean)),
   ];
+  const invoiceIds = [...new Set(rows.map((r) => r.linked_invoice_id).filter(Boolean))];
+  const transmittalIds = [...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean))];
+  const taskIds = [
+    ...new Set(rows.map((r) => r.linked_task_id || r.task_id).filter(Boolean)),
+  ];
   const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))];
   const userIds = [
     ...new Set(
@@ -546,6 +578,33 @@ const enrichDisbursementExtras = async (rows = []) => {
       .select('id, title, work_request_number')
       .in('id', wrIds);
     wrMap = new Map((wrs || []).map((w) => [w.id, w]));
+  }
+
+  let invoiceMap = new Map();
+  if (invoiceIds.length > 0) {
+    const { data: invs } = await supabaseAdmin
+      .from('invoices')
+      .select('id, invoice_number, status, total, amount_paid, balance, due_date')
+      .in('id', invoiceIds);
+    invoiceMap = new Map((invs || []).map((inv) => [inv.id, inv]));
+  }
+
+  let transmittalMap = new Map();
+  if (transmittalIds.length > 0) {
+    const { data: trs } = await supabaseAdmin
+      .from('transmittals')
+      .select('id, tracking_number, status, recipient_name, approved')
+      .in('id', transmittalIds);
+    transmittalMap = new Map((trs || []).map((tr) => [tr.id, tr]));
+  }
+
+  let taskMap = new Map();
+  if (taskIds.length > 0) {
+    const { data: tsks } = await supabaseAdmin
+      .from('tasks')
+      .select('id, title, status')
+      .in('id', taskIds);
+    taskMap = new Map((tsks || []).map((t) => [t.id, t]));
   }
 
   let clientMap = new Map();
@@ -587,6 +646,10 @@ const enrichDisbursementExtras = async (rows = []) => {
   return rows.map((row) => {
     const wrId = row.linked_work_request_id || row.work_request_id;
     const wr = wrId ? wrMap.get(wrId) : null;
+    const inv = row.linked_invoice_id ? invoiceMap.get(row.linked_invoice_id) : null;
+    const tr = row.linked_transmittal_id ? transmittalMap.get(row.linked_transmittal_id) : null;
+    const taskIdVal = row.linked_task_id || row.task_id;
+    const task = taskIdVal ? taskMap.get(taskIdVal) : null;
     const editedByAccounting = Boolean(
       row.edited_by_accounting || (row.notes && row.notes.includes('Edited by Accounting'))
     );
@@ -620,7 +683,41 @@ const enrichDisbursementExtras = async (rows = []) => {
       workRequestNumber: wrNumber,
       work_request_number: wrNumber,
       linked_work_request_name: wr?.title || null,
-      linked_work_request_order_number: wrNumber,
+      linked_work_request_order_number: wrNumber || wr?.work_order_number || null,
+      linked_task_title: task?.title || null,
+      linked_invoice_number: inv?.invoice_number || null,
+      linked_invoice_status: inv?.status || null,
+      linked_invoice_total:
+        inv?.total !== undefined && inv?.total !== null ? Number(inv.total) : null,
+      linked_invoice_amount_paid:
+        inv?.amount_paid !== undefined && inv?.amount_paid !== null
+          ? Number(inv.amount_paid)
+          : null,
+      linked_invoice_balance:
+        inv?.balance !== undefined && inv?.balance !== null ? Number(inv.balance) : null,
+      linked_invoice: inv
+        ? {
+            id: inv.id,
+            invoice_number: inv.invoice_number,
+            status: inv.status,
+            total: Number(inv.total || 0),
+            amount_paid: Number(inv.amount_paid || 0),
+            balance: Number(inv.balance || 0),
+            due_date: inv.due_date || null,
+          }
+        : null,
+      linked_transmittal_tracking_number: tr?.tracking_number || null,
+      linked_transmittal_status: tr?.status || null,
+      linked_transmittal_recipient_name: tr?.recipient_name || null,
+      linked_transmittal: tr
+        ? {
+            id: tr.id,
+            tracking_number: tr.tracking_number,
+            status: tr.status,
+            recipient_name: tr.recipient_name || null,
+            approved: Boolean(tr.approved),
+          }
+        : null,
       employee_name: userMap.get(row.employee_id)?.name || null,
       employee_avatar_url: userMap.get(row.employee_id)?.avatar_url || null,
       employeeAvatarUrl: userMap.get(row.employee_id)?.avatar_url || null,
@@ -689,7 +786,14 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     linkedTaskId,
     taskId,
     task_id,
+    linkedInvoiceId,
+    linked_invoice_id,
     linkedTransmittalId,
+    linked_transmittal_id,
+    workRequestId,
+    work_request_id,
+    linkedWorkRequestId,
+    linked_work_request_id,
     search,
     archived,
     page = 1,
@@ -732,6 +836,10 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   }
 
   const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
+  const effectiveLinkedInvoiceId = linkedInvoiceId || linked_invoice_id;
+  const effectiveLinkedTransmittalId = linkedTransmittalId || linked_transmittal_id;
+  const effectiveWrId =
+    workRequestId || work_request_id || linkedWorkRequestId || linked_work_request_id;
 
   const makeQuery = () => {
     let q = supabaseAdmin.from('disbursements').select('*').is('deleted_at', null);
@@ -774,7 +882,11 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
         `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
       );
     }
-    if (linkedTransmittalId) q = q.eq('linked_transmittal_id', linkedTransmittalId);
+    if (effectiveLinkedInvoiceId) q = q.eq('linked_invoice_id', effectiveLinkedInvoiceId);
+    if (effectiveLinkedTransmittalId) {
+      q = q.eq('linked_transmittal_id', effectiveLinkedTransmittalId);
+    }
+    if (effectiveWrId) q = q.eq('linked_work_request_id', effectiveWrId);
     if (search) {
       q = q.or(`description.ilike.%${search}%,disbursement_number.ilike.%${search}%`);
     }
@@ -968,7 +1080,10 @@ const createDisbursement = async ({ entityId, entityCode, userId, user, data }) 
 
         await notifyLifecycle(disbursement, 'created', 'admin', userId);
         const entityCodeResolved = await resolveEntityCode(disbursement.entity_id);
-        return { ...disbursement, entity_code: entityCodeResolved };
+        const enriched = await enrichDisbursementExtras([
+          { ...disbursement, entity_code: entityCodeResolved },
+        ]);
+        return enriched[0];
       }
 
       // Only definite statement rejections release the claim. Connection errors
@@ -1095,14 +1210,13 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     });
   }
 
-  const contentFields = [
+  const strictDraftContentFields = [
     'category',
     'description',
     'amount',
     'fundSource',
     'clientId',
     'employeeId',
-    'linkedInvoiceId',
     'linkedWorkRequestId',
     'linked_work_request_id',
     'workRequestId',
@@ -1111,15 +1225,24 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     'linked_task_id',
     'taskId',
     'task_id',
-    'linkedTransmittalId',
     'dueDate',
     'notes',
     'receiptS3Key',
     'receiptFilename',
   ];
-  const isUpdatingContent = contentFields.some((field) => data[field] !== undefined);
+  const postDraftLinkFields = [
+    'linkedInvoiceId',
+    'linked_invoice_id',
+    'linkedTransmittalId',
+    'linked_transmittal_id',
+  ];
+  const isUpdatingStrictDraftContent = strictDraftContentFields.some(
+    (field) => data[field] !== undefined
+  );
+  const isUpdatingLinks = postDraftLinkFields.some((field) => data[field] !== undefined);
+  const isUpdatingContent = isUpdatingStrictDraftContent || isUpdatingLinks;
 
-  if (isUpdatingContent && existing.status !== 'Draft') {
+  if (isUpdatingStrictDraftContent && existing.status !== 'Draft') {
     throw new AppError({
       statusCode: 409,
       title: 'Conflict',
@@ -1136,6 +1259,124 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
         'This saved voucher is view-only. Create a new request to use the current workflow.',
       code: 'SAVED_WORKFLOW_READ_ONLY',
     });
+  }
+
+  if (existing.status !== 'Draft' && isUpdatingLinks) {
+    if (
+      existing.status === 'Rejected' ||
+      existing.status === 'Cancelled' ||
+      existing.archived === true
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        detail: `Cannot update reference links on a ${existing.archived ? 'archived' : existing.status} disbursement.`,
+        code: 'CONFLICT_CURRENT_STATUS',
+      });
+    }
+
+    const isDocumentationUser =
+      String(effectiveUser?.role || '').toLowerCase() === 'documentation' ||
+      (effectiveUser?.departments || []).some(
+        (d) => String(d).toLowerCase() === 'documentation'
+      );
+    const isOwnerOrRequester =
+      existing.created_by === userId || existing.requested_by === userId;
+
+    if (!isAdminUser && !isAccountingUser && !isDocumentationUser && !isOwnerOrRequester) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail: 'You do not have permission to update reference links on this disbursement.',
+        code: 'FORBIDDEN',
+      });
+    }
+
+    await validateReferenceScope(
+      existing.entity_id,
+      data,
+      existing,
+      existing.linked_work_request_id
+    );
+
+    const linkUpdates = {};
+    if (data.printDetails !== undefined) linkUpdates.print_details = data.printDetails;
+    if (data.linkedInvoiceId !== undefined) {
+      linkUpdates.linked_invoice_id = data.linkedInvoiceId;
+    }
+    if (data.linkedTransmittalId !== undefined) {
+      linkUpdates.linked_transmittal_id = data.linkedTransmittalId;
+    }
+
+    const nowIso = new Date().toISOString();
+    const linkAuditEntry = {
+      status: existing.status,
+      by: userId,
+      at: nowIso,
+      action: 'links_updated',
+      linked_invoice_id:
+        linkUpdates.linked_invoice_id !== undefined
+          ? linkUpdates.linked_invoice_id
+          : existing.linked_invoice_id || null,
+      linked_transmittal_id:
+        linkUpdates.linked_transmittal_id !== undefined
+          ? linkUpdates.linked_transmittal_id
+          : existing.linked_transmittal_id || null,
+    };
+    const { data: linkRows, error: linkUpdateErr } = await supabaseAdmin
+      .from('disbursements')
+      .update({
+        ...linkUpdates,
+        version: (existing.version || 1) + 1,
+        updated_by: userId,
+        updated_at: nowIso,
+      })
+      .eq('id', id)
+      .eq('entity_id', existing.entity_id || entityId)
+      .eq('version', expectedVersion)
+      .select();
+
+    if (linkUpdateErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to update disbursement reference links.',
+      });
+    }
+
+    if (!linkRows || linkRows.length === 0) {
+      throw concurrencyConflict();
+    }
+
+    const updated = linkRows[0];
+    await supabaseAdmin.from('status_history').insert({
+      table_name: 'disbursements',
+      record_id: id,
+      old_status: existing.status,
+      new_status: updated.status,
+      actor_id: userId,
+      entity_id: existing.entity_id || entityId,
+      details: {
+        ...linkAuditEntry,
+        action: 'link_update',
+        after: linkUpdates,
+        previous_version: expectedVersion,
+      },
+    });
+
+    await auditService.log({
+      action: 'disbursement.link_update',
+      table: 'disbursements',
+      recordId: id,
+      entity: existing.entity_id || entityId,
+      userId,
+      details: linkUpdates,
+    });
+
+    invalidateAnalytics(updated.entity_id);
+    const entityCode = await resolveEntityCode(updated.entity_id);
+    const enriched = await enrichDisbursementExtras([{ ...updated, entity_code: entityCode }]);
+    return enriched[0];
   }
 
   // Draft authorization: Owner, Admin, or Accounting
@@ -1230,6 +1471,24 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
   }
   if (data.linkedTransmittalId !== undefined) {
     updates.linked_transmittal_id = data.linkedTransmittalId;
+  }
+  let linkAuditEntry = null;
+  if (isUpdatingLinks) {
+    const nowIso = new Date().toISOString();
+    linkAuditEntry = {
+      status: existing.status,
+      by: userId,
+      at: nowIso,
+      action: 'links_updated',
+      linked_invoice_id:
+        updates.linked_invoice_id !== undefined
+          ? updates.linked_invoice_id
+          : existing.linked_invoice_id || null,
+      linked_transmittal_id:
+        updates.linked_transmittal_id !== undefined
+          ? updates.linked_transmittal_id
+          : existing.linked_transmittal_id || null,
+    };
   }
   if (data.dueDate !== undefined) updates.due_date = data.dueDate;
   if (data.notes !== undefined) updates.notes = data.notes;
@@ -1335,6 +1594,18 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
 
   const updated = rows[0];
   invalidateAnalytics(updated.entity_id);
+  if (linkAuditEntry) {
+    await supabaseAdmin.from('status_history').insert({
+      table_name: 'disbursements',
+      record_id: updated.id,
+      old_status: existing.status,
+      new_status: existing.status,
+      actor_id: userId,
+      entity_id: updated.entity_id || entityId,
+      details: linkAuditEntry,
+      created_at: linkAuditEntry.at,
+    });
+  }
   if (existing.review_ready === false && updated.review_ready === true) {
     await notifyLifecycle(updated, 'corrected', 'admin', userId);
   }

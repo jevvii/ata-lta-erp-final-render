@@ -1217,4 +1217,249 @@ describe('/v1/disbursements', () => {
       expect(res.body.data.id).toBe(DISB_ID);
     });
   });
+
+  describe('Disbursement ↔ Invoice & Transmittal Connectivity (SOP Alignment)', () => {
+    const INVOICE_ID = '99999999-1111-4111-8111-111111111111';
+    const TRANSMITTAL_ID = '99999999-2222-4222-8222-222222222222';
+    const OTHER_WR_ID = '99999999-3333-4333-8333-333333333333';
+    const OTHER_WR_INVOICE_ID = '99999999-4444-4444-8444-444444444444';
+
+    beforeEach(() => {
+      mockTables.invoices.set(INVOICE_ID, {
+        id: INVOICE_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: WORK_REQUEST_ID,
+        invoice_number: 'INV-ATA-2026-0088',
+        status: 'Partially Paid',
+        total: 15000,
+        amount_paid: 5000,
+        balance: 10000,
+        due_date: '2026-11-30',
+        deleted_at: null,
+      });
+
+      mockTables.transmittals.set(TRANSMITTAL_ID, {
+        id: TRANSMITTAL_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: WORK_REQUEST_ID,
+        tracking_number: 'TR-ATA-2026-0042',
+        status: 'Sent',
+        recipient_name: 'BIR RDO 044',
+        approved: true,
+        deleted_at: null,
+      });
+
+      mockTables.work_requests.set(OTHER_WR_ID, {
+        id: OTHER_WR_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        title: 'Other Work Request',
+        status: 'In Progress',
+      });
+
+      mockTables.invoices.set(OTHER_WR_INVOICE_ID, {
+        id: OTHER_WR_INVOICE_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: OTHER_WR_ID,
+        invoice_number: 'INV-ATA-2026-OTHER',
+        status: 'Draft',
+        total: 8000,
+        amount_paid: 0,
+        balance: 8000,
+        deleted_at: null,
+      });
+    });
+
+    it('creates, enriches, and filters disbursements by linkedInvoiceId, linkedTransmittalId, and workRequestId', async () => {
+      const admin = registerUser({
+        email: 'admin-links@ata-lta.ph',
+        name: 'Admin Links',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const createRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          ...validDisbursement,
+          linked_invoice_id: INVOICE_ID,
+          linked_transmittal_id: TRANSMITTAL_ID,
+        })
+        .expect(201);
+
+      expect(createRes.body.data.linked_invoice_id).toBe(INVOICE_ID);
+      expect(createRes.body.data.linked_invoice_number).toBe('INV-ATA-2026-0088');
+      expect(createRes.body.data.linked_invoice_status).toBe('Partially Paid');
+      expect(createRes.body.data.linked_invoice_total).toBe(15000);
+      expect(createRes.body.data.linked_invoice_amount_paid).toBe(5000);
+      expect(createRes.body.data.linked_invoice_balance).toBe(10000);
+      expect(createRes.body.data.linked_invoice).toEqual({
+        id: INVOICE_ID,
+        invoice_number: 'INV-ATA-2026-0088',
+        status: 'Partially Paid',
+        total: 15000,
+        amount_paid: 5000,
+        balance: 10000,
+        due_date: '2026-11-30',
+      });
+      expect(createRes.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID);
+      expect(createRes.body.data.linked_transmittal_tracking_number).toBe('TR-ATA-2026-0042');
+      expect(createRes.body.data.linked_transmittal_status).toBe('Sent');
+      expect(createRes.body.data.linked_transmittal_recipient_name).toBe('BIR RDO 044');
+      expect(createRes.body.data.linked_transmittal).toEqual({
+        id: TRANSMITTAL_ID,
+        tracking_number: 'TR-ATA-2026-0042',
+        status: 'Sent',
+        recipient_name: 'BIR RDO 044',
+        approved: true,
+      });
+      expect(createRes.body.data.linked_task_title).toBe('Acme Disbursement Task');
+
+      // Filter by linkedInvoiceId
+      const byInvoice = await request(app)
+        .get(`/v1/disbursements?linkedInvoiceId=${INVOICE_ID}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(byInvoice.body.data).toHaveLength(1);
+      expect(byInvoice.body.data[0].id).toBe(createRes.body.data.id);
+
+      // Filter by workRequestId
+      const byWr = await request(app)
+        .get(`/v1/disbursements?workRequestId=${WORK_REQUEST_ID}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(byWr.body.data).toHaveLength(1);
+      expect(byWr.body.data[0].id).toBe(createRes.body.data.id);
+    });
+
+    it('rejects cross-Work-Request invoice or transmittal linkage with 400 REFERENCE_WR_MISMATCH', async () => {
+      const admin = registerUser({
+        email: 'admin-mismatch@ata-lta.ph',
+        name: 'Admin Mismatch',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const res = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          ...validDisbursement,
+          linkedInvoiceId: OTHER_WR_INVOICE_ID,
+        })
+        .expect(400);
+
+      expect(res.body.code).toBe('REFERENCE_WR_MISMATCH');
+    });
+
+    it('allows post-Draft (Approved, Funded, Released) updates to linkedInvoiceId and linkedTransmittalId while locking financial fields', async () => {
+      const admin = registerUser({
+        email: 'admin-postdraft@ata-lta.ph',
+        name: 'Admin PostDraft',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const acctId = '00000000-0000-4000-a000-000000000777';
+      const accounting = registerUser({
+        id: acctId,
+        email: 'acct-postdraft@ata-lta.ph',
+        name: 'Acct PostDraft',
+        role: 'Accounting',
+        entities: ['ATA'],
+      });
+      mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = acctId;
+
+      const createRes = await request(app)
+        .post('/v1/disbursements')
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send(validDisbursement)
+        .expect(201);
+
+      const disbId = createRes.body.data.id;
+
+      // Transition Draft -> Approved
+      await request(app)
+        .post(`/v1/disbursements/${disbId}/approve`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ expectedVersion: 1 })
+        .expect(200);
+
+      // 1. Financial field edit on Approved is rejected with 409 CONFLICT_CURRENT_STATUS
+      const finErr = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${accounting}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ amount: 9999, linkedInvoiceId: INVOICE_ID, expectedVersion: 2 })
+        .expect(409);
+      expect(finErr.body.code).toBe('CONFLICT_CURRENT_STATUS');
+
+      // 2. Link-only update on Approved succeeds and bumps version to 3
+      const linkApproved = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${accounting}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedInvoiceId: INVOICE_ID, expectedVersion: 2 })
+        .expect(200);
+      expect(linkApproved.body.data.linked_invoice_id).toBe(INVOICE_ID);
+      expect(linkApproved.body.data.linked_invoice_number).toBe('INV-ATA-2026-0088');
+      expect(linkApproved.body.data.version).toBe(3);
+
+      // Transition Approved -> Funded
+      await request(app)
+        .post(`/v1/disbursements/${disbId}/fund`)
+        .set('Authorization', `Bearer ${accounting}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          method: 'Bank Transfer',
+          bank: 'BDO',
+          reference: 'BDO-REF-001',
+          date: '2026-10-28',
+          expectedVersion: 3,
+        })
+        .expect(200);
+
+      // 3. Link-only update on Funded succeeds and bumps version to 5
+      const linkFunded = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${accounting}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedTransmittalId: TRANSMITTAL_ID, expectedVersion: 4 })
+        .expect(200);
+      expect(linkFunded.body.data.linked_transmittal_id).toBe(TRANSMITTAL_ID);
+      expect(linkFunded.body.data.linked_transmittal_tracking_number).toBe('TR-ATA-2026-0042');
+      expect(linkFunded.body.data.version).toBe(5);
+
+      // Transition Funded -> Released
+      await request(app)
+        .post(`/v1/disbursements/${disbId}/release`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ expectedVersion: 5 })
+        .expect(200);
+
+      // 4. Clearing and re-attaching link on Released succeeds and records link_update in lifecycle_history
+      const linkReleased = await request(app)
+        .put(`/v1/disbursements/${disbId}`)
+        .set('Authorization', `Bearer ${admin}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ linkedInvoiceId: null, expectedVersion: 6 })
+        .expect(200);
+      expect(linkReleased.body.data.linked_invoice_id).toBeNull();
+      expect(linkReleased.body.data.version).toBe(7);
+      expect(
+        linkReleased.body.data.lifecycle_history.some((h) => h.action === 'link_update')
+      ).toBe(true);
+    });
+  });
 });
