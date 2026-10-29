@@ -50,6 +50,29 @@ const {
   consumeReservationByKey,
   cleanupExpiredReservations,
 } = require('./receiptReservationStore');
+const {
+  syncLinkedClientFundDisbursementsForInvoice,
+  unlinkAndRevertClientFundDisbursements,
+} = require('./billingLifecycleSync');
+
+const isAccountingOnlyUser = (user) => {
+  if (!user || user.role === 'Admin') return false;
+  return (
+    String(user.role || '').toLowerCase() === 'accounting' ||
+    (user.departments || []).some((d) => String(d).toLowerCase() === 'accounting')
+  );
+};
+
+const canAccountingViewDisbursement = (record, userId) => {
+  if (!record) return false;
+  if (['Approved', 'Funded', 'Released'].includes(record.status)) return true;
+  if (!userId) return false;
+  return (
+    record.created_by === userId ||
+    record.requested_by === userId ||
+    record.employee_id === userId
+  );
+};
 
 /** Canonical status transitions */
 const VALID_TRANSITIONS = {
@@ -199,7 +222,7 @@ const validateReferenceScope = async (
 
   for (const [field, table, selectCols] of [
     ['clientId', 'clients', 'id,entity_id,deleted_at'],
-    ['linkedInvoiceId', 'invoices', 'id,entity_id,work_request_id,deleted_at'],
+    ['linkedInvoiceId', 'invoices', 'id,entity_id,work_request_id,status,invoice_number,deleted_at'],
     ['linkedTransmittalId', 'transmittals', 'id,entity_id,work_request_id,deleted_at'],
   ]) {
     if (!data[field]) continue;
@@ -221,6 +244,7 @@ const validateReferenceScope = async (
         code: row?.deleted_at ? 'INVALID_REFERENCE_SCOPE' : 'INVALID_ENTITY_LINK',
         detail: 'Linked records must belong to the current entity.',
       });
+
     if (
       (field === 'linkedInvoiceId' || field === 'linkedTransmittalId') &&
       wrId &&
@@ -233,6 +257,17 @@ const validateReferenceScope = async (
         code: 'REFERENCE_WR_MISMATCH',
         detail: 'Referenced record belongs to a different work request.',
       });
+    }
+
+    if (field === 'linkedInvoiceId') {
+      if (row.status === 'Cancelled') {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          code: 'INVALID_INVOICE_STATUS_FOR_LINK',
+          detail: 'Cannot link a disbursement to a cancelled invoice.',
+        });
+      }
     }
   }
 };
@@ -434,7 +469,7 @@ const getDisbursementCounts = async ({ entityId, user }) => {
     let q = supabaseAdmin
       .from('disbursements')
       .select(
-        'id, entity_id, task_id, linked_task_id, linked_work_request_id, status, archived, lifecycle_version, review_ready, created_by, employee_id'
+        'id, entity_id, task_id, linked_task_id, linked_work_request_id, status, archived, lifecycle_version, review_ready, created_by, employee_id, requested_by, fund_source, linked_invoice_id'
       )
       .in('entity_id', entityIds)
       .is('deleted_at', null);
@@ -498,19 +533,41 @@ const getDisbursementCounts = async ({ entityId, user }) => {
         })
       : data || [];
 
-  const initialRequests = validRows.filter(
-    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Draft' && r.review_ready === true
+  let accountingFilteredRows = validRows;
+  if (isAccountingOnlyUser(user)) {
+    accountingFilteredRows = accountingFilteredRows.filter((r) =>
+      canAccountingViewDisbursement(r, user.id)
+    );
+  }
+
+  const isBillingControlled = (r) =>
+    r.fund_source === 'Client Fund' && Boolean(r.linked_invoice_id);
+
+  const initialRequests = accountingFilteredRows.filter(
+    (r) =>
+      !r.archived &&
+      r.lifecycle_version === 2 &&
+      r.status === 'Draft' &&
+      r.review_ready === true
   ).length;
 
-  const readyForFunding = validRows.filter(
-    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Approved'
+  const readyForFunding = accountingFilteredRows.filter(
+    (r) =>
+      !r.archived &&
+      r.lifecycle_version === 2 &&
+      r.status === 'Approved' &&
+      !isBillingControlled(r)
   ).length;
 
-  const paymentReleases = validRows.filter(
-    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Funded'
+  const paymentReleases = accountingFilteredRows.filter(
+    (r) =>
+      !r.archived &&
+      r.lifecycle_version === 2 &&
+      r.status === 'Funded' &&
+      !isBillingControlled(r)
   ).length;
 
-  const needsCorrection = validRows.filter(
+  const needsCorrection = accountingFilteredRows.filter(
     (r) =>
       !r.archived &&
       r.lifecycle_version === 2 &&
@@ -519,9 +576,11 @@ const getDisbursementCounts = async ({ entityId, user }) => {
       (isAdmin || (Boolean(user?.id) && r.created_by === user.id))
   ).length;
 
-  const active = validRows.filter((r) => !r.archived && r.status !== 'Cancelled').length;
-  const archived = validRows.filter((r) => Boolean(r.archived) || r.status === 'Cancelled').length;
-  const rejected = validRows.filter((r) => !r.archived && r.status === 'Rejected').length;
+  const active = accountingFilteredRows.filter((r) => !r.archived && r.status !== 'Cancelled').length;
+  const archived = accountingFilteredRows.filter(
+    (r) => Boolean(r.archived) || r.status === 'Cancelled'
+  ).length;
+  const rejected = accountingFilteredRows.filter((r) => !r.archived && r.status === 'Rejected').length;
 
   return {
     active: Math.max(active, 0),
@@ -675,6 +734,11 @@ const enrichDisbursementExtras = async (rows = []) => {
     const cli = row.client_id ? clientMap.get(row.client_id) : null;
     const clientNumber = cli?.client_number || row.client_number || null;
     const wrNumber = wr?.work_request_number || wr?.work_order_number || null;
+    const isBillingControlled = Boolean(
+      row.fund_source === 'Client Fund' &&
+      row.linked_invoice_id &&
+      (!inv || inv.status !== 'Cancelled')
+    );
 
     return {
       ...row,
@@ -682,6 +746,8 @@ const enrichDisbursementExtras = async (rows = []) => {
       client_number: clientNumber,
       workRequestNumber: wrNumber,
       work_request_number: wrNumber,
+      is_billing_controlled: isBillingControlled,
+      isBillingControlled: isBillingControlled,
       linked_work_request_name: wr?.title || null,
       linked_work_request_order_number: wrNumber || wr?.work_order_number || null,
       linked_task_title: task?.title || null,
@@ -901,11 +967,22 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     concernedWrIds,
   });
 
-  const total = validRows.length;
+  let filteredRows = validRows;
+  if (isAccountingOnlyUser(user)) {
+    filteredRows = filteredRows.filter((r) => canAccountingViewDisbursement(r, user.id));
+  }
+
+  if (queue === 'ready_for_funding' || queue === 'payment_releases') {
+    filteredRows = filteredRows.filter(
+      (r) => !(r.fund_source === 'Client Fund' && Boolean(r.linked_invoice_id))
+    );
+  }
+
+  const total = filteredRows.length;
   const effectiveLimit = Number(limit) || 50;
   const effectiveOffset =
     filters.offset !== undefined ? Number(filters.offset) : (page - 1) * effectiveLimit;
-  const rows = validRows.slice(effectiveOffset, effectiveOffset + effectiveLimit);
+  const rows = filteredRows.slice(effectiveOffset, effectiveOffset + effectiveLimit);
 
   const { data: entitiesData } = rows.length
     ? await supabaseAdmin.from('entities').select('id, code')
@@ -1151,6 +1228,15 @@ const getDisbursementById = async ({ entityId, id, user, internal = false }) => 
       });
     }
 
+    if (isAccountingOnlyUser(user) && !canAccountingViewDisbursement(data, user.id)) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        code: 'FORBIDDEN',
+        detail: 'Accounting users can only view approved disbursements or their own drafts.',
+      });
+    }
+
     await validateRecordProjectLinkage({
       record: data,
       entityId,
@@ -1190,6 +1276,36 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     String(effectiveUser?.role || '').toLowerCase() === 'accounting' ||
     (effectiveUser?.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
   const isAdminUser = effectiveUser?.role === 'Admin';
+
+  const targetLinkedInvoiceId =
+    data.linkedInvoiceId !== undefined
+      ? data.linkedInvoiceId || null
+      : data.linked_invoice_id !== undefined
+        ? data.linked_invoice_id || null
+        : undefined;
+
+  if (
+    existing.linked_invoice_id &&
+    targetLinkedInvoiceId !== undefined &&
+    targetLinkedInvoiceId !== existing.linked_invoice_id
+  ) {
+    if (existing.fund_source === 'Client Fund' && existing.status === 'Released') {
+      const { data: linkedInv } = await supabaseAdmin
+        .from('invoices')
+        .select('id, status')
+        .eq('id', existing.linked_invoice_id)
+        .maybeSingle();
+
+      if (linkedInv?.status === 'Paid') {
+        throw new AppError({
+          statusCode: 409,
+          title: 'Conflict',
+          code: 'BILLING_LINK_LOCKED_AFTER_PAID',
+          detail: 'Cannot unlink or relink a Client Fund disbursement after it has been released.',
+        });
+      }
+    }
+  }
 
   const expectedVersion = resolveExpectedVersion(data);
   if (expectedVersion === null) {
@@ -1299,6 +1415,23 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
       existing.linked_work_request_id
     );
 
+    if (
+      existing.linked_invoice_id &&
+      targetLinkedInvoiceId !== undefined &&
+      targetLinkedInvoiceId !== existing.linked_invoice_id
+    ) {
+      if (existing.status === 'Funded' && existing.fund_source === 'Client Fund') {
+        await unlinkAndRevertClientFundDisbursements({
+          entityId: existing.entity_id || entityId,
+          invoiceId: existing.linked_invoice_id,
+          disbursementIds: [id],
+          actorId: userId,
+          reason: 'billing_unlinked',
+          clearLink: false,
+        });
+      }
+    }
+
     const linkUpdates = {};
     if (data.printDetails !== undefined) linkUpdates.print_details = data.printDetails;
     if (data.linkedInvoiceId !== undefined) {
@@ -1374,6 +1507,31 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
     });
 
     invalidateAnalytics(updated.entity_id);
+
+    if (updated.fund_source === 'Client Fund' && updated.linked_invoice_id) {
+      const { data: inv } = await supabaseAdmin
+        .from('invoices')
+        .select('id, entity_id, invoice_number, status, balance, amount_paid, total')
+        .eq('id', updated.linked_invoice_id)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (inv) {
+        await syncLinkedClientFundDisbursementsForInvoice({
+          invoice: inv,
+          actorId: userId,
+          disbursementIds: [updated.id],
+        });
+        const refetched = await getDisbursementById({
+          entityId: updated.entity_id || entityId,
+          id: updated.id,
+          user: effectiveUser,
+          internal,
+        });
+        return refetched;
+      }
+    }
+
     const entityCode = await resolveEntityCode(updated.entity_id);
     const enriched = await enrichDisbursementExtras([{ ...updated, entity_code: entityCode }]);
     return enriched[0];
@@ -1696,6 +1854,37 @@ const performWorkflowTransition = async ({
   }
 
   // Approval readiness and persisted payment checks. Admin may approve and release their own request.
+  if (['fund', 'release'].includes(action) || (action === 'reject' && current.status === 'Funded')) {
+    let linkedInvStatus = current.linked_invoice_status;
+    let linkedInvNumber = current.linked_invoice_number;
+    if (
+      current.linked_invoice_id &&
+      (linkedInvStatus === undefined || linkedInvNumber === undefined)
+    ) {
+      const { data: invRow } = await supabaseAdmin
+        .from('invoices')
+        .select('id, invoice_number, status')
+        .eq('id', current.linked_invoice_id)
+        .maybeSingle();
+      if (invRow) {
+        linkedInvStatus = invRow.status;
+        linkedInvNumber = invRow.invoice_number;
+      }
+    }
+    if (
+      current.fund_source === 'Client Fund' &&
+      current.linked_invoice_id &&
+      linkedInvStatus !== 'Cancelled'
+    ) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Billing-Controlled Lifecycle',
+        code: 'BILLING_CONTROLLED_LIFECYCLE',
+        detail: `This Client Fund disbursement is linked to invoice ${linkedInvNumber || current.linked_invoice_id}. Its funding and release lifecycle is automatically controlled by the linked billing invoice.`,
+      });
+    }
+  }
+
   if (action === 'approve') {
     if (current.review_ready !== true) {
       throw new AppError({
@@ -1772,6 +1961,24 @@ const approveDisbursement = async ({ entityId, id, userId, user, expectedVersion
   });
 
   await notifyLifecycle(result, 'approve', 'accounting', userId);
+
+  if (result.fund_source === 'Client Fund' && result.linked_invoice_id) {
+    const { data: inv } = await supabaseAdmin
+      .from('invoices')
+      .select('id, entity_id, invoice_number, status, balance, amount_paid, total')
+      .eq('id', result.linked_invoice_id)
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (inv) {
+      await syncLinkedClientFundDisbursementsForInvoice({
+        invoice: inv,
+        actorId: userId,
+        disbursementIds: [result.id],
+      });
+      return getDisbursementById({ entityId: result.entity_id || entityId, id, user, internal: true });
+    }
+  }
 
   return result;
 };
@@ -2406,4 +2613,6 @@ module.exports = {
   generateDisbursementPdf,
   generateDisbursementNumber,
   cleanupExpiredReservations,
+  isAccountingOnlyUser,
+  canAccountingViewDisbursement,
 };
