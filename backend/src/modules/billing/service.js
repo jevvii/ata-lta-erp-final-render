@@ -32,6 +32,10 @@ const {
   validateRecordProjectLinkage,
   filterValidProjectRecords,
 } = require('../../lib/projectLinkage');
+const {
+  syncLinkedClientFundDisbursementsForInvoice,
+  unlinkAndRevertClientFundDisbursements,
+} = require('../disbursements/billingLifecycleSync');
 
 // ============================================================
 // Invoice CRUD
@@ -53,7 +57,7 @@ const validateDisbursementsForInvoice = async ({
   const { data: rows, error } = await supabaseAdmin
     .from('disbursements')
     .select(
-      'id, entity_id, linked_work_request_id, linked_invoice_id, version, status, deleted_at'
+      'id, entity_id, linked_work_request_id, linked_invoice_id, version, status, fund_source, deleted_at'
     )
     .in('id', uniqueIds);
 
@@ -76,6 +80,17 @@ const validateDisbursementsForInvoice = async ({
         detail: `Disbursement ${disbId} not found or does not belong to this entity.`,
       });
     }
+
+    const isEligibleStatus = ['Approved', 'Draft', 'Funded', 'Released'].includes(row.status);
+    if (!isEligibleStatus) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'DISBURSEMENT_MUST_BE_APPROVED_TO_LINK',
+        detail: 'Cannot link a cancelled or rejected disbursement to an invoice.',
+      });
+    }
+
     const rowWrId = row.linked_work_request_id || row.work_request_id;
     if (workRequestId && rowWrId && rowWrId !== workRequestId) {
       throw new AppError({
@@ -118,14 +133,59 @@ const applyDisbursementInvoiceLinks = async ({
   disbursementIds,
   userId,
   isCreate = false,
+  invoice = null,
 }) => {
-  if (!Array.isArray(disbursementIds) || disbursementIds.length === 0) return;
   const now = new Date().toISOString();
+
+  const { data: previouslyLinkedRows, error: prevErr } = await supabaseAdmin
+    .from('disbursements')
+    .select('id, entity_id, status, fund_source, linked_invoice_id, version')
+    .eq('linked_invoice_id', invoiceId)
+    .is('deleted_at', null);
+
+  if (prevErr) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to fetch existing linked disbursements',
+    });
+  }
+
+  const desiredIds = Array.isArray(disbursementIds)
+    ? [...new Set(disbursementIds.filter(Boolean))]
+    : [];
+
+  const toUnlink = (previouslyLinkedRows || []).filter((r) => !desiredIds.includes(r.id));
+  if (toUnlink.length > 0) {
+    if (toUnlink.some((r) => r.status === 'Released') || invoice?.status === 'Paid') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'BILLING_LINK_LOCKED_AFTER_PAID',
+        detail:
+          'Cannot unlink a Client Fund disbursement after its linked billing invoice has been paid and released.',
+      });
+    }
+
+    await unlinkAndRevertClientFundDisbursements({
+      entityId: invoice?.entity_id,
+      invoiceId,
+      invoiceNumber: invoice?.invoice_number,
+      disbursementIds: toUnlink.map((r) => r.id),
+      actorId: userId,
+      reason: 'billing_unlinked',
+      clearLink: true,
+    });
+  }
+
+  if (desiredIds.length === 0) return;
 
   const { data: currentRows, error: fetchErr } = await supabaseAdmin
     .from('disbursements')
-    .select('id, entity_id, version, status, linked_invoice_id')
-    .in('id', disbursementIds);
+    .select(
+      'id, entity_id, client_id, linked_work_request_id, work_request_id, linked_invoice_id, status, fund_source, version, funded_by, funded_at, payment_method, payment_date, disbursement_number, description, requested_by, created_by'
+    )
+    .in('id', desiredIds);
 
   if (fetchErr) {
     throw new AppError({
@@ -133,6 +193,18 @@ const applyDisbursementInvoiceLinks = async ({
       title: 'Database Error',
       detail: 'Failed to fetch disbursements for invoice linking',
     });
+  }
+
+  for (const row of currentRows || []) {
+    const isEligibleStatus = ['Approved', 'Draft', 'Funded', 'Released'].includes(row.status);
+    if (!isEligibleStatus) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'DISBURSEMENT_MUST_BE_APPROVED_TO_LINK',
+        detail: 'Cannot link a cancelled or rejected disbursement to an invoice.',
+      });
+    }
   }
 
   for (const row of currentRows || []) {
@@ -483,12 +555,28 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
     });
   }
 
+  const createdInvoice = {
+    ...invoice,
+    entity_id: invoice.entity_id || entityId,
+    invoice_number: invoice.invoice_number || invoiceNumber,
+    status: invoice.status || requestedStatus,
+  };
+
   if (validatedDisbursementIds.length > 0) {
     await applyDisbursementInvoiceLinks({
       invoiceId: invoice.id,
       disbursementIds: validatedDisbursementIds,
       userId,
       isCreate: true,
+      invoice: createdInvoice,
+    });
+  }
+
+  if (data.linkedDisbursementIds?.length) {
+    await syncLinkedClientFundDisbursementsForInvoice({
+      invoice: createdInvoice,
+      actorId: userId,
+      disbursementIds: validatedDisbursementIds,
     });
   }
 
@@ -878,12 +966,15 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     });
   }
 
-  const validatedDisbursementIds = await validateDisbursementsForInvoice({
-    entityId: existing.entity_id || entityId,
-    workRequestId: effectiveWrId,
-    disbursementIds: data.linkedDisbursementIds,
-    targetInvoiceId: id,
-  });
+  const validatedDisbursementIds =
+    data.linkedDisbursementIds !== undefined
+      ? await validateDisbursementsForInvoice({
+          entityId: existing.entity_id || entityId,
+          workRequestId: effectiveWrId,
+          disbursementIds: data.linkedDisbursementIds,
+          targetInvoiceId: id,
+        })
+      : [];
 
   // Atomic update (Spec 2.3 / R-11) with OCC guard (Spec 2.2 / R-10): field
   // updates, line-item replacement, total/balance recomputation, and the
@@ -1063,14 +1154,32 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
   }
 
   const entityCode = await resolveEntityCode(updated.entity_id);
-  if (validatedDisbursementIds.length > 0) {
+  if (data.linkedDisbursementIds !== undefined) {
     await applyDisbursementInvoiceLinks({
       invoiceId: id,
       disbursementIds: validatedDisbursementIds,
       userId,
       isCreate: false,
+      invoice: updated,
     });
   }
+
+  if (updated.status === 'Cancelled') {
+    await unlinkAndRevertClientFundDisbursements({
+      entityId: updated.entity_id || entityId,
+      invoiceId: updated.id,
+      invoiceNumber: updated.invoice_number,
+      actorId: userId,
+      reason: 'invoice_cancelled',
+      clearLink: true,
+    });
+  } else {
+    await syncLinkedClientFundDisbursementsForInvoice({
+      invoice: updated,
+      actorId: userId,
+    });
+  }
+
   return { ...updated, entity_code: entityCode };
 };
 
@@ -1097,7 +1206,16 @@ const updateInvoiceStatus = async ({ entityId, id, userId, status, user }) => {
  * @returns {Promise<void>}
  */
 const deleteInvoice = async ({ entityId, id, userId }) => {
-  await getInvoiceById({ entityId, id, internal: true });
+  const existing = await getInvoiceById({ entityId, id, internal: true });
+
+  await unlinkAndRevertClientFundDisbursements({
+    entityId: existing.entity_id || entityId,
+    invoiceId: id,
+    invoiceNumber: existing.invoice_number,
+    actorId: userId,
+    reason: 'invoice_deleted',
+    clearLink: true,
+  });
 
   const { error } = await supabaseAdmin
     .from('invoices')
@@ -1187,6 +1305,21 @@ const recordPayment = async ({ entityId, invoiceId, userId, user, data }) => {
     entity: entityId,
     userId,
     details: { invoiceId, amount: data.amount, method: data.method },
+  });
+
+  const updatedInvoice =
+    result?.invoice || (await getInvoiceById({ entityId, id: invoiceId, internal: true }));
+  const createdPayment = payment || {
+    amount: data.amount,
+    method: data.method,
+    reference: data.reference,
+    payment_date: data.date,
+  };
+
+  await syncLinkedClientFundDisbursementsForInvoice({
+    invoice: updatedInvoice,
+    payment: createdPayment,
+    actorId: userId,
   });
 
   return payment;

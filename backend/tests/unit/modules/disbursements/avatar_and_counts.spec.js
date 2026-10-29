@@ -192,20 +192,45 @@ describe('Avatar and Disbursement Counts Unit Tests', () => {
       expect(counts.active).toBe(5); // 5 non-archived non-cancelled
     });
 
-    it('correctly calculates counts across all queues for Accounting', async () => {
+    it('correctly calculates counts across all queues for Accounting (only approved/funded or own drafts)', async () => {
+      const counts = await disbursementsService.getDisbursementCounts({
+        entityId: ENTITY_ID,
+        user: accountingUser,
+      });
+
+      // Accounting only sees approved items unless they have a draft of their own
+      expect(counts.initialRequests).toBe(0);
+      expect(counts.readyForFunding).toBe(1);
+      expect(counts.paymentReleases).toBe(1);
+      expect(counts.awaitingRelease).toBe(1);
+      expect(counts.needsCorrection).toBe(0);
+      expect(counts.rejected).toBe(0);
+      expect(counts.archived).toBe(0); // staffUser's draft is not visible to accounting
+      expect(counts.active).toBe(2);
+    });
+
+    it('includes Accounting user own draft in initialRequests count', async () => {
+      // Add a draft created by accountingUser
+      mockTables.disbursements.set('disb-acct-draft', {
+        id: 'disb-acct-draft',
+        entity_id: ENTITY_ID,
+        lifecycle_version: 2,
+        status: 'Draft',
+        review_ready: true,
+        archived: false,
+        created_by: accountingUser.id,
+        linked_work_request_id: WR_ID,
+        linked_task_id: TASK_ID,
+        deleted_at: null,
+      });
+
       const counts = await disbursementsService.getDisbursementCounts({
         entityId: ENTITY_ID,
         user: accountingUser,
       });
 
       expect(counts.initialRequests).toBe(1);
-      expect(counts.readyForFunding).toBe(1);
-      expect(counts.paymentReleases).toBe(1);
-      expect(counts.awaitingRelease).toBe(1);
-      expect(counts.needsCorrection).toBe(0); // Only shows correction drafts created by the user
-      expect(counts.rejected).toBe(1);
-      expect(counts.archived).toBe(1);
-      expect(counts.active).toBe(5);
+      expect(counts.active).toBe(3);
     });
 
     it('project team member sees counts for their concerned work requests', async () => {
