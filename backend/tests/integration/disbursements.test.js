@@ -945,6 +945,7 @@ describe('/v1/disbursements', () => {
         lifecycle_version: 2,
         review_ready: true,
         notes: 'Original requester note',
+        created_by: jenId,
         archived: false,
         version: 1,
       });
@@ -1195,7 +1196,7 @@ describe('/v1/disbursements', () => {
         description: 'Check by accounting',
         amount: 350,
         fund_source: 'Firm Fund',
-        status: 'Draft',
+        status: 'Approved',
         created_by: 'someone-else',
         archived: false,
       });
