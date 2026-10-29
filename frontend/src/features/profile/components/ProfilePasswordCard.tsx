@@ -268,7 +268,7 @@ export function ProfilePasswordCard({ isLoading = false }: ProfilePasswordCardPr
                   evalRes.strength === 'strong'
                     ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
                     : evalRes.strength === 'good'
-                    ? 'bg-[#F8FAFC]0/15 text-[#1E293B] dark:text-blue-400'
+                    ? 'bg-[#1D4ED8]/15 text-[#1D4ED8] dark:text-blue-400'
                     : evalRes.strength === 'fair'
                     ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                     : evalRes.strength === 'weak'
@@ -288,7 +288,7 @@ export function ProfilePasswordCard({ isLoading = false }: ProfilePasswordCardPr
                 let bgColor = 'bg-border';
                 if (isActive) {
                   if (evalRes.strength === 'strong') bgColor = 'bg-emerald-500';
-                  else if (evalRes.strength === 'good') bgColor = 'bg-[#F8FAFC]0';
+                  else if (evalRes.strength === 'good') bgColor = 'bg-[#1D4ED8]';
                   else if (evalRes.strength === 'fair') bgColor = 'bg-amber-500';
                   else if (evalRes.strength === 'weak') bgColor = 'bg-destructive';
                 }
