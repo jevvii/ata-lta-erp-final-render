@@ -15,7 +15,7 @@ const REQUEST_TYPES = [
 ];
 const REQUEST_STATUSES = ['pending', 'fulfilled', 'rejected', 'cancelled'];
 
-const uuidOrEmptySchema = z.union([z.string().uuid(), z.literal(''), z.null()]).optional();
+const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
 
 /**
  * Schema for creating an operations request.
@@ -77,8 +77,8 @@ const updateRequestSchema = z
     notes: z.string().max(2000).optional().nullable(),
     rejectionReason: z.string().max(2000).optional().nullable(),
     rejection_reason: z.string().max(2000).optional().nullable(),
-    fulfilledBy: z.string().uuid().optional().nullable(),
-    fulfilled_by: z.string().uuid().optional().nullable(),
+    fulfilledBy: z.string().guid().optional().nullable(),
+    fulfilled_by: z.string().guid().optional().nullable(),
   })
   .passthrough()
   .refine(
@@ -103,10 +103,10 @@ const updateRequestSchema = z
 const listQuerySchema = z.object({
   status: z.enum(REQUEST_STATUSES).optional(),
   type: z.enum(REQUEST_TYPES).optional(),
-  workRequestId: z.string().uuid().optional(),
-  clientId: z.string().uuid().optional(),
-  linkedTaskId: z.string().uuid().optional(),
-  requestedBy: z.string().uuid().optional(),
+  workRequestId: z.string().guid().optional(),
+  clientId: z.string().guid().optional(),
+  linkedTaskId: z.string().guid().optional(),
+  requestedBy: z.string().guid().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(1000).default(50),
 });

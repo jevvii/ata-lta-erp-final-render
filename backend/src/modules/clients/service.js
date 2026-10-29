@@ -19,6 +19,8 @@ const toApiClient = (row, extras = {}) => {
   if (!row) return null;
   return {
     id: row.id,
+    clientNumber: row.client_number || null,
+    client_number: row.client_number || null,
     entity: extras.entityCode || row.entity_code,
     name: row.name,
     tin: row.tin,
@@ -172,7 +174,7 @@ const listClients = async ({
   }
 
   if (search) {
-    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
+    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
   }
 
   // Client master records are shared within the authorized entity. Project
@@ -239,8 +241,19 @@ const listClients = async ({
  */
 const createClient = async ({ entityId, data, createdBy }) => {
   const now = new Date().toISOString();
+  const entityCode = await resolveEntityCode(entityId);
+  const code = (entityCode && entityCode !== 'ALL' && entityCode.length <= 5) ? entityCode : 'ATA';
+  let clientNumber = null;
+  const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
+    p_prefix: `CLI-${code}`,
+  });
+  if (typeof seqData === 'string' && seqData.length > 0) {
+    clientNumber = seqData;
+  }
+
   const clientRecord = {
     id: randomUUID(),
+    ...(clientNumber ? { client_number: clientNumber } : {}),
     entity_id: entityId,
     name: data.name,
     tin: data.tin,

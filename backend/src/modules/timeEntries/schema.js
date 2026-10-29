@@ -19,7 +19,7 @@ const entryDateSchema = calendarDateSchema.refine((value) => value <= getMaxAllo
 });
 
 const createTimeEntrySchema = z.object({
-  task_id: z.string().uuid('task_id must be a valid UUID'),
+  task_id: z.string().guid('task_id must be a valid UUID'),
   entry_date: entryDateSchema,
   duration_minutes: z
     .number()
@@ -31,7 +31,7 @@ const createTimeEntrySchema = z.object({
 });
 
 const updateTimeEntrySchema = z.object({
-  task_id: z.string().uuid('task_id must be a valid UUID').optional(),
+  task_id: z.string().guid('task_id must be a valid UUID').optional(),
   entry_date: entryDateSchema.optional(),
   duration_minutes: z
     .number()
@@ -45,17 +45,17 @@ const updateTimeEntrySchema = z.object({
 const listQuerySchema = z.object({
   from: calendarDateSchema.optional(),
   to: calendarDateSchema.optional(),
-  task_id: z.string().uuid('task_id must be a valid UUID').optional(),
-  user_id: z.string().uuid('user_id must be a valid UUID').optional(),
+  task_id: z.string().guid('task_id must be a valid UUID').optional(),
+  user_id: z.string().guid('user_id must be a valid UUID').optional(),
 }).refine((value) => !value.from || !value.to || value.from <= value.to, 'from must not be after to');
 
 const summaryQuerySchema = z.object({
   date: calendarDateSchema,
-  user_id: z.string().uuid('user_id must be a valid UUID').optional(),
+  user_id: z.string().guid('user_id must be a valid UUID').optional(),
 });
 
 const entryParamsSchema = z.object({
-  id: z.string().uuid('id must be a valid UUID'),
+  id: z.string().guid('id must be a valid UUID'),
 });
 
 module.exports = {

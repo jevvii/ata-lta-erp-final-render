@@ -688,9 +688,23 @@ const updateRequest = async ({ entityId, id, userId, data }) => {
           let attempts = 0;
           while (!inserted && attempts < 5) {
             attempts++;
-            const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-            const timeSuffix = Date.now().toString().slice(-4);
-            const invoiceNum = `INV-${new Date().getFullYear()}-${randomSuffix}-${timeSuffix}`;
+            const year = new Date().getFullYear();
+            let invoiceNum = null;
+            try {
+              const { data: seqStr, error: seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
+                p_prefix: `INV-${year}`,
+              });
+              if (!seqErr && typeof seqStr === 'string' && seqStr.startsWith('INV-')) {
+                invoiceNum = seqStr;
+              }
+            } catch {
+              // Ignore rpc failure and fall back
+            }
+            if (!invoiceNum) {
+              const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+              const timeSuffix = Date.now().toString().slice(-4);
+              invoiceNum = `INV-${year}-${randomSuffix}-${timeSuffix}`;
+            }
             const nowIso = new Date().toISOString();
             const today = nowIso.split('T')[0];
 

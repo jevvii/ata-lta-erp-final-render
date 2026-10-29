@@ -27,7 +27,7 @@ const linkedTaskIdSchema = z
     },
     z
       .string()
-      .uuid({ message: 'A valid linked task is required for transmittals' })
+      .guid({ message: 'A valid linked task is required for transmittals' })
       .optional()
       .nullable()
   );
@@ -36,8 +36,8 @@ const linkedTaskIdSchema = z
  * Schema for creating a transmittal.
  */
 const createTransmittalSchema = z.object({
-  clientId: z.string().uuid(),
-  workRequestId: z.string().uuid(),
+  clientId: z.string().guid(),
+  workRequestId: z.string().guid(),
   trackingNumber: z.string().min(1).max(50).optional(),
   items: z.array(transmittalItemSchema).min(1),
   notes: z.string().max(2000).optional().nullable(),
@@ -50,7 +50,7 @@ const createTransmittalSchema = z.object({
  * Schema for updating a transmittal (Draft status, or Admin corrections).
  */
 const updateTransmittalSchema = z.object({
-  clientId: z.string().uuid().optional(),
+  clientId: z.string().guid().optional(),
   workRequestId: linkedTaskIdSchema,
   items: z.array(transmittalItemSchema).min(1).optional(),
   notes: z.string().max(2000).optional().nullable(),

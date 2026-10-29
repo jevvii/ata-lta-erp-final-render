@@ -16,27 +16,27 @@ const timeLogSchema = z.object({
   endTime: timeLogTimestampSchema,
   date: entryDateSchema,
   hours: z.number().min(1 / 60).max(24),
-  userId: z.string().uuid().optional().nullable(),
+  userId: z.string().guid().optional().nullable(),
   note: z.string().max(5000).optional().nullable(),
   workerName: z.string().optional().nullable(),
-  checklistItemId: z.string().uuid().optional().nullable(),
+  checklistItemId: z.string().guid().optional().nullable(),
 });
 
 const checklistItemSchema = z.object({
-  id: z.string().uuid().optional().nullable(),
+  id: z.string().guid().optional().nullable(),
   text: z.string().min(1),
   category: z.string().optional().nullable(),
   completed: z.boolean().default(false).optional(),
-  assigneeId: z.string().uuid().optional().nullable(),
-  assignee_id: z.string().uuid().optional().nullable(),
+  assigneeId: z.string().guid().optional().nullable(),
+  assignee_id: z.string().guid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
   assignee_name: z.string().optional().nullable(),
   dependsOn: z
-    .union([z.string().uuid(), z.array(z.string().uuid())])
+    .union([z.string().guid(), z.array(z.string().guid())])
     .optional()
     .nullable(),
   depends_on: z
-    .union([z.string().uuid(), z.array(z.string().uuid())])
+    .union([z.string().guid(), z.array(z.string().guid())])
     .optional()
     .nullable(),
   periodYear: z
@@ -80,25 +80,24 @@ const phasesSchema = z
   .passthrough();
 
 const workRequestDueDateSchema = z.string({
-  required_error: 'Due date is required',
-  invalid_type_error: 'Due date is required',
+  error: 'Due date is required',
 }).min(1, 'Due date is required').pipe(
   z.union([z.string().date(), z.string().datetime({ offset: true })], {
-    errorMap: () => ({ message: 'Due date must be a valid date or ISO timestamp' }),
+    error: 'Due date must be a valid date or ISO timestamp',
   })
 );
 
 const createWorkRequestSchema = z.object({
   title: z.string().min(1).max(255),
   description: z.string().optional().nullable(),
-  clientId: z.string().uuid().optional().nullable(),
+  clientId: z.string().guid().optional().nullable(),
   entity: z.enum(['ATA', 'LTA', 'ALL']).optional(),
   status: z.string().max(50).optional(),
   phase: z.string().max(50).optional(),
-  requestedBy: z.string().uuid().optional(),
+  requestedBy: z.string().guid().optional(),
   assignedTo: z.preprocess(
     (val) => (val === '' || val === undefined ? null : val),
-    z.string().uuid().nullable().optional()
+    z.string().guid().nullable().optional()
   ),
   coAssignees: z.array(z.string()).optional().default([]),
   dueDate: workRequestDueDateSchema,
@@ -133,6 +132,7 @@ const WR_STATUSES = [
 ];
 
 const updateWorkRequestSchema = createWorkRequestSchema.partial().extend({
+  coAssignees: z.array(z.string()).optional(),
   dueDate: workRequestDueDateSchema.optional().nullable(),
   archived: z.boolean().optional(),
   status: z.enum(WR_STATUSES).optional(),
@@ -145,13 +145,13 @@ const createTaskSchema = z.object({
   description: z.string().optional().nullable(),
   status: z.string().max(50).optional(),
   phase: z.enum(['pre_processing', 'processing']).optional(),
-  assigneeId: z.string().uuid().optional().nullable(),
+  assigneeId: z.string().guid().optional().nullable(),
   assigneeName: z.string().optional().nullable(),
-  assignees: z.array(z.string().uuid()).optional().nullable(),
-  predecessors: z.array(z.string().uuid()).optional(),
+  assignees: z.array(z.string().guid()).optional().nullable(),
+  predecessors: z.array(z.string().guid()).optional(),
   dueDate: z.string().optional().nullable(),
   checklist: z.array(checklistItemSchema).optional(),
-  coAssignees: z.array(z.string().uuid()).optional().nullable(),
+  coAssignees: z.array(z.string().guid()).optional().nullable(),
   taskDocuments: z.array(z.any()).optional().nullable(),
   requiredLinkType: z.string().max(50).optional().nullable(),
 });
@@ -163,7 +163,7 @@ const updateTaskSchema = createTaskSchema
     // OCC guard (Spec 2.2 / R-10): update applies only if the stored version matches.
     expectedVersion: z.number().int().positive().optional(),
     checklistCompletions: z.array(z.object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       completed: z.boolean(),
     }).strict()).min(1).refine((items) => new Set(items.map((item) => item.id)).size === items.length,
       'Checklist item IDs must be unique').optional(),
@@ -181,7 +181,7 @@ const updateTaskSchema = createTaskSchema
 
 const nullableUuid = z.preprocess(
   (val) => (val === '' || val === undefined ? null : val),
-  z.string().uuid().nullable().optional()
+  z.string().guid().nullable().optional()
 );
 
 const taskTemplateSchema = z.object({
@@ -248,7 +248,7 @@ const generateTaskOverrideSchema = z.object({
   title: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),
   phase: z.enum(['pre_processing', 'processing']).optional(),
-  assignees: z.array(z.string().uuid()).optional(),
+  assignees: z.array(z.string().guid()).optional(),
   depends_on: z.string().optional().nullable(),
   dependsOn: z.string().optional().nullable(),
   dueDate: z.string().optional().nullable(),
@@ -270,8 +270,8 @@ const generateRetainerTemplateSchema = z.object({
       priority: z.string().max(50).optional(),
       assignedTo: nullableUuid,
       assigned_to: nullableUuid,
-      coAssignees: z.array(z.string().uuid()).optional(),
-      co_assignees: z.array(z.string().uuid()).optional(),
+      coAssignees: z.array(z.string().guid()).optional(),
+      co_assignees: z.array(z.string().guid()).optional(),
       dueDate: workRequestDueDateSchema.optional(),
       due_date: workRequestDueDateSchema.optional(),
       tasks: z.array(generateTaskOverrideSchema).optional(),
@@ -315,8 +315,8 @@ const advanceWorkRequestSchema = z.object({
 
 const qaReviewTaskResultSchema = z
   .object({
-    task_id: z.string().uuid().optional(),
-    taskId: z.string().uuid().optional(),
+    task_id: z.string().guid().optional(),
+    taskId: z.string().guid().optional(),
     qa_status: z.enum(['passed', 'failed']).optional(),
     qaStatus: z.enum(['passed', 'failed']).optional(),
   })
@@ -372,8 +372,8 @@ const taskResubmitDataSchema = z
     description: z.string().max(2000).optional().nullable(),
     dueDate: z.string().optional().nullable(),
     assigneeId: nullableUuid.optional(),
-    assignees: z.array(z.string().uuid()).optional().nullable(),
-    predecessors: z.array(z.string().uuid()).optional().nullable(),
+    assignees: z.array(z.string().guid()).optional().nullable(),
+    predecessors: z.array(z.string().guid()).optional().nullable(),
     requiredLinkType: z.string().max(50).optional().nullable(),
   })
   .strict();

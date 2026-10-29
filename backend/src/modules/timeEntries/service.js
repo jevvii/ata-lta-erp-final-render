@@ -65,7 +65,7 @@ const withLoggerProfiles = async (entries) => {
   const userIds = [...new Set(entries.map((entry) => entry.user_id).filter(Boolean))];
   const profiles = new Map();
   for (let index = 0; index < userIds.length; index += 100) {
-    const { data, error } = await supabaseAdmin.from('users').select('id, name, role')
+    const { data, error } = await supabaseAdmin.from('users').select('id, name, role, avatar_url')
       .in('id', userIds.slice(index, index + 100));
     databaseError(error);
     (data || []).forEach((profile) => profiles.set(profile.id, profile));
@@ -74,6 +74,8 @@ const withLoggerProfiles = async (entries) => {
     ...entry,
     user_name: profiles.get(entry.user_id)?.name || entry.user_name || null,
     user_role: profiles.get(entry.user_id)?.role || null,
+    user_avatar_url: profiles.get(entry.user_id)?.avatar_url || null,
+    userAvatarUrl: profiles.get(entry.user_id)?.avatar_url || null,
   }));
 };
 
@@ -557,4 +559,5 @@ module.exports = {
   deleteTimeEntry,
   getSummary,
   isUserAssignedToTask,
+  withLoggerProfiles,
 };

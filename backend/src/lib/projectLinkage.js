@@ -223,13 +223,15 @@ const validateRecordProjectLinkage = async ({
       });
     }
 
-    if (!wr || wr.deleted_at) {
+    if (!internal && (!wr || wr.deleted_at)) {
       throw new AppError({
         statusCode: 404,
         title: 'Not Found',
         detail: 'Parent work request not found or deleted',
       });
     }
+
+    if (!wr) return true;
 
     if (!internal && wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
       throw new AppError({
@@ -249,7 +251,7 @@ const validateRecordProjectLinkage = async ({
     }
 
     // 4. Entity boundary verification against caller scope
-    if (entityId && entityId !== 'ALL' && wr.entity_id !== entityId) {
+    if (entityId && entityId !== 'ALL' && wr.entity_id && wr.entity_id !== entityId) {
       throw new AppError({
         statusCode: 404,
         title: 'Not Found',

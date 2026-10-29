@@ -14,6 +14,7 @@ const transmittalsService = require('../transmittals/service');
 const { computePermissions } = require('../../middleware/rbac');
 const { hasPermission } = require('../../lib/permissions');
 const { evictUserProfile } = require('../../middleware/auth');
+const { concurrencyConflict, resolveExpectedVersion } = require('../../lib/concurrency');
 const { filterValidProjectRecords } = require('../../lib/projectLinkage');
 const { normalizeTaskAndParentAliases } = require('../../lib/taskAssignment');
 const {
@@ -24,28 +25,46 @@ const {
 
 const ALLOWED_DEPARTMENTS = ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'];
 
-const toApiUser = (row, departments = []) => ({
-  id: row.id,
-  email: row.email,
-  name: row.name,
-  role: row.role,
-  departments,
-  entities: row.entities || [],
-  isActive: row.is_active,
-  createdAt: row.created_at,
-  updatedAt: row.updated_at,
-});
+const toApiUser = (row, departments = []) => {
+  const isActive = row.is_active !== false;
+  return {
+    id: row.id,
+    userNumber: row.user_number || null,
+    user_number: row.user_number || null,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    avatarUrl: row.avatar_url || null,
+    avatar_url: row.avatar_url || null,
+    departments,
+    entities: row.entities || [],
+    isActive,
+    status: isActive ? 'Active' : 'Disabled',
+    version: row.version ?? 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+};
 
-const loadUserDepartments = async (userId) => {
+const extractEmbeddedDepartments = (userRow) => {
+  if (!Array.isArray(userRow?.user_departments)) return [];
+  return userRow.user_departments
+    .map((ud) => ud?.departments?.name || ud?.name)
+    .filter(Boolean);
+};
+
+const loadUserDepartments = async (userId, userRow = null) => {
   const { data: udRows, error } = await supabaseAdmin
     .from('user_departments')
     .select('department_id')
     .eq('user_id', userId);
 
-  if (error) return [];
+  if (error) return extractEmbeddedDepartments(userRow);
 
   const deptIds = (udRows || []).map((row) => row.department_id).filter(Boolean);
-  if (!deptIds.length) return [];
+  if (!deptIds.length) {
+    return extractEmbeddedDepartments(userRow);
+  }
 
   const { data: deptRows } = await supabaseAdmin
     .from('departments')
@@ -54,6 +73,53 @@ const loadUserDepartments = async (userId) => {
 
   const nameById = new Map((deptRows || []).map((d) => [d.id, d.name]));
   return deptIds.map((id) => nameById.get(id)).filter(Boolean);
+};
+
+const loadUsersDepartmentsMap = async (users = []) => {
+  const result = new Map();
+  if (!Array.isArray(users) || users.length === 0) return result;
+
+  const userIds = Array.from(new Set(users.map((u) => u?.id).filter(Boolean)));
+  if (userIds.length === 0) return result;
+
+  const { data: udRows, error } = await supabaseAdmin
+    .from('user_departments')
+    .select('user_id, department_id')
+    .in('user_id', userIds);
+
+  if (!error && Array.isArray(udRows) && udRows.length > 0) {
+    const deptIds = Array.from(
+      new Set(udRows.map((row) => row.department_id).filter(Boolean))
+    );
+    let nameById = new Map();
+    if (deptIds.length > 0) {
+      const { data: deptRows } = await supabaseAdmin
+        .from('departments')
+        .select('id, name')
+        .in('id', deptIds);
+      nameById = new Map((deptRows || []).map((d) => [d.id, d.name]));
+    }
+
+    for (const row of udRows) {
+      if (!row?.user_id) continue;
+      const deptName = nameById.get(row.department_id);
+      if (!deptName) continue;
+      const list = result.get(row.user_id) || [];
+      if (!list.includes(deptName)) {
+        list.push(deptName);
+      }
+      result.set(row.user_id, list);
+    }
+  }
+
+  for (const u of users) {
+    if (!u?.id) continue;
+    if (!result.has(u.id)) {
+      result.set(u.id, extractEmbeddedDepartments(u));
+    }
+  }
+
+  return result;
 };
 
 const resolveEntityId = async (code) => {
@@ -117,32 +183,7 @@ const setDepartments = async (userId, departmentNames) => {
   await supabaseAdmin.from('user_departments').insert(rows);
 };
 
-const listUsers = async ({ entityId } = {}) => {
-  const query = supabaseAdmin.from('users').select('*').eq('is_active', true);
-
-  const { data, error } = await query.order('name', { ascending: true });
-
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Unable to list users',
-    });
-  }
-
-  const rows = (data || []).filter(
-    (u) => !entityId || entityId === 'ALL' || (u.entities || []).includes(entityId)
-  );
-  const usersWithDepts = await Promise.all(
-    rows.map(async (u) => {
-      const departments = await loadUserDepartments(u.id);
-      return toApiUser(u, departments);
-    })
-  );
-  return usersWithDepts;
-};
-
-const createUser = async ({ data, createdBy: _createdBy }) => {
+const assertAccountCapNotReached = async () => {
   // Enforce a global cap of 15 active user accounts.
   const { count, error: countError } = await supabaseAdmin
     .from('users')
@@ -165,6 +206,33 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
         'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.',
       code: 'USER_LIMIT_REACHED',
     });
+  }
+};
+
+const listUsers = async ({ entityId, entityCode } = {}) => {
+  const scopeEntity = entityId || entityCode;
+  const query = supabaseAdmin.from('users').select('*');
+
+  const { data, error } = await query.order('name', { ascending: true });
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to list users',
+    });
+  }
+
+  const rows = (data || []).filter(
+    (u) => !scopeEntity || scopeEntity === 'ALL' || (u.entities || []).includes(scopeEntity)
+  );
+  const departmentsByUserId = await loadUsersDepartmentsMap(rows);
+  return rows.map((u) => toApiUser(u, departmentsByUserId.get(u.id) || []));
+};
+
+const createUser = async ({ data, createdBy: _createdBy }) => {
+  if (data.isActive !== false) {
+    await assertAccountCapNotReached();
   }
 
   const password = data.password || 'ChangeMe123!';
@@ -192,6 +260,7 @@ const createUser = async ({ data, createdBy: _createdBy }) => {
     role: data.role,
     entities: data.entities || [],
     is_active: data.isActive !== false,
+    version: 1,
     created_at: now,
     updated_at: now,
   };
@@ -222,23 +291,53 @@ const getUserById = async (id) => {
     });
   }
   if (!data) return null;
-  const departments = await loadUserDepartments(id);
+  const departments = await loadUserDepartments(id, data);
   return toApiUser(data, departments);
 };
 
-const updateUser = async ({ id, data, updatedBy: _updatedBy }) => {
-  const existing = await getUserById(id);
+const updateUser = async ({ id, data = {}, currentUserId, updatedBy: _updatedBy }) => {
+  const { data: existing, error: fetchError } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve user',
+    });
+  }
+
   if (!existing) {
     throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'User not found' });
   }
 
-  const { data: userRow } = await supabaseAdmin
-    .from('users')
-    .select('auth_user_id')
-    .eq('id', id)
-    .maybeSingle();
+  let nextIsActive;
+  if (data.isActive !== undefined) {
+    nextIsActive = Boolean(data.isActive);
+  } else if (data.status !== undefined) {
+    nextIsActive = data.status === 'Active';
+  } else {
+    nextIsActive = existing.is_active !== false;
+  }
 
-  const authUserId = userRow?.auth_user_id;
+  if (currentUserId && String(currentUserId) === String(id) && nextIsActive === false) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'Cannot disable your own account',
+      code: 'SELF_DEACTIVATION_FORBIDDEN',
+    });
+  }
+
+  if (existing.is_active === false && nextIsActive === true) {
+    await assertAccountCapNotReached();
+  }
+
+  const expectedVersion = resolveExpectedVersion(data);
+  const authUserId = existing.auth_user_id;
 
   if (authUserId) {
     if (data.email && data.email !== existing.email) {
@@ -273,17 +372,27 @@ const updateUser = async ({ id, data, updatedBy: _updatedBy }) => {
     email: data.email ?? existing.email,
     role: data.role ?? existing.role,
     entities: data.entities ?? existing.entities,
-    is_active: data.isActive ?? existing.isActive,
+    is_active: nextIsActive,
+    version: (existing.version || 1) + 1,
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await supabaseAdmin.from('users').update(updates).eq('id', id);
+  let updateQuery = supabaseAdmin.from('users').update(updates).eq('id', id);
+  if (expectedVersion !== null) {
+    updateQuery = updateQuery.eq('version', expectedVersion);
+  }
+
+  const { data: updatedRows, error } = await updateQuery.select();
   if (error) {
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
       detail: 'Unable to update user',
     });
+  }
+
+  if (expectedVersion !== null && (!updatedRows || updatedRows.length === 0)) {
+    throw concurrencyConflict();
   }
 
   if (data.departments !== undefined) {
@@ -295,17 +404,49 @@ const updateUser = async ({ id, data, updatedBy: _updatedBy }) => {
   // permissions for up to the cache TTL.
   evictUserProfile(id);
 
-  return getUserById(id);
+  const updatedRow = updatedRows?.[0] || { ...existing, ...updates };
+  const departments =
+    data.departments !== undefined && data.departments.length === 0
+      ? []
+      : await loadUserDepartments(id, updatedRow);
+  return toApiUser(updatedRow, departments);
 };
 
-const deleteUser = async ({ id, deletedBy: _deletedBy }) => {
-  const existing = await getUserById(id);
-  if (!existing) return false;
-
-  const { error } = await supabaseAdmin
+const deleteUser = async ({ id, expectedVersion: rawExpectedVersion, deletedBy: _deletedBy }) => {
+  const { data: existing, error: fetchError } = await supabaseAdmin
     .from('users')
-    .update({ is_active: false, updated_at: new Date().toISOString() })
-    .eq('id', id);
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  if (fetchError) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Unable to retrieve user',
+    });
+  }
+  if (!existing) return null;
+
+  const expectedVersion =
+    typeof rawExpectedVersion === 'number' &&
+    Number.isInteger(rawExpectedVersion) &&
+    rawExpectedVersion > 0
+      ? rawExpectedVersion
+      : resolveExpectedVersion({ expectedVersion: rawExpectedVersion });
+
+  const updates = {
+    is_active: false,
+    version: (existing.version || 1) + 1,
+    updated_at: new Date().toISOString(),
+  };
+
+  let updateQuery = supabaseAdmin.from('users').update(updates).eq('id', id);
+  if (expectedVersion !== null) {
+    updateQuery = updateQuery.eq('version', expectedVersion);
+  }
+
+  const { data: updatedRows, error } = await updateQuery.select();
 
   if (error) {
     throw new AppError({
@@ -315,11 +456,17 @@ const deleteUser = async ({ id, deletedBy: _deletedBy }) => {
     });
   }
 
+  if (expectedVersion !== null && (!updatedRows || updatedRows.length === 0)) {
+    throw concurrencyConflict();
+  }
+
   // R-13: the account is disabled — evict immediately so in-flight tokens no
   // longer authenticate against the stale cached profile.
   evictUserProfile(id);
 
-  return true;
+  const updatedRow = updatedRows?.[0] || { ...existing, ...updates };
+  const departments = await loadUserDepartments(id, updatedRow);
+  return toApiUser(updatedRow, departments);
 };
 
 const toApiPendingChange = (row) => ({
@@ -741,37 +888,6 @@ const approvePending = async ({ id, user }) => {
   return { id, status: 'approved' };
 };
 
-/**
- * Count audit log entries for the active entity.
- * @param {object} params
- * @param {string} params.entityCode
- * @returns {Promise<number>}
- */
-const getAuditLogCount = async ({ entityCode }) => {
-  let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact', head: true });
-
-  if (entityCode && entityCode !== 'ALL') {
-    const entityUuid = await resolveEntityId(entityCode).catch(() => null);
-    if (entityUuid && entityUuid !== entityCode) {
-      query = query.or(`entity.eq.${entityCode},entity.eq.${entityUuid}`);
-    } else {
-      query = query.eq('entity', entityCode);
-    }
-  }
-
-  const { count, error } = await query;
-
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Unable to count audit logs',
-    });
-  }
-
-  return count || 0;
-};
-
 const MODULE_TABLE_MAP = {
   operations: ['work_requests', 'tasks'],
   billing: ['invoices', 'invoice_line_items', 'invoice_payments'],
@@ -789,14 +905,15 @@ const MODULE_TABLE_MAP = {
   ],
 };
 
-/**
- * List audit log entries with optional filters and pagination.
- * @param {object} params
- * @param {string} params.entityCode
- * @param {object} params.filters
- * @returns {Promise<{ data: object[], meta: object }>}
- */
-const getAuditLogs = async ({ entityCode, filters = {} }) => {
+const normalizeAuditParams = (params = {}) => {
+  const { entityCode, filters = {}, ...topLevel } = params;
+  return {
+    entityCode,
+    mergedFilters: { ...filters, ...topLevel },
+  };
+};
+
+const applyAuditBaseFilters = async (query, { entityCode, filters = {} }) => {
   const {
     userId,
     action,
@@ -806,31 +923,23 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
     date,
     from,
     to,
-    page: pageParam,
-    limit = 20,
-    offset: offsetParam = 0,
   } = filters;
 
-  const limitNum = Number(limit);
-  const page = pageParam ? Number(pageParam) : Math.floor(Number(offsetParam) / limitNum) + 1;
-  const offset = pageParam ? (page - 1) * limitNum : Number(offsetParam);
-
-  let query = supabaseAdmin.from('audit_logs').select('*', { count: 'exact' });
+  let q = query;
 
   if (entityCode && entityCode !== 'ALL') {
     const entityUuid = await resolveEntityId(entityCode).catch(() => null);
     if (entityUuid && entityUuid !== entityCode) {
-      query = query.or(`entity.eq.${entityCode},entity.eq.${entityUuid}`);
+      q = q.or(`entity.eq.${entityCode},entity.eq.${entityUuid}`);
     } else {
-      query = query.eq('entity', entityCode);
+      q = q.eq('entity', entityCode);
     }
   }
 
-  // Actor / User filter
   if (actor) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actor);
     if (isUuid) {
-      query = query.eq('user_id', actor);
+      q = q.eq('user_id', actor);
     } else {
       const { data: matchedUsers } = await supabaseAdmin
         .from('users')
@@ -838,65 +947,573 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
         .or(`email.ilike.%${actor}%,name.ilike.%${actor}%`);
       const matchedIds = (matchedUsers || []).map((u) => u.id);
       if (matchedIds.length > 0) {
-        query = query.in('user_id', matchedIds);
+        q = q.in('user_id', matchedIds);
       } else {
-        return {
-          data: [],
-          meta: {
-            total: 0,
-            page,
-            limit: limitNum,
-            offset,
-            hasMore: false,
-          },
-        };
+        return { query: q, empty: true };
       }
     }
   } else if (userId) {
-    query = query.eq('user_id', userId);
+    q = q.eq('user_id', userId);
   }
 
   if (action) {
-    query = query.eq('action', action);
+    q = q.eq('action', action);
   }
 
   if (table) {
-    query = query.eq('table_name', table);
+    q = q.eq('table_name', table);
   } else if (moduleFilter) {
     const modKey = moduleFilter.toLowerCase();
     const tables = MODULE_TABLE_MAP[modKey];
     if (tables && tables.length > 0) {
-      query = query.in('table_name', tables);
+      q = q.in('table_name', tables);
     }
   }
 
   if (date) {
     const dateStr = date.includes('T') ? date.split('T')[0] : date;
-    query = query.gte('created_at', `${dateStr}T00:00:00.000Z`);
-    query = query.lte('created_at', `${dateStr}T23:59:59.999Z`);
+    q = q.gte('created_at', `${dateStr}T00:00:00.000Z`);
+    q = q.lte('created_at', `${dateStr}T23:59:59.999Z`);
   } else {
     if (from) {
-      query = query.gte('created_at', from);
+      const fromIso = from.includes('T') ? from : `${from}T00:00:00.000Z`;
+      q = q.gte('created_at', fromIso);
     }
     if (to) {
-      query = query.lte('created_at', to);
+      const toIso = to.includes('T') ? to : `${to}T23:59:59.999Z`;
+      q = q.lte('created_at', toIso);
     }
   }
 
-  const { data, error, count } = await query
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limitNum - 1);
+  return { query: q, empty: false };
+};
 
+const resolveMatchingUserIdsForSearch = async (searchTerm) => {
+  if (!searchTerm) return new Set();
+  const { data: matchedUsers } = await supabaseAdmin
+    .from('users')
+    .select('id, name, email, user_number')
+    .or(`email.ilike.%${searchTerm}%,name.ilike.%${searchTerm}%,user_number.ilike.%${searchTerm}%`);
+  return new Set((matchedUsers || []).map((u) => u.id));
+};
+
+const matchesAuditSearch = (row, searchTerm, matchedUserIds) => {
+  const actionRaw = String(row.action || '').toLowerCase();
+  const actionHuman = actionRaw.replace(/[._-]+/g, ' ');
+  const tableRaw = String(row.table_name || '').toLowerCase();
+  const tableHuman = tableRaw.replace(/[._-]+/g, ' ');
+  const recordId = String(row.record_id || '').toLowerCase();
+  const auditNumber = String(row.audit_number || '').toLowerCase();
+  const entity = String(row.entity || '').toLowerCase();
+  const userId = String(row.user_id || '').toLowerCase();
+  const detailsText =
+    row.details !== null && row.details !== undefined
+      ? (typeof row.details === 'string' ? row.details : JSON.stringify(row.details)).toLowerCase()
+      : '';
+
+  return (
+    actionRaw.includes(searchTerm) ||
+    actionHuman.includes(searchTerm) ||
+    tableRaw.includes(searchTerm) ||
+    tableHuman.includes(searchTerm) ||
+    recordId.includes(searchTerm) ||
+    auditNumber.includes(searchTerm) ||
+    entity.includes(searchTerm) ||
+    userId.includes(searchTerm) ||
+    detailsText.includes(searchTerm) ||
+    (Boolean(row.user_id) && matchedUserIds.has(row.user_id))
+  );
+};
+
+/**
+ * Count audit log entries for the active entity.
+ * @param {object} params
+ * @param {string} params.entityCode
+ * @returns {Promise<number>}
+ */
+const getAuditLogCount = async (params = {}) => {
+  const { entityCode, mergedFilters } = normalizeAuditParams(params);
+  const searchTerm =
+    typeof mergedFilters.search === 'string' ? mergedFilters.search.trim().toLowerCase() : '';
+
+  if (!searchTerm) {
+    const baseQuery = supabaseAdmin.from('audit_logs').select('*', { count: 'exact', head: true });
+    const { query, empty } = await applyAuditBaseFilters(baseQuery, {
+      entityCode,
+      filters: mergedFilters,
+    });
+    if (empty) return 0;
+
+    const { count, error } = await query;
+
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to count audit logs',
+      });
+    }
+
+    return count || 0;
+  }
+
+  const baseQuery = supabaseAdmin.from('audit_logs').select('*');
+  const { query, empty } = await applyAuditBaseFilters(baseQuery, {
+    entityCode,
+    filters: mergedFilters,
+  });
+  if (empty) return 0;
+
+  const { data, error } = await query;
   if (error) {
     throw new AppError({
       statusCode: 500,
       title: 'Database Error',
-      detail: 'Unable to list audit logs',
+      detail: 'Unable to count audit logs',
     });
   }
 
-  const rows = data || [];
-  const total = count !== undefined && count !== null ? count : rows.length;
+  const matchedUserIds = await resolveMatchingUserIdsForSearch(searchTerm);
+  const filteredRows = (data || []).filter((row) =>
+    matchesAuditSearch(row, searchTerm, matchedUserIds)
+  );
+  return filteredRows.length;
+};
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuidStr = (val) => typeof val === 'string' && UUID_RE.test(val);
+
+const safeSelectByIds = async (table, ids) => {
+  const uniqueIds = Array.from(new Set(ids.filter(isUuidStr)));
+  if (uniqueIds.length === 0) return new Map();
+  try {
+    const res = await supabaseAdmin.from(table).select('*').in('id', uniqueIds);
+    const map = new Map();
+    (res?.data || []).forEach((item) => {
+      if (item && item.id) map.set(item.id, item);
+    });
+    return map;
+  } catch {
+    return new Map();
+  }
+};
+
+/**
+ * Batch-enriches paginated audit log rows with target record titles, business numbers,
+ * and parent foreign keys (e.g. workRequestId on task/document logs) so deep-links
+ * and Business Context cards work across all modules.
+ */
+const enrichAuditLogRows = async (rows = []) => {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+
+  try {
+    const taskIds = [];
+    const wrIds = [];
+    const docIds = [];
+    const invoiceIds = [];
+    const disbursementIds = [];
+    const transmittalIds = [];
+    const clientIds = [];
+    const templateIds = [];
+    const opsReqIds = [];
+    const targetUserIds = [];
+
+    for (const row of rows) {
+      const d = row.details && typeof row.details === 'object' ? row.details : {};
+      const recId = row.record_id || d.recordId || d.record_id || d.id;
+      const table = String(row.table_name || '').toLowerCase();
+
+      if (table === 'users' && isUuidStr(recId)) targetUserIds.push(recId);
+      if (isUuidStr(d.userId || d.user_id)) targetUserIds.push(d.userId || d.user_id);
+      if (isUuidStr(d.targetUserId || d.target_user_id)) targetUserIds.push(d.targetUserId || d.target_user_id);
+
+      if (table === 'tasks' && isUuidStr(recId)) taskIds.push(recId);
+      if (isUuidStr(d.taskId || d.task_id)) taskIds.push(d.taskId || d.task_id);
+
+      if (table === 'work_requests' && isUuidStr(recId)) wrIds.push(recId);
+      if (isUuidStr(d.workRequestId || d.work_request_id || d.linkedWorkRequestId || d.linked_work_request_id)) {
+        wrIds.push(d.workRequestId || d.work_request_id || d.linkedWorkRequestId || d.linked_work_request_id);
+      }
+
+      if (table === 'documents' && isUuidStr(recId)) docIds.push(recId);
+      if (table === 'invoices' && isUuidStr(recId)) invoiceIds.push(recId);
+      if (isUuidStr(d.invoiceId || d.invoice_id || d.linkedInvoiceId || d.linked_invoice_id)) {
+        invoiceIds.push(d.invoiceId || d.invoice_id || d.linkedInvoiceId || d.linked_invoice_id);
+      }
+
+      if (table === 'disbursements' && isUuidStr(recId)) disbursementIds.push(recId);
+      if (isUuidStr(d.disbursementId || d.disbursement_id)) {
+        disbursementIds.push(d.disbursementId || d.disbursement_id);
+      }
+
+      if (table === 'transmittals' && isUuidStr(recId)) transmittalIds.push(recId);
+      if (isUuidStr(d.transmittalId || d.transmittal_id || d.linkedTransmittalId || d.linked_transmittal_id)) {
+        transmittalIds.push(d.transmittalId || d.transmittal_id || d.linkedTransmittalId || d.linked_transmittal_id);
+      }
+
+      if (table === 'clients' && isUuidStr(recId)) clientIds.push(recId);
+      if (isUuidStr(d.clientId || d.client_id)) clientIds.push(d.clientId || d.client_id);
+
+      if (table === 'retainer_templates' && isUuidStr(recId)) templateIds.push(recId);
+      if (table === 'operations_requests' && isUuidStr(recId)) opsReqIds.push(recId);
+    }
+
+    const [
+      tasksMap,
+      docMap,
+      invMap,
+      disbMap,
+      trkMap,
+      tplMap,
+      opsMap,
+      targetUsersMap,
+    ] = await Promise.all([
+      safeSelectByIds('tasks', taskIds),
+      safeSelectByIds('documents', docIds),
+      safeSelectByIds('invoices', invoiceIds),
+      safeSelectByIds('disbursements', disbursementIds),
+      safeSelectByIds('transmittals', transmittalIds),
+      safeSelectByIds('retainer_templates', templateIds),
+      safeSelectByIds('operations_requests', opsReqIds),
+      safeSelectByIds('users', targetUserIds),
+    ]);
+
+    for (const t of tasksMap.values()) {
+      if (isUuidStr(t.work_request_id)) wrIds.push(t.work_request_id);
+    }
+    for (const doc of docMap.values()) {
+      if (isUuidStr(doc.work_request_id)) wrIds.push(doc.work_request_id);
+      if (isUuidStr(doc.client_id)) clientIds.push(doc.client_id);
+    }
+    for (const inv of invMap.values()) {
+      if (isUuidStr(inv.work_request_id)) wrIds.push(inv.work_request_id);
+      if (isUuidStr(inv.client_id)) clientIds.push(inv.client_id);
+    }
+    for (const disb of disbMap.values()) {
+      if (isUuidStr(disb.linked_work_request_id)) wrIds.push(disb.linked_work_request_id);
+      if (isUuidStr(disb.client_id)) clientIds.push(disb.client_id);
+    }
+    for (const trk of trkMap.values()) {
+      if (isUuidStr(trk.work_request_id)) wrIds.push(trk.work_request_id);
+      if (isUuidStr(trk.client_id)) clientIds.push(trk.client_id);
+    }
+    for (const ops of opsMap.values()) {
+      if (isUuidStr(ops.work_request_id)) wrIds.push(ops.work_request_id);
+    }
+
+    const wrMap = await safeSelectByIds('work_requests', wrIds);
+    for (const wr of wrMap.values()) {
+      if (isUuidStr(wr.client_id)) clientIds.push(wr.client_id);
+    }
+    const clientMap = await safeSelectByIds('clients', clientIds);
+
+    const entityIds = rows.map((r) => r.entity).filter(isUuidStr);
+    const entityMap = await safeSelectByIds('entities', entityIds);
+    const normalizeEntityVal = (val) => {
+      if (!val) return val;
+      if (val === 'a0000000-0000-0000-0000-000000000001') return 'ATA';
+      if (val === 'a0000000-0000-0000-0000-000000000002') return 'LTA';
+      const ent = entityMap.get(val);
+      return ent?.code || val;
+    };
+
+    return rows.map((row) => {
+      const rawDetails = row.details && typeof row.details === 'object' ? { ...row.details } : {};
+      const recId = row.record_id || rawDetails.recordId || rawDetails.record_id || rawDetails.id;
+      const table = String(row.table_name || '').toLowerCase();
+
+      if (table === 'users' && recId && targetUsersMap.has(recId)) {
+        const targetUser = targetUsersMap.get(recId);
+        if (targetUser.user_number) {
+          if (!rawDetails.userNumber) rawDetails.userNumber = targetUser.user_number;
+          if (!rawDetails.user_number) rawDetails.user_number = targetUser.user_number;
+        }
+        if (!rawDetails.name && targetUser.name) rawDetails.name = targetUser.name;
+        if (!rawDetails.email && targetUser.email) rawDetails.email = targetUser.email;
+      }
+
+      if (table === 'tasks' && recId && tasksMap.has(recId)) {
+        const task = tasksMap.get(recId);
+        if (!rawDetails.name && !rawDetails.title && task.title) rawDetails.name = task.title;
+        if (!rawDetails.taskTitle && task.title) rawDetails.taskTitle = task.title;
+        if (!rawDetails.workRequestId && !rawDetails.work_request_id && task.work_request_id) {
+          rawDetails.workRequestId = task.work_request_id;
+        }
+        if (!rawDetails.status && task.status) rawDetails.status = task.status;
+        if (!rawDetails.phase && task.phase) rawDetails.phase = task.phase;
+        if (!rawDetails.dueDate && !rawDetails.due_date && task.due_date) {
+          rawDetails.dueDate = task.due_date;
+        }
+        if (!rawDetails.assigneeId && !rawDetails.assignee_id && task.assignee_id) {
+          rawDetails.assigneeId = task.assignee_id;
+        }
+      }
+
+      if (table === 'work_requests' && recId && wrMap.has(recId)) {
+        const wr = wrMap.get(recId);
+        if (wr.work_request_number) {
+          if (!rawDetails.workRequestNumber) rawDetails.workRequestNumber = wr.work_request_number;
+          if (!rawDetails.workRequestNo) rawDetails.workRequestNo = wr.work_request_number;
+          if (!rawDetails.work_request_number) rawDetails.work_request_number = wr.work_request_number;
+        }
+        if (!rawDetails.title && !rawDetails.name && wr.title) rawDetails.title = wr.title;
+        if (!rawDetails.workRequestTitle && wr.title) rawDetails.workRequestTitle = wr.title;
+        if (!rawDetails.workRequestId) rawDetails.workRequestId = wr.id;
+        if (!rawDetails.status && wr.status) rawDetails.status = wr.status;
+        if (!rawDetails.priority && wr.priority) rawDetails.priority = wr.priority;
+        if (!rawDetails.phase && wr.phase) rawDetails.phase = wr.phase;
+        if (!rawDetails.dueDate && !rawDetails.due_date && wr.due_date) {
+          rawDetails.dueDate = wr.due_date;
+        }
+        if (!rawDetails.assignedTo && !rawDetails.assigned_to && wr.assigned_to) {
+          rawDetails.assignedTo = wr.assigned_to;
+        }
+        if (rawDetails.archived === undefined && wr.archived !== undefined) {
+          rawDetails.archived = wr.archived;
+        }
+        if (!rawDetails.clientId && !rawDetails.client_id && wr.client_id) {
+          rawDetails.clientId = wr.client_id;
+        }
+      }
+
+      if (table === 'documents' && recId && docMap.has(recId)) {
+        const doc = docMap.get(recId);
+        const docName = doc.original_name || doc.file_name;
+        if (!rawDetails.name && !rawDetails.title && docName) rawDetails.name = docName;
+        if (!rawDetails.category && (doc.category || doc.document_type)) {
+          rawDetails.category = doc.category || doc.document_type;
+        }
+        if (!rawDetails.status && (doc.document_lifecycle || doc.status)) {
+          rawDetails.status = doc.document_lifecycle || doc.status;
+        }
+        if (!rawDetails.workRequestId && !rawDetails.work_request_id && doc.work_request_id) {
+          rawDetails.workRequestId = doc.work_request_id;
+        }
+        if (!rawDetails.taskId && !rawDetails.task_id && doc.linked_task_id) {
+          rawDetails.taskId = doc.linked_task_id;
+        }
+        if (!rawDetails.clientId && !rawDetails.client_id && doc.client_id) {
+          rawDetails.clientId = doc.client_id;
+        }
+      }
+
+      if (table === 'disbursements' && recId && disbMap.has(recId)) {
+        const disb = disbMap.get(recId);
+        if (!rawDetails.disbursementNumber && disb.disbursement_number) {
+          rawDetails.disbursementNumber = disb.disbursement_number;
+        }
+        if (!rawDetails.disbursement_number && disb.disbursement_number) {
+          rawDetails.disbursement_number = disb.disbursement_number;
+        }
+        if (!rawDetails.description && disb.description) rawDetails.description = disb.description;
+        if (!rawDetails.category && disb.category) rawDetails.category = disb.category;
+        if (rawDetails.amount === undefined && disb.amount !== undefined) rawDetails.amount = disb.amount;
+        if (!rawDetails.status && disb.status) rawDetails.status = disb.status;
+        if (!rawDetails.workRequestId && disb.linked_work_request_id) {
+          rawDetails.workRequestId = disb.linked_work_request_id;
+        }
+        if (!rawDetails.invoiceId && disb.linked_invoice_id) {
+          rawDetails.invoiceId = disb.linked_invoice_id;
+        }
+        if (!rawDetails.transmittalId && disb.linked_transmittal_id) {
+          rawDetails.transmittalId = disb.linked_transmittal_id;
+        }
+        if (!rawDetails.clientId && disb.client_id) rawDetails.clientId = disb.client_id;
+      }
+
+      if (table === 'invoices' && recId && invMap.has(recId)) {
+        const inv = invMap.get(recId);
+        if (!rawDetails.invoiceNumber && inv.invoice_number) {
+          rawDetails.invoiceNumber = inv.invoice_number;
+        }
+        if (!rawDetails.invoice_number && inv.invoice_number) {
+          rawDetails.invoice_number = inv.invoice_number;
+        }
+        if (rawDetails.amount === undefined && (inv.total_amount !== undefined || inv.amount !== undefined)) {
+          rawDetails.amount = inv.total_amount ?? inv.amount;
+        }
+        if (!rawDetails.status && inv.status) rawDetails.status = inv.status;
+        if (!rawDetails.workRequestId && inv.work_request_id) {
+          rawDetails.workRequestId = inv.work_request_id;
+        }
+        if (!rawDetails.clientId && inv.client_id) rawDetails.clientId = inv.client_id;
+      }
+
+      if (table === 'transmittals' && recId && trkMap.has(recId)) {
+        const trk = trkMap.get(recId);
+        const trkNum = trk.tracking_number || trk.transmittal_number;
+        if (!rawDetails.trackingNumber && trkNum) {
+          rawDetails.trackingNumber = trkNum;
+        }
+        if (!rawDetails.tracking_number && trkNum) {
+          rawDetails.tracking_number = trkNum;
+        }
+        if (!rawDetails.status && trk.status) rawDetails.status = trk.status;
+        if (!rawDetails.workRequestId && trk.work_request_id) {
+          rawDetails.workRequestId = trk.work_request_id;
+        }
+        if (!rawDetails.clientId && trk.client_id) rawDetails.clientId = trk.client_id;
+      }
+
+      if (table === 'clients' && recId && clientMap.has(recId)) {
+        const cli = clientMap.get(recId);
+        if (cli.client_number) {
+          if (!rawDetails.clientNumber) rawDetails.clientNumber = cli.client_number;
+          if (!rawDetails.client_number) rawDetails.client_number = cli.client_number;
+        }
+        if (!rawDetails.name && cli.name) rawDetails.name = cli.name;
+        if (!rawDetails.clientName && cli.name) rawDetails.clientName = cli.name;
+        if (!rawDetails.status && cli.status) rawDetails.status = cli.status;
+      }
+
+      if (table === 'retainer_templates' && recId && tplMap.has(recId)) {
+        const tpl = tplMap.get(recId);
+        const tplName = tpl.name || tpl.title;
+        if (!rawDetails.name && !rawDetails.title && tplName) rawDetails.name = tplName;
+      }
+
+      if (table === 'operations_requests' && recId && opsMap.has(recId)) {
+        const ops = opsMap.get(recId);
+        if (!rawDetails.workRequestId && ops.work_request_id) {
+          rawDetails.workRequestId = ops.work_request_id;
+        }
+        if (!rawDetails.taskId && ops.task_id) rawDetails.taskId = ops.task_id;
+        if (!rawDetails.status && ops.status) rawDetails.status = ops.status;
+      }
+
+      const targetUid = rawDetails.targetUserId || rawDetails.target_user_id || rawDetails.userId || rawDetails.user_id;
+      if (targetUid && targetUsersMap.has(targetUid)) {
+        const tu = targetUsersMap.get(targetUid);
+        if (tu.user_number) {
+          if (!rawDetails.userNumber) rawDetails.userNumber = tu.user_number;
+          if (!rawDetails.user_number) rawDetails.user_number = tu.user_number;
+        }
+      }
+
+      const resolvedWrId =
+        rawDetails.workRequestId ||
+        rawDetails.work_request_id ||
+        rawDetails.linkedWorkRequestId ||
+        rawDetails.linked_work_request_id;
+      if (resolvedWrId && wrMap.has(resolvedWrId)) {
+        const parentWr = wrMap.get(resolvedWrId);
+        if (parentWr.work_request_number) {
+          if (!rawDetails.workRequestNumber) rawDetails.workRequestNumber = parentWr.work_request_number;
+          if (!rawDetails.workRequestNo) rawDetails.workRequestNo = parentWr.work_request_number;
+          if (!rawDetails.work_request_number) rawDetails.work_request_number = parentWr.work_request_number;
+        }
+        if (!rawDetails.workRequestTitle && !rawDetails.work_request_title && parentWr.title) {
+          rawDetails.workRequestTitle = parentWr.title;
+        }
+        if (!rawDetails.clientId && !rawDetails.client_id && parentWr.client_id) {
+          rawDetails.clientId = parentWr.client_id;
+        }
+      }
+
+      const resolvedClientId = rawDetails.clientId || rawDetails.client_id;
+      if (resolvedClientId && clientMap.has(resolvedClientId)) {
+        const cli = clientMap.get(resolvedClientId);
+        if (cli.client_number) {
+          if (!rawDetails.clientNumber) rawDetails.clientNumber = cli.client_number;
+          if (!rawDetails.client_number) rawDetails.client_number = cli.client_number;
+        }
+        if (!rawDetails.clientName && !rawDetails.client_name && cli.name) {
+          rawDetails.clientName = cli.name;
+        }
+      }
+
+      return {
+        ...row,
+        entity: normalizeEntityVal(row.entity),
+        details: Object.keys(rawDetails).length > 0 ? rawDetails : row.details,
+      };
+    });
+  } catch {
+    return rows;
+  }
+};
+
+/**
+ * List audit log entries with optional filters and pagination.
+ * @param {object} params
+ * @param {string} params.entityCode
+ * @param {object} params.filters
+ * @returns {Promise<{ data: object[], meta: object }>}
+ */
+const getAuditLogs = async (params = {}) => {
+  const { entityCode, mergedFilters } = normalizeAuditParams(params);
+  const {
+    page: pageParam,
+    limit = 20,
+    offset: offsetParam = 0,
+    search,
+    sortOrder = 'desc',
+  } = mergedFilters;
+
+  const limitNum = Number(limit);
+  const page = pageParam ? Number(pageParam) : Math.floor(Number(offsetParam) / limitNum) + 1;
+  const offset = pageParam ? (page - 1) * limitNum : Number(offsetParam);
+  const ascending = sortOrder === 'asc';
+  const searchTerm = typeof search === 'string' ? search.trim().toLowerCase() : '';
+
+  const baseQuery = supabaseAdmin
+    .from('audit_logs')
+    .select('*', searchTerm ? undefined : { count: 'exact' });
+  const { query, empty } = await applyAuditBaseFilters(baseQuery, {
+    entityCode,
+    filters: mergedFilters,
+  });
+
+  if (empty) {
+    return {
+      data: [],
+      meta: {
+        total: 0,
+        page,
+        limit: limitNum,
+        offset,
+        hasMore: false,
+      },
+    };
+  }
+
+  let rows = [];
+  let total = 0;
+
+  if (searchTerm) {
+    const { data, error } = await query.order('created_at', { ascending });
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to list audit logs',
+      });
+    }
+    const matchedUserIds = await resolveMatchingUserIdsForSearch(searchTerm);
+    const filteredRows = (data || []).filter((row) =>
+      matchesAuditSearch(row, searchTerm, matchedUserIds)
+    );
+    total = filteredRows.length;
+    rows = filteredRows.slice(offset, offset + limitNum);
+  } else {
+    const { data, error, count } = await query
+      .order('created_at', { ascending })
+      .range(offset, offset + limitNum - 1);
+
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to list audit logs',
+      });
+    }
+
+    rows = data || [];
+    total = count !== undefined && count !== null ? count : rows.length;
+  }
+
+  // Enrich target record context and foreign keys for deep-linking
+  rows = await enrichAuditLogRows(rows);
 
   // Enrich actor metadata
   const userIds = Array.from(new Set(rows.map((r) => r.user_id).filter(Boolean)));
@@ -904,7 +1521,7 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
   if (userIds.length > 0) {
     const { data: usersData } = await supabaseAdmin
       .from('users')
-      .select('id, name, email, role')
+      .select('id, name, email, role, user_number, avatar_url')
       .in('id', userIds);
     (usersData || []).forEach((u) => userMap.set(u.id, u));
   }
@@ -914,6 +1531,8 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
       const user = userMap.get(row.user_id) || null;
       return {
         id: row.id,
+        auditNumber: row.audit_number || null,
+        audit_number: row.audit_number || null,
         action: row.action,
         tableName: row.table_name,
         recordId: row.record_id,
@@ -925,12 +1544,21 @@ const getAuditLogs = async ({ entityCode, filters = {} }) => {
               name: user.name,
               email: user.email,
               role: user.role,
+              userNumber: user.user_number || null,
+              user_number: user.user_number || null,
+              avatarUrl: user.avatar_url || null,
+              avatar_url: user.avatar_url || null,
             }
           : row.user_id
           ? { id: row.user_id }
           : null,
+        actorUserNumber: user?.user_number || null,
+        actorAvatarUrl: user?.avatar_url || null,
+        actor_avatar_url: user?.avatar_url || null,
         userName: user?.name || null,
         userEmail: user?.email || null,
+        userAvatarUrl: user?.avatar_url || null,
+        user_avatar_url: user?.avatar_url || null,
         details: row.details,
         createdAt: row.created_at,
       };
@@ -1006,6 +1634,10 @@ const rejectPending = async ({ id, user, reason }) => {
 };
 
 module.exports = {
+  toApiUser,
+  loadUserDepartments,
+  loadUsersDepartmentsMap,
+  assertAccountCapNotReached,
   listUsers,
   createUser,
   getUserById,
@@ -1018,5 +1650,7 @@ module.exports = {
   rejectPending,
   resolveEntityId,
   getAuditLogCount,
+  countAuditLogs: getAuditLogCount,
   getAuditLogs,
+  listAuditLogs: getAuditLogs,
 };

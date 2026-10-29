@@ -35,7 +35,7 @@ const MAX_FILE_SIZE_BYTES = process.env.MAX_FILE_SIZE_BYTES
   ? parseInt(process.env.MAX_FILE_SIZE_BYTES, 10)
   : 50 * 1024 * 1024; // 50 MB
 
-const uuidOrEmptySchema = z.union([z.string().uuid(), z.literal(''), z.null()]).optional();
+const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
 
 /**
  * Schema for creating document metadata (step 1 of upload flow).
@@ -61,7 +61,7 @@ const createDocumentSchema = z.object({
   originalName: z.string().max(255).optional(),
   workRequestId: uuidOrEmptySchema,
   linkedTaskId: uuidOrEmptySchema,
-  clientId: z.string().uuid().optional().nullable(),
+  clientId: z.string().guid().optional().nullable(),
   documentType: z.string().max(100).optional(),
   category: z.enum(DOCUMENT_CATEGORIES).optional(),
   description: z.string().max(2000).optional(),

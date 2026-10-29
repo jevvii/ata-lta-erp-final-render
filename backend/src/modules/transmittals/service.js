@@ -78,7 +78,7 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
   }
 
   const makeQuery = () => {
-    let q = supabaseAdmin.from('transmittals').select('*, clients(name)');
+    let q = supabaseAdmin.from('transmittals').select('*, clients(name, client_number)');
 
     if (includeDeleted !== true && includeDeleted !== 'true') {
       q = q.is('deleted_at', null);
@@ -137,11 +137,31 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
     itemsByTransmittal.set(item.transmittal_id, list);
   }
 
-  const mapped = rows.map((row) => ({
-    ...row,
-    entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
-    items: itemsByTransmittal.get(row.id) || [],
-  }));
+  const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
+  let wrMap = new Map();
+  if (wrIds.length > 0) {
+    const { data: wrData } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_request_number')
+      .in('id', wrIds);
+    wrMap = new Map((wrData || []).map((w) => [w.id, w]));
+  }
+
+  const mapped = rows.map((row) => {
+    const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
+    const clientNumber = row.clients?.client_number || row.client_number || null;
+    const wrNumber = wr?.work_request_number || null;
+    return {
+      ...row,
+      clientNumber,
+      client_number: clientNumber,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
+      work_request_title: wr?.title || null,
+      entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+      items: itemsByTransmittal.get(row.id) || [],
+    };
+  });
 
   return { data: mapped, count: total };
 };
@@ -373,10 +393,17 @@ const createTransmittal = async ({ entityId, entityCode, userId, user, data }) =
     const code = rawCode === 'ALL' ? 'ATA' : rawCode;
     const year = new Date().getFullYear();
     const prefix = `TR-${code}-${year}`;
-    const { data: seq, error: _seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
+    const { data: seq, error: seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
       p_prefix: prefix,
     });
-    trackingNumber = seq || `${prefix}-0001`;
+    if (seqErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Unable to generate tracking sequence',
+      });
+    }
+    trackingNumber = (typeof seq === 'string' && seq.length > 0) ? seq : `${prefix}-0001`;
   }
 
   const row = {
@@ -458,7 +485,7 @@ const createTransmittal = async ({ entityId, entityCode, userId, user, data }) =
 const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
   let query = supabaseAdmin
     .from('transmittals')
-    .select('*, clients(name, address, tin)')
+    .select('*, clients(name, address, tin, client_number)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -505,8 +532,27 @@ const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
     .eq('id', transmittal.entity_id)
     .maybeSingle();
 
+  let wrNumber = null;
+  let wrTitle = null;
+  if (transmittal.work_request_id) {
+    const { data: wr } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_request_number')
+      .eq('id', transmittal.work_request_id)
+      .maybeSingle();
+    wrNumber = wr?.work_request_number || null;
+    wrTitle = wr?.title || null;
+  }
+
+  const clientNumber = transmittal.clients?.client_number || transmittal.client_number || null;
+
   return {
     ...transmittal,
+    clientNumber,
+    client_number: clientNumber,
+    workRequestNumber: wrNumber,
+    work_request_number: wrNumber,
+    work_request_title: wrTitle,
     entity_code: entity?.code || transmittal.entity_code,
     items: items || [],
   };

@@ -207,6 +207,60 @@ describe('PATCH /v1/me', () => {
 
     expect(res.body.title).toMatch(/bad request/i);
   });
+
+  it('trims leading and trailing whitespace from name', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .patch('/v1/me')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ name: '   Whitespace Name   ' })
+      .expect(200);
+
+    expect(res.body.data.name).toBe('Whitespace Name');
+  });
+
+  it('rejects empty name with 400', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .patch('/v1/me')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ name: '' })
+      .expect(400);
+
+    expect(res.body.detail).toBe('Name cannot be empty');
+  });
+
+  it('rejects whitespace-only name with 400', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+    });
+
+    const res = await request(app)
+      .patch('/v1/me')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ name: '     ' })
+      .expect(400);
+
+    expect(res.body.detail).toBe('Name cannot be empty');
+  });
 });
 
 describe('PATCH /v1/me/password', () => {
@@ -302,6 +356,44 @@ describe('PATCH /v1/me/password', () => {
       .expect(400);
 
     expect(res.body.detail).toMatch(/at least 8 characters/i);
+  });
+
+  it('rejects new password exceeding 128 characters', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+      password: 'initialpassword1',
+    });
+
+    const res = await request(app)
+      .patch('/v1/me/password')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ currentPassword: 'initialpassword1', newPassword: 'A'.repeat(129) })
+      .expect(400);
+
+    expect(res.body.detail).toBe('New password must not exceed 128 characters');
+  });
+
+  it('rejects new password identical to current password', async () => {
+    const token = registerUser({
+      email: 'admin@ata-lta.ph',
+      name: 'Administrator',
+      role: 'Admin',
+      entities: ['ATA', 'LTA'],
+      password: 'initialpassword1',
+    });
+
+    const res = await request(app)
+      .patch('/v1/me/password')
+      .set('Authorization', `Bearer ${token}`)
+      .set('X-Active-Entity', 'ATA')
+      .send({ currentPassword: 'initialpassword1', newPassword: 'initialpassword1' })
+      .expect(400);
+
+    expect(res.body.detail).toBe('New password must be different from your current password');
   });
 });
 

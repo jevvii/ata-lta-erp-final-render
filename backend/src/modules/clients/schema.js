@@ -12,7 +12,7 @@ const contactDetailSchema = z.object({
 });
 
 const relatedCompanySchema = z.object({
-  relatedClientId: z.string().uuid(),
+  relatedClientId: z.string().guid(),
   relationship: z.string().max(100).optional(),
 });
 
@@ -30,7 +30,7 @@ const createClientSchema = z.object({
   tradeName: z.string().max(255).optional(),
   contactUserId: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? null : val),
-    z.string().uuid().nullable().optional()
+    z.string().guid().nullable().optional()
   ),
   contactPerson: z.string().max(255).optional().nullable(),
   contactDetails: z.array(contactDetailSchema).optional(),

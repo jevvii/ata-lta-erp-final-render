@@ -18,24 +18,24 @@ const lineItemSchema = z.object({
   type: z.enum(LINE_ITEM_TYPES).default('Professional Fee'),
 });
 
-const uuidOrEmptySchema = z.union([z.string().uuid(), z.literal(''), z.null()]).optional();
+const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
 
 /**
  * Schema for creating an invoice.
  */
 const createInvoiceSchema = z
   .object({
-    clientId: z.string().uuid(),
-    workRequestId: z.string().uuid().optional(),
-    work_request_id: z.string().uuid().optional(),
-    linkedWorkRequestId: z.string().uuid().optional(),
-    linked_work_request_id: z.string().uuid().optional(),
+    clientId: z.string().guid(),
+    workRequestId: z.string().guid().optional(),
+    work_request_id: z.string().guid().optional(),
+    linkedWorkRequestId: z.string().guid().optional(),
+    linked_work_request_id: z.string().guid().optional(),
     taskId: uuidOrEmptySchema,
     task_id: uuidOrEmptySchema,
     linkedTaskId: uuidOrEmptySchema,
     linked_task_id: uuidOrEmptySchema,
-    linkedTransmittalId: z.string().uuid().optional().nullable(),
-    invoiceNumber: z.string().min(1).max(50),
+    linkedTransmittalId: z.string().guid().optional().nullable(),
+    invoiceNumber: z.string().trim().max(50).optional(),
     issueDate: z.string().min(1),
     dueDate: z.string().min(1),
     status: z.string().max(50).optional(),
@@ -82,7 +82,7 @@ const FINANCIAL_FIELDS = [
 const updateInvoiceSchema = z
   .object({
     printDetails: printDetailsSchema.optional(),
-    clientId: z.string().uuid().optional(),
+    clientId: z.string().guid().optional(),
     workRequestId: uuidOrEmptySchema,
     work_request_id: uuidOrEmptySchema,
     linkedWorkRequestId: uuidOrEmptySchema,
@@ -91,7 +91,7 @@ const updateInvoiceSchema = z
     task_id: uuidOrEmptySchema,
     linkedTaskId: uuidOrEmptySchema,
     linked_task_id: uuidOrEmptySchema,
-    linkedTransmittalId: z.string().uuid().optional().nullable(),
+    linkedTransmittalId: z.string().guid().optional().nullable(),
     invoiceNumber: z.string().min(1).max(50).optional(),
     issueDate: z.string().optional(),
     dueDate: z.string().optional(),
@@ -135,7 +135,7 @@ const recordPaymentSchema = z.object({
  */
 const billingTemplateSchema = z.object({
   name: z.string().min(1).max(255),
-  clientId: z.string().uuid().optional().nullable(),
+  clientId: z.string().guid().optional().nullable(),
   schedule: z.string().max(50).optional().nullable(),
   pfAmount: z.number().nonnegative().optional(),
   lineItems: z.array(lineItemSchema).optional(),

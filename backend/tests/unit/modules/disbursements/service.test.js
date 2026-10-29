@@ -100,17 +100,20 @@ describe('Disbursements Service - Status Workflow', () => {
 });
 
 describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', () => {
-  const ENTITY_ID = 'ent-ata';
-  const WR_ID = 'wr-test-1111';
-  const TASK_ID = 'task-test-2222';
+  const ENTITY_ID = '11111111-1111-4111-8111-111111111101';
+  const WR_ID = '11111111-1111-4111-8111-111111111102';
+  const TASK_ID = '11111111-1111-4111-8111-111111111103';
+  const OTHER_WR_ID = '11111111-1111-4111-8111-111111111104';
+  const OTHER_TASK_ID = '11111111-1111-4111-8111-111111111105';
+  const WR_EMPTY_ID = '11111111-1111-4111-8111-111111111106';
 
-  const adminUser = { id: 'user-admin', role: 'Admin', departments: ['Management'] };
-  const accountingDeptUser = { id: 'user-acct-dept', role: 'Staff', departments: ['Accounting'] };
-  const accountingRoleUser = { id: 'user-acct-role', role: 'Accounting', departments: [] };
-  const creatorUser = { id: 'user-creator', role: 'Operations', departments: ['Operations'] };
-  const payeeUser = { id: 'user-payee', role: 'Documentation', departments: ['Documentation'] };
-  const managerUser = { id: 'user-manager', role: 'Manager', departments: ['Management'] };
-  const otherUser = { id: 'user-other', role: 'Operations', departments: ['Operations'] };
+  const adminUser = { id: '11111111-1111-4111-8111-111111111111', role: 'Admin', departments: ['Management'], entities: ['ATA'] };
+  const accountingDeptUser = { id: '11111111-1111-4111-8111-111111111112', role: 'Staff', departments: ['Accounting'], entities: ['ATA'] };
+  const accountingRoleUser = { id: '11111111-1111-4111-8111-111111111113', role: 'Accounting', departments: [], entities: ['ATA'] };
+  const creatorUser = { id: '11111111-1111-4111-8111-111111111114', role: 'Operations', departments: ['Operations'], entities: ['ATA'] };
+  const payeeUser = { id: '11111111-1111-4111-8111-111111111115', role: 'Documentation', departments: ['Documentation'], entities: ['ATA'] };
+  const managerUser = { id: '11111111-1111-4111-8111-111111111116', role: 'Manager', departments: ['Management'], entities: ['ATA'] };
+  const otherUser = { id: '11111111-1111-4111-8111-111111111117', role: 'Operations', departments: ['Operations'], entities: ['ATA'] };
 
   beforeEach(() => {
     resetMock();
@@ -129,6 +132,9 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       entity_id: ENTITY_ID,
       title: 'Audit WR',
       status: 'In Progress',
+      creation_approval_status: 'approved',
+      assigned_to: creatorUser.id,
+      co_assignees: [accountingDeptUser.id, accountingRoleUser.id],
       deleted_at: null,
     });
 
@@ -138,6 +144,36 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       work_request_id: WR_ID,
       title: 'Audit Task',
       assignee_id: creatorUser.id,
+      deleted_at: null,
+    });
+
+    // Seed other WR & task for otherUser
+    mockTables.work_requests.set(OTHER_WR_ID, {
+      id: OTHER_WR_ID,
+      entity_id: ENTITY_ID,
+      title: 'Other WR',
+      status: 'In Progress',
+      creation_approval_status: 'approved',
+      assigned_to: otherUser.id,
+      co_assignees: [accountingDeptUser.id, accountingRoleUser.id],
+      deleted_at: null,
+    });
+    mockTables.tasks.set(OTHER_TASK_ID, {
+      id: OTHER_TASK_ID,
+      work_request_id: OTHER_WR_ID,
+      title: 'Other Task',
+      assignee_id: otherUser.id,
+      deleted_at: null,
+    });
+
+    // Seed empty WR for payeeUser
+    mockTables.work_requests.set(WR_EMPTY_ID, {
+      id: WR_EMPTY_ID,
+      entity_id: ENTITY_ID,
+      title: 'Empty WR',
+      status: 'In Progress',
+      creation_approval_status: 'approved',
+      assigned_to: payeeUser.id,
       deleted_at: null,
     });
 
@@ -169,6 +205,7 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       created_by: creatorUser.id,
       employee_id: null,
       linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -182,6 +219,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Submitted',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -195,6 +234,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Approved',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -208,6 +249,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Released',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -221,6 +264,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Funded',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -234,6 +279,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Rejected',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -248,6 +295,7 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       status: 'Draft',
       created_by: creatorUser.id,
       linked_work_request_id: null,
+      linked_task_id: null,
       archived: false,
       deleted_at: null,
     });
@@ -261,6 +309,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       fund_source: 'Firm Fund',
       status: 'Draft',
       created_by: creatorUser.id,
+      linked_work_request_id: WR_ID,
+      linked_task_id: TASK_ID,
       archived: true,
       deleted_at: null,
     });
@@ -276,8 +326,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       status: 'Released',
       created_by: otherUser.id,
       employee_id: creatorUser.id, // creatorUser is payee here
-      linked_work_request_id: WR_ID,
-      linked_task_id: TASK_ID,
+      linked_work_request_id: OTHER_WR_ID,
+      linked_task_id: OTHER_TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -292,7 +342,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       status: 'Draft',
       created_by: otherUser.id,
       requested_by: creatorUser.id, // creatorUser is requester here
-      linked_work_request_id: WR_ID,
+      linked_work_request_id: OTHER_WR_ID,
+      linked_task_id: OTHER_TASK_ID,
       archived: false,
       deleted_at: null,
     });
@@ -347,8 +398,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       expect(res.data.some((d) => d.id === 'disb-c-released')).toBe(true);
       expect(res.data.some((d) => d.id === 'disb-c-funded')).toBe(true);
       expect(res.data.some((d) => d.id === 'disb-c-rejected')).toBe(true);
-      // Own record without WR is visible
-      expect(res.data.some((d) => d.id === 'disb-c-no-wr')).toBe(true);
+      // Own record without WR is blocked (fails closed per mandatory linkage)
+      expect(res.data.some((d) => d.id === 'disb-c-no-wr')).toBe(false);
       // Other user's records are NOT visible even if status is Released or caller is payee/requester
       expect(res.data.some((d) => d.id === 'disb-other-released')).toBe(false);
       expect(res.data.some((d) => d.id === 'disb-other-draft')).toBe(false);
@@ -426,7 +477,6 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
         'disb-c-released',
         'disb-c-funded',
         'disb-c-rejected',
-        'disb-c-no-wr',
       ];
       for (const id of statuses) {
         const d = await disbursementsService.getDisbursementById({
@@ -438,14 +488,17 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       }
     });
 
-    it('Creator can view own disbursement when not linked to any WR', async () => {
-      const d = await disbursementsService.getDisbursementById({
-        entityId: ENTITY_ID,
-        id: 'disb-c-no-wr',
-        user: creatorUser,
+    it('Creator cannot view own disbursement when not linked to any WR (fails closed)', async () => {
+      await expect(
+        disbursementsService.getDisbursementById({
+          entityId: ENTITY_ID,
+          id: 'disb-c-no-wr',
+          user: creatorUser,
+        })
+      ).rejects.toMatchObject({
+        statusCode: 404,
+        title: 'Not Found',
       });
-      expect(d.id).toBe('disb-c-no-wr');
-      expect(d.linked_work_request_id).toBeNull();
     });
 
     it('Payee (employee_id) is forbidden from viewing non-created disbursement', async () => {
@@ -566,8 +619,8 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       });
       // Active non-archived non-cancelled disbursements created by creatorUser:
       // disb-c-draft, disb-c-pending, disb-c-submitted, disb-c-approved,
-      // disb-c-released, disb-c-funded, disb-c-rejected, disb-c-no-wr = 8
-      expect(counts.active).toBe(8);
+      // disb-c-released, disb-c-funded, disb-c-rejected = 7
+      expect(counts.active).toBe(7);
       // Archived disbursements created by creatorUser: disb-c-archived = 1
       expect(counts.archived).toBe(1);
     });
@@ -609,7 +662,13 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       });
       expect(related.disbursements.length).toBeGreaterThan(0);
       expect(related.disbursements.some((d) => d.id === 'disb-c-draft')).toBe(true);
-      expect(related.disbursements.some((d) => d.id === 'disb-other-released')).toBe(true);
+
+      const otherRelated = await operationsService.getWorkRequestRelated({
+        id: OTHER_WR_ID,
+        entityId: ENTITY_ID,
+        caller: adminUser,
+      });
+      expect(otherRelated.disbursements.some((d) => d.id === 'disb-other-released')).toBe(true);
     });
 
     it('Accounting caller receives all disbursements linked to the work request', async () => {
@@ -619,7 +678,13 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
         caller: accountingDeptUser,
       });
       expect(related.disbursements.some((d) => d.id === 'disb-c-draft')).toBe(true);
-      expect(related.disbursements.some((d) => d.id === 'disb-other-released')).toBe(true);
+
+      const otherRelated = await operationsService.getWorkRequestRelated({
+        id: OTHER_WR_ID,
+        entityId: ENTITY_ID,
+        caller: accountingDeptUser,
+      });
+      expect(otherRelated.disbursements.some((d) => d.id === 'disb-other-released')).toBe(true);
     });
 
     it('Non-Admin/non-Accounting caller receives ONLY their own disbursements in WR related', async () => {
@@ -653,7 +718,7 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
 
     it('Caller who created 0 disbursements gets empty disbursements array in related', async () => {
       const related = await operationsService.getWorkRequestRelated({
-        id: WR_ID,
+        id: WR_EMPTY_ID,
         entityId: ENTITY_ID,
         caller: payeeUser,
       });

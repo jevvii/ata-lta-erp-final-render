@@ -80,7 +80,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
 
   const makeQuery = () => {
-    let q = supabaseAdmin.from('invoices').select('*, clients(name)');
+    let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number)');
     if (includeDeleted !== true && includeDeleted !== 'true') {
       q = q.is('deleted_at', null);
     }
@@ -133,7 +133,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   if (wrIds.length > 0) {
     const { data: wrData } = await supabaseAdmin
       .from('work_requests')
-      .select('id, title, work_order_number, created_by')
+      .select('id, title, work_order_number, work_request_number, created_by')
       .in('id', wrIds);
 
     const wrs = wrData || [];
@@ -151,8 +151,14 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const mapped = rows.map((row) => {
     const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
     const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
+    const clientNumber = row.clients?.client_number || row.client_number || null;
+    const wrNumber = wr?.work_request_number || null;
     return {
       ...row,
+      clientNumber,
+      client_number: clientNumber,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
       entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
       work_request_title: wr?.title || null,
       work_request_creator_name: creator?.name || null,
@@ -222,6 +228,19 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
     sort_order: idx,
   }));
 
+  let invoiceNumber = (data.invoiceNumber || '').trim();
+  if (!invoiceNumber) {
+    const entityCode = await resolveEntityCode(entityId);
+    const code = (entityCode && entityCode !== 'ALL' && entityCode.length <= 5) ? entityCode : 'ATA';
+    const year = new Date().getFullYear();
+    const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
+      p_prefix: `${code}-SI-${year}`,
+    });
+    if (typeof seqData === 'string' && seqData.length > 0) {
+      invoiceNumber = seqData;
+    }
+  }
+
   const { data: invoice, error: invoiceErr } = await supabaseAdmin.rpc(
     'invoice_create_transactional',
     {
@@ -232,7 +251,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
         taskId: effectiveTaskId || null,
         task_id: effectiveTaskId || null,
         linkedTransmittalId: data.linkedTransmittalId || null,
-        invoiceNumber: data.invoiceNumber,
+        invoiceNumber: invoiceNumber || null,
         issueDate: data.issueDate,
         dueDate: data.dueDate,
         status: requestedStatus,
@@ -252,7 +271,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
       throw new AppError({
         statusCode: 409,
         title: 'Conflict',
-        detail: `Invoice number "${data.invoiceNumber}" already exists for this entity`,
+        detail: `Invoice number "${invoiceNumber || data.invoiceNumber}" already exists for this entity`,
       });
     }
     throw new AppError({
@@ -298,7 +317,7 @@ const getInvoiceById = async ({
 }) => {
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients(name, tin, address)')
+    .select('*, clients(name, tin, address, client_number)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -311,7 +330,7 @@ const getInvoiceById = async ({
   if ((error || !invoice) && entityId && entityId !== 'ALL' && allowFallback) {
     const { data: fallbackInvoice } = await supabaseAdmin
       .from('invoices')
-      .select('*, clients(name, tin, address)')
+      .select('*, clients(name, tin, address, client_number)')
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
@@ -379,14 +398,16 @@ const getInvoiceById = async ({
 
   // Fetch parent Work Request and creator (Task A.3)
   let workRequestInfo = null;
+  let wrNumber = null;
   if (invoice.work_request_id) {
     const { data: wr } = await supabaseAdmin
       .from('work_requests')
-      .select('id, title, work_order_number, created_by')
+      .select('id, title, work_order_number, work_request_number, created_by')
       .eq('id', invoice.work_request_id)
       .maybeSingle();
 
     if (wr) {
+      wrNumber = wr.work_request_number || null;
       let creatorUser = null;
       if (wr.created_by) {
         const { data: u } = await supabaseAdmin
@@ -406,9 +427,14 @@ const getInvoiceById = async ({
     }
   }
 
+  const clientNumber = invoice.clients?.client_number || invoice.client_number || null;
   const entityCode = await resolveEntityCode(invoice.entity_id);
   return {
     ...invoice,
+    clientNumber,
+    client_number: clientNumber,
+    workRequestNumber: wrNumber,
+    work_request_number: wrNumber,
     entity_code: entityCode,
     line_items: lineItems || [],
     payments: payments || [],

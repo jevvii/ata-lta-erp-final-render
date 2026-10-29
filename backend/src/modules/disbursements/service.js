@@ -388,108 +388,113 @@ const getDisbursementCounts = async ({ entityId, user }) => {
       };
     }
     concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return {
+        active: 0,
+        archived: 0,
+        rejected: 0,
+        awaitingRelease: 0,
+        initialRequests: 0,
+        paymentReleases: 0,
+        readyForFunding: 0,
+        needsCorrection: 0,
+        rejectedRequests: 0,
+      };
+    }
   }
 
-  const runCount = async (query) => {
-    const { count, error } = await query;
-    if (error) {
-      throw new AppError({
-        statusCode: 500,
-        title: 'Database Error',
-        detail: 'Failed to count disbursements',
-      });
-    }
-    return count || 0;
-  };
-
-  const baseQuery = () => {
+  const makeQuery = () => {
     let q = supabaseAdmin
       .from('disbursements')
-      .select('*', { count: 'exact', head: true })
+      .select(
+        'id, entity_id, task_id, linked_task_id, linked_work_request_id, status, archived, lifecycle_version, review_ready, created_by, employee_id'
+      )
       .in('entity_id', entityIds)
       .is('deleted_at', null);
+
     if (!isAdmin) {
-      if (concernedWrIds.length === 0) {
-        q = q.in('linked_work_request_id', ['00000000-0000-0000-0000-000000000000']);
-      } else {
-        q = q.in('linked_work_request_id', concernedWrIds);
-      }
+      q = q.in('linked_work_request_id', concernedWrIds);
     }
     return q;
   };
 
-  const [
-    active,
-    archivedCount,
-    cancelledCount,
-    rejectedDisbursements,
-    pendingRejected,
-    opsRejected,
-    initialRequests,
-    readyForFunding,
-    paymentReleases,
-    needsCorrection,
-  ] = await Promise.all([
-    runCount(baseQuery().neq('archived', true).neq('status', 'Cancelled')),
-    runCount(baseQuery().eq('archived', true)),
-    runCount(baseQuery().eq('status', 'Cancelled').eq('archived', false)),
-    runCount(baseQuery().eq('status', 'Rejected').eq('archived', false)),
-    runCount(
-      (() => {
-        let q = supabaseAdmin
-          .from('pending_changes')
-          .select('*', { count: 'exact', head: true })
-          .in('entity_id', entityIds)
-          .eq('table_name', 'disbursements')
-          .eq('status', 'rejected');
-        if (!isAdmin) {
-          q = q.eq('submitted_by', user.id);
-        }
-        return q;
-      })()
-    ),
-    runCount(
-      (() => {
-        let q = supabaseAdmin
-          .from('operations_requests')
-          .select('*', { count: 'exact', head: true })
-          .in('entity_id', entityIds)
-          .eq('type', 'disbursement')
-          .eq('status', 'rejected');
-        if (!isAdmin) {
-          if (concernedWrIds.length === 0) {
-            q = q.in('work_request_id', ['00000000-0000-0000-0000-000000000000']);
-          } else {
-            q = q.in('work_request_id', concernedWrIds);
-          }
-        }
-        return q;
-      })()
-    ),
-    // initialRequests: v2 Draft, review_ready=true
-    runCount(
-      baseQuery()
-        .eq('lifecycle_version', 2)
-        .eq('status', 'Draft')
-        .eq('review_ready', true)
-        .eq('archived', false)
-    ),
-    // readyForFunding: v2 Approved
-    runCount(baseQuery().eq('lifecycle_version', 2).eq('status', 'Approved').eq('archived', false)),
-    // paymentReleases: v2 Funded (must not include legacy Funded)
-    runCount(baseQuery().eq('lifecycle_version', 2).eq('status', 'Funded').eq('archived', false)),
-    // needsCorrection: v2 Draft, review_ready=false
-    runCount(
-      baseQuery()
-        .eq('lifecycle_version', 2)
-        .eq('status', 'Draft')
-        .eq('review_ready', false)
-        .eq('archived', false)
-    ),
+  const [data, pendingRejected, opsRejected] = await Promise.all([
+    fetchInPages(makeQuery),
+    (async () => {
+      let q = supabaseAdmin
+        .from('pending_changes')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .eq('table_name', 'disbursements')
+        .eq('status', 'rejected');
+      if (!isAdmin && user?.id) {
+        q = q.eq('submitted_by', user.id);
+      }
+      const { count, error } = await q;
+      if (error) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Failed to count disbursements',
+        });
+      }
+      return count || 0;
+    })(),
+    (async () => {
+      let q = supabaseAdmin
+        .from('operations_requests')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .eq('type', 'disbursement')
+        .eq('status', 'rejected');
+      if (!isAdmin) {
+        q = q.in('work_request_id', concernedWrIds);
+      }
+      const { count, error } = await q;
+      if (error) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Failed to count disbursements',
+        });
+      }
+      return count || 0;
+    })(),
   ]);
 
-  const archived = archivedCount + cancelledCount;
-  const rejected = rejectedDisbursements;
+  const validRows =
+    typeof filterValidProjectRecords === 'function'
+      ? await filterValidProjectRecords(data || [], {
+          user,
+          entityId,
+          concernedWrIds,
+        })
+      : data || [];
+
+  const initialRequests = validRows.filter(
+    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Draft' && r.review_ready === true
+  ).length;
+
+  const readyForFunding = validRows.filter(
+    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Approved'
+  ).length;
+
+  const paymentReleases = validRows.filter(
+    (r) => !r.archived && r.lifecycle_version === 2 && r.status === 'Funded'
+  ).length;
+
+  const needsCorrection = validRows.filter(
+    (r) =>
+      !r.archived &&
+      r.lifecycle_version === 2 &&
+      r.status === 'Draft' &&
+      r.review_ready === false &&
+      (isAdmin || (Boolean(user?.id) && r.created_by === user.id))
+  ).length;
+
+  const active = validRows.filter((r) => !r.archived && r.status !== 'Cancelled').length;
+  const archived = validRows.filter((r) => Boolean(r.archived) || r.status === 'Cancelled').length;
+  const rejected = validRows.filter((r) => !r.archived && r.status === 'Rejected').length;
 
   return {
     active: Math.max(active, 0),
@@ -514,6 +519,7 @@ const enrichDisbursementExtras = async (rows = []) => {
   const wrIds = [
     ...new Set(rows.map((r) => r.linked_work_request_id || r.work_request_id).filter(Boolean)),
   ];
+  const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))];
   const userIds = [
     ...new Set(
       rows
@@ -537,9 +543,18 @@ const enrichDisbursementExtras = async (rows = []) => {
   if (wrIds.length > 0) {
     const { data: wrs } = await supabaseAdmin
       .from('work_requests')
-      .select('id, title, work_order_number')
+      .select('id, title, work_request_number')
       .in('id', wrIds);
     wrMap = new Map((wrs || []).map((w) => [w.id, w]));
+  }
+
+  let clientMap = new Map();
+  if (clientIds.length > 0) {
+    const { data: clients } = await supabaseAdmin
+      .from('clients')
+      .select('id, name, client_number')
+      .in('id', clientIds);
+    clientMap = new Map((clients || []).map((c) => [c.id, c]));
   }
 
   // Fetch status history for lifecycle audit trail
@@ -564,7 +579,7 @@ const enrichDisbursementExtras = async (rows = []) => {
   if (distinctUserIds.length > 0) {
     const { data: users } = await supabaseAdmin
       .from('users')
-      .select('id, name, role')
+      .select('id, name, role, avatar_url')
       .in('id', distinctUserIds);
     userMap = new Map((users || []).map((u) => [u.id, u]));
   }
@@ -583,6 +598,8 @@ const enrichDisbursementExtras = async (rows = []) => {
       actor_id: h.actor_id,
       actor_name: userMap.get(h.actor_id)?.name || null,
       actor_role: userMap.get(h.actor_id)?.role || null,
+      actor_avatar_url: userMap.get(h.actor_id)?.avatar_url || null,
+      actorAvatarUrl: userMap.get(h.actor_id)?.avatar_url || null,
       timestamp: h.created_at,
       created_at: h.created_at,
       from_status: h.old_status,
@@ -592,24 +609,55 @@ const enrichDisbursementExtras = async (rows = []) => {
       details: h.details || {},
     }));
 
+    const cli = row.client_id ? clientMap.get(row.client_id) : null;
+    const clientNumber = cli?.client_number || row.client_number || null;
+    const wrNumber = wr?.work_request_number || wr?.work_order_number || null;
+
     return {
       ...row,
+      clientNumber,
+      client_number: clientNumber,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
       linked_work_request_name: wr?.title || null,
-      linked_work_request_order_number: wr?.work_order_number || null,
+      linked_work_request_order_number: wrNumber,
       employee_name: userMap.get(row.employee_id)?.name || null,
+      employee_avatar_url: userMap.get(row.employee_id)?.avatar_url || null,
+      employeeAvatarUrl: userMap.get(row.employee_id)?.avatar_url || null,
       requested_by_name: userMap.get(row.requested_by)?.name || null,
+      requested_by_avatar_url:
+        (userMap.get(row.requested_by) || userMap.get(row.created_by))?.avatar_url || null,
+      requester_avatar_url:
+        (userMap.get(row.requested_by) || userMap.get(row.created_by))?.avatar_url || null,
+      requesterAvatarUrl:
+        (userMap.get(row.requested_by) || userMap.get(row.created_by))?.avatar_url || null,
       created_by_name: userMap.get(row.created_by)?.name || null,
       created_by_role: userMap.get(row.created_by)?.role || null,
+      created_by_avatar_url:
+        (userMap.get(row.created_by) || userMap.get(row.requested_by))?.avatar_url || null,
+      createdByAvatarUrl:
+        (userMap.get(row.created_by) || userMap.get(row.requested_by))?.avatar_url || null,
       approved_by_name: userMap.get(row.approved_by)?.name || null,
       approved_by_role: userMap.get(row.approved_by)?.role || null,
+      approved_by_avatar_url: userMap.get(row.approved_by)?.avatar_url || null,
+      approvedByAvatarUrl: userMap.get(row.approved_by)?.avatar_url || null,
       released_by_name: userMap.get(row.released_by)?.name || null,
       released_by_role: userMap.get(row.released_by)?.role || null,
+      released_by_avatar_url: userMap.get(row.released_by)?.avatar_url || null,
+      releasedByAvatarUrl: userMap.get(row.released_by)?.avatar_url || null,
       rejected_by_name: userMap.get(row.rejected_by)?.name || null,
       rejected_by_role: userMap.get(row.rejected_by)?.role || null,
+      rejected_by_avatar_url: userMap.get(row.rejected_by)?.avatar_url || null,
+      rejectedByAvatarUrl: userMap.get(row.rejected_by)?.avatar_url || null,
       funded_by_name: userMap.get(row.funded_by)?.name || null,
       funded_by_role: userMap.get(row.funded_by)?.role || null,
+      funded_by_avatar_url: userMap.get(row.funded_by)?.avatar_url || null,
+      fundedByAvatarUrl: userMap.get(row.funded_by)?.avatar_url || null,
+      payment_processed_by_avatar_url: userMap.get(row.payment_processed_by)?.avatar_url || null,
+      paymentProcessedByAvatarUrl: userMap.get(row.payment_processed_by)?.avatar_url || null,
       edited_by_accounting: editedByAccounting,
       lifecycle_history: historyItems,
+      audit_trail: historyItems,
     };
   });
 };
@@ -671,11 +719,7 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
   }
 
   if (!user || !user.id) {
-    throw new AppError({
-      statusCode: 401,
-      title: 'Unauthorized',
-      detail: 'Authentication required to list disbursements',
-    });
+    return { data: [], count: 0 };
   }
 
   const isAdmin = user.role === 'Admin';

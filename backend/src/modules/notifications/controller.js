@@ -18,7 +18,7 @@ const handleZodError = (err, next) => {
       new AppError({
         statusCode: 400,
         title: 'Validation Error',
-        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
       })
     );
   }

@@ -64,7 +64,7 @@ const createDocument = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -114,7 +114,7 @@ const updateDocument = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -204,7 +204,7 @@ const updateLifecycle = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -263,7 +263,7 @@ const commentHandler = (action, schema, status = 200) => async (req, res, next) 
   } catch (err) {
     if (err.name === 'ZodError') {
       return next(new AppError({ statusCode: 400, title: 'Validation Error',
-        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ') }));
+        detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; ') }));
     }
     next(err);
   }

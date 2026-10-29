@@ -32,7 +32,7 @@ const calendarDateSchema = z
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
   }, 'Date must be a valid calendar date');
 
-const uuidOrEmptySchema = z.union([z.string().uuid(), z.literal(''), z.null()]).optional();
+const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
 
 /**
  * Schema for creating a disbursement.
@@ -271,7 +271,7 @@ const createReceiptUploadSchema = z.object({
     }
     return val;
   }, z.enum(['application/pdf', 'image/png', 'image/jpeg'], {
-    errorMap: () => ({ message: 'contentType must be application/pdf, image/png, or image/jpeg' }),
+    error: 'contentType must be application/pdf, image/png, or image/jpeg',
   })),
   size: z
     .number()
@@ -301,9 +301,9 @@ const disbursementTemplateSchema = z.object({
   fundSource: z.enum(FUND_SOURCES).optional().nullable(),
   schedule: z.string().max(50).optional().nullable(),
   description: z.string().max(2000).optional().nullable(),
-  linkedWorkRequestId: z.string().uuid().optional().nullable(),
-  linkedInvoiceId: z.string().uuid().optional().nullable(),
-  linkedTransmittalId: z.string().uuid().optional().nullable(),
+  linkedWorkRequestId: z.string().guid().optional().nullable(),
+  linkedInvoiceId: z.string().guid().optional().nullable(),
+  linkedTransmittalId: z.string().guid().optional().nullable(),
 });
 
 module.exports = {

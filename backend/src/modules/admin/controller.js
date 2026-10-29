@@ -14,6 +14,7 @@ const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
 const { computePermissions } = require('../../middleware/rbac');
 const { hasPermission } = require('../../lib/permissions');
+const { injectExpectedVersion, resolveExpectedVersion } = require('../../lib/concurrency');
 
 const validate = (schema, data) => {
   const result = schema.safeParse(data);
@@ -45,13 +46,22 @@ const createUser = async (req, res, next) => {
     const payload = validate(createUserSchema, req.body);
     const user = await adminService.createUser({ data: payload, createdBy: req.user.id });
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'user.created',
       table: 'users',
       recordId: user.id,
       entity: req.activeEntity,
       userId: req.user.id,
-      details: { email: user.email, role: user.role },
+      details: {
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status || (user.isActive ? 'Active' : 'Disabled'),
+        isActive: user.isActive,
+        departments: user.departments,
+        entities: user.entities,
+      },
     });
 
     res.status(201).json({ data: user });
@@ -75,19 +85,30 @@ const getUserById = async (req, res, next) => {
 const updateUser = async (req, res, next) => {
   try {
     const payload = validate(updateUserSchema, req.body);
+    injectExpectedVersion(req, payload);
     const user = await adminService.updateUser({
       id: req.params.id,
       data: payload,
+      currentUserId: req.user.id,
       updatedBy: req.user.id,
     });
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'user.updated',
       table: 'users',
       recordId: user.id,
       entity: req.activeEntity,
       userId: req.user.id,
-      details: { email: user.email, role: user.role },
+      details: {
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status || (user.isActive ? 'Active' : 'Disabled'),
+        isActive: user.isActive,
+        departments: user.departments,
+        entities: user.entities,
+      },
     });
 
     res.status(200).json({ data: user });
@@ -98,11 +119,17 @@ const updateUser = async (req, res, next) => {
 
 const deleteUser = async (req, res, next) => {
   try {
-    const removed = await adminService.deleteUser({ id: req.params.id, deletedBy: req.user.id });
+    const expectedVersion = resolveExpectedVersion(req.body, req.headers);
+    const removed = await adminService.deleteUser({
+      id: req.params.id,
+      expectedVersion,
+      deletedBy: req.user.id,
+    });
     if (!removed) {
       throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'User not found' });
     }
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'user.disabled',
       table: 'users',
@@ -186,6 +213,7 @@ const createPending = async (req, res, next) => {
       data: payload,
     });
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'pending.created',
       table: 'pending_changes',
@@ -228,6 +256,7 @@ const approvePending = async (req, res, next) => {
   try {
     const result = await adminService.approvePending({ id: req.params.id, user: req.user });
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'pending.approved',
       table: 'pending_changes',
@@ -252,6 +281,7 @@ const rejectPending = async (req, res, next) => {
       reason: payload.reason,
     });
 
+    res.locals.auditLogged = true;
     await auditService.log({
       action: 'pending.rejected',
       table: 'pending_changes',
@@ -269,7 +299,13 @@ const rejectPending = async (req, res, next) => {
 
 const getAuditLogCount = async (req, res, next) => {
   try {
-    const total = await adminService.getAuditLogCount({ entityCode: req.activeEntity });
+    const query = validate(listAuditQuerySchema, req.query || {});
+    const total = await adminService.countAuditLogs({
+      entityCode: req.activeEntity,
+      filters: query,
+      search: query.search,
+      sortOrder: query.sortOrder,
+    });
     res.status(200).json({ data: { total } });
   } catch (err) {
     next(err);
@@ -278,8 +314,13 @@ const getAuditLogCount = async (req, res, next) => {
 
 const listAudit = async (req, res, next) => {
   try {
-    const filters = validate(listAuditQuerySchema, req.query);
-    const result = await adminService.getAuditLogs({ entityCode: req.activeEntity, filters });
+    const query = validate(listAuditQuerySchema, req.query || {});
+    const result = await adminService.listAuditLogs({
+      entityCode: req.activeEntity,
+      filters: query,
+      search: query.search,
+      sortOrder: query.sortOrder,
+    });
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -297,8 +338,12 @@ module.exports = {
     createPending,
     getPendingById,
     approvePending,
+    approvePendingApproval: approvePending,
     rejectPending,
+    rejectPendingApproval: rejectPending,
     getAuditLogCount,
+    countAuditLogs: getAuditLogCount,
     listAudit,
+    listAuditLogs: listAudit,
   },
 };

@@ -262,10 +262,12 @@ const enrichDocuments = async (docs) => {
   const uploaderIds = [...new Set(docs.map((d) => d.uploader_id).filter(Boolean))];
   const workRequestIds = [...new Set(docs.map((d) => d.work_request_id).filter(Boolean))];
   const linkedTaskIds = [...new Set(docs.map((d) => d.linked_task_id).filter(Boolean))];
+  const clientIds = [...new Set(docs.map((d) => d.client_id).filter(Boolean))];
 
   const userMap = new Map();
   const wrMap = new Map();
   const taskMap = new Map();
+  const clientMap = new Map();
 
   try {
     if (uploaderIds.length > 0) {
@@ -281,10 +283,20 @@ const enrichDocuments = async (docs) => {
     if (workRequestIds.length > 0) {
       const { data: wrs } = await supabaseAdmin
         .from('work_requests')
-        .select('id, title')
+        .select('id, title, work_request_number')
         .in('id', workRequestIds);
       (wrs || []).forEach((wr) => {
-        if (wr && wr.id) wrMap.set(wr.id, wr.title);
+        if (wr && wr.id) wrMap.set(wr.id, wr);
+      });
+    }
+
+    if (clientIds.length > 0) {
+      const { data: clients } = await supabaseAdmin
+        .from('clients')
+        .select('id, name, client_number')
+        .in('id', clientIds);
+      (clients || []).forEach((c) => {
+        if (c && c.id) clientMap.set(c.id, c);
       });
     }
 
@@ -301,12 +313,22 @@ const enrichDocuments = async (docs) => {
     // Graceful fallback if relations cannot be fetched
   }
 
-  return docs.map((doc) => ({
-    ...doc,
-    uploader_name: doc.uploader_id ? userMap.get(doc.uploader_id) || null : null,
-    work_request_title: doc.work_request_id ? wrMap.get(doc.work_request_id) || null : null,
-    linked_task_title: doc.linked_task_id ? taskMap.get(doc.linked_task_id) || null : null,
-  }));
+  return docs.map((doc) => {
+    const wr = doc.work_request_id ? wrMap.get(doc.work_request_id) : null;
+    const cli = doc.client_id ? clientMap.get(doc.client_id) : null;
+    const clientNumber = cli?.client_number || doc.client_number || null;
+    const wrNumber = wr?.work_request_number || null;
+    return {
+      ...doc,
+      clientNumber,
+      client_number: clientNumber,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
+      uploader_name: doc.uploader_id ? userMap.get(doc.uploader_id) || null : null,
+      work_request_title: wr?.title || null,
+      linked_task_title: doc.linked_task_id ? taskMap.get(doc.linked_task_id) || null : null,
+    };
+  });
 };
 
 /**
