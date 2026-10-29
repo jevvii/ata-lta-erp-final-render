@@ -46,7 +46,7 @@ const monthlyPendingQuerySchema = z.object({
  */
 const agingQuerySchema = z
   .object({
-    clientId: z.string().uuid().optional(),
+    clientId: z.string().guid().optional(),
   })
   .optional();
 

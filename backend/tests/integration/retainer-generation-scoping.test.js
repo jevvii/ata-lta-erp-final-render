@@ -178,6 +178,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             priority: 'High',
           },
         });
@@ -195,6 +196,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: null,
           },
         });
@@ -204,7 +206,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
       expect(res.body.detail).toBe('Manager (assignedTo) is required to generate work requests.');
     });
 
-    it('returns 400 Bad Request with code MANAGER_REQUIRED when overrides object is omitted', async () => {
+    it('returns validation error when overrides and due date are omitted', async () => {
       const res = await request(app)
         .post(`/v1/operations/templates/${baseTemplateId}/generate`)
         .set('Authorization', `Bearer ${managerToken}`)
@@ -214,8 +216,8 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         });
 
       expect(res.status).toBe(400);
-      expect(res.body.code).toBe('MANAGER_REQUIRED');
-      expect(res.body.detail).toBe('Manager (assignedTo) is required to generate work requests.');
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(res.body.detail).toContain('Due date is required');
     });
   });
 
@@ -228,6 +230,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -246,6 +249,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: ADMIN_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -264,6 +268,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: STAFF_1_ID,
             coAssignees: [],
           },
@@ -282,6 +287,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [ADMIN_ID],
           },
@@ -300,6 +306,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [NON_OPS_MGR_ID],
           },
@@ -318,6 +325,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [OPS_MANAGER_ID, STAFF_1_ID],
           },
@@ -338,6 +346,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
             tasks: [
@@ -368,6 +377,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_2_ID], // STAFF_1_ID is missing from team
           },
@@ -388,6 +398,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID, STAFF_2_ID],
             tasks: [
@@ -458,6 +469,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -474,6 +486,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -515,6 +528,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2028',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -536,6 +550,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2026',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },
@@ -549,6 +564,7 @@ describe('Retainer Generation & Team Scoping (Requirement R1)', () => {
         .send({
           period_label: 'FY-2027',
           overrides: {
+            dueDate: '2026-12-31',
             assignedTo: MANAGER_ID,
             coAssignees: [STAFF_1_ID],
           },

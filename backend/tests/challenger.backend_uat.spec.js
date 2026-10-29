@@ -79,7 +79,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         .post('/v1/work-requests')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ title: 'Completed Lock Test WR', clientId: client.id, entity: 'ATA' })
+        .send({ dueDate: '2026-12-31', title: 'Completed Lock Test WR', clientId: client.id, entity: 'ATA' })
         .expect(201);
       completedWr = wrRes.body.data;
 
@@ -212,7 +212,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         .post('/v1/work-requests')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ title: 'Phase Gate Test WR', clientId: client.id, entity: 'ATA' })
+        .send({ dueDate: '2026-12-31', title: 'Phase Gate Test WR', clientId: client.id, entity: 'ATA' })
         .expect(201);
       wr = wrRes.body.data;
 
@@ -349,9 +349,17 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
     };
 
     beforeEach(async () => {
+      const docWrId = '22222222-2222-4222-8222-222222222222';
+      mockTables.work_requests.set(docWrId, {
+        id: docWrId,
+        entity_id: 'ent-ata',
+        title: 'Doc Auth WR',
+        status: 'In Progress',
+        deleted_at: null,
+      });
       mockTables.tasks.set(validTaskId, {
         id: validTaskId,
-        work_request_id: null,
+        work_request_id: docWrId,
         assignee_id: staffId,
       });
       taskAssignedToStaff = mockTables.tasks.get(validTaskId);
@@ -480,6 +488,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         fund_source: 'Firm Fund',
         status: 'Pending',
         created_by: 'someone-else',
+        requested_by: otherStaffId,
         employee_id: otherStaffId,
         linked_work_request_id: WR_ID,
         archived: false,
@@ -512,7 +521,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
       expect(res.body.data.some((d) => d.id === 'disb-pending-other')).toBe(false);
     });
 
-    test('4.2: Creator querying without status filter receives their draft AND released, but not other employee pending', async () => {
+    test('4.2: Creator querying without status filter receives their draft, but not third-party released or other employee pending', async () => {
       const res = await request(app)
         .get('/v1/disbursements')
         .set('Authorization', `Bearer ${staffToken}`)
@@ -520,7 +529,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         .expect(200);
 
       expect(res.body.data.some((d) => d.id === 'disb-draft-staff')).toBe(true);
-      expect(res.body.data.some((d) => d.id === 'disb-released-common')).toBe(true);
+      expect(res.body.data.some((d) => d.id === 'disb-released-common')).toBe(false);
       expect(res.body.data.some((d) => d.id === 'disb-pending-other')).toBe(false);
     });
 
@@ -565,7 +574,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         .post('/v1/work-requests')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ title: 'Task Status Assignee Test WR', clientId: client.id, entity: 'ATA' })
+        .send({ dueDate: '2026-12-31', title: 'Task Status Assignee Test WR', clientId: client.id, entity: 'ATA' })
         .expect(201);
       wr = wrRes.body.data;
 
@@ -665,7 +674,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         .post('/v1/work-requests')
         .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send({ title: 'Related Route WR', clientId: client.id, entity: 'ATA' })
+        .send({ dueDate: '2026-12-31', title: 'Related Route WR', clientId: client.id, entity: 'ATA' })
         .expect(201);
       wr = wrRes.body.data;
 

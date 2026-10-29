@@ -158,6 +158,7 @@ app.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
     res.setHeader('Vary', 'X-Active-Entity, Authorization');
   }
   next();
@@ -171,44 +172,83 @@ const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 let healthCache = null;
 let healthCacheExpiry = 0;
 
+const runWithTimeout = (promise, ms, label = 'timeout') => {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label)), ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+};
+
+const {
+  checkReceiptStoreReadiness,
+  startPeriodicReceiptCleanup,
+} = require('./modules/disbursements/receiptReservationStore');
+
 app.get('/health', async (req, res) => {
   const now = Date.now();
   if (healthCache && now < healthCacheExpiry) {
     return res.status(healthCache.ok ? 200 : 503).json(healthCache.body);
   }
 
-  const checks = { supabase: false, storage: false };
+  const checks = { supabase: false, storage: false, receiptStore: false };
   try {
-    await Promise.race([
+    const supabaseResult = await runWithTimeout(
       supabaseAdmin.from('entities').select('id').limit(1),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
-      ),
-    ]);
+      HEALTH_CHECK_TIMEOUT_MS,
+      'supabase timeout'
+    );
+    if (supabaseResult?.error) throw new Error('Database probe failed');
     checks.supabase = true;
   } catch (e) {
     logger.warn('health check failed: supabase', { error: e.message, requestId: req.id });
   }
+
   try {
-    await Promise.race([
+    const storageResult = await runWithTimeout(
       supabaseAdmin.storage.listBuckets(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), HEALTH_CHECK_TIMEOUT_MS)
-      ),
-    ]);
+      HEALTH_CHECK_TIMEOUT_MS,
+      'storage timeout'
+    );
+    if (storageResult?.error) throw new Error('Storage probe failed');
     checks.storage = true;
   } catch (e) {
     logger.warn('health check failed: storage', { error: e.message, requestId: req.id });
   }
-  const ok = checks.supabase && checks.storage;
+
+  try {
+    const readiness = await runWithTimeout(
+      checkReceiptStoreReadiness(),
+      HEALTH_CHECK_TIMEOUT_MS,
+      'receiptStore timeout'
+    );
+    checks.receiptStore = Boolean(readiness && readiness.ok);
+    if (!checks.receiptStore && readiness?.error) {
+      logger.warn('health check failed: receiptStore', {
+        error: readiness.error,
+        requestId: req.id,
+      });
+    }
+  } catch (e) {
+    logger.warn('health check failed: receiptStore', { error: e.message, requestId: req.id });
+  }
+
+  const ok = checks.supabase && checks.storage && checks.receiptStore;
   const body = {
     status: ok ? 'ok' : 'degraded',
     timestamp: new Date().toISOString(),
     checks,
   };
 
-  healthCache = { ok, body };
-  healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
+  if (ok) {
+    healthCache = { ok, body };
+    healthCacheExpiry = now + HEALTH_CACHE_TTL_MS;
+  } else {
+    healthCache = null;
+    healthCacheExpiry = 0;
+  }
 
   res.status(ok ? 200 : 503).json(body);
 });
@@ -224,30 +264,33 @@ app.get('/livez', (req, res) => {
   });
 });
 
-// Readiness: un-cached live check of PostgreSQL and Supabase Storage with a
-// 3-second timeout per dependency. Traffic should only be routed here when
-// this returns 200.
+// Readiness: un-cached live check of PostgreSQL, Supabase Storage and receipt store with a
+// 3-second timeout per dependency. Traffic should only be routed here when this returns 200.
 const READINESS_TIMEOUT_MS = 3_000;
-const withTimeout = (promise) =>
-  Promise.race([
-    promise,
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Probe timeout')), READINESS_TIMEOUT_MS)
-    ),
-  ]);
 
 app.get('/readyz', async (req, res) => {
   try {
-    await Promise.all([
-      withTimeout(supabaseAdmin.from('entities').select('id').limit(1)),
-      withTimeout(supabaseAdmin.storage.listBuckets()),
+    const [databaseRes, storageRes, receiptStoreRes] = await Promise.all([
+      runWithTimeout(
+        supabaseAdmin.from('entities').select('id').limit(1),
+        READINESS_TIMEOUT_MS,
+        'database timeout'
+      ),
+      runWithTimeout(supabaseAdmin.storage.listBuckets(), READINESS_TIMEOUT_MS, 'storage timeout'),
+      runWithTimeout(checkReceiptStoreReadiness(), READINESS_TIMEOUT_MS, 'receiptStore timeout'),
     ]);
+
+    if (databaseRes?.error || storageRes?.error) throw new Error('Dependency probe failed');
+    if (!receiptStoreRes || receiptStoreRes.ok !== true) {
+      throw new Error('Receipt store is not ready');
+    }
+
     res.status(200).json({ status: 'ready', timestamp: new Date().toISOString() });
   } catch (err) {
     logger.warn('readiness probe failed', { error: err.message, requestId: req.id });
     res.status(503).json({
       status: 'not_ready',
-      error: err.message,
+      error: 'A required service is unavailable.',
       timestamp: new Date().toISOString(),
     });
   }
@@ -257,11 +300,15 @@ const isStagingOrDev =
   process.env.STAGING === 'true' ||
   process.env.APP_ENV === 'staging' ||
   process.env.APP_ENV === 'uat' ||
-  (process.env.FRONTEND_URL && (process.env.FRONTEND_URL.includes('staging') || process.env.FRONTEND_URL.includes('uat'))) ||
-  (process.env.RENDER_SERVICE_NAME && (process.env.RENDER_SERVICE_NAME.includes('staging') || process.env.RENDER_SERVICE_NAME.includes('uat'))) ||
+  (process.env.FRONTEND_URL &&
+    (process.env.FRONTEND_URL.includes('staging') || process.env.FRONTEND_URL.includes('uat'))) ||
+  (process.env.RENDER_SERVICE_NAME &&
+    (process.env.RENDER_SERVICE_NAME.includes('staging') ||
+      process.env.RENDER_SERVICE_NAME.includes('uat'))) ||
   process.env.NODE_ENV === 'development';
 
-const isStrictRateLimit = !isStagingOrDev && (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test');
+const isStrictRateLimit =
+  !isStagingOrDev && (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test');
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: isStrictRateLimit ? 10 : 500, // Max 10 attempts per IP in prod/test, 500 in dev/staging/QA
@@ -326,6 +373,14 @@ app.use(errorHandler);
 
 const server = app.listen(env.port, () => {
   logger.info('server started', { port: env.port, env: env.nodeEnv });
+  if (env.nodeEnv !== 'test') {
+    startPeriodicReceiptCleanup();
+  }
 });
 
-module.exports = { app, server };
+const resetHealthCache = () => {
+  healthCache = null;
+  healthCacheExpiry = 0;
+};
+
+module.exports = { app, server, resetHealthCache };

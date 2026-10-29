@@ -118,6 +118,7 @@ describe('Time Entries Module (/v1/time-entries)', () => {
       id: task1Id,
       work_request_id: wr1Id,
       title: 'Bank Reconciliation',
+      required_link_type: 'billing', // Accounting staff may log legacy time only on assigned billing tasks.
       status: 'In Progress',
     });
     mockTables.task_assignees.set(`ta-${task1Id}-${userAId}`, {
@@ -716,6 +717,45 @@ describe('Time Entries Module (/v1/time-entries)', () => {
         });
     });
 
+    it('includes only the logger name and role from the authoritative profile', async () => {
+      const res = await request(app).get('/v1/time-entries')
+        .set('Authorization', `Bearer ${tokenAdmin}`).set('X-Active-Entity', 'ATA').expect(200);
+      expect(res.body.data).toHaveLength(3);
+      for (const entry of res.body.data) {
+        expect(entry).toMatchObject(entry.user_id === userAId
+          ? { user_name: 'Staff A (Accounting)', user_role: 'Accounting' }
+          : { user_name: 'Staff B (Operations)', user_role: 'Operations' });
+        expect(entry).not.toHaveProperty('email');
+        expect(entry.created_at).toBeDefined();
+      }
+    });
+
+    it('enriches legacy logs and retains their timestamp, note and duration', async () => {
+      mockTables.task_time_logs.set('legacy-profile', { id: 'legacy-profile', task_id: task1Id,
+        user_id: userAId, worker_name: 'Outdated Name', date: '2026-09-20', hours: 1,
+        note: 'First line\nFull second line', created_at: '2026-09-21T01:30:00Z' });
+      const res = await request(app).get(`/v1/time-entries?task_id=${task1Id}`)
+        .set('Authorization', `Bearer ${tokenA}`).set('X-Active-Entity', 'ATA').expect(200);
+      expect(res.body.data.find((entry) => entry.id === 'legacy-profile')).toMatchObject({
+        user_name: 'Staff A (Accounting)', user_role: 'Accounting', duration_minutes: 60,
+        entry_date: '2026-09-20', created_at: '2026-09-21T01:30:00Z', note: 'First line\nFull second line',
+      });
+    });
+
+    it('keeps entries readable when the logger profile no longer exists', async () => {
+      mockTables.users.delete(userAId);
+      mockTables.task_time_logs.set('legacy-missing', { id: 'legacy-missing', task_id: task1Id,
+        user_id: userAId, worker_name: 'Historical Name', date: '2026-09-20', hours: 1 });
+      const res = await request(app).get('/v1/time-entries')
+        .set('Authorization', `Bearer ${tokenAdmin}`).set('X-Active-Entity', 'ATA').expect(200);
+      expect(res.body.data.find((entry) => entry.id === 'legacy-missing')).toMatchObject({
+        user_name: 'Historical Name', user_role: null,
+      });
+      expect(res.body.data.find((entry) => entry.task_id === task2Id)).toMatchObject({
+        user_name: null, user_role: null,
+      });
+    });
+
     it('returns only callers own entries for standard staff user', async () => {
       const res = await request(app)
         .get('/v1/time-entries')
@@ -725,6 +765,7 @@ describe('Time Entries Module (/v1/time-entries)', () => {
 
       expect(res.body.data).toHaveLength(2);
       expect(res.body.data.every((e) => e.user_id === userAId)).toBe(true);
+      expect(res.body.data.every((e) => e.user_name === 'Staff A (Accounting)' && e.user_role === 'Accounting')).toBe(true);
     });
 
     it('ignores client-supplied user_id filter when caller is non-admin', async () => {

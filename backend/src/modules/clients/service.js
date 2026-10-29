@@ -7,6 +7,7 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const { concurrencyConflict, resolveExpectedVersion } = require('../../lib/concurrency');
 const { randomUUID } = require('crypto');
+const { isUserEntitledToEntity } = require('../../lib/userScope');
 
 /**
  * Map a database row to the API client shape.
@@ -18,6 +19,8 @@ const toApiClient = (row, extras = {}) => {
   if (!row) return null;
   return {
     id: row.id,
+    clientNumber: row.client_number || null,
+    client_number: row.client_number || null,
     entity: extras.entityCode || row.entity_code,
     name: row.name,
     tin: row.tin,
@@ -171,8 +174,11 @@ const listClients = async ({
   }
 
   if (search) {
-    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%`);
+    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
   }
+
+  // Client master records are shared within the authorized entity. Project
+  // membership scopes work requests and their records, not the client directory.
 
   if (isPaginated) {
     const offset = (pageNum - 1) * limitNum;
@@ -235,8 +241,19 @@ const listClients = async ({
  */
 const createClient = async ({ entityId, data, createdBy }) => {
   const now = new Date().toISOString();
+  const entityCode = await resolveEntityCode(entityId);
+  const code = (entityCode && entityCode !== 'ALL' && entityCode.length <= 5) ? entityCode : 'ATA';
+  let clientNumber = null;
+  const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
+    p_prefix: `CLI-${code}`,
+  });
+  if (typeof seqData === 'string' && seqData.length > 0) {
+    clientNumber = seqData;
+  }
+
   const clientRecord = {
     id: randomUUID(),
+    ...(clientNumber ? { client_number: clientNumber } : {}),
     entity_id: entityId,
     name: data.name,
     tin: data.tin,
@@ -338,6 +355,8 @@ const getClientById = async ({
   entityId,
   allowCrossEntity = false,
   includeArchived = false,
+  user,
+  internal = false,
 }) => {
   let query = supabaseAdmin.from('clients').select('*').eq('id', id);
 
@@ -366,6 +385,11 @@ const getClientById = async ({
   }
 
   if (!data) return null;
+
+  if (!internal && user) {
+    const entitled = await isUserEntitledToEntity(data.entity_id, user);
+    if (!entitled) return null;
+  }
 
   const [related, entityCode] = await Promise.all([
     loadRelated([id]),

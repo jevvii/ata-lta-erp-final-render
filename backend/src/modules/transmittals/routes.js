@@ -48,6 +48,13 @@ router.put(
   transmittalsController.updateTransmittal
 );
 
+router.patch(
+  '/:id',
+  requirePermission('transmittal:edit'),
+  audit('transmittal.update', { table: 'transmittals' }),
+  transmittalsController.updateTransmittal
+);
+
 router.post(
   '/:id/approve',
   requirePermission('transmittal:approve'),

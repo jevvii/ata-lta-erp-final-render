@@ -12,18 +12,16 @@ const entityScope = async (req, res, next) => {
     const userEntities = (req.user?.entities || []).map((e) => e.toUpperCase());
     let requested = (req.headers['x-active-entity'] || '').toUpperCase();
 
-    const canSeeAll =
-      req.user?.role === 'Admin' ||
-      req.user?.role === 'Manager' ||
-      (req.user?.departments || []).includes('Management');
-    const hasBoth = VALID_ENTITIES.filter((e) => e !== 'ALL').every((e) =>
-      userEntities.includes(e)
-    );
+    const hasBoth =
+      userEntities.includes('ALL') ||
+      VALID_ENTITIES.filter((e) => e !== 'ALL').every((e) =>
+        userEntities.includes(e)
+      );
 
     // During login/restore the SPA may not know the active entity yet, or omits header for 'ALL'.
-    // When omitted, default to 'ALL' if user is authorized; otherwise default to first available entity.
+    // When omitted, default to 'ALL' if user is authorized for both entities; otherwise default to first available entity.
     if (!requested || !VALID_ENTITIES.includes(requested)) {
-      if (!requested && canSeeAll && hasBoth) {
+      if (!requested && hasBoth) {
         requested = 'ALL';
       } else {
         const defaultEntity = userEntities.find((e) => VALID_ENTITIES.includes(e) && e !== 'ALL');
@@ -39,26 +37,8 @@ const entityScope = async (req, res, next) => {
       }
     }
 
-    // ALL is only allowed for managerial users who can access both entities.
-    if (requested === 'ALL') {
-      const canSeeAll =
-        req.user?.role === 'Admin' ||
-        req.user?.role === 'Manager' ||
-        (req.user?.departments || []).includes('Management');
-      if (!canSeeAll) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'Consolidated view requires a managerial role',
-        });
-      }
-    }
-
     // ALL requires the user to have access to both real entities.
     if (requested === 'ALL') {
-      const hasBoth = VALID_ENTITIES.filter((e) => e !== 'ALL').every((e) =>
-        userEntities.includes(e)
-      );
       if (!hasBoth) {
         throw new AppError({
           statusCode: 403,
@@ -66,7 +46,7 @@ const entityScope = async (req, res, next) => {
           detail: 'Consolidated view requires access to both ATA and LTA entities',
         });
       }
-    } else if (!userEntities.includes(requested)) {
+    } else if (!userEntities.includes(requested) && !userEntities.includes('ALL')) {
       throw new AppError({
         statusCode: 403,
         title: 'Forbidden',

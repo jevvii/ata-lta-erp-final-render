@@ -18,49 +18,110 @@ const lineItemSchema = z.object({
   type: z.enum(LINE_ITEM_TYPES).default('Professional Fee'),
 });
 
+const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
+
 /**
  * Schema for creating an invoice.
  */
-const createInvoiceSchema = z.object({
-  clientId: z.string().uuid(),
-  workRequestId: z.string().uuid(),
-  taskId: z.string().uuid().optional().nullable(),
-  task_id: z.string().uuid().optional().nullable(),
-  linkedTaskId: z.string().uuid().optional().nullable(),
-  linkedTransmittalId: z.string().uuid().optional().nullable(),
-  invoiceNumber: z.string().min(1).max(50),
-  issueDate: z.string().min(1),
-  dueDate: z.string().min(1),
-  status: z.string().max(50).optional(),
-  lineItems: z.array(lineItemSchema).min(1),
-  notes: z.string().max(2000).optional().nullable(),
-  terms: z.string().max(2000).optional().nullable(),
-});
+const createInvoiceSchema = z
+  .object({
+    clientId: z.string().guid(),
+    workRequestId: z.string().guid().optional(),
+    work_request_id: z.string().guid().optional(),
+    linkedWorkRequestId: z.string().guid().optional(),
+    linked_work_request_id: z.string().guid().optional(),
+    taskId: uuidOrEmptySchema,
+    task_id: uuidOrEmptySchema,
+    linkedTaskId: uuidOrEmptySchema,
+    linked_task_id: uuidOrEmptySchema,
+    linkedTransmittalId: uuidOrEmptySchema,
+    linked_transmittal_id: uuidOrEmptySchema,
+    linkedDisbursementIds: z.array(z.string().guid()).optional(),
+    invoiceNumber: z.string().trim().max(50).optional(),
+    issueDate: z.string().min(1),
+    dueDate: z.string().min(1),
+    status: z.string().max(50).optional(),
+    lineItems: z.array(lineItemSchema).min(1),
+    notes: z.string().max(2000).optional().nullable(),
+    terms: z.string().max(2000).optional().nullable(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.workRequestId && !data.work_request_id && !data.linkedWorkRequestId && !data.linked_work_request_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['workRequestId'],
+        message: 'workRequestId is required',
+      });
+    }
+  });
+
+const printDetailsSchema = z
+  .object({
+    clientName: z.string().max(500).optional(),
+    clientTin: z.string().max(500).optional(),
+    paymentDate: z.string().max(500).optional(),
+    cash: z.string().max(500).optional(),
+    checkNumber: z.string().max(500).optional(),
+    bankBranch: z.string().max(500).optional(),
+    notedBy: z.string().max(500).optional(),
+    preparedBy: z.string().max(500).optional(),
+    receivedBy: z.string().max(500).optional(),
+  })
+  .strict();
 
 /**
  * Schema for updating an invoice.
  */
-const updateInvoiceSchema = z.object({
-  clientId: z.string().uuid().optional(),
-  workRequestId: z.string().uuid().optional().nullable(),
-  work_request_id: z.string().uuid().optional().nullable(),
-  taskId: z.string().uuid().optional().nullable(),
-  task_id: z.string().uuid().optional().nullable(),
-  linkedTaskId: z.string().uuid().optional().nullable(),
-  linkedTransmittalId: z.string().uuid().optional().nullable(),
-  invoiceNumber: z.string().min(1).max(50).optional(),
-  issueDate: z.string().optional(),
-  dueDate: z.string().optional(),
-  status: z.string().max(50).optional(),
-  lineItems: z.array(lineItemSchema).min(1).optional(),
-  notes: z.string().max(2000).optional().nullable(),
-  terms: z.string().max(2000).optional().nullable(),
-  address: z.string().max(500).optional().nullable(),
-  clientAddress: z.string().max(500).optional().nullable(),
-  archived: z.boolean().optional(),
-  // OCC guard (Spec 2.2 / R-10): update applies only if the stored version matches.
-  expectedVersion: z.number().int().positive().optional(),
-});
+const FINANCIAL_FIELDS = [
+  'clientId',
+  'invoiceNumber',
+  'issueDate',
+  'dueDate',
+  'lineItems',
+  'terms',
+];
+
+const updateInvoiceSchema = z
+  .object({
+    printDetails: printDetailsSchema.optional(),
+    clientId: z.string().guid().optional(),
+    workRequestId: uuidOrEmptySchema,
+    work_request_id: uuidOrEmptySchema,
+    linkedWorkRequestId: uuidOrEmptySchema,
+    linked_work_request_id: uuidOrEmptySchema,
+    taskId: uuidOrEmptySchema,
+    task_id: uuidOrEmptySchema,
+    linkedTaskId: uuidOrEmptySchema,
+    linked_task_id: uuidOrEmptySchema,
+    linkedTransmittalId: uuidOrEmptySchema,
+    linked_transmittal_id: uuidOrEmptySchema,
+    linkedDisbursementIds: z.array(z.string().guid()).optional(),
+    invoiceNumber: z.string().min(1).max(50).optional(),
+    issueDate: z.string().optional(),
+    dueDate: z.string().optional(),
+    status: z.string().max(50).optional(),
+    lineItems: z.array(lineItemSchema).min(1).optional(),
+    notes: z.string().max(2000).optional().nullable(),
+    terms: z.string().max(2000).optional().nullable(),
+    address: z.string().max(500).optional().nullable(),
+    clientAddress: z.string().max(500).optional().nullable(),
+    archived: z.boolean().optional(),
+    // OCC guard (Spec 2.2 / R-10): update applies only if the stored version matches.
+    expectedVersion: z.number().int().positive().optional(),
+  })
+  .superRefine((data, ctx) => {
+    const hasFinancialEdit = FINANCIAL_FIELDS.some((field) => data[field] !== undefined);
+    if (
+      (hasFinancialEdit || data.printDetails !== undefined) &&
+      (data.expectedVersion === undefined || data.expectedVersion === null)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['expectedVersion'],
+        message: 'expectedVersion is required for financial field and line item edits',
+      });
+    }
+  });
 
 /**
  * Schema for recording a payment.
@@ -78,7 +139,7 @@ const recordPaymentSchema = z.object({
  */
 const billingTemplateSchema = z.object({
   name: z.string().min(1).max(255),
-  clientId: z.string().uuid().optional().nullable(),
+  clientId: z.string().guid().optional().nullable(),
   schedule: z.string().max(50).optional().nullable(),
   pfAmount: z.number().nonnegative().optional(),
   lineItems: z.array(lineItemSchema).optional(),

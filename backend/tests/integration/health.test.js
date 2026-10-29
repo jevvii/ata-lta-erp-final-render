@@ -18,6 +18,7 @@ describe('GET /health', () => {
     expect(res.body.checks).toEqual({
       supabase: true,
       storage: true,
+      receiptStore: true,
     });
   });
 });

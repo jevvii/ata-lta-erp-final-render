@@ -166,6 +166,14 @@ describe('Optimistic Concurrency Control', () => {
       status: 'In Progress',
     });
 
+    const TASK_UUID = '44444444-4444-4444-4444-444444444444';
+    mockTables.tasks.set(TASK_UUID, {
+      id: TASK_UUID,
+      work_request_id: WR_UUID,
+      title: 'OCC Task',
+      status: 'In Progress',
+    });
+
     const created = await request(app)
       .post('/v1/invoices')
       .set('Authorization', `Bearer ${token}`)
@@ -174,6 +182,7 @@ describe('Optimistic Concurrency Control', () => {
         invoiceNumber: 'ATA-SI-2026-900',
         clientId: CLIENT_UUID,
         workRequestId: WR_UUID,
+        taskId: TASK_UUID,
         issueDate: '2026-07-01',
         dueDate: '2026-07-31',
         status: 'Draft',

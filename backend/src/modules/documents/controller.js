@@ -31,7 +31,7 @@ const listDocuments = async (req, res, next) => {
       page: parseInt(req.query.page, 10) || 1,
       limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
     };
-    const result = await service.listDocuments({ entityId, filters });
+    const result = await service.listDocuments({ entityId, filters, user: req.user });
     res.json({
       data: result.data,
       meta: { total: result.count, page: filters.page, limit: filters.limit },
@@ -54,6 +54,7 @@ const createDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       entityCode: req.entityCode,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.status(201).json({ data: result });
@@ -63,7 +64,7 @@ const createDocument = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -82,6 +83,7 @@ const getDocument = async (req, res, next) => {
     const data = await service.getDocumentById({
       entityId: req.activeEntity,
       id: req.params.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -102,6 +104,7 @@ const updateDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.json({ data });
@@ -111,7 +114,7 @@ const updateDocument = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -131,6 +134,7 @@ const deleteDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.status(204).send();
   } catch (err) {
@@ -149,6 +153,8 @@ const confirmUpload = async (req, res, next) => {
     const data = await service.confirmUpload({
       entityId: req.activeEntity,
       id: req.params.id,
+      userId: req.user?.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -167,6 +173,7 @@ const getDownloadUrl = async (req, res, next) => {
     const result = await service.getDownloadUrl({
       entityId: req.activeEntity,
       id: req.params.id,
+      user: req.user,
     });
     res.json({ data: result });
   } catch (err) {
@@ -187,6 +194,7 @@ const updateLifecycle = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       lifecycle: validated.lifecycle,
     });
     res.json({ data });
@@ -196,7 +204,7 @@ const updateLifecycle = async (req, res, next) => {
         new AppError({
           statusCode: 400,
           title: 'Validation Error',
-          detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+          detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         })
       );
     }
@@ -206,7 +214,7 @@ const updateLifecycle = async (req, res, next) => {
 
 const getDocumentCounts = async (req, res, next) => {
   try {
-    const data = await service.countDocuments({ entityId: req.activeEntity });
+    const data = await service.countDocuments({ entityId: req.activeEntity, user: req.user });
     res.json({ data });
   } catch (err) {
     next(err);
@@ -219,6 +227,7 @@ const archiveDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -232,6 +241,7 @@ const unarchiveDocument = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -253,7 +263,7 @@ const commentHandler = (action, schema, status = 200) => async (req, res, next) 
   } catch (err) {
     if (err.name === 'ZodError') {
       return next(new AppError({ statusCode: 400, title: 'Validation Error',
-        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ') }));
+        detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; ') }));
     }
     next(err);
   }

@@ -19,6 +19,7 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-4444-444444444444';
 
 const seedClient = () => {
   mockTables.clients.set(CLIENT_ID, {
@@ -46,6 +47,12 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Acme Task',
+    status: 'In Progress',
+  });
 };
 
 const validDisbursement = {
@@ -55,6 +62,7 @@ const validDisbursement = {
   fundSource: 'Firm Fund',
   clientId: CLIENT_ID,
   linkedWorkRequestId: WORK_REQUEST_ID,
+  linkedTaskId: TASK_ID,
   dueDate: '2026-07-31',
   notes: 'Test disbursement',
 };
@@ -63,6 +71,7 @@ const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -106,38 +115,46 @@ const adminFor = (entities = ['ATA']) => {
 describe('Concurrency race conditions', () => {
   test('1. Two concurrent disbursement approvals: only one succeeds', async () => {
     const admin = adminFor(['ATA']);
+    const staff = registerUser({
+      id: 'staff-user-concurrency',
+      email: 'staff@ata-lta.ph',
+      name: 'Staff',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+    mockTables.tasks.get(TASK_ID).assignee_id = 'staff-user-concurrency';
 
     const created = await request(app)
       .post('/v1/disbursements')
-      .set('Authorization', `Bearer ${admin}`)
+      .set('Authorization', `Bearer ${staff}`)
       .set('X-Active-Entity', 'ATA')
       .send(validDisbursement)
       .expect(201);
 
     const id = created.body.data.id;
 
-    await request(app)
-      .post(`/v1/disbursements/${id}/submit`)
-      .set('Authorization', `Bearer ${admin}`)
-      .set('X-Active-Entity', 'ATA')
-      .expect(200);
-
     const [res1, res2] = await Promise.all([
       request(app)
         .post(`/v1/disbursements/${id}/approve`)
         .set('Authorization', `Bearer ${admin}`)
-        .set('X-Active-Entity', 'ATA'),
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        }),
       request(app)
         .post(`/v1/disbursements/${id}/approve`)
         .set('Authorization', `Bearer ${admin}`)
-        .set('X-Active-Entity', 'ATA'),
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          expectedVersion: 1,
+        }),
     ]);
 
     const statuses = [res1.status, res2.status].sort();
     expect(statuses).toEqual([200, 409]);
 
     const winner = res1.status === 200 ? res1 : res2;
-    expect(['Approved', 'Released']).toContain(winner.body.data.status);
+    expect(winner.body.data.status).toBe('Approved');
 
     const final = await request(app)
       .get(`/v1/disbursements/${id}`)
@@ -145,7 +162,7 @@ describe('Concurrency race conditions', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 
-    expect(['Approved', 'Released']).toContain(final.body.data.status);
+    expect(final.body.data.status).toBe('Approved');
   });
 
   test('2. Two concurrent invoice payments cannot overpay', async () => {
@@ -215,19 +232,34 @@ describe('Concurrency race conditions', () => {
 
   test('4. Two concurrent operations-request fulfillments: only one succeeds', async () => {
     const admin = adminFor(['ATA']);
+    const opsUserId = '00000000-0000-4000-a000-000000000999';
     const ops = registerUser({
-      id: 'ops-user',
+      id: opsUserId,
       email: 'ops@ata-lta.ph',
       name: 'Ops',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    mockTables.work_requests.set(WORK_REQUEST_ID, {
+      id: WORK_REQUEST_ID,
+      entity_id: 'ent-ata',
+      client_id: CLIENT_ID,
+      title: 'Acme Audit',
+      status: 'In Progress',
+      assigned_to: opsUserId,
+    });
+
     const created = await request(app)
       .post('/v1/operations-requests')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ type: 'billing', amount: 5000, notes: 'Need billing' })
+      .send({
+        type: 'billing',
+        amount: 5000,
+        notes: 'Need billing',
+        workRequestId: WORK_REQUEST_ID,
+      })
       .expect(201);
 
     const id = created.body.data.id;

@@ -32,4 +32,19 @@ describe('buildPermissionSet', () => {
     expect(perms.has('transmittal:create')).toBe(true); // Documentation
     expect(perms.has('users:manage')).toBe(false);
   });
+
+  it('grants retainers:edit to role Manager by explicit role check', () => {
+    const managerPerms = buildPermissionSet({ role: 'Manager', departments: [] });
+    expect(managerPerms.has('retainers:edit')).toBe(true);
+    expect(managerPerms.has('retainers:use')).toBe(true);
+  });
+
+  it('does not grant retainers:edit to Management department-only staff without Manager role', () => {
+    const staffWithManagement = buildPermissionSet({
+      role: 'Operations',
+      departments: ['Management'],
+    });
+    expect(staffWithManagement.has('retainers:use')).toBe(true);
+    expect(staffWithManagement.has('retainers:edit')).toBe(false);
+  });
 });

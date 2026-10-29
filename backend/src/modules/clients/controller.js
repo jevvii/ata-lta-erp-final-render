@@ -129,6 +129,7 @@ const getById = async (req, res, next) => {
       entityId,
       allowCrossEntity: !entityId,
       includeArchived,
+      user: req.user,
     });
 
     if (!client) {

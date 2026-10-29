@@ -52,6 +52,13 @@ const requireWorkflowEditOrTaskAssignee = async (req, res, next) => {
       });
     }
 
+    // Completion updates carry only item IDs and booleans, never checklist content.
+    const completionKeys = new Set(['checklistCompletions', 'expectedVersion']);
+    if (req.body?.checklistCompletions !== undefined &&
+        Object.keys(req.body).every((key) => completionKeys.has(key))) {
+      return next();
+    }
+
     // 3. User IS assigned to task:
     // May ONLY update status (and optional expectedVersion / version).
     // If other fields are in req.body -> 403 Forbidden ("Assignees may only update task status")
@@ -173,7 +180,7 @@ router.post(
 );
 
 router.get(
-  '/counts',
+  ['/work-requests/counts', '/counts'],
   resolveEntity({ allowAll: true }),
   requirePermission('workflow:view'),
   operationsController.counts
@@ -191,6 +198,21 @@ router.post(
   requirePermission('workflow:edit'),
   audit('work_request.created', { table: 'work_requests' }),
   operationsController.create
+);
+router.get(
+  ['/work-requests/creation-approvals', '/creation-approvals'],
+  resolveEntity({ allowAll: true }),
+  operationsController.listCreationApprovals
+);
+router.post(
+  ['/work-requests/:id/creation-approval', '/:id/creation-approval'],
+  resolveEntity(),
+  operationsController.decideCreationApproval
+);
+router.post(
+  ['/work-requests/:id/resubmit-creation', '/:id/resubmit-creation'],
+  resolveEntity(),
+  operationsController.resubmitCreation
 );
 router.get(
   ['/work-requests/:id', '/:id'],
@@ -295,6 +317,16 @@ router.patch(
   operationsController.updateTask
 );
 router.post(
+  ['/work-requests/:wrId/tasks/:taskId/creation-approval', '/:wrId/tasks/:taskId/creation-approval'],
+  resolveEntity(),
+  operationsController.decideTaskCreationApproval
+);
+router.post(
+  ['/work-requests/:wrId/tasks/:taskId/resubmit-creation', '/:wrId/tasks/:taskId/resubmit-creation'],
+  resolveEntity(),
+  operationsController.resubmitTaskCreation
+);
+router.post(
   ['/work-requests/:wrId/tasks/:taskId/time-logs', '/:wrId/tasks/:taskId/time-logs', '/tasks/:taskId/time-logs'],
   resolveEntity(),
   requirePermission('timelog:create'),
@@ -332,6 +364,14 @@ tasksRouter.patch(
   requireWorkflowEditOrTaskAssignee,
   audit('task.updated', { table: 'tasks' }),
   operationsController.updateTask
+);
+tasksRouter.post(
+  '/:taskId/creation-approval',
+  operationsController.decideTaskCreationApproval
+);
+tasksRouter.post(
+  '/:taskId/resubmit-creation',
+  operationsController.resubmitTaskCreation
 );
 tasksRouter.delete(
   '/:taskId',

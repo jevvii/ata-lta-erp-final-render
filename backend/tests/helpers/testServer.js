@@ -5,7 +5,7 @@
 process.env.SUPABASE_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'test-bucket';
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || 'https://test.supabase.co';
 
-const { app, server } = require('../../src/app');
+const { app, server, resetHealthCache } = require('../../src/app');
 
 afterAll((done) => {
   if (server.listening) {
@@ -15,4 +15,4 @@ afterAll((done) => {
   }
 });
 
-module.exports = { app, server };
+module.exports = { app, server, resetHealthCache };

@@ -51,6 +51,22 @@ router.put(
   operationsRequestsController.updateRequest
 );
 
+router.post(
+  '/:id/approve',
+  resolveEntity(),
+  requirePermission('workflow:view'),
+  audit('operations_request.approve', { table: 'operations_requests' }),
+  operationsRequestsController.approveRequest
+);
+
+router.post(
+  '/:id/reject',
+  resolveEntity(),
+  requirePermission('workflow:view'),
+  audit('operations_request.reject', { table: 'operations_requests' }),
+  operationsRequestsController.rejectRequest
+);
+
 router.delete(
   '/:id',
   resolveEntity(),

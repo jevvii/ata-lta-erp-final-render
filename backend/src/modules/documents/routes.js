@@ -32,6 +32,10 @@ router.get(
   documentsController.getDocument
 );
 
+// File previews have the same entity scope and read permission as document details.
+router.get('/:id/download-url', resolveEntity({ allowAll: true }),
+  requirePermission('dms:view'), documentsController.getDownloadUrl);
+
 // Resolve entity code → UUID for all remaining mutation routes in this module
 router.use(resolveEntity());
 
@@ -52,12 +56,12 @@ router.post(
   documentsController.createDocument
 );
 
-// Dedicated comment writes retain the existing DMS edit permission gate.
-router.post('/:id/comments', requirePermission('dms:edit'),
+// The service authorizes task assignment or standalone DMS edit access.
+router.post('/:id/comments',
   audit('document.comment.add', { table: 'documents' }), documentsController.addDocumentComment);
-router.put('/:id/comments/:commentId', requirePermission('dms:edit'),
+router.put('/:id/comments/:commentId',
   audit('document.comment.edit', { table: 'documents' }), documentsController.updateDocumentComment);
-router.delete('/:id/comments/:commentId', requirePermission('dms:edit'),
+router.delete('/:id/comments/:commentId',
   audit('document.comment.delete', { table: 'documents' }), documentsController.deleteDocumentComment);
 
 // Update document metadata
@@ -109,8 +113,6 @@ router.post(
   documentsController.confirmUpload
 );
 
-// Get signed download URL
-router.get('/:id/download-url', requirePermission('dms:view'), documentsController.getDownloadUrl);
 
 // Transition lifecycle state
 router.put(

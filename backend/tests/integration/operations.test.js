@@ -44,7 +44,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Annual Audit', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Annual Audit', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     expect(wrRes.body.data.title).toBe('Annual Audit');
@@ -72,14 +72,14 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const wrRes2 = await request(app)
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Rapid Audit WR', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     expect(wrRes2.body.data.id).toBe(wrRes1.body.data.id);
@@ -91,7 +91,9 @@ describe('/v1/work-requests', () => {
     // whose legacy role maps to the Management department (workflow:edit)
     // and therefore reaches the VALID_TRANSITIONS check. The client fixture
     // needs clients:edit, which Management lacks, so an admin creates it.
+    const managerId = '22222222-2222-4222-8222-888888888888';
     const manager = registerUser({
+      id: managerId,
       email: 'manager-wr-transitions@ata-lta.ph',
       name: 'Manager WR Transitions',
       role: 'Manager',
@@ -107,9 +109,9 @@ describe('/v1/work-requests', () => {
 
     const wr = await request(app)
       .post('/v1/work-requests')
-      .set('Authorization', `Bearer ${manager}`)
+      .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Tax Filing', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Tax Filing', clientId: client.id, entity: 'ATA', assignedTo: managerId })
       .expect(201);
 
     await request(app)
@@ -133,7 +135,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Review', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Review', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const updated = await request(app)
@@ -159,7 +161,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Review', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Review', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -210,7 +212,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Deep Link WR', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Deep Link WR', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -247,7 +249,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Time Log Test WR', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Time Log Test WR', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -303,7 +305,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${token}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'WR', clientId: 'does-not-matter' })
+      .send({ dueDate: '2026-12-31', title: 'WR', clientId: 'does-not-matter' })
       .expect(403);
 
     expect(res.body.title).toMatch(/forbidden/i);
@@ -410,7 +412,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Review Null Fields', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Review Null Fields', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -455,7 +457,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ALL')
-      .send({ title: 'Consolidated WR 1', clientId: client.id, entity: 'ALL' })
+      .send({ dueDate: '2026-12-31', title: 'Consolidated WR 1', clientId: client.id, entity: 'ALL' })
       .expect(201);
 
     expect(wrRes1.body.data.title).toBe('Consolidated WR 1');
@@ -466,7 +468,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ALL')
-      .send({ title: 'Consolidated WR 2', clientId: client.id })
+      .send({ dueDate: '2026-12-31', title: 'Consolidated WR 2', clientId: client.id })
       .expect(201);
 
     expect(wrRes2.body.data.title).toBe('Consolidated WR 2');
@@ -477,7 +479,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ALL')
-      .send({ title: 'Malformed Entity WR', clientId: client.id, entity: 123 })
+      .send({ dueDate: '2026-12-31', title: 'Malformed Entity WR', clientId: client.id, entity: 123 })
       .expect(400);
   });
 
@@ -502,7 +504,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'Assignee Resolution Test', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'Assignee Resolution Test', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     // 1. Create task with assigneeId and NO assigneeName -> should resolve to 'Elena Rostova'
@@ -579,7 +581,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'LTA')
-      .send({ title: 'Cross Entity WR', clientId: client.id, entity: 'LTA' })
+      .send({ dueDate: '2026-12-31', title: 'Cross Entity WR', clientId: client.id, entity: 'LTA' })
       .expect(201);
 
     // Retrieve while active entity is ATA (cross-entity lookup)
@@ -636,6 +638,7 @@ describe('/v1/work-requests', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Project Alpha',
         clientId: client.id,
         entity: 'ATA',
@@ -653,6 +656,7 @@ describe('/v1/work-requests', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Project Beta',
         clientId: client.id,
         entity: 'ATA',
@@ -742,6 +746,7 @@ describe('/v1/work-requests', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Project Invalid Manager',
         clientId: client.id,
         entity: 'ATA',
@@ -757,6 +762,7 @@ describe('/v1/work-requests', () => {
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
       .send({
+        dueDate: '2026-12-31',
         title: 'Project Invalid Member',
         clientId: client.id,
         entity: 'ATA',
@@ -779,7 +785,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'WR Related Test', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'WR Related Test', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -814,7 +820,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'WR Completed Lock Test', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'WR Completed Lock Test', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     const task = await request(app)
@@ -866,7 +872,7 @@ describe('/v1/work-requests', () => {
       .post('/v1/work-requests')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ title: 'WR Predecessor Resolution Test', clientId: client.id, entity: 'ATA' })
+      .send({ dueDate: '2026-12-31', title: 'WR Predecessor Resolution Test', clientId: client.id, entity: 'ATA' })
       .expect(201);
 
     // Create Pred Task

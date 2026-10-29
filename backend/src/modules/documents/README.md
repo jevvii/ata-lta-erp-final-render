@@ -46,7 +46,15 @@ SEC, BIR, CONTRACT, PERMIT, FINANCIAL, CORRESPONDENCE, LEGAL, HR, OTHER
 ## Collaborative comments
 
 Apply migration `000064_atomic_document_comments.js` before deploying the new API.
-All comment mutations require authentication, an active entity, and `dms:edit`.
+All comment mutations require authentication, an active entity, and document/project visibility.
+For task-linked documents, the primary assignee and relational co-assignees may comment
+regardless of department or `dms:edit`. Managers must also be assigned to that specific
+task; parent project membership or sibling-task assignment does not grant comment access.
+Admins bypass the assignment requirement. Documents without a linked task retain the
+`dms:edit` requirement. The service rechecks access on every add, edit, and delete.
+Document detail and successful comment responses include the caller-specific boolean
+`can_comment`; clients must hide comment controls unless it is explicitly true.
+Deploy this API change before the frontend that consumes this capability. No new migration is needed.
 
 - `POST /v1/documents/:id/comments` accepts `{ "text": "..." }` and returns 201.
 - `PUT /v1/documents/:id/comments/:commentId` accepts the same body, author only.

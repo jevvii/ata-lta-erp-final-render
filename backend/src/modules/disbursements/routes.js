@@ -2,7 +2,7 @@
  * Disbursements module routes.
  * Mounted at /v1/disbursements by app.js.
  *
- * Phase 6 — Agent B
+ * Authorized Disbursement Lifecycle Redesign (v2)
  */
 
 const express = require('express');
@@ -12,13 +12,18 @@ const { requirePermission, computePermissions } = require('../../middleware/rbac
 const { hasPermission } = require('../../lib/permissions');
 const { audit } = require('../../middleware/audit');
 const { resolveEntity } = require('../../middleware/resolveEntity');
+const { receiptEntityGuard } = require('../../middleware/receiptEntityGuard');
 const AppError = require('../../lib/AppError');
 
 /**
- * Guard POST /v1/disbursements/:id/approve and /reject with disbursement:approve (Admin only).
- * Per R3: disbursement:approve cannot be held by any non-Admin role.
+ * Guard for Admin-only disbursement actions:
+ * - approve (v2 Draft -> Approved)
+ * - release (v2 Funded -> Released)
+ * - reject (v2 Draft/Funded -> Rejected)
+ * - resend_draft (v2 Rejected -> Draft)
+ * - archive / unarchive (v2 Released)
  */
-const requireDisbursementApprove = (req, res, next) => {
+const requireAdmin = (req, res, next) => {
   if (!req.user) {
     return next(
       new AppError({
@@ -30,15 +35,20 @@ const requireDisbursementApprove = (req, res, next) => {
   }
 
   const permissions = computePermissions(req.user);
-  // disbursement:approve resolves from the P0-A manifest (Admin-only grant).
   req.userPermissions = permissions;
 
-  if (!hasPermission(permissions, 'disbursement:approve')) {
+  const isAdmin =
+    req.user.role === 'Admin' ||
+    hasPermission(permissions, 'disbursement:approve') ||
+    hasPermission(permissions, 'disbursement:*');
+
+  if (!isAdmin) {
     return next(
       new AppError({
         statusCode: 403,
         title: 'Forbidden',
-        detail: 'Permission disbursement:approve is required',
+        detail: 'Administrator permission is required for this action',
+        code: 'FORBIDDEN',
       })
     );
   }
@@ -47,10 +57,10 @@ const requireDisbursementApprove = (req, res, next) => {
 };
 
 /**
- * Guard POST /v1/disbursements/:id/reject.
- * Allows Admin, users with approve_change:disbursements, disbursement:edit, or disbursement:approve.
+ * Guard for payment preparation (funding):
+ * Accounting or Admin can prepare payment details for Approved vouchers.
  */
-const requireDisbursementReject = (req, res, next) => {
+const requireFundingPermission = (req, res, next) => {
   if (!req.user) {
     return next(
       new AppError({
@@ -64,20 +74,19 @@ const requireDisbursementReject = (req, res, next) => {
   const permissions = computePermissions(req.user);
   req.userPermissions = permissions;
 
+  const isAccounting =
+    String(req.user.role || '').toLowerCase() === 'accounting' ||
+    (req.user.departments || []).some((d) => String(d).toLowerCase() === 'accounting');
   const isAdmin = req.user.role === 'Admin';
-  const canReject =
-    isAdmin ||
-    hasPermission(permissions, 'disbursement:approve') ||
-    hasPermission(permissions, 'approve_change:disbursements') ||
-    hasPermission(permissions, 'disbursement:edit') ||
-    hasPermission(permissions, 'disbursement:*');
+  const hasFundingPerm = isAdmin || isAccounting;
 
-  if (!canReject) {
+  if (!hasFundingPerm) {
     return next(
       new AppError({
         statusCode: 403,
         title: 'Forbidden',
-        detail: 'Permission to reject disbursements is required',
+        detail: 'Accounting or Administrator permission is required to prepare payment details',
+        code: 'FORBIDDEN',
       })
     );
   }
@@ -107,10 +116,41 @@ router.get(
   disbursementsController.listDisbursements
 );
 router.get(
+  '/:id/receipt-url',
+  resolveEntity({ allowAll: true }),
+  requirePermission('disbursement:view'),
+  disbursementsController.getReceiptUrl
+);
+router.get(
   '/:id',
   resolveEntity({ allowAll: true }),
   requirePermission('disbursement:view'),
   disbursementsController.getDisbursement
+);
+
+router.get(
+  '/:id/pdf',
+  resolveEntity({ allowAll: true }),
+  requirePermission('disbursement:view'),
+  disbursementsController.getDisbursementPdf
+);
+
+// --- Receipt Upload Reservations (C2 / RECEIPT-ENTITY-20261021) ---
+// Mounted before module-wide resolveEntity() to enforce explicit, authorized entity context
+// without double resolution or impact on other disbursement routes.
+router.post(
+  '/receipt-uploads',
+  requirePermission('disbursement:create'),
+  receiptEntityGuard,
+  resolveEntity(),
+  disbursementsController.createReceiptUpload
+);
+router.post(
+  '/receipt-uploads/:uploadId/complete',
+  requirePermission('disbursement:create'),
+  receiptEntityGuard,
+  resolveEntity(),
+  disbursementsController.completeReceiptUpload
 );
 
 // Resolve entity code → UUID for all remaining mutation routes in this module
@@ -146,51 +186,39 @@ router.post(
 
 router.put(
   '/:id',
-  requirePermission('disbursement:edit'),
+  requirePermission(['disbursement:create', 'disbursement:edit']),
   audit('disbursement.update', { table: 'disbursements' }),
   disbursementsController.updateDisbursement
 );
 
+router.patch(
+  '/:id',
+  requirePermission(['disbursement:create', 'disbursement:edit']),
+  audit('disbursement.update', { table: 'disbursements' }),
+  disbursementsController.updateDisbursement
+);
+
+// Admin-only archive / unarchive (Released v2 records)
 router.post(
   '/:id/archive',
-  requirePermission('disbursement:edit'),
+  requireAdmin,
   audit('disbursement.archive', { table: 'disbursements' }),
   disbursementsController.archiveDisbursement
 );
 
 router.post(
   '/:id/unarchive',
-  requirePermission('disbursement:edit'),
+  requireAdmin,
   audit('disbursement.unarchive', { table: 'disbursements' }),
   disbursementsController.unarchiveDisbursement
 );
 
+// Deprecated workflow routes on v2 (return 409 CONFLICT_CURRENT_STATUS)
 router.post(
   '/:id/submit',
   requirePermission('disbursement:create'),
   audit('disbursement.submit', { table: 'disbursements' }),
   disbursementsController.submitDisbursement
-);
-
-router.post(
-  '/:id/approve',
-  requireDisbursementApprove,
-  audit('disbursement.approve', { table: 'disbursements' }),
-  disbursementsController.approveDisbursement
-);
-
-router.post(
-  '/:id/release',
-  requirePermission('disbursement:mark_released'),
-  audit('disbursement.release', { table: 'disbursements' }),
-  disbursementsController.releaseDisbursement
-);
-
-router.post(
-  '/:id/fund',
-  requirePermission('disbursement:mark_released'),
-  audit('disbursement.fund', { table: 'disbursements' }),
-  disbursementsController.fundDisbursement
 );
 
 router.post(
@@ -207,16 +235,57 @@ router.post(
   disbursementsController.forwardDisbursement
 );
 
+// Stage 1 approval: Admin, Draft -> Approved (no payment details required)
+router.post(
+  '/:id/approve',
+  requireAdmin,
+  audit('disbursement.approve', { table: 'disbursements' }),
+  disbursementsController.approveDisbursement
+);
+
+// Stage 2 funding: Accounting/Admin, Approved -> Funded (4 payment fields required)
+router.post(
+  '/:id/fund',
+  requireFundingPermission,
+  audit('disbursement.fund', { table: 'disbursements' }),
+  disbursementsController.fundDisbursement
+);
+
+// Stage 3 release: Admin, including the preparer, Funded -> Released
+router.post(
+  '/:id/release',
+  requireAdmin,
+  audit('disbursement.release', { table: 'disbursements' }),
+  disbursementsController.releaseDisbursement
+);
+
+// Rejection: Admin, Draft or Funded -> Rejected (reason required)
 router.post(
   '/:id/reject',
-  requireDisbursementReject,
+  requireAdmin,
   audit('disbursement.reject', { table: 'disbursements' }),
   disbursementsController.rejectDisbursement
 );
 
+// Return rejected to draft: Admin, Rejected -> Draft (review_ready = false)
+router.post(
+  '/:id/resend_draft',
+  requireAdmin,
+  audit('disbursement.resend_draft', { table: 'disbursements' }),
+  disbursementsController.resendDraftDisbursement
+);
+
+// Payment details correction (blocked on v2 Funded/Released)
+router.patch(
+  '/:id/payment-details',
+  requirePermission(['disbursement:mark_released', 'disbursement:edit']),
+  audit('disbursement.payment_details_update', { table: 'disbursements' }),
+  disbursementsController.updatePaymentDetails
+);
+
 router.delete(
   '/:id',
-  requirePermission('disbursement:edit'),
+  requirePermission(['disbursement:create', 'disbursement:edit']),
   audit('disbursement.delete', { table: 'disbursements' }),
   disbursementsController.deleteDisbursement
 );

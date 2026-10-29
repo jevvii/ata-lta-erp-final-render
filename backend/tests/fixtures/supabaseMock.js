@@ -4,6 +4,19 @@
  * Supports the atomic RPC transitions introduced by the concurrency hardening plan.
  */
 
+try {
+  const mime = require('mime');
+  if (mime && typeof mime.getType !== 'function' && typeof mime.lookup === 'function') {
+    mime.getType = (path) => mime.lookup(path);
+  }
+} catch (_) {
+  // mime compatibility shim optional
+}
+
+const isValidUUID = (v) =>
+  typeof v === 'string' &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+
 const mockUsers = new Map();
 const mockTokens = new Map();
 const mockTables = {
@@ -36,12 +49,24 @@ const mockTables = {
   retainer_template_generations: new Map(),
   ground_workers: new Map(),
   standard_task_templates: new Map(),
+  task_templates: new Map(),
   idempotency_keys: new Map(),
   status_history: new Map(),
   document_sequences: new Map(),
+  notifications: new Map(),
+  task_creation_review_events: new Map(),
 };
 
+const mockStorageObjects = new Map();
+
 let sequence = 0;
+let auditLogSeq = 0;
+let userSeq = 0;
+let clientSeq = 0;
+let wrSeq = 0;
+let invoiceSeq = 0;
+let disbSeq = 0;
+let trkSeq = 0;
 const nextId = () => {
   sequence += 1;
   return `mock-${sequence}`;
@@ -52,6 +77,7 @@ const nextId = () => {
 // the mock mirrors that so OCC guards (`eq('version', n)`) behave the same
 // here as they would against the live database.
 const VERSIONED_TABLES = new Set([
+  'users',
   'clients',
   'invoices',
   'invoice_line_items',
@@ -64,6 +90,23 @@ const VERSIONED_TABLES = new Set([
   'pending_changes',
   'documents',
 ]);
+
+const TABLE_COLUMNS = {
+  pending_changes: new Set([
+    'id',
+    'entity_id',
+    'table_name',
+    'parent_record_id',
+    'proposed_data',
+    'submitted_by',
+    'status',
+    'rejection_reason',
+    'reviewed_by',
+    'reviewed_at',
+    'created_at',
+    'version',
+  ]),
+};
 
 const nowIso = () => new Date().toISOString();
 
@@ -89,8 +132,11 @@ const seedDefaults = () => {
 const registerUser = (user) => {
   const token = `token-${user.email}`;
   const id = user.id || nextId();
+  userSeq += 1;
+  const userNum = user.userNumber || user.user_number || `USR-${String(userSeq).padStart(2, '0')}`;
   const record = {
     id,
+    user_number: userNum,
     auth_user_id: user.authUserId || id,
     email: user.email,
     password: user.password || 'oldpass',
@@ -98,10 +144,16 @@ const registerUser = (user) => {
     role: user.role,
     entities: user.entities || ['ATA'],
     is_active: user.isActive !== false,
+    version: user.version || 1,
     avatar_url: user.avatarUrl || null,
     preferences: user.preferences || {},
     password_updated_at: user.passwordUpdatedAt || null,
   };
+  if (Array.isArray(user.departments)) {
+    record.user_departments = user.departments.map((deptName) => ({
+      departments: { name: deptName },
+    }));
+  }
   mockUsers.set(token, record);
   mockTokens.set(record.auth_user_id, token);
   mockTables.users.set(id, record);
@@ -115,15 +167,48 @@ const registerUser = (user) => {
 const tableQuery = (table) => {
   const rows = mockTables[table] || new Map();
   const filters = [];
-  let order = null;
+  const orders = [];
   let limit = null;
   let op = 'select';
   let countOptions = null;
   let insertRecords = null;
   let updateValues = null;
 
-  const matchFilter = (row, { column, value, op: fop = 'eq', innerOp }) => {
-    const rowValue = row[column];
+  const splitTopLevel = (str) => {
+    const parts = [];
+    let current = '';
+    let depth = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (char === '(' || char === '{') depth++;
+      else if (char === ')' || char === '}') depth--;
+      if (char === ',' && depth === 0) {
+        parts.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    if (current.trim()) parts.push(current.trim());
+    return parts;
+  };
+
+  const matchFilter = (row, filter) => {
+    const { column, value, op: fop = 'eq', innerOp } = filter;
+    if (fop === 'and') {
+      return (filter.parts || []).every((p) => matchFilter(row, p));
+    }
+    if (fop === 'or') {
+      return (filter.parts || []).some((p) => matchFilter(row, p));
+    }
+    let rowValue = row[column];
+    if (rowValue === undefined) {
+      if (column === 'creation_approval_status' || column === 'approval_status') {
+        rowValue = 'approved';
+      } else if (column === 'version' && VERSIONED_TABLES.has(table)) {
+        rowValue = 1;
+      }
+    }
     if (fop === 'not') {
       return !matchFilter(row, { column, value, op: innerOp || 'eq' });
     }
@@ -178,6 +263,16 @@ const tableQuery = (table) => {
   };
 
   const parseOrPart = (part) => {
+    const andM = part.match(/^and\((.*)\)$/);
+    if (andM) {
+      const subParts = splitTopLevel(andM[1]);
+      return { op: 'and', parts: subParts.map(parseOrPart).filter(Boolean) };
+    }
+    const orM = part.match(/^or\((.*)\)$/);
+    if (orM) {
+      const subParts = splitTopLevel(orM[1]);
+      return { op: 'or', parts: subParts.map(parseOrPart).filter(Boolean) };
+    }
     const notIsM = part.match(/^([^.]+)\.not\.is\.null$/);
     if (notIsM) {
       return { column: notIsM[1], value: null, op: 'not', innerOp: 'is' };
@@ -188,7 +283,10 @@ const tableQuery = (table) => {
     }
     const notM = part.match(/^([^.]+)\.not\.([^.]+)\.%?(.+)%?$/);
     if (notM) {
-      return { column: notM[1], value: notM[3], op: 'not', innerOp: notM[2] };
+      let val = notM[3];
+      if (val === 'true') val = true;
+      else if (val === 'false') val = false;
+      return { column: notM[1], value: val, op: 'not', innerOp: notM[2] };
     }
     const m = part.match(/^([^.]+)\.([^.]+)\.%?(.+)%?$/);
     if (!m) return null;
@@ -199,6 +297,10 @@ const tableQuery = (table) => {
       val = val.slice(1, -1).split(',').map((s) => s.trim());
     } else if (fop === 'cs' && val.startsWith('{') && val.endsWith('}')) {
       val = val.slice(1, -1).split(',').map((s) => s.trim());
+    } else if (val === 'true') {
+      val = true;
+    } else if (val === 'false') {
+      val = false;
     }
     return { column: col, value: val, op: fop };
   };
@@ -208,7 +310,7 @@ const tableQuery = (table) => {
       filters.every((filter) => {
         if (filter.op === 'or') {
           return filter.parts.some((part) => {
-            const parsed = parseOrPart(part);
+            const parsed = typeof part === 'string' ? parseOrPart(part) : part;
             if (!parsed) return false;
             return matchFilter(row, parsed);
           });
@@ -244,8 +346,38 @@ const tableQuery = (table) => {
         if (VERSIONED_TABLES.has(table) && stored.version === undefined) {
           stored.version = 1;
         }
+        if (table === 'work_requests' && stored.creation_approval_status === undefined) {
+          stored.creation_approval_status = 'approved';
+        }
+        if (table === 'tasks' && stored.approval_status === undefined) {
+          stored.approval_status = 'approved';
+        }
         if (table === 'retainer_templates' && stored.template_type === undefined) {
           stored.template_type = 'retainer';
+        }
+        if (table === 'disbursements' && stored.lifecycle_version === 2) {
+          const histId = nextId();
+          mockTables.status_history.set(histId, {
+            id: histId,
+            table_name: 'disbursements',
+            record_id: id,
+            old_status: null,
+            new_status: stored.status || 'Draft',
+            actor_id: stored.created_by,
+            entity_id: stored.entity_id,
+            details: {
+              action: 'create',
+              amount: stored.amount,
+              category: stored.category,
+              description: stored.description,
+              disbursement_number: stored.disbursement_number,
+              review_ready: stored.review_ready,
+              lifecycle_version: stored.lifecycle_version,
+              receipt_filename: stored.receipt_filename,
+              receipt_s3_key: stored.receipt_s3_key,
+            },
+            created_at: stored.created_at || nowIso(),
+          });
         }
         rows.set(id, stored);
         inserted.push(stored);
@@ -253,13 +385,15 @@ const tableQuery = (table) => {
       return inserted;
     }
 
-    if (order) {
+    if (orders.length > 0) {
       result.sort((a, b) => {
-        const aVal = a[order.column];
-        const bVal = b[order.column];
-        if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) return 0;
-        if (aVal < bVal) return order.ascending ? -1 : 1;
-        if (aVal > bVal) return order.ascending ? 1 : -1;
+        for (const ord of orders) {
+          const aVal = a[ord.column];
+          const bVal = b[ord.column];
+          if (aVal === null || aVal === undefined || bVal === null || bVal === undefined) continue;
+          if (aVal < bVal) return ord.ascending ? -1 : 1;
+          if (aVal > bVal) return ord.ascending ? 1 : -1;
+        }
         return 0;
       });
     }
@@ -275,12 +409,28 @@ const tableQuery = (table) => {
 
   const builder = {
     select: (_columns, options = {}) => {
+      if (table === 'tasks' && _columns) {
+        const cols = String(_columns).split(',').map((x) => x.trim());
+        if (cols.includes('entity_id')) {
+          builder._queryError = {
+            code: '42703',
+            message: 'column tasks.entity_id does not exist',
+          };
+        }
+      }
       if (options.count) {
         countOptions = options;
       }
       return builder;
     },
     eq: (column, value) => {
+      const known = TABLE_COLUMNS[table];
+      if (known && !known.has(column)) {
+        builder._queryError = {
+          message: `column "${column}" does not exist`,
+          code: '42703',
+        };
+      }
       filters.push({ column, value });
       return builder;
     },
@@ -293,7 +443,7 @@ const tableQuery = (table) => {
       return builder;
     },
     order: (column, { ascending = true } = {}) => {
-      order = { column, ascending };
+      orders.push({ column, ascending });
       return builder;
     },
     limit: (n) => {
@@ -334,49 +484,93 @@ const tableQuery = (table) => {
       return builder;
     },
     or: (expression) => {
-      const parts = [];
-      let current = '';
-      let depth = 0;
-      for (let i = 0; i < expression.length; i++) {
-        const char = expression[i];
-        if (char === '(' || char === '{') depth++;
-        else if (char === ')' || char === '}') depth--;
-        if (char === ',' && depth === 0) {
-          parts.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      if (current.trim()) parts.push(current.trim());
+      const parts = splitTopLevel(expression);
       filters.push({ op: 'or', parts });
       return builder;
     },
     insert: (records) => {
       op = 'insert';
-      insertRecords = Array.isArray(records) ? records : [records];
+      insertRecords = (Array.isArray(records) ? records : [records]).map((rec) => {
+        const copy = { ...rec };
+        if (table === 'audit_logs' && !copy.audit_number) {
+          auditLogSeq += 1;
+          copy.audit_number = `AUR-${String(auditLogSeq).padStart(4, '0')}`;
+        }
+        if (table === 'users' && !copy.user_number) {
+          userSeq += 1;
+          copy.user_number = `USR-${String(userSeq).padStart(2, '0')}`;
+        }
+        if (table === 'clients' && !copy.client_number) {
+          clientSeq += 1;
+          copy.client_number = `CLI-ATA-${String(clientSeq).padStart(4, '0')}`;
+        }
+        if (table === 'work_requests' && !copy.work_request_number) {
+          wrSeq += 1;
+          copy.work_request_number = `WR-ATA-${new Date().getFullYear()}-${String(wrSeq).padStart(4, '0')}`;
+        }
+        if (table === 'invoices' && !copy.invoice_number) {
+          invoiceSeq += 1;
+          copy.invoice_number = `ATA-SI-${new Date().getFullYear()}-${String(invoiceSeq).padStart(4, '0')}`;
+        }
+        if (table === 'disbursements' && !copy.disbursement_number) {
+          disbSeq += 1;
+          copy.disbursement_number = `DISB-ATA-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(disbSeq).padStart(4, '0')}`;
+        }
+        if (table === 'transmittals' && !copy.tracking_number) {
+          trkSeq += 1;
+          copy.tracking_number = `TR-ATA-${new Date().getFullYear()}-${String(trkSeq).padStart(4, '0')}`;
+        }
+        return copy;
+      });
 
-      for (const rec of insertRecords) {
-        const id = rec.id || nextId();
-        const stored = { ...rec, id };
+      for (const stored of insertRecords) {
+        if (!stored.id) {
+          stored.id = nextId();
+        }
 
-        // Simulate unique constraints for concurrency-safety tests.
-        if (table === 'clients' && stored.tin) {
-          const dup = Array.from(rows.values()).find(
-            (r) => r.entity_id === stored.entity_id && r.tin === stored.tin && !r.deleted_at
-          );
+        // Global uniqueness across ALL rows
+        if (table === 'audit_logs' && stored.audit_number) {
+          const dup = Array.from(rows.values()).find((r) => r.audit_number === stored.audit_number);
           if (dup) {
             builder._insertError = {
-              message: 'duplicate key value violates unique constraint "clients_entity_id_tin_key"',
+              message: 'duplicate key value violates unique constraint "uq_audit_logs_audit_number"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'users' && stored.user_number) {
+          const dup = Array.from(rows.values()).find((r) => r.user_number === stored.user_number);
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "uq_users_user_number"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'clients' && stored.client_number) {
+          const dup = Array.from(rows.values()).find((r) => r.client_number === stored.client_number);
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "uq_clients_client_number"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'work_requests' && stored.work_request_number) {
+          const dup = Array.from(rows.values()).find((r) => r.work_request_number === stored.work_request_number);
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "uq_work_requests_number"',
               code: '23505',
             };
             return builder;
           }
         }
         if (table === 'invoices' && stored.invoice_number) {
-          const dup = Array.from(rows.values()).find(
-            (r) => r.entity_id === stored.entity_id && r.invoice_number === stored.invoice_number
-          );
+          const dup = Array.from(rows.values()).find((r) => r.invoice_number === stored.invoice_number);
           if (dup) {
             builder._insertError = {
               message:
@@ -387,15 +581,35 @@ const tableQuery = (table) => {
           }
         }
         if (table === 'disbursements' && stored.disbursement_number) {
-          const dup = Array.from(rows.values()).find(
-            (r) =>
-              r.entity_id === stored.entity_id &&
-              r.disbursement_number === stored.disbursement_number
-          );
+          const dup = Array.from(rows.values()).find((r) => r.disbursement_number === stored.disbursement_number);
           if (dup) {
             builder._insertError = {
               message:
                 'duplicate key value violates unique constraint "disbursements_entity_id_disbursement_number_key"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+        if (table === 'transmittals' && stored.tracking_number) {
+          const dup = Array.from(rows.values()).find((r) => r.tracking_number === stored.tracking_number);
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "uq_transmittals_tracking_number"',
+              code: '23505',
+            };
+            return builder;
+          }
+        }
+
+        // Simulate unique constraints for concurrency-safety tests.
+        if (table === 'clients' && stored.tin) {
+          const dup = Array.from(rows.values()).find(
+            (r) => r.entity_id === stored.entity_id && r.tin === stored.tin && !r.deleted_at
+          );
+          if (dup) {
+            builder._insertError = {
+              message: 'duplicate key value violates unique constraint "clients_entity_id_tin_key"',
               code: '23505',
             };
             return builder;
@@ -430,15 +644,27 @@ const tableQuery = (table) => {
       return builder;
     },
     maybeSingle: () => {
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError });
+      }
       if (builder._insertError) {
         return Promise.resolve({ data: null, error: builder._insertError });
+      }
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError });
       }
       const result = execute();
       return Promise.resolve({ data: result[0] || null, error: null });
     },
     single: () => {
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError });
+      }
       if (builder._insertError) {
         return Promise.resolve({ data: null, error: builder._insertError });
+      }
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError });
       }
       const result = execute();
       if (result.length === 0) {
@@ -447,8 +673,14 @@ const tableQuery = (table) => {
       return Promise.resolve({ data: result[0], error: null });
     },
     count: (options = {}) => {
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, count: null, error: builder._queryError });
+      }
       if (builder._insertError) {
         return Promise.resolve({ data: null, error: builder._insertError });
+      }
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError });
       }
       const result = execute();
       const count = result.length;
@@ -458,8 +690,14 @@ const tableQuery = (table) => {
       return Promise.resolve({ data: [{ count }], count, error: null });
     },
     then: (resolve) => {
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, count: null, error: builder._queryError }).then(resolve);
+      }
       if (builder._insertError) {
         return Promise.resolve({ data: null, error: builder._insertError }).then(resolve);
+      }
+      if (builder._queryError) {
+        return Promise.resolve({ data: null, error: builder._queryError }).then(resolve);
       }
       const result = execute();
       const response = { data: result, error: null };
@@ -480,6 +718,448 @@ const tableQuery = (table) => {
  * Atomic RPC transition helpers for concurrency tests.
  */
 const rpcImpl = {
+  task_creation_review_decide: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const decision = params.p_decision;
+    const reason = params.p_reason;
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (actor.role === 'Admin') return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (actor.role !== 'Manager') return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    if (wr.assigned_to !== actorId) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+
+    // Entitlement
+    const actorEntities = Array.isArray(actor.entities) ? actor.entities : [];
+    if (!actorEntities.includes('ALL')) {
+      const ent = mockTables.entities.get(wr.entity_id);
+      const code = ent?.code || wr.entity_id;
+      if (!actorEntities.includes(code)) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    }
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    const currentStatus = task.approval_status || 'approved';
+    if (currentStatus !== 'pending') {
+      return fail('P0001', 'TASK_REVIEW_STATE');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT');
+    }
+
+    const isApprove = decision === 'approve' || decision === 'approved';
+    const isReject = decision === 'reject' || decision === 'rejected';
+    if (!isApprove && !isReject) {
+      return fail('22023', 'INVALID_DECISION');
+    }
+
+    if (isReject && (!reason || typeof reason !== 'string' || reason.trim().length === 0)) {
+      return fail('22023', 'REASON_REQUIRED');
+    }
+
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+    task.approval_status = isApprove ? 'approved' : 'rejected';
+    task.reviewed_by = actorId;
+    task.reviewed_at = now;
+    task.rejection_reason = isReject ? reason.trim() : null;
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
+  task_creation_review_resubmit: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const editData = params.p_data || {};
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    const creatorId =
+      task.created_by !== undefined && task.created_by !== null
+        ? task.created_by
+        : task.requested_by || null;
+    if (creatorId !== actorId) {
+      return fail('42501', 'TASK_REVIEW_FORBIDDEN');
+    }
+
+    const currentStatus = task.approval_status || 'approved';
+    if (currentStatus !== 'rejected') {
+      return fail('P0001', 'TASK_REVIEW_STATE');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT');
+    }
+
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+    task.approval_status = 'pending';
+    task.reviewed_by = null;
+    task.reviewed_at = null;
+    task.rejection_reason = null;
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    if (editData.title !== undefined) task.title = String(editData.title).trim();
+    if (editData.description !== undefined) task.description = editData.description;
+    if (editData.dueDate !== undefined) task.due_date = editData.dueDate;
+    if (editData.assigneeId !== undefined) task.assignee_id = editData.assigneeId;
+    if (editData.assignees !== undefined) task.assignees = editData.assignees;
+    if (editData.predecessors !== undefined) task.predecessors = editData.predecessors;
+    if (editData.requiredLinkType !== undefined) task.required_link_type = editData.requiredLinkType;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
+  task_creation_review_create: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const taskData = params.p_data || {};
+    const assignees = params.p_assignees;
+
+    if (!wrId || !entityId || !actorId) {
+      return fail('22023', 'TASK_REVIEW_CONFLICT: Missing required parameters');
+    }
+
+    const allowedKeys = new Set([
+      'id', 'title', 'description', 'status', 'phase', 'qa_status',
+      'due_date', 'dueDate', 'required_link_type', 'requiredLinkType',
+      'display_order', 'displayOrder', 'predecessors', 'assignee_id', 'assigneeId', 'assignees'
+    ]);
+    for (const key of Object.keys(taskData)) {
+      if (!allowedKeys.has(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported field in task data: ${key}`);
+      }
+    }
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Work request entity mismatch');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is not admitted');
+    }
+    if (wr.archived || wr.status === 'Cancelled' || wr.status === 'Completed') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is archived, cancelled, or completed');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Inactive or invalid actor');
+
+    // Entitlement
+    const actorEntities = Array.isArray(actor.entities) ? actor.entities : [];
+    if (!actorEntities.includes('ALL')) {
+      const ent = mockTables.entities.get(entityId);
+      const code = ent?.code || entityId;
+      if (!actorEntities.includes(code)) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Actor not entitled to entity');
+    }
+
+    // WR membership
+    if (actor.role !== 'Admin') {
+      let isMember = false;
+      if (wr.assigned_to === actorId) isMember = true;
+      else if (Array.isArray(wr.co_assignees) && wr.co_assignees.includes(actorId)) isMember = true;
+      else {
+        for (const t of mockTables.tasks.values()) {
+          if (t.work_request_id === wrId && !t.deleted_at && t.assignee_id === actorId) {
+            isMember = true;
+            break;
+          }
+        }
+        if (!isMember) {
+          for (const ta of mockTables.task_assignees.values()) {
+            if (ta.user_id === actorId) {
+              const parentTask = mockTables.tasks.get(ta.task_id);
+              if (parentTask && parentTask.work_request_id === wrId && !parentTask.deleted_at) {
+                isMember = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (!isMember) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Actor is not a member of this work request');
+    }
+
+    const isEmployee = actor.role !== 'Admin' && actor.role !== 'Manager';
+    let approvalStatus = 'approved';
+    let reviewedBy = actorId;
+    let reviewedAt = nowIso();
+
+    if (isEmployee) {
+      if (!wr.assigned_to) {
+        return fail('42501', 'TASK_REVIEW_REQUIRED: Work request has no assigned Manager lead');
+      }
+      const lead = mockTables.users.get(wr.assigned_to);
+      if (!lead || lead.is_active === false || lead.role !== 'Manager') {
+        return fail('42501', 'TASK_REVIEW_REQUIRED: Work request assigned lead is not an active Manager');
+      }
+      const leadEntities = Array.isArray(lead.entities) ? lead.entities : [];
+      if (!leadEntities.includes('ALL')) {
+        const ent = mockTables.entities.get(entityId);
+        const code = ent?.code || entityId;
+        if (!leadEntities.includes(code)) {
+          return fail('42501', 'TASK_REVIEW_REQUIRED: Work request assigned lead is not entitled to entity');
+        }
+      }
+      approvalStatus = 'pending';
+      reviewedBy = null;
+      reviewedAt = null;
+    }
+
+    const taskId = taskData.id && isValidUUID(taskData.id) ? taskData.id : require('crypto').randomUUID();
+    const now = nowIso();
+
+    let assigneeList = [];
+    if (Array.isArray(assignees)) {
+      assigneeList = assignees.filter(isValidUUID);
+    } else if (Array.isArray(taskData.assignees)) {
+      assigneeList = taskData.assignees.filter(isValidUUID);
+    } else if (taskData.assignee_id) {
+      assigneeList = [taskData.assignee_id];
+    } else if (taskData.assigneeId) {
+      assigneeList = [taskData.assigneeId];
+    }
+
+    const primaryAssigneeId = assigneeList[0] || null;
+    let primaryAssigneeName = taskData.assignee_name || taskData.assigneeName || null;
+    if (primaryAssigneeId && (!primaryAssigneeName || isValidUUID(primaryAssigneeName))) {
+      const u = mockTables.users.get(primaryAssigneeId);
+      primaryAssigneeName = u?.name || primaryAssigneeName;
+    }
+
+    const newTask = {
+      id: taskId,
+      work_request_id: wrId,
+      title: String(taskData.title || '').trim(),
+      description: taskData.description || null,
+      status: taskData.status || 'Draft',
+      phase: taskData.phase || wr.phase || 'pre_processing',
+      qa_status: taskData.qa_status || taskData.qaStatus || 'none',
+      due_date: taskData.due_date || taskData.dueDate || null,
+      required_link_type: taskData.required_link_type || taskData.requiredLinkType || null,
+      display_order: taskData.display_order ?? taskData.displayOrder ?? 0,
+      predecessors: Array.isArray(taskData.predecessors) ? taskData.predecessors.filter(isValidUUID) : [],
+      assignee_id: primaryAssigneeId,
+      assignee_name: primaryAssigneeName,
+      assigned_by: primaryAssigneeId ? actorId : null,
+      assigned_at: primaryAssigneeId ? now : null,
+      approval_status: approvalStatus,
+      created_by: actorId,
+      reviewed_by: reviewedBy,
+      reviewed_at: reviewedAt,
+      rejection_reason: null,
+      version: 1,
+      created_at: now,
+      updated_at: now,
+    };
+
+    mockTables.tasks.set(taskId, newTask);
+
+    if (assigneeList.length > 0) {
+      for (const uid of assigneeList) {
+        const taId = require('crypto').randomUUID();
+        mockTables.task_assignees.set(taId, {
+          id: taId,
+          task_id: taskId,
+          user_id: uid,
+          assigned_by: actorId,
+          assigned_at: now,
+          created_at: now,
+        });
+      }
+    }
+
+    return { data: [JSON.parse(JSON.stringify(newTask))], error: null };
+  },
+  task_material_update: (params) => {
+    const fail = (code, message) => ({ data: null, error: { code, message } });
+    const taskId = params.p_task_id;
+    const wrId = params.p_work_request_id;
+    const entityId = params.p_entity_id;
+    const actorId = params.p_actor_id;
+    const expectedVersion = Number(params.p_expected_version);
+    const patch = params.p_data || {};
+    const assignees = params.p_assignees;
+
+    if (!taskId || !wrId || !entityId || !actorId) {
+      return fail('22023', 'TASK_REVIEW_CONFLICT: Missing required parameters');
+    }
+    if (!expectedVersion || expectedVersion <= 0) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT: expectedVersion is required and must be a positive integer');
+    }
+
+    const allowedMaterialKeys = new Set([
+      'title', 'description', 'status', 'phase', 'qa_status', 'due_date', 'dueDate',
+      'required_link_type', 'requiredLinkType', 'display_order', 'displayOrder',
+      'predecessors', 'assignee_id', 'assigneeId', 'assignees'
+    ]);
+    const privilegedKeys = [
+      'id', 'approval_status', 'created_by', 'reviewed_by', 'reviewed_at',
+      'rejection_reason', 'version', 'created_at', 'updated_at', 'deleted_at'
+    ];
+    for (const key of Object.keys(patch)) {
+      if (privilegedKeys.includes(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported or privileged field in task data: ${key}`);
+      }
+      if (!allowedMaterialKeys.has(key)) {
+        return fail('22023', `TASK_REVIEW_STATE: Unsupported field ${key}`);
+      }
+    }
+
+    const wr = mockTables.work_requests.get(wrId);
+    if (!wr || wr.deleted_at) return fail('P0002', 'WORK_REQUEST_NOT_FOUND');
+    if (entityId && wr.entity_id !== entityId) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Work request entity mismatch');
+    if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is not admitted');
+    }
+    if (wr.archived || wr.status === 'Cancelled' || wr.status === 'Completed') {
+      return fail('P0002', 'TASK_REVIEW_STATE: Work request is archived, cancelled, or completed');
+    }
+
+    const actor = mockTables.users.get(actorId);
+    if (!actor || actor.is_active === false) return fail('42501', 'TASK_REVIEW_FORBIDDEN: Inactive or invalid actor');
+
+    const task = mockTables.tasks.get(taskId);
+    if (!task || task.deleted_at || task.work_request_id !== wrId) {
+      return fail('P0002', 'TASK_NOT_FOUND');
+    }
+
+    if (Number(task.version || 1) !== expectedVersion) {
+      return fail('P0001', 'TASK_REVIEW_CONFLICT: Task version mismatch');
+    }
+
+    if (task.approval_status === 'rejected') {
+      return fail('P0002', 'TASK_REJECTED_LOCKED: Cannot modify rejected task without resubmission');
+    }
+
+    const isEmployee = actor.role !== 'Admin' && actor.role !== 'Manager';
+    const now = nowIso();
+    const nextVersion = expectedVersion + 1;
+
+    let isMaterialChange = false;
+    if (patch.title !== undefined) {
+      task.title = String(patch.title).trim();
+      isMaterialChange = true;
+    }
+    if (patch.description !== undefined) {
+      task.description = patch.description;
+      isMaterialChange = true;
+    }
+    if (patch.due_date !== undefined || patch.dueDate !== undefined) {
+      task.due_date = patch.due_date ?? patch.dueDate;
+      isMaterialChange = true;
+    }
+    if (patch.required_link_type !== undefined || patch.requiredLinkType !== undefined) {
+      task.required_link_type = patch.required_link_type ?? patch.requiredLinkType;
+      isMaterialChange = true;
+    }
+    if (patch.display_order !== undefined || patch.displayOrder !== undefined) {
+      task.display_order = patch.display_order ?? patch.displayOrder;
+    }
+    if (patch.predecessors !== undefined) {
+      task.predecessors = Array.isArray(patch.predecessors) ? patch.predecessors.filter(isValidUUID) : [];
+      isMaterialChange = true;
+    }
+
+    let assigneeList = null;
+    if (Array.isArray(assignees)) {
+      assigneeList = assignees.filter(isValidUUID);
+      isMaterialChange = true;
+    } else if (Array.isArray(patch.assignees)) {
+      assigneeList = patch.assignees.filter(isValidUUID);
+      isMaterialChange = true;
+    } else if (patch.assignee_id !== undefined || patch.assigneeId !== undefined) {
+      const raw = patch.assignee_id ?? patch.assigneeId;
+      assigneeList = raw ? [raw] : [];
+      isMaterialChange = true;
+    }
+
+    if (assigneeList !== null) {
+      task.assignee_id = assigneeList[0] || null;
+      if (task.assignee_id) {
+        const u = mockTables.users.get(task.assignee_id);
+        task.assignee_name = u?.name || task.assignee_name;
+      } else {
+        task.assignee_name = null;
+      }
+
+      for (const [taId, ta] of [...mockTables.task_assignees.entries()]) {
+        if (ta.task_id === taskId) mockTables.task_assignees.delete(taId);
+      }
+      for (const uid of assigneeList) {
+        const taId = require('crypto').randomUUID();
+        mockTables.task_assignees.set(taId, {
+          id: taId,
+          task_id: taskId,
+          user_id: uid,
+          assigned_by: actorId,
+          assigned_at: now,
+          created_at: now,
+        });
+      }
+    }
+
+    if (isEmployee && isMaterialChange && (task.approval_status === 'approved' || !task.approval_status)) {
+      task.approval_status = 'pending';
+      task.reviewed_by = null;
+      task.reviewed_at = null;
+      task.rejection_reason = null;
+
+      const eventId = require('crypto').randomUUID();
+      mockTables.task_creation_review_events.set(eventId, {
+        id: eventId,
+        task_id: taskId,
+        work_request_id: wrId,
+        entity_id: entityId,
+        event_type: 'material_update',
+        decision: null,
+        actor_id: actorId,
+        reason: null,
+        metadata: { changes: patch },
+        created_at: now,
+      });
+    }
+
+    task.version = nextVersion;
+    task.updated_at = now;
+
+    return { data: [JSON.parse(JSON.stringify(task))], error: null };
+  },
   mutate_document_comment: (p) => {
     const fail = (code, message) => ({ data: null, error: { code, message } });
     const doc = mockTables.documents.get(p.p_document_id);
@@ -507,41 +1187,234 @@ const rpcImpl = {
     const row = mockTables.disbursements.get(params.p_id);
     if (!row) return { data: [], error: null };
     if (row.entity_id !== params.p_entity_id) return { data: [], error: null };
+
+    if (row.lifecycle_version === 2) {
+      if (
+        params.p_expected_version === null ||
+        params.p_expected_version === undefined ||
+        Number(params.p_expected_version) <= 0
+      ) {
+        return { data: null, error: { message: 'VERSION_REQUIRED', code: 'P0001' } };
+      }
+      if (row.version !== Number(params.p_expected_version)) {
+        return { data: null, error: { message: 'ERR_CONCURRENCY_CONFLICT', code: 'P0001' } };
+      }
+    } else if (
+      params.p_expected_version !== null &&
+      params.p_expected_version !== undefined &&
+      row.version !== Number(params.p_expected_version)
+    ) {
+      return { data: [], error: null };
+    }
+
+    const actor = mockTables.users.get(params.p_user_id);
+    const isAdmin = actor?.role === 'Admin';
+    const isAccounting =
+      actor?.role === 'Accounting' ||
+      (actor?.user_departments || []).some((d) => (d.departments?.name || '').toLowerCase() === 'accounting');
+
     const fromStatuses = Array.isArray(params.p_from_statuses)
       ? params.p_from_statuses
       : [params.p_from_statuses];
     if (!fromStatuses.includes(row.status)) return { data: [], error: null };
 
+    const oldStatus = row.status;
     const now = nowIso();
+
+    if (params.p_to_status === 'Approved') {
+      if (!isAdmin) {
+        return { data: null, error: { message: 'FORBIDDEN_ROLE_NOT_ADMIN', code: '42501' } };
+      }
+      row.approved_by = params.p_user_id;
+      row.approved_at = now;
+    } else if (params.p_to_status === 'Funded') {
+      if (!isAdmin && !isAccounting) {
+        return { data: null, error: { message: 'FORBIDDEN_FUNDING_PERMISSION', code: '42501' } };
+      }
+      const pd = params.p_payment_details || {};
+      if (!pd.method || !pd.bank || !pd.reference || !pd.date) {
+        return { data: null, error: { message: 'MISSING_PAYMENT_DETAILS', code: '22023' } };
+      }
+      row.funded_by = params.p_user_id;
+      row.funded_at = now;
+      row.payment_method = pd.method;
+      row.payment_bank = pd.bank;
+      row.payment_reference = pd.reference;
+      row.payment_date = pd.date;
+      row.payment_processed_by = params.p_user_id;
+    } else if (params.p_to_status === 'Released') {
+      if (!isAdmin) {
+        return { data: null, error: { message: 'FORBIDDEN_ROLE_NOT_ADMIN', code: '42501' } };
+      }
+      row.released_by = params.p_user_id;
+      row.released_at = now;
+    } else if (params.p_to_status === 'Rejected') {
+      if (!isAdmin) {
+        return { data: null, error: { message: 'FORBIDDEN_ROLE_NOT_ADMIN', code: '42501' } };
+      }
+      if (!params.p_reason || !String(params.p_reason).trim()) {
+        return { data: null, error: { message: 'INVALID_REASON', code: '22023' } };
+      }
+      row.rejected_by = params.p_user_id;
+      row.rejected_at = now;
+      row.rejection_reason = String(params.p_reason).trim();
+    }
+
     row.status = params.p_to_status;
     row.updated_at = now;
     row.updated_by = params.p_user_id;
     row.version = (row.version || 1) + 1;
 
-    if (params.p_to_status === 'Approved' || (params.p_to_status === 'Released' && !row.approved_by)) {
-      row.approved_by = params.p_user_id;
-      row.approved_at = now;
+    const histId = nextId();
+    mockTables.status_history.set(histId, {
+      id: histId,
+      table_name: 'disbursements',
+      record_id: row.id,
+      old_status: oldStatus,
+      new_status: row.status,
+      actor_id: params.p_user_id,
+      entity_id: params.p_entity_id,
+      details: {
+        action: 'status_change',
+        reason: params.p_reason || null,
+        payment_details: params.p_payment_details || null,
+        previous_version: params.p_expected_version,
+      },
+      created_at: now,
+    });
+
+    return { data: [row], error: null };
+  },
+
+  disbursement_atomic_delete: (params) => {
+    const row = mockTables.disbursements.get(params.p_id);
+    if (!row || row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.deleted_at || row.archived) {
+      return { data: null, error: { message: 'ALREADY_DELETED_OR_ARCHIVED', code: 'P0002' } };
     }
-    if (params.p_to_status === 'Released') {
-      row.released_by = params.p_user_id;
-      row.released_at = now;
-      const pd = params.p_payment_details || {};
-      if (pd.method !== undefined) row.payment_method = pd.method || null;
-      if (pd.reference !== undefined) row.payment_reference = pd.reference || null;
-      if (pd.bank !== undefined) row.payment_bank = pd.bank || null;
-      if (pd.date !== undefined) row.payment_date = pd.date || null;
-      row.payment_processed_by = params.p_user_id;
+    if (row.lifecycle_version !== 2) {
+      return { data: null, error: { message: 'SAVED_WORKFLOW_READ_ONLY', code: 'P0002' } };
     }
-    if (params.p_to_status === 'Funded') {
-      row.funded_by = params.p_user_id;
-      row.funded_at = now;
+    if (row.status !== 'Draft') {
+      return { data: null, error: { message: 'CANNOT_DELETE_NON_DRAFT', code: 'P0002' } };
     }
-    if (params.p_to_status === 'Rejected') {
-      row.rejected_by = params.p_user_id;
-      row.rejected_at = now;
-      row.rejection_reason = params.p_reason || null;
+    const actor = mockTables.users.get(params.p_user_id);
+    const isAdmin = actor?.role === 'Admin';
+    const isOwner = row.created_by === params.p_user_id || row.requested_by === params.p_user_id;
+    if (!isAdmin && !isOwner) {
+      return { data: null, error: { message: 'FORBIDDEN_DELETE_PERMISSION', code: '42501' } };
+    }
+    if (
+      params.p_expected_version === null ||
+      params.p_expected_version === undefined ||
+      Number(params.p_expected_version) <= 0 ||
+      row.version !== Number(params.p_expected_version)
+    ) {
+      return { data: null, error: { message: 'ERR_CONCURRENCY_CONFLICT', code: 'P0001' } };
+    }
+    const now = nowIso();
+    const oldStatus = row.status;
+    row.deleted_at = now;
+    row.updated_at = now;
+    row.updated_by = params.p_user_id;
+    row.version = (row.version || 1) + 1;
+
+    const histId = nextId();
+    mockTables.status_history.set(histId, {
+      id: histId,
+      table_name: 'disbursements',
+      record_id: row.id,
+      old_status: oldStatus,
+      new_status: 'Deleted',
+      actor_id: params.p_user_id,
+      entity_id: params.p_entity_id,
+      details: { action: 'delete', previous_status: oldStatus, previous_version: params.p_expected_version },
+      created_at: now,
+    });
+    return { data: [row], error: null };
+  },
+
+  disbursement_archive_toggle: (params) => {
+    const row = mockTables.disbursements.get(params.p_id);
+    if (!row || row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    const actor = mockTables.users.get(params.p_user_id);
+    if (actor?.role !== 'Admin') {
+      return { data: null, error: { message: 'FORBIDDEN_ROLE_NOT_ADMIN', code: '42501' } };
+    }
+    if (row.version !== Number(params.p_expected_version)) {
+      return { data: null, error: { message: 'ERR_CONCURRENCY_CONFLICT', code: 'P0001' } };
+    }
+    const now = nowIso();
+    row.archived = params.p_archive;
+    row.archived_at = params.p_archive ? now : null;
+    row.archived_by = params.p_archive ? params.p_user_id : null;
+    row.updated_at = now;
+    row.updated_by = params.p_user_id;
+    row.version = (row.version || 1) + 1;
+
+    const histId = nextId();
+    mockTables.status_history.set(histId, {
+      id: histId,
+      table_name: 'disbursements',
+      record_id: row.id,
+      old_status: row.status,
+      new_status: row.status,
+      actor_id: params.p_user_id,
+      entity_id: params.p_entity_id,
+      details: { action: params.p_archive ? 'archive' : 'unarchive', previous_version: params.p_expected_version },
+      created_at: now,
+    });
+    return { data: [row], error: null };
+  },
+
+
+
+  disbursement_atomic_edit: (params) => {
+    const row = mockTables.disbursements.get(params.p_id);
+    if (!row || row.entity_id !== params.p_entity_id) return { data: [], error: null };
+    if (row.version !== Number(params.p_expected_version)) {
+      return { data: null, error: { message: 'ERR_CONCURRENCY_CONFLICT', code: 'P0001' } };
+    }
+    const u = params.p_updates || {};
+    const actor = mockTables.users.get(params.p_user_id);
+    const isAdmin = actor?.role === 'Admin';
+    const isFinancial =
+      u.amount !== undefined ||
+      u.category !== undefined ||
+      u.description !== undefined ||
+      u.fund_source !== undefined ||
+      u.client_id !== undefined ||
+      u.linked_work_request_id !== undefined ||
+      u.receipt_s3_key !== undefined;
+
+    if (isFinancial && row.status !== 'Draft') {
+      return { data: null, error: { message: 'FINANCIAL_EDITS_LOCKED_AFTER_APPROVAL', code: 'P0002' } };
+    }
+    if (u.print_details !== undefined && !isAdmin) {
+      return { data: null, error: { message: 'FORBIDDEN_PRINT_DETAILS_ADMIN_ONLY', code: '42501' } };
     }
 
+    const now = nowIso();
+    Object.assign(row, u);
+    if (row.review_ready === false && isFinancial) {
+      row.review_ready = true;
+    }
+    row.updated_at = now;
+    row.updated_by = params.p_user_id;
+    row.version = (row.version || 1) + 1;
+
+    const histId = nextId();
+    mockTables.status_history.set(histId, {
+      id: histId,
+      table_name: 'disbursements',
+      record_id: row.id,
+      old_status: row.status,
+      new_status: row.status,
+      actor_id: params.p_user_id,
+      entity_id: params.p_entity_id,
+      details: { action: 'edit', after: u, previous_version: params.p_expected_version },
+      created_at: now,
+    });
     return { data: [row], error: null };
   },
 
@@ -686,13 +1559,20 @@ const rpcImpl = {
     row.current_val += 1;
     row.updated_at = nowIso();
     mockTables.document_sequences.set(prefix, row);
-    return { data: `${prefix}-${String(row.current_val).padStart(4, '0')}`, error: null };
+    const valStr = String(row.current_val);
+    const formatted = valStr.length < 4 ? valStr.padStart(4, '0') : valStr;
+    return { data: `${prefix}-${formatted}`, error: null };
   },
 
   // Atomic invoice create (migration 000047): invoice row + line items in one
   // step, mirroring invoice_create_transactional().
   invoice_create_transactional: (params) => {
     const d = params.p_invoice_data || {};
+    let invoiceNumber = d.invoiceNumber;
+    if (!invoiceNumber) {
+      invoiceSeq += 1;
+      invoiceNumber = `ATA-SI-${new Date().getFullYear()}-${String(invoiceSeq).padStart(4, '0')}`;
+    }
     const invoice = {
       id: d.id || nextId(),
       entity_id: params.p_entity_id,
@@ -701,7 +1581,7 @@ const rpcImpl = {
       linked_task_id: d.linkedTaskId || null,
       task_id: d.taskId || d.task_id || d.linkedTaskId || null,
       linked_transmittal_id: d.linkedTransmittalId || null,
-      invoice_number: d.invoiceNumber,
+      invoice_number: invoiceNumber,
       issue_date: d.issueDate,
       due_date: d.dueDate,
       status: d.status || 'Draft',
@@ -721,7 +1601,7 @@ const rpcImpl = {
     };
 
     const dup = Array.from(mockTables.invoices.values()).find(
-      (r) => r.entity_id === invoice.entity_id && r.invoice_number === invoice.invoice_number
+      (r) => r.invoice_number === invoice.invoice_number
     );
     if (dup) {
       return {
@@ -763,11 +1643,50 @@ const rpcImpl = {
       params.p_expected_version !== undefined &&
       invoice.version !== Number(params.p_expected_version)
     ) {
-      return { data: null, error: null };
+      return {
+        data: null,
+        error: {
+          message: `ERR_CONCURRENCY_CONFLICT: Invoice version mismatch (expected ${params.p_expected_version}, found ${invoice.version})`,
+          code: 'P0001',
+        },
+      };
+    }
+
+    const u = params.p_updates || {};
+    const isFinancial =
+      (params.p_line_items !== null && params.p_line_items !== undefined) ||
+      u.client_id !== undefined ||
+      u.work_request_id !== undefined ||
+      u.task_id !== undefined ||
+      u.linked_task_id !== undefined ||
+      u.taskId !== undefined ||
+      u.linkedTaskId !== undefined ||
+      u.linked_transmittal_id !== undefined ||
+      u.invoice_number !== undefined ||
+      u.issue_date !== undefined ||
+      u.due_date !== undefined ||
+      u.terms !== undefined;
+
+    const isAdmin = mockTables.users.get(params.p_user_id)?.role === 'Admin';
+    if (u.print_details !== undefined && !isAdmin) {
+      return { data: null, error: { message: 'Only administrators can edit statement details', code: '42501' } };
+    }
+    if (isFinancial && invoice.status !== 'Draft' && !isAdmin) {
+      return {
+        data: null,
+        error: {
+          message: `INVOICE_NOT_DRAFT: Cannot modify financial fields or line items of non-draft invoice (current status ${invoice.status})`,
+          code: 'P0002',
+        },
+      };
     }
 
     let subtotal = null;
     if (params.p_line_items !== null && params.p_line_items !== undefined) {
+      const proposed = params.p_line_items.reduce((sum, item) => sum + Math.round(Number(item.amount) * 100), 0) / 100;
+      if (proposed < Number(invoice.amount_paid || 0)) {
+        return { data: null, error: { message: 'INVOICE_TOTAL_BELOW_PAID', code: '22023' } };
+      }
       Array.from(mockTables.invoice_line_items.values())
         .filter((li) => li.invoice_id === params.p_invoice_id)
         .forEach((li) => mockTables.invoice_line_items.delete(li.id));
@@ -788,7 +1707,6 @@ const rpcImpl = {
       subtotal = params.p_line_items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
     }
 
-    const u = params.p_updates || {};
     Object.keys(u).forEach((key) => {
       invoice[key] = u[key];
     });
@@ -796,6 +1714,9 @@ const rpcImpl = {
       invoice.subtotal = subtotal;
       invoice.total = subtotal;
       invoice.balance = subtotal - Number(invoice.amount_paid || 0);
+      if (u.status === undefined && Number(invoice.amount_paid) > 0 && ['Paid', 'Partially Paid', 'Sent', 'Approved', 'Overdue'].includes(invoice.status)) {
+        invoice.status = invoice.balance === 0 ? 'Paid' : 'Partially Paid';
+      }
     }
     invoice.updated_by = params.p_user_id;
     invoice.updated_at = nowIso();
@@ -916,16 +1837,57 @@ const supabaseAdmin = {
     listBuckets: () => Promise.resolve({ data: [{ name: 'test-bucket' }], error: null }),
     createBucket: () => Promise.resolve({ data: { name: 'avatars' }, error: null }),
     updateBucket: () => Promise.resolve({ data: { name: 'avatars' }, error: null }),
-    from: () => ({
-      createSignedUploadUrl: () =>
-        Promise.resolve({ data: { signedUrl: 'https://storage.example.com/upload' }, error: null }),
-      createSignedUrl: () =>
+    from: (_bucketName) => ({
+      createSignedUploadUrl: (_path) =>
         Promise.resolve({
-          data: { signedUrl: 'https://storage.example.com/download' },
+          data: {
+            signedUrl: 'https://storage.example.com/upload',
+          },
           error: null,
         }),
-      remove: () => Promise.resolve({ data: null, error: null }),
-      upload: () => Promise.resolve({ data: { path: 'test-path' }, error: null }),
+      createSignedUrl: (_path, _expiresIn) =>
+        Promise.resolve({
+          data: {
+            signedUrl: 'https://storage.example.com/download',
+          },
+          error: null,
+        }),
+      remove: (paths) => {
+        (paths || []).forEach((p) => mockStorageObjects.delete(p));
+        return Promise.resolve({ data: null, error: null });
+      },
+      upload: (path, buffer, options) => {
+        mockStorageObjects.set(path, {
+          buffer: buffer || Buffer.from('mock-bytes'),
+          size: buffer ? buffer.length : 1024,
+          contentType: options?.contentType || 'application/octet-stream',
+        });
+        return Promise.resolve({ data: { path }, error: null });
+      },
+      list: (folder, _options) => {
+        const prefix = folder ? (folder.endsWith('/') ? folder : folder + '/') : '';
+        const items = Array.from(mockStorageObjects.keys())
+          .filter((k) => k.startsWith(prefix))
+          .map((k) => ({
+            name: k.slice(prefix.length),
+            metadata: { size: mockStorageObjects.get(k)?.size || 1024 },
+          }));
+        return Promise.resolve({ data: items, error: null });
+      },
+      download: (path) => {
+        if (!mockStorageObjects.has(path)) {
+          return Promise.resolve({ data: null, error: { message: 'Object not found' } });
+        }
+        const obj = mockStorageObjects.get(path);
+        let buffer = obj.buffer || Buffer.from('mock-bytes');
+        if (!Buffer.isBuffer(buffer)) {
+          buffer = Buffer.from(buffer);
+        }
+        buffer.contentType = obj.contentType;
+        buffer.type = obj.contentType;
+        buffer.size = obj.size !== undefined ? obj.size : buffer.length;
+        return Promise.resolve({ data: buffer, error: null });
+      },
     }),
   },
 };
@@ -933,8 +1895,16 @@ const supabaseAdmin = {
 const resetMock = () => {
   mockUsers.clear();
   mockTokens.clear();
+  mockStorageObjects.clear();
   Object.keys(mockTables).forEach((key) => mockTables[key].clear());
   sequence = 0;
+  auditLogSeq = 0;
+  userSeq = 0;
+  clientSeq = 0;
+  wrSeq = 0;
+  invoiceSeq = 0;
+  disbSeq = 0;
+  trkSeq = 0;
   try {
     const { clearProfileCache } = require('../../src/middleware/auth');
     clearProfileCache();
@@ -949,4 +1919,5 @@ module.exports = {
   seedDefaults,
   resetMock,
   mockTables,
+  mockStorageObjects,
 };

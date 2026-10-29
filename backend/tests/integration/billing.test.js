@@ -14,11 +14,15 @@ const { registerUser, seedDefaults, resetMock, mockTables } = require('../fixtur
 const CLIENT_ID = '11111111-1111-1111-1111-111111111111';
 const CLIENT_ID_LTA = '22222222-2222-2222-2222-222222222222';
 const WORK_REQUEST_ID = '33333333-3333-3333-3333-333333333333';
+const TASK_ID = '44444444-4444-4444-4444-444444444444';
+const WORK_REQUEST_ID_LTA = '33333333-3333-3333-3333-333333333334';
+const TASK_ID_LTA = '44444444-4444-4444-4444-444444444445';
 
 const validInvoice = {
   invoiceNumber: 'ATA-SI-2026-001',
   clientId: CLIENT_ID,
   workRequestId: WORK_REQUEST_ID,
+  taskId: TASK_ID,
   issueDate: '2026-07-01',
   dueDate: '2026-07-31',
   status: 'Draft',
@@ -53,6 +57,25 @@ const seedClient = () => {
     title: 'Acme Audit',
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ID, {
+    id: TASK_ID,
+    work_request_id: WORK_REQUEST_ID,
+    title: 'Acme Audit Task',
+    status: 'In Progress',
+  });
+  mockTables.work_requests.set(WORK_REQUEST_ID_LTA, {
+    id: WORK_REQUEST_ID_LTA,
+    entity_id: 'ent-lta',
+    client_id: CLIENT_ID_LTA,
+    title: 'Beta Audit',
+    status: 'In Progress',
+  });
+  mockTables.tasks.set(TASK_ID_LTA, {
+    id: TASK_ID_LTA,
+    work_request_id: WORK_REQUEST_ID_LTA,
+    title: 'Beta Audit Task',
+    status: 'In Progress',
+  });
 };
 
 describe('/v1/invoices', () => {
@@ -63,12 +86,15 @@ describe('/v1/invoices', () => {
   });
 
   it('creates an invoice when user has billing:edit', async () => {
+    const accUserId = 'acc-billing-user-1';
     const token = registerUser({
+      id: accUserId,
       email: 'accounting@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
       entities: ['ATA'],
     });
+    mockTables.tasks.get(TASK_ID).assignee_id = accUserId;
 
     const res = await request(app)
       .post('/v1/invoices')
@@ -101,7 +127,7 @@ describe('/v1/invoices', () => {
       .post('/v1/invoices')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'LTA')
-      .send({ ...validInvoice, invoiceNumber: 'LTA-SI-2026-001', clientId: CLIENT_ID_LTA })
+      .send({ ...validInvoice, invoiceNumber: 'LTA-SI-2026-001', clientId: CLIENT_ID_LTA, workRequestId: WORK_REQUEST_ID_LTA, taskId: TASK_ID_LTA })
       .expect(201);
 
     const res = await request(app)
@@ -450,7 +476,7 @@ describe('/v1/invoices', () => {
       .post('/v1/invoices')
       .set('Authorization', `Bearer ${admin}`)
       .set('X-Active-Entity', 'ATA')
-      .send({ ...validInvoice, linkedTaskId: taskId })
+      .send({ ...validInvoice, taskId: undefined, linkedTaskId: taskId })
       .expect(201);
 
     expect(created.body.data.linked_task_id).toBe(taskId);
@@ -520,29 +546,53 @@ describe('/v1/invoices', () => {
     expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
     expect(adminList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
-    // 2. Ops lists invoices -> sees only Sent
+    // 2. Ops (project teammate on WORK_REQUEST_ID) lists invoices -> sees both Draft and Sent (F07)
     const opsList = await request(app)
       .get('/v1/invoices')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(true);
     expect(opsList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(true);
 
-    // 3. Ops tries to fetch draft invoice directly -> 403 Forbidden
+    // 3. Outsider user not on project team cannot see either and is denied direct fetch
+    const outsider = registerUser({
+      id: '00000000-0000-4000-a000-000000000444',
+      email: 'outsider-billing@ata-lta.ph',
+      name: 'Outsider User',
+      role: 'Operations',
+      entities: ['ATA'],
+    });
+
+    const outsiderList = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${outsider}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(outsiderList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-DRAFT')).toBe(false);
+    expect(outsiderList.body.data.some((i) => i.invoice_number === 'ATA-SI-2026-SENT')).toBe(false);
+
     await request(app)
       .get(`/v1/invoices/${draftRes.body.data.id}`)
-      .set('Authorization', `Bearer ${ops}`)
+      .set('Authorization', `Bearer ${outsider}`)
       .set('X-Active-Entity', 'ATA')
       .expect(403);
 
-    // 4. Ops gets counts -> count does not include draft/pending
+    // 4. Ops (project teammate) gets counts -> count includes both project invoices (Draft & Sent) (F07, F09)
     const opsCounts = await request(app)
       .get('/v1/invoices/counts')
       .set('Authorization', `Bearer ${ops}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(opsCounts.body.data.active).toBe(1); // Only the Sent one
+    expect(opsCounts.body.data.active).toBe(2);
+
+    // 4b. Outsider gets counts -> 0 active (F09)
+    const outsiderCounts = await request(app)
+      .get('/v1/invoices/counts')
+      .set('Authorization', `Bearer ${outsider}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(outsiderCounts.body.data.active).toBe(0);
 
     // 5. Admin gets counts -> count includes both
     const adminCounts = await request(app)
@@ -561,24 +611,27 @@ describe('/v1/invoices', () => {
       entities: ['ATA'],
     });
 
+    const staff1Id = '00000000-0000-4000-a000-000000000561';
     const staff1 = registerUser({
-      id: 'staff-1-id',
+      id: staff1Id,
       email: 'staff1@ata-lta.ph',
       name: 'Staff One',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    const staff2Id = '00000000-0000-4000-a000-000000000562';
     const staff2 = registerUser({
-      id: 'staff-2-id',
+      id: staff2Id,
       email: 'staff2@ata-lta.ph',
       name: 'Staff Two',
       role: 'Operations',
       entities: ['ATA'],
     });
 
+    const acctId = '00000000-0000-4000-a000-000000000563';
     const accounting = registerUser({
-      id: 'accounting-id',
+      id: acctId,
       email: 'acct@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
@@ -603,16 +656,17 @@ describe('/v1/invoices', () => {
     });
 
     // Seed tasks assigning Staff One to WR_1, but no one to WR_2
-    mockTables.tasks.set('task-staff1', {
-      id: 'task-staff1',
+    const taskIdStaff1 = '22222222-3333-4444-5555-666666666661';
+    mockTables.tasks.set(taskIdStaff1, {
+      id: taskIdStaff1,
       work_request_id: WR_1,
-      assignee_id: 'staff-1-id',
+      assignee_id: staff1Id,
       deleted_at: null,
     });
 
     // Seed invoices linked to WR_1 and WR_2
-    const invoiceWr1 = 'inv-wr1';
-    const invoiceWr2 = 'inv-wr2';
+    const invoiceWr1 = '33333333-4444-5555-6666-777777777771';
+    const invoiceWr2 = '33333333-4444-5555-6666-777777777772';
 
     mockTables.invoices.set(invoiceWr1, {
       id: invoiceWr1,
@@ -665,14 +719,23 @@ describe('/v1/invoices', () => {
       .set('X-Active-Entity', 'ATA')
       .expect(200);
 
-    // 5. Accounting Staff can see both invoices across the entity
-    const resAcct = await request(app)
+    // 5. Accounting Staff without project membership cannot see unrelated invoices (Finding F03)
+    const resAcctOutsider = await request(app)
       .get('/v1/invoices')
       .set('Authorization', `Bearer ${accounting}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
-    expect(resAcct.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
-    expect(resAcct.body.data.some((i) => i.id === invoiceWr2)).toBe(true);
+    expect(resAcctOutsider.body.data.length).toBe(0);
+
+    // 6. Accounting Staff assigned to WR_1 sees WR_1's invoice
+    mockTables.work_requests.get(WR_1).assigned_to = acctId;
+    const resAcctAssigned = await request(app)
+      .get('/v1/invoices')
+      .set('Authorization', `Bearer ${accounting}`)
+      .set('X-Active-Entity', 'ATA')
+      .expect(200);
+    expect(resAcctAssigned.body.data.some((i) => i.id === invoiceWr1)).toBe(true);
+    expect(resAcctAssigned.body.data.some((i) => i.id === invoiceWr2)).toBe(false);
   });
 
   it('supports linking a transmittal to an invoice on create, update, and filtering by linkedTransmittalId', async () => {
@@ -779,6 +842,14 @@ describe('/v1/invoices', () => {
       deleted_at: null,
     });
 
+    const mgrTaskId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    mockTables.tasks.set(mgrTaskId, {
+      id: mgrTaskId,
+      work_request_id: WR_MANAGED_ID,
+      title: 'Managed Task',
+      status: 'In Progress',
+    });
+
     // Create Draft invoice linked to WR_MANAGED_ID
     const draftRes = await request(app)
       .post('/v1/invoices')
@@ -788,6 +859,7 @@ describe('/v1/invoices', () => {
         ...validInvoice,
         invoiceNumber: 'ATA-SI-2026-MGR-DRAFT',
         workRequestId: WR_MANAGED_ID,
+        taskId: mgrTaskId,
         status: 'Draft',
       })
       .expect(201);
@@ -845,7 +917,9 @@ describe('/v1/invoices', () => {
         id: LTA_INV_ID,
         entity_id: 'ent-lta',
         client_id: CLIENT_ID_LTA,
-        work_request_id: WORK_REQUEST_ID,
+        work_request_id: WORK_REQUEST_ID_LTA,
+        task_id: TASK_ID_LTA,
+        linked_task_id: TASK_ID_LTA,
         invoice_number: 'LTA-SI-2026-ALL',
         status: 'Draft',
         total: 5000,
@@ -885,12 +959,20 @@ describe('/v1/invoices', () => {
         entities: ['ATA', 'LTA'],
       };
 
+      const WR_LTA = '77777777-8888-4999-a000-bbbbbbbbbbbb';
+      mockTables.work_requests.set(WR_LTA, {
+        id: WR_LTA,
+        entity_id: 'ent-lta',
+        client_id: CLIENT_ID_LTA,
+        title: 'LTA Work Request',
+      });
+
       const INV_ID = '88888888-aaaa-bbbb-cccc-222222222222';
       mockTables.invoices.set(INV_ID, {
         id: INV_ID,
         entity_id: 'ent-lta',
         client_id: CLIENT_ID_LTA,
-        work_request_id: WORK_REQUEST_ID,
+        work_request_id: WR_LTA,
         invoice_number: 'LTA-SI-2026-FB',
         status: 'Draft',
         total: 3000,
@@ -920,12 +1002,15 @@ describe('/v1/invoices', () => {
     });
 
     it('Task A.2: Non-admin attempting to approve invoice to Sent gets HTTP 403 FORBIDDEN_INVOICE_APPROVAL', async () => {
+      const jenId = '00000000-0000-4000-a000-000000000781';
       const accountingToken = registerUser({
+        id: jenId,
         email: 'jen.andoga@ata-lta.ph',
         name: 'Jen Andoga',
         role: 'Accounting',
         entities: ['ATA'],
       });
+      mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = jenId;
 
       // Seed a draft invoice
       const INV_DRAFT = '12345678-0000-0000-0000-000000000001';
@@ -954,12 +1039,15 @@ describe('/v1/invoices', () => {
     });
 
     it('Task A.2: Non-admin attempting to reject invoice from Pending to Draft gets HTTP 403 FORBIDDEN_INVOICE_APPROVAL', async () => {
+      const jenId = '00000000-0000-4000-a000-000000000782';
       const accountingToken = registerUser({
-        email: 'jen.andoga@ata-lta.ph',
-        name: 'Jen Andoga',
+        id: jenId,
+        email: 'jen.andoga2@ata-lta.ph',
+        name: 'Jen Andoga 2',
         role: 'Accounting',
         entities: ['ATA'],
       });
+      mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = jenId;
 
       // Seed a pending invoice
       const INV_PENDING = '12345678-0000-0000-0000-000000000002';
@@ -968,6 +1056,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-GOV-2',
         status: 'Pending',
         total: 4000,
@@ -1002,6 +1092,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-ADMIN-1',
         status: 'Draft',
         total: 5000,
@@ -1026,6 +1118,8 @@ describe('/v1/invoices', () => {
         entity_id: 'ent-ata',
         client_id: CLIENT_ID,
         work_request_id: WORK_REQUEST_ID,
+        task_id: TASK_ID,
+        linked_task_id: TASK_ID,
         invoice_number: 'ATA-SI-2026-ADMIN-2',
         status: 'Pending',
         total: 6000,
@@ -1052,7 +1146,7 @@ describe('/v1/invoices', () => {
         entities: ['ATA'],
       });
 
-      const CREATOR_ID = 'creator-user-8888';
+      const CREATOR_ID = '00000000-0000-4000-a000-000000000883';
       mockTables.users.set(CREATOR_ID, {
         id: CREATOR_ID,
         name: 'Maria Creator',
@@ -1060,7 +1154,7 @@ describe('/v1/invoices', () => {
         role: 'Operations',
       });
 
-      const WR_CREATOR_ID = 'wr-with-creator-9999';
+      const WR_CREATOR_ID = '00000000-0000-4000-a000-000000000881';
       mockTables.work_requests.set(WR_CREATOR_ID, {
         id: WR_CREATOR_ID,
         entity_id: 'ent-ata',
@@ -1070,7 +1164,7 @@ describe('/v1/invoices', () => {
         created_by: CREATOR_ID,
       });
 
-      const INV_WITH_WR = 'inv-with-wr-7777';
+      const INV_WITH_WR = '00000000-0000-4000-a000-000000000882';
       mockTables.invoices.set(INV_WITH_WR, {
         id: INV_WITH_WR,
         entity_id: 'ent-ata',
@@ -1119,6 +1213,103 @@ describe('/v1/invoices', () => {
         creatorName: 'Maria Creator',
         creatorEmail: 'maria.creator@example.ph',
       });
+    });
+
+    it('auto-links linkedDisbursementIds on createInvoice and returns linked_disbursements and linked_transmittal on getInvoiceById', async () => {
+      const adminToken = registerUser({
+        email: 'admin-billing-links@ata-lta.ph',
+        name: 'Admin Billing Links',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const DISB_1 = '88888888-1111-4111-8111-111111111111';
+      const DISB_2 = '88888888-2222-4222-8222-222222222222';
+      const TR_ID = '88888888-3333-4333-8333-333333333333';
+
+      mockTables.disbursements.set(DISB_1, {
+        id: DISB_1,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-0001',
+        category: 'Government Fee',
+        description: 'SEC Filing Fee',
+        amount: 2500,
+        fund_source: 'Client Fund',
+        status: 'Released',
+        created_at: '2026-10-20T00:00:00Z',
+        deleted_at: null,
+      });
+
+      mockTables.disbursements.set(DISB_2, {
+        id: DISB_2,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-0002',
+        category: 'Transportation',
+        description: 'Courier to SEC',
+        amount: 450,
+        fund_source: 'Firm Fund',
+        status: 'Released',
+        created_at: '2026-10-21T00:00:00Z',
+        deleted_at: null,
+      });
+
+      mockTables.transmittals.set(TR_ID, {
+        id: TR_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: WORK_REQUEST_ID,
+        tracking_number: 'TR-ATA-2026-0099',
+        status: 'Sent',
+        recipient_name: 'Acme Finance Dept',
+        deleted_at: null,
+      });
+
+      const createRes = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          ...validInvoice,
+          invoiceNumber: 'ATA-SI-2026-LINKED-DISB',
+          linked_transmittal_id: TR_ID,
+          linkedDisbursementIds: [DISB_1, DISB_2],
+        })
+        .expect(201);
+
+      const invId = createRes.body.data.id;
+      expect(mockTables.disbursements.get(DISB_1).linked_invoice_id).toBe(invId);
+      expect(mockTables.disbursements.get(DISB_2).linked_invoice_id).toBe(invId);
+
+      // Detail endpoint returns linked_disbursements and linked_transmittal
+      const detailRes = await request(app)
+        .get(`/v1/invoices/${invId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(detailRes.body.data.linked_disbursements).toHaveLength(2);
+      expect(detailRes.body.data.linked_transmittal).toEqual({
+        id: TR_ID,
+        tracking_number: 'TR-ATA-2026-0099',
+        status: 'Sent',
+        recipient_name: 'Acme Finance Dept',
+      });
+      expect(detailRes.body.data.linked_transmittal_tracking_number).toBe('TR-ATA-2026-0099');
+
+      // List endpoint filters by workRequestId and enriches linked_transmittal
+      const listRes = await request(app)
+        .get(`/v1/invoices?workRequestId=${WORK_REQUEST_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(listRes.body.data).toHaveLength(1);
+      expect(listRes.body.data[0].id).toBe(invId);
+      expect(listRes.body.data[0].linked_transmittal_tracking_number).toBe('TR-ATA-2026-0099');
     });
   });
 });

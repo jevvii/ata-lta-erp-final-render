@@ -28,7 +28,11 @@ const createUserSchema = z.object({
   password: passwordSchema.optional(),
 });
 
-const updateUserSchema = createUserSchema.partial();
+const updateUserSchema = createUserSchema.partial().extend({
+  isActive: z.boolean().optional(),
+  status: z.enum(['Active', 'Disabled']).optional(),
+  expectedVersion: z.coerce.number().int().positive().optional(),
+});
 
 const rejectPendingSchema = z.object({
   reason: z.string().min(1).max(500),
@@ -36,8 +40,8 @@ const rejectPendingSchema = z.object({
 
 const createPendingSchema = z.object({
   tableName: z.string().min(1).max(100),
-  parentRecordId: z.string().uuid().optional().nullable(),
-  proposedData: z.record(z.any()),
+  parentRecordId: z.string().guid().optional().nullable(),
+  proposedData: z.record(z.string(), z.any()),
 });
 
 const listAuditQuerySchema = z.object({
@@ -49,6 +53,8 @@ const listAuditQuerySchema = z.object({
   date: z.string().min(1).optional(),
   from: z.string().optional(),
   to: z.string().optional(),
+  search: z.string().trim().max(200).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
   page: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
@@ -60,4 +66,5 @@ module.exports = {
   rejectPendingSchema,
   createPendingSchema,
   listAuditQuerySchema,
+  auditQuerySchema: listAuditQuerySchema,
 };

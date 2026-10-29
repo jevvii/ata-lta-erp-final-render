@@ -15,7 +15,7 @@ const listQuerySchema = z.object({
 });
 
 const markReadParamsSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().guid(),
 });
 
 module.exports = {

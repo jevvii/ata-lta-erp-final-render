@@ -17,7 +17,7 @@ const handleZodError = (err, next) => {
       new AppError({
         statusCode: 400,
         title: 'Validation Error',
-        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
       })
     );
   }
@@ -30,6 +30,10 @@ const listTransmittals = async (req, res, next) => {
     const filters = {
       status: req.query.status,
       clientId: req.query.clientId,
+      workRequestId: req.query.workRequestId,
+      work_request_id: req.query.work_request_id,
+      linkedWorkRequestId: req.query.linkedWorkRequestId,
+      linked_work_request_id: req.query.linked_work_request_id,
       search: req.query.search,
       archived: req.query.archived,
       includeDeleted: req.query.includeDeleted,
@@ -68,6 +72,7 @@ const createTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       entityCode: req.entityCode || req.headers['x-active-entity'],
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.status(201).json({ data });
@@ -98,6 +103,7 @@ const updateTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.json({ data });
@@ -113,6 +119,7 @@ const approveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -127,6 +134,7 @@ const sendTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
@@ -142,6 +150,7 @@ const acknowledgeTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
       boardOrder: req.body?.boardOrder,
     });
     res.json({ data });
@@ -157,6 +166,7 @@ const archiveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -171,6 +181,7 @@ const unarchiveTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -185,6 +196,7 @@ const deleteTransmittal = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.status(204).send();
   } catch (err) {

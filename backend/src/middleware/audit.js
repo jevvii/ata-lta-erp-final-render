@@ -30,6 +30,47 @@ const audit = (action, options = {}) => {
 
       const details = { ...(auditMeta.details || {}) };
       if (resData && typeof resData === 'object') {
+        const wrNum = resData.workRequestNumber || resData.work_request_number || resData.workRequestNo;
+        if (wrNum) {
+          if (!details.workRequestNumber) details.workRequestNumber = wrNum;
+          if (!details.workRequestNo) details.workRequestNo = wrNum;
+          if (!details.work_request_number) details.work_request_number = wrNum;
+        }
+
+        const clientNum = resData.clientNumber || resData.client_number;
+        if (clientNum) {
+          if (!details.clientNumber) details.clientNumber = clientNum;
+          if (!details.client_number) details.client_number = clientNum;
+        }
+
+        const userNum = resData.userNumber || resData.user_number;
+        if (userNum) {
+          if (!details.userNumber) details.userNumber = userNum;
+          if (!details.user_number) details.user_number = userNum;
+        }
+
+        const invNum = resData.invoiceNumber || resData.invoice_number;
+        if (invNum) {
+          if (!details.invoiceNumber) details.invoiceNumber = invNum;
+          if (!details.invoice_number) details.invoice_number = invNum;
+        }
+
+        const disbNum = resData.disbursementNumber || resData.disbursement_number;
+        if (disbNum) {
+          if (!details.disbursementNumber) details.disbursementNumber = disbNum;
+          if (!details.disbursement_number) details.disbursement_number = disbNum;
+        }
+
+        const trkNum =
+          resData.trackingNumber ||
+          resData.tracking_number ||
+          resData.transmittalNumber ||
+          resData.transmittal_number;
+        if (trkNum) {
+          if (!details.trackingNumber) details.trackingNumber = trkNum;
+          if (!details.tracking_number) details.tracking_number = trkNum;
+        }
+
         const itemNum =
           resData.disbursementNumber ||
           resData.disbursement_number ||

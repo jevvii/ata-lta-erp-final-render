@@ -11,6 +11,206 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const { getSignedUploadUrl, getSignedDownloadUrl } = require('../../services/storageService');
 const auditService = require('../../services/auditService');
 const AppError = require('../../lib/AppError');
+const {
+  getUserConcernedWorkRequestIds,
+  fetchInPages,
+  isUserEntitledToEntity,
+} = require('../../lib/userScope');
+const {
+  resolveTrustedUser,
+  isUserAssignedToTask,
+  assertTaskPhaseAndPrerequisitesSelectable,
+} = require('../../lib/taskAssignment');
+const { buildPermissionSet, hasPermission } = require('../../lib/permissions');
+const {
+  validateRecordProjectLinkage,
+  filterValidProjectRecords,
+  resolveExistingStoredTaskId,
+} = require('../../lib/projectLinkage');
+
+const isDisbursementReceiptDoc = (d) => {
+  if (!d) return false;
+  const path = (d.storage_path || '').toLowerCase();
+  if (path.includes('/disbursements/receipts/') || path.includes('/disbursements/')) return true;
+  const cat = (d.category || '').toLowerCase();
+  if (['receipt', 'receipts', 'disbursement', 'disbursement_receipt'].includes(cat)) return true;
+  const docType = (d.document_type || '').toLowerCase();
+  if (docType === 'disbursement_receipt' || docType === 'disbursement receipt') return true;
+  return false;
+};
+
+// Task comments belong to the task's assignees, regardless of department.
+// Standalone documents retain the existing DMS edit rule.
+// Rejected tasks are locked against comments for all users.
+const canCommentOnDocument = async (document, user) => {
+  if (!user?.id) return false;
+  const taskId = resolveExistingStoredTaskId(document);
+  if (taskId) {
+    const { data: task } = await supabaseAdmin
+      .from('tasks')
+      .select('id, approval_status')
+      .eq('id', taskId)
+      .maybeSingle();
+    if (task && task.approval_status === 'rejected') {
+      return false;
+    }
+  }
+  if (user.role === 'Admin') return true;
+  if (taskId) return isUserAssignedToTask(taskId, user.id);
+  return hasPermission(buildPermissionSet(user), 'dms:edit');
+};
+
+/**
+ * Authorize task-linked document mutations and enforce rejection locks.
+ * Disallows mutations on rejected tasks with 409 TASK_REJECTED_LOCKED.
+ * Prevents cross-WR and cross-entity leakage.
+ *
+ * @param {object} params
+ * @param {string} params.taskId - Linked task UUID
+ * @param {string} [params.entityId] - Active entity context
+ * @param {object} [params.user] - Effective caller context
+ * @param {string} [params.workRequestId] - Expected parent WR if already known
+ * @param {'attachment'|'modification'} [params.action='modification']
+ * @param {boolean} [params.requireAssignment=false]
+ * @returns {Promise<{ task: object, workRequest: object|null }>}
+ */
+const assertTaskDocumentMutationAllowed = async ({
+  taskId,
+  entityId,
+  user,
+  workRequestId,
+  action = 'modification',
+  requireAssignment = false,
+}) => {
+  if (!taskId) return { task: null, workRequest: null };
+
+  const { data: task, error: taskError } = await supabaseAdmin
+    .from('tasks')
+    .select('id, work_request_id, assignee_id, approval_status, status, phase, predecessors, deleted_at')
+    .eq('id', taskId)
+    .maybeSingle();
+
+  if (taskError) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: `Failed to retrieve task ${taskId}: ${taskError.message || String(taskError)}`,
+    });
+  }
+
+  if (!task || task.deleted_at) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: `Linked task ${taskId} does not exist`,
+      code: 'TASK_NOT_FOUND',
+    });
+  }
+
+  if (task.approval_status === 'rejected') {
+    throw new AppError({
+      statusCode: 409,
+      title: 'Conflict',
+      detail:
+        action === 'attachment'
+          ? 'Task is rejected and locked against document attachments'
+          : 'Task is rejected and locked against document modifications',
+      code: 'TASK_REJECTED_LOCKED',
+    });
+  }
+
+  // Work Request and Entity validation
+  let wr = null;
+  const effectiveWrId = workRequestId || task.work_request_id;
+  if (workRequestId && task.work_request_id && task.work_request_id !== workRequestId) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: `Linked task ${taskId} does not belong to work request ${workRequestId}`,
+      code: 'TASK_WR_MISMATCH',
+    });
+  }
+
+  if (effectiveWrId) {
+    const { data: wrData, error: wrError } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, entity_id, phase, deleted_at, creation_approval_status')
+      .eq('id', effectiveWrId)
+      .maybeSingle();
+
+    if (wrError) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: `Failed to retrieve work request: ${wrError.message || String(wrError)}`,
+      });
+    }
+
+    if (!wrData || wrData.deleted_at) {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Parent work request not found or deleted',
+      });
+    }
+
+    // Pending or rejected WR is not admitted to DMS
+    if (wrData.creation_approval_status && wrData.creation_approval_status !== 'approved') {
+      throw new AppError({
+        statusCode: 404,
+        title: 'Not Found',
+        detail: 'Parent work request not found or deleted',
+      });
+    }
+
+    // Entity alignment
+    if (entityId && entityId !== 'ALL' && wrData.entity_id && wrData.entity_id !== entityId) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: `Linked task ${taskId} does not belong to active entity`,
+      });
+    }
+
+    if (entityId === 'ALL' && user) {
+      const entitled = await isUserEntitledToEntity(wrData.entity_id, user);
+      if (!entitled) {
+        throw new AppError({
+          statusCode: 403,
+          title: 'Forbidden',
+          detail: 'You do not have permission to modify records for this entity.',
+          code: 'FORBIDDEN',
+        });
+      }
+    }
+
+    wr = wrData;
+  }
+
+  // User assignment authorization
+  if (requireAssignment && user && user.role !== 'Admin') {
+    const { data: taRows } = await supabaseAdmin
+      .from('task_assignees')
+      .select('id')
+      .eq('task_id', taskId)
+      .eq('user_id', user.id);
+
+    const isAssigned = task.assignee_id === user.id || (taRows && taRows.length > 0);
+    if (!isAssigned) {
+      throw new AppError({
+        statusCode: 403,
+        title: 'Forbidden',
+        detail:
+          action === 'attachment'
+            ? 'You are not assigned to this task and cannot attach documents to it.'
+            : 'You are not assigned to this task and cannot modify its documents.',
+        code: 'FORBIDDEN_TASK_ATTACHMENT',
+      });
+    }
+  }
+
+  return { task, workRequest: wr };
+};
 
 /**
  * Sanitize a file name for safe storage.
@@ -62,10 +262,12 @@ const enrichDocuments = async (docs) => {
   const uploaderIds = [...new Set(docs.map((d) => d.uploader_id).filter(Boolean))];
   const workRequestIds = [...new Set(docs.map((d) => d.work_request_id).filter(Boolean))];
   const linkedTaskIds = [...new Set(docs.map((d) => d.linked_task_id).filter(Boolean))];
+  const clientIds = [...new Set(docs.map((d) => d.client_id).filter(Boolean))];
 
   const userMap = new Map();
   const wrMap = new Map();
   const taskMap = new Map();
+  const clientMap = new Map();
 
   try {
     if (uploaderIds.length > 0) {
@@ -81,10 +283,20 @@ const enrichDocuments = async (docs) => {
     if (workRequestIds.length > 0) {
       const { data: wrs } = await supabaseAdmin
         .from('work_requests')
-        .select('id, title')
+        .select('id, title, work_request_number')
         .in('id', workRequestIds);
       (wrs || []).forEach((wr) => {
-        if (wr && wr.id) wrMap.set(wr.id, wr.title);
+        if (wr && wr.id) wrMap.set(wr.id, wr);
+      });
+    }
+
+    if (clientIds.length > 0) {
+      const { data: clients } = await supabaseAdmin
+        .from('clients')
+        .select('id, name, client_number')
+        .in('id', clientIds);
+      (clients || []).forEach((c) => {
+        if (c && c.id) clientMap.set(c.id, c);
       });
     }
 
@@ -101,12 +313,22 @@ const enrichDocuments = async (docs) => {
     // Graceful fallback if relations cannot be fetched
   }
 
-  return docs.map((doc) => ({
-    ...doc,
-    uploader_name: doc.uploader_id ? userMap.get(doc.uploader_id) || null : null,
-    work_request_title: doc.work_request_id ? wrMap.get(doc.work_request_id) || null : null,
-    linked_task_title: doc.linked_task_id ? taskMap.get(doc.linked_task_id) || null : null,
-  }));
+  return docs.map((doc) => {
+    const wr = doc.work_request_id ? wrMap.get(doc.work_request_id) : null;
+    const cli = doc.client_id ? clientMap.get(doc.client_id) : null;
+    const clientNumber = cli?.client_number || doc.client_number || null;
+    const wrNumber = wr?.work_request_number || null;
+    return {
+      ...doc,
+      clientNumber,
+      client_number: clientNumber,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
+      uploader_name: doc.uploader_id ? userMap.get(doc.uploader_id) || null : null,
+      work_request_title: wr?.title || null,
+      linked_task_title: doc.linked_task_id ? taskMap.get(doc.linked_task_id) || null : null,
+    };
+  });
 };
 
 /**
@@ -116,7 +338,15 @@ const enrichDocuments = async (docs) => {
  * @param {object} [params.filters] - Optional filters
  * @returns {Promise<{ data: object[], count: number }>}
  */
-const listDocuments = async ({ entityId, filters = {} }) => {
+const listDocuments = async ({ entityId, filters = {}, user }) => {
+  if (!user) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to list documents',
+    });
+  }
+
   const {
     category,
     status,
@@ -131,49 +361,64 @@ const listDocuments = async ({ entityId, filters = {} }) => {
   } = filters;
   const isArchived = archived === true || archived === 'true';
 
-  let query = supabaseAdmin
-    .from('documents')
-    .select('*', { count: 'exact' })
-    .is('deleted_at', null);
-
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
+  const isAdmin = user.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { data: [], count: 0 };
+    }
   }
 
-  if (isArchived) {
-    query = query.eq('archived', true);
-  } else {
-    query = query.eq('archived', false);
-  }
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('documents').select('*').is('deleted_at', null);
 
-  if (category) query = query.eq('category', category);
-  if (status) query = query.eq('status', status);
-  if (lifecycle) query = query.eq('document_lifecycle', lifecycle);
-  if (clientId) query = query.eq('client_id', clientId);
-  if (workRequestId) query = query.eq('work_request_id', workRequestId);
-  if (linkedTaskId) query = query.eq('linked_task_id', linkedTaskId);
-  if (search) {
-    query = query.or(
-      `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
-    );
-  }
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
 
+    if (isArchived) {
+      q = q.eq('archived', true);
+    } else {
+      q = q.eq('archived', false);
+    }
+
+    // Exclude disbursement receipts from DMS documents views
+    q = q
+      .not('storage_path', 'ilike', '%/disbursements/receipts/%')
+      .not('storage_path', 'ilike', '%/disbursements/%');
+
+    if (category) q = q.eq('category', category);
+    if (status) q = q.eq('status', status);
+    if (lifecycle) q = q.eq('document_lifecycle', lifecycle);
+    if (clientId) q = q.eq('client_id', clientId);
+    if (workRequestId) q = q.eq('work_request_id', workRequestId);
+    if (linkedTaskId) q = q.eq('linked_task_id', linkedTaskId);
+    if (search) {
+      q = q.or(
+        `original_name.ilike.%${search}%,description.ilike.%${search}%,document_type.ilike.%${search}%`
+      );
+    }
+    return q.order('created_at', { ascending: false });
+  };
+
+  const rawRows = await fetchInPages(makeQuery);
+
+  const validRows = await filterValidProjectRecords(rawRows || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const visibleRows = (validRows || []).filter((d) => !isDisbursementReceiptDoc(d));
+
+  const total = visibleRows.length;
   const offset = (page - 1) * limit;
-  query = query.order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+  const rows = visibleRows.slice(offset, offset + limit);
 
-  const { data, error, count } = await query;
+  const enriched = await enrichDocuments(rows);
 
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Failed to fetch documents',
-    });
-  }
-
-  const enriched = await enrichDocuments(data || []);
-
-  return { data: enriched, count: count || 0 };
+  return { data: enriched, count: total };
 };
 
 /**
@@ -184,57 +429,82 @@ const listDocuments = async ({ entityId, filters = {} }) => {
  * @param {object} params.data - Validated document data
  * @returns {Promise<{ document: object, uploadUrl: string }>}
  */
-const createDocument = async ({ entityId, entityCode, userId, data }) => {
-  // Validate linkedTaskId if provided
-  if (data.linkedTaskId) {
-    const { data: task, error: taskError } = await supabaseAdmin
-      .from('tasks')
-      .select('id, work_request_id, assignee_id')
-      .eq('id', data.linkedTaskId)
-      .single();
+const createDocument = async ({ entityId, entityCode, userId, user, data }) => {
+  // Enforce mandatory linked task on all document creations (No Floating Documents)
+  if (
+    !data.linkedTaskId ||
+    (typeof data.linkedTaskId === 'string' && data.linkedTaskId.trim() === '')
+  ) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'A valid linked task is required',
+      code: 'TASK_REQUIRED',
+    });
+  }
 
-    if (taskError || !task) {
-      throw new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: `Linked task ${data.linkedTaskId} does not exist`,
-      });
-    }
-
-    if (data.workRequestId && task.work_request_id !== data.workRequestId) {
-      throw new AppError({
-        statusCode: 400,
-        title: 'Validation Error',
-        detail: `Linked task ${data.linkedTaskId} does not belong to work request ${data.workRequestId}`,
-      });
-    }
-
-    // Role check: Admin bypasses
+  let callerUser = user;
+  if (!callerUser || !callerUser.role) {
     const { data: uploader } = await supabaseAdmin
       .from('users')
-      .select('role')
+      .select('id, role')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
+    callerUser = uploader || { id: userId };
+  }
 
-    if (uploader?.role !== 'Admin') {
-      // Check if user is task assignee or task_assignees member
-      const { data: taRows } = await supabaseAdmin
-        .from('task_assignees')
-        .select('id')
-        .eq('task_id', data.linkedTaskId)
-        .eq('user_id', userId);
+  const authResult = await assertTaskDocumentMutationAllowed({
+    taskId: data.linkedTaskId,
+    entityId,
+    user: callerUser,
+    workRequestId: data.workRequestId,
+    action: 'attachment',
+    requireAssignment: callerUser?.role !== 'Admin',
+  });
+  const linkedTask = authResult.task;
+  const wrData = authResult.workRequest;
 
-      const isAssigned = task.assignee_id === userId || (taRows && taRows.length > 0);
-      if (!isAssigned) {
-        throw new AppError({
-          statusCode: 403,
-          title: 'Forbidden',
-          detail: 'You are not assigned to this task and cannot attach documents to it.',
-          code: 'FORBIDDEN_TASK_ATTACHMENT',
-        });
-      }
+  if (data.workRequestId && linkedTask.work_request_id !== data.workRequestId) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: `Linked task ${data.linkedTaskId} does not belong to work request ${data.workRequestId}`,
+      code: 'TASK_WR_MISMATCH',
+    });
+  }
+
+  const effectiveWrId = data.workRequestId || linkedTask?.work_request_id;
+  if (!effectiveWrId) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: 'Task is not associated with an active work request',
+      code: 'TASK_WR_MISMATCH',
+    });
+  }
+  data.workRequestId = effectiveWrId;
+
+  if (linkedTask.status) {
+    const normStatus = String(linkedTask.status).trim().toLowerCase();
+    if (normStatus === 'cancelled') {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Task is cancelled and cannot be linked',
+        code: 'TASK_NOT_SELECTABLE',
+      });
+    }
+    if (normStatus === 'completed' || normStatus === 'done') {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Completed tasks cannot be linked to this record',
+        code: 'TASK_NOT_SELECTABLE',
+      });
     }
   }
+
+  await assertTaskPhaseAndPrerequisitesSelectable(linkedTask, wrData, 'document');
 
   const documentId = randomUUID();
 
@@ -252,7 +522,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
     id: documentId,
     file_name: sanitizeFileName(data.fileName),
     original_name: data.originalName || data.fileName,
-    work_request_id: data.workRequestId || null,
+    work_request_id: data.workRequestId || linkedTask?.work_request_id || null,
     linked_task_id: data.linkedTaskId || null,
     client_id: data.clientId || null,
     document_type: data.documentType || null,
@@ -314,7 +584,7 @@ const createDocument = async ({ entityId, entityCode, userId, data }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<object>}
  */
-const getDocumentById = async ({ entityId, id }) => {
+const getDocumentById = async ({ entityId, id, user, internal = false }) => {
   let query = supabaseAdmin
     .from('documents')
     .select('*')
@@ -335,8 +605,57 @@ const getDocumentById = async ({ entityId, id }) => {
     });
   }
 
+  if (!internal) {
+    if (!user) {
+      throw new AppError({
+        statusCode: 401,
+        title: 'Unauthorized',
+        detail: 'Authentication required to view document',
+      });
+    }
+
+    await validateRecordProjectLinkage({
+      record: data,
+      entityId,
+      user,
+      internal: false,
+    });
+
+    // Documents whose parent work request is not approved (e.g. pending, rejected)
+    // are accessible only in Admin inbox or creator submissions in Operations, not DMS.
+    const effectiveWrId = data.work_request_id || null;
+    if (effectiveWrId) {
+      const { data: wr } = await supabaseAdmin
+        .from('work_requests')
+        .select('id, creation_approval_status')
+        .eq('id', effectiveWrId)
+        .maybeSingle();
+
+      if (wr && wr.creation_approval_status && wr.creation_approval_status !== 'approved') {
+        throw new AppError({
+          statusCode: 404,
+          title: 'Not Found',
+          detail: `Document ${id} not found`,
+        });
+      }
+    }
+  }
+
   const [enriched] = await enrichDocuments([data]);
-  return enriched || data;
+  const document = enriched || data;
+  return internal ? document : { ...document, can_comment: await canCommentOnDocument(document, user) };
+};
+
+const resolveDocumentCaller = async ({ user, userId, caller, internal }) => {
+  const effectiveUser = caller || user || (await resolveTrustedUser({ user, userId }));
+  if (!internal && !effectiveUser) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to modify document',
+    });
+  }
+  return effectiveUser;
 };
 
 /**
@@ -348,9 +667,114 @@ const getDocumentById = async ({ entityId, id }) => {
  * @param {object} params.data - Fields to update
  * @returns {Promise<object>}
  */
-const updateDocument = async ({ entityId, id, userId, data }) => {
-  // Verify document exists and belongs to entity
-  await getDocumentById({ entityId, id });
+const updateDocument = async ({ entityId, id, userId, data, user, caller, internal = false }) => {
+  // Verify document exists, belongs to entity, and caller has project membership
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  // Guard existing linked task against mutations if rejected
+  const existingTaskId = resolveExistingStoredTaskId(existing);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: existing.work_request_id,
+      action: 'modification',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
+
+  const isWrSpecified = data.workRequestId !== undefined;
+  const isTaskSpecified = data.linkedTaskId !== undefined;
+  const isLinkageInPayload = isWrSpecified || isTaskSpecified;
+  let effectiveWrId = isWrSpecified ? data.workRequestId : existing.work_request_id;
+  const effectiveTaskId = isTaskSpecified ? data.linkedTaskId : existing.linked_task_id;
+  const isTaskChanged = isTaskSpecified && data.linkedTaskId !== existing.linked_task_id;
+
+  if (isLinkageInPayload) {
+    if (isWrSpecified && (!data.workRequestId || String(data.workRequestId).trim() === '')) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'A valid work request and linked task are required',
+        code: 'TASK_REQUIRED',
+      });
+    }
+
+    if (
+      !effectiveTaskId ||
+      (typeof effectiveTaskId === 'string' && effectiveTaskId.trim() === '')
+    ) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'A valid linked task is required',
+        code: 'TASK_REQUIRED',
+      });
+    }
+
+    if (isTaskChanged && effectiveTaskId) {
+      const authResult = await assertTaskDocumentMutationAllowed({
+        taskId: effectiveTaskId,
+        entityId,
+        user: effectiveUser,
+        workRequestId: effectiveWrId,
+        action: 'attachment',
+        requireAssignment: effectiveUser?.role !== 'Admin',
+      });
+      const targetTask = authResult.task;
+      const targetWr = authResult.workRequest;
+
+      effectiveWrId = effectiveWrId || targetTask?.work_request_id;
+      if (!effectiveWrId) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          detail: 'Task is not associated with an active work request',
+          code: 'TASK_WR_MISMATCH',
+        });
+      }
+
+      if (targetTask?.status) {
+        const normStatus = String(targetTask.status).trim().toLowerCase();
+        if (normStatus === 'cancelled') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Task is cancelled and cannot be linked',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+        if (normStatus === 'completed' || normStatus === 'done') {
+          throw new AppError({
+            statusCode: 400,
+            title: 'Bad Request',
+            detail: 'Completed tasks cannot be linked to this record',
+            code: 'TASK_NOT_SELECTABLE',
+          });
+        }
+      }
+
+      await assertTaskPhaseAndPrerequisitesSelectable(targetTask, targetWr, 'document');
+    } else if (!isTaskChanged && effectiveTaskId && effectiveWrId) {
+      // Unchanged stored linkage: check if stored task was deleted
+      const { data: storedTask } = await supabaseAdmin
+        .from('tasks')
+        .select('id, deleted_at')
+        .eq('id', effectiveTaskId)
+        .maybeSingle();
+
+      if (!storedTask || Boolean(storedTask.deleted_at)) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Bad Request',
+          detail: 'The previously linked task has been deleted. A valid linked task is required.',
+          code: 'TASK_REQUIRED',
+        });
+      }
+    }
+  }
 
   const updates = {
     updated_by: userId,
@@ -360,7 +784,9 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
   if (data.documentType !== undefined) updates.document_type = data.documentType;
   if (data.category !== undefined) updates.category = data.category;
   if (data.description !== undefined) updates.description = data.description;
+  if (data.workRequestId !== undefined) updates.work_request_id = data.workRequestId;
   if (data.linkedTaskId !== undefined) updates.linked_task_id = data.linkedTaskId;
+  if (effectiveWrId && updates.work_request_id === undefined) updates.work_request_id = effectiveWrId;
   if (data.externalUrl !== undefined) updates.external_url = data.externalUrl;
   if (data.scannedBy !== undefined) updates.scanned_by = data.scannedBy;
   if (data.envelopeId !== undefined) updates.envelope_id = data.envelopeId;
@@ -397,8 +823,21 @@ const updateDocument = async ({ entityId, id, userId, data }) => {
  * @param {string} params.userId - User performing deletion
  * @returns {Promise<void>}
  */
-const deleteDocument = async ({ entityId, id, userId }) => {
-  const doc = await getDocumentById({ entityId, id });
+const deleteDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const doc = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const existingTaskId = resolveExistingStoredTaskId(doc);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: doc.work_request_id,
+      action: 'modification',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
 
   const { error } = await supabaseAdmin
     .from('documents')
@@ -428,8 +867,22 @@ const deleteDocument = async ({ entityId, id, userId }) => {
   });
 };
 
-const archiveDocument = async ({ entityId, id, userId }) => {
-  const existing = await getDocumentById({ entityId, id });
+const archiveDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const existingTaskId = resolveExistingStoredTaskId(existing);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: existing.work_request_id,
+      action: 'modification',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
+
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
     .update({ archived: true, updated_by: userId, updated_at: new Date().toISOString() })
@@ -458,8 +911,22 @@ const archiveDocument = async ({ entityId, id, userId }) => {
   return updated;
 };
 
-const unarchiveDocument = async ({ entityId, id, userId }) => {
-  const existing = await getDocumentById({ entityId, id });
+const unarchiveDocument = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const existingTaskId = resolveExistingStoredTaskId(existing);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: existing.work_request_id,
+      action: 'modification',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
+
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
     .update({ archived: false, updated_by: userId, updated_at: new Date().toISOString() })
@@ -488,22 +955,46 @@ const unarchiveDocument = async ({ entityId, id, userId }) => {
   return updated;
 };
 
-const countDocuments = async ({ entityId }) => {
-  const baseQuery = () => {
-    let q = supabaseAdmin
-      .from('documents')
-      .select('*', { count: 'exact', head: true })
-      .is('deleted_at', null);
-    if (entityId && entityId !== 'ALL') q = q.eq('entity_id', entityId);
-    return q;
+const countDocuments = async ({ entityId, user }) => {
+  const isAdmin = user?.role === 'Admin';
+  let concernedWrIds = null;
+  if (!isAdmin) {
+    if (!user) return { active: 0, archived: 0 };
+    concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
+    if (concernedWrIds.length === 0) {
+      return { active: 0, archived: 0 };
+    }
+  }
+
+  const makeQuery = () => {
+    let q = supabaseAdmin.from('documents').select('*').is('deleted_at', null);
+
+    if (entityId && entityId !== 'ALL') {
+      q = q.eq('entity_id', entityId);
+    }
+
+    // Exclude disbursement receipts from DMS documents views
+    q = q
+      .not('storage_path', 'ilike', '%/disbursements/receipts/%')
+      .not('storage_path', 'ilike', '%/disbursements/%');
+
+    return q.order('created_at', { ascending: false });
   };
 
-  const [{ count: activeCount }, { count: archivedCount }] = await Promise.all([
-    baseQuery().eq('archived', false),
-    baseQuery().eq('archived', true),
-  ]);
+  const data = await fetchInPages(makeQuery);
 
-  return { active: activeCount || 0, archived: archivedCount || 0 };
+  const validRows = await filterValidProjectRecords(data || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const visibleRows = (validRows || []).filter((d) => !isDisbursementReceiptDoc(d));
+
+  const activeCount = visibleRows.filter((d) => !d.archived).length;
+  const archivedCount = visibleRows.filter((d) => d.archived).length;
+
+  return { active: activeCount, archived: archivedCount };
 };
 
 /**
@@ -514,8 +1005,21 @@ const countDocuments = async ({ entityId }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<object>}
  */
-const confirmUpload = async ({ entityId, id }) => {
-  const doc = await getDocumentById({ entityId, id });
+const confirmUpload = async ({ entityId, id, userId, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const doc = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const existingTaskId = resolveExistingStoredTaskId(doc);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: doc.work_request_id,
+      action: 'attachment',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
 
   if (doc.status !== 'pending_upload') {
     throw new AppError({
@@ -525,13 +1029,17 @@ const confirmUpload = async ({ entityId, id }) => {
     });
   }
 
+  const effectiveUserId = userId || effectiveUser?.id || null;
+  const updatePayload = {
+    status: 'active',
+    upload_date: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    ...(effectiveUserId ? { updated_by: effectiveUserId } : {}),
+  };
+
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
-    .update({
-      status: 'active',
-      upload_date: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
+    .update(updatePayload)
     .eq('id', id)
     .eq('entity_id', entityId)
     .select()
@@ -555,8 +1063,8 @@ const confirmUpload = async ({ entityId, id }) => {
  * @param {string} params.id - Document UUID
  * @returns {Promise<{ url: string, fileName: string }>}
  */
-const getDownloadUrl = async ({ entityId, id }) => {
-  const doc = await getDocumentById({ entityId, id });
+const getDownloadUrl = async ({ entityId, id, user }) => {
+  const doc = await getDocumentById({ entityId, id, user });
 
   if (doc.external_url && doc.external_url.trim()) {
     return { url: doc.external_url.trim(), fileName: doc.original_name || doc.file_name || 'document' };
@@ -595,8 +1103,21 @@ const getDownloadUrl = async ({ entityId, id }) => {
  * @param {string} params.lifecycle - Target lifecycle state
  * @returns {Promise<object>}
  */
-const updateLifecycle = async ({ entityId, id, userId, lifecycle }) => {
-  await getDocumentById({ entityId, id });
+const updateLifecycle = async ({ entityId, id, userId, lifecycle, user, caller, internal = false }) => {
+  const effectiveUser = await resolveDocumentCaller({ user, userId, caller, internal });
+  const existing = await getDocumentById({ entityId, id, user: effectiveUser, internal });
+
+  const existingTaskId = resolveExistingStoredTaskId(existing);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user: effectiveUser,
+      workRequestId: existing.work_request_id,
+      action: 'modification',
+      requireAssignment: effectiveUser?.role !== 'Admin',
+    });
+  }
 
   const { data: updated, error } = await supabaseAdmin
     .from('documents')
@@ -633,6 +1154,37 @@ const updateLifecycle = async ({ entityId, id, userId, lifecycle }) => {
 // Authorization and mutation run together under a PostgreSQL row lock. Never
 // read/replace the thread in JavaScript: separate API workers must serialize too.
 const mutateDocumentComment = async ({ entityId, id, commentId, user, text, action }) => {
+  if (!user || !user.id) {
+    throw new AppError({
+      statusCode: 401,
+      title: 'Unauthorized',
+      detail: 'Authentication required to mutate document comments',
+    });
+  }
+  const document = await getDocumentById({ entityId, id, user, internal: false });
+
+  const existingTaskId = resolveExistingStoredTaskId(document);
+  if (existingTaskId) {
+    await assertTaskDocumentMutationAllowed({
+      taskId: existingTaskId,
+      entityId,
+      user,
+      workRequestId: document.work_request_id,
+      action: 'modification',
+    });
+  }
+
+  if (!document.can_comment) {
+    throw new AppError({
+      statusCode: 403,
+      title: 'Forbidden',
+      detail: document.linked_task_id
+        ? 'You must be assigned to this task to comment on its documents.'
+        : 'Document edit permission is required to comment.',
+      code: 'DOCUMENT_COMMENT_FORBIDDEN',
+    });
+  }
+
   const { data, error } = await supabaseAdmin.rpc('mutate_document_comment', {
     p_entity_id: entityId,
     p_document_id: id,
@@ -649,7 +1201,7 @@ const mutateDocumentComment = async ({ entityId, id, commentId, user, text, acti
       detail: statusCode === 500 ? 'Failed to save document comment' : error.message,
     });
   }
-  return data;
+  return { ...data, can_comment: true };
 };
 const addDocumentComment = (params) => mutateDocumentComment({ ...params, action: 'add' });
 const updateDocumentComment = (params) => mutateDocumentComment({ ...params, action: 'edit' });
@@ -672,4 +1224,5 @@ module.exports = {
   confirmUpload,
   getDownloadUrl,
   updateLifecycle,
+  assertTaskDocumentMutationAllowed,
 };

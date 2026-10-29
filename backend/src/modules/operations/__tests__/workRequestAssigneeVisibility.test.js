@@ -162,12 +162,12 @@ describe('SPEC-DASHBOARD-ASSIGNED-TASKS-REALTIME-001 §R1: Backend Multi-Assigne
       expect(canViewWorkRequest(wr, adminUser, null)).toBe(true);
     });
 
-    it('grants visibility to direct work request submitter/requester/assignee', () => {
+    it('denies visibility to submitter/requester alone (F10) and grants to assigned_to/co_assignees', () => {
       const wrSubmitted = { id: 'wr-1', submitted_by: ownerUser.id, tasks: [] };
-      expect(canViewWorkRequest(wrSubmitted, ownerUser, null)).toBe(true);
+      expect(canViewWorkRequest(wrSubmitted, ownerUser, null)).toBe(false);
 
       const wrRequested = { id: 'wr-1', requested_by: ownerUser.id, tasks: [] };
-      expect(canViewWorkRequest(wrRequested, ownerUser, null)).toBe(true);
+      expect(canViewWorkRequest(wrRequested, ownerUser, null)).toBe(false);
 
       const wrAssigned = { id: 'wr-1', assigned_to: ownerUser.id, tasks: [] };
       expect(canViewWorkRequest(wrAssigned, ownerUser, null)).toBe(true);
@@ -293,6 +293,40 @@ describe('SPEC-DASHBOARD-ASSIGNED-TASKS-REALTIME-001 §R1: Backend Multi-Assigne
       });
 
       expect(result.data).toHaveLength(0);
+    });
+
+    it('restricts managers to work requests they are added to (excludes unassigned manager)', async () => {
+      const managerUser = {
+        id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee',
+        email: 'manager@ata-lta.ph',
+        name: 'Manager User',
+        role: 'Manager',
+        entities: ['ATA'],
+      };
+      registerUser(managerUser);
+
+      // Unassigned manager cannot see WR_ID
+      const excludedResult = await listWorkRequests({
+        entityId: ENTITY_ID,
+        user: managerUser,
+        includeTasks: true,
+      });
+      expect(excludedResult.data).toHaveLength(0);
+
+      // Added manager as co_assignee can see WR_ID
+      const currentWr = mockTables.work_requests.get(WR_ID);
+      mockTables.work_requests.set(WR_ID, {
+        ...currentWr,
+        co_assignees: [managerUser.id],
+      });
+
+      const includedResult = await listWorkRequests({
+        entityId: ENTITY_ID,
+        user: managerUser,
+        includeTasks: true,
+      });
+      expect(includedResult.data).toHaveLength(1);
+      expect(includedResult.data[0].id).toBe(WR_ID);
     });
 
     it('does NOT embed tasks or phases when includeTasks is false', async () => {

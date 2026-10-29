@@ -26,7 +26,7 @@ const handleZodError = (err, next) => {
       new AppError({
         statusCode: 400,
         title: 'Validation Error',
-        detail: err.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
+        detail: (err.issues || err.errors).map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
       })
     );
   }
@@ -45,7 +45,12 @@ const listInvoices = async (req, res, next) => {
       clientId: req.query.clientId,
       taskId: req.query.taskId || req.query.task_id,
       linkedTaskId: req.query.linkedTaskId,
+      workRequestId: req.query.workRequestId,
+      work_request_id: req.query.work_request_id,
+      linkedWorkRequestId: req.query.linkedWorkRequestId,
+      linked_work_request_id: req.query.linked_work_request_id,
       linkedTransmittalId: req.query.linkedTransmittalId,
+      linked_transmittal_id: req.query.linked_transmittal_id,
       search: req.query.search,
       archived: req.query.archived,
       includeDeleted: req.query.includeDeleted,
@@ -73,6 +78,7 @@ const createInvoice = async (req, res, next) => {
     const data = await service.createInvoice({
       entityId: req.activeEntity,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.status(201).json({ data });
@@ -134,6 +140,7 @@ const recordPayment = async (req, res, next) => {
       entityId: req.activeEntity,
       invoiceId: req.params.id,
       userId: req.user.id,
+      user: req.user,
       data: validated,
     });
     res.status(201).json({ data });
@@ -145,10 +152,20 @@ const recordPayment = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const getInvoicePdf = async (req, res, next) => {
   try {
+    const raw = req.query.includeCompanyDetails;
+    if (raw !== undefined && raw !== 'true' && raw !== 'false') {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        detail: 'includeCompanyDetails must be true or false.',
+      });
+    }
     const result = await service.generateInvoicePdf({
       entityId: req.activeEntity,
       entityCode: req.entityCode,
       id: req.params.id,
+      includeCompanyDetails: raw !== 'false',
+      user: req.user,
     });
     res.json({ data: result });
   } catch (err) {
@@ -163,6 +180,7 @@ const getVoucherPdf = async (req, res, next) => {
       entityId: req.activeEntity,
       entityCode: req.entityCode,
       id: req.params.id,
+      user: req.user,
     });
     res.json({ data: result });
   } catch (err) {
@@ -173,7 +191,7 @@ const getVoucherPdf = async (req, res, next) => {
 /** @type {import('express').RequestHandler} */
 const getAgingReport = async (req, res, next) => {
   try {
-    const data = await service.getAgingReport({ entityId: req.activeEntity });
+    const data = await service.getAgingReport({ entityId: req.activeEntity, user: req.user });
     res.json({ data });
   } catch (err) {
     next(err);
@@ -253,6 +271,7 @@ const archiveInvoice = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
@@ -266,6 +285,7 @@ const unarchiveInvoice = async (req, res, next) => {
       entityId: req.activeEntity,
       id: req.params.id,
       userId: req.user.id,
+      user: req.user,
     });
     res.json({ data });
   } catch (err) {
