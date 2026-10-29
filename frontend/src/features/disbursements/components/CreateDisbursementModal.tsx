@@ -53,7 +53,8 @@ export interface FinancialPrefill {
 }
 
 export interface CreateDisbursementModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
+  open?: boolean;
   onClose: () => void;
   onSuccess?: () => void;
   prefill?: FinancialPrefill;
@@ -127,7 +128,8 @@ function classifyReceiptUploadError(err: unknown): string {
 }
 
 export function CreateDisbursementModal({
-  isOpen,
+  isOpen: propIsOpen,
+  open,
   onClose,
   onSuccess,
   prefill,
@@ -139,6 +141,7 @@ export function CreateDisbursementModal({
   defaultCategory = '',
   defaultDescription = '',
 }: CreateDisbursementModalProps) {
+  const isOpen = propIsOpen ?? open ?? false;
   const { createWithBlocking, isPending } = useCreateDisbursement();
   const { data: team = [] } = useTeam();
 

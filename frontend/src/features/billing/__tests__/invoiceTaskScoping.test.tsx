@@ -741,8 +741,8 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     await waitFor(() => {
       expect(posts.length).toBe(1);
     });
-    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_UNASSIGNED);
-    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111191']);
+    expect(posts[0]!.body.linkedTaskId || posts[0]!.body.taskId).toBe(TASK_UNASSIGNED);
+    expect(posts[0]!.body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111191']);
   });
 
   it('pre-fills the Linked Task field from attached disbursement for assigned task workers', async () => {
@@ -796,8 +796,8 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     await waitFor(() => {
       expect(posts.length).toBe(1);
     });
-    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_ASSIGNED);
-    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111192']);
+    expect(posts[0]!.body.linkedTaskId || posts[0]!.body.taskId).toBe(TASK_ASSIGNED);
+    expect(posts[0]!.body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111192']);
   });
 
   it('auto-selects assignable billing task when attached disbursement has a task assigned to someone else', async () => {
@@ -852,7 +852,7 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
       expect(posts.length).toBe(1);
     });
     // Auto-selected CALLER_USER_ID's assignable task instead of unassigned task
-    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_ASSIGNED);
-    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111193']);
+    expect(posts[0]!.body.linkedTaskId || posts[0]!.body.taskId).toBe(TASK_ASSIGNED);
+    expect(posts[0]!.body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111193']);
   });
 });

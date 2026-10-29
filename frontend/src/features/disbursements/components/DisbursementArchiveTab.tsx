@@ -16,13 +16,18 @@ import { useDebounce } from '@/features/billing/hooks/useDebounce';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { useEntityRealtimeSync } from '@/lib/realtime';
+import { cn } from '@/lib/utils';
 import type { Disbursement } from '../api/types';
 
 export interface DisbursementArchiveTabProps {
+  selectedId?: string | null;
   onSelectDisbursement?: (id: string) => void;
 }
 
-export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArchiveTabProps) {
+export function DisbursementArchiveTab({
+  selectedId,
+  onSelectDisbursement,
+}: DisbursementArchiveTabProps) {
   useEntityRealtimeSync({ table: 'disbursements' });
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
@@ -114,9 +119,9 @@ export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArc
   };
 
   return (
-    <div className="space-y-4" data-testid="disbursement-archive-tab">
+    <div className="flex flex-col h-full w-full min-h-0 overflow-hidden gap-3" data-testid="disbursement-archive-tab">
       {/* Search and Action Bar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-surface p-3 rounded-[8px] border border-border">
+      <div className="shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-surface p-2.5 sm:p-3 rounded-[8px] border border-border">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted" />
           <Input
@@ -151,29 +156,30 @@ export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArc
       </div>
 
       {/* Archived Disbursements Table */}
-      <div className="border border-border rounded-[8px] overflow-hidden bg-surface shadow-none">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-sidebar text-ink hover:bg-sidebar">
-              <TableHead className="w-10">
-                <input
-                  type="checkbox"
-                  aria-label="Select all archived disbursements"
-                  checked={restorable.length > 0 && restorable.every((d) => selectedIds.has(d.id))}
-                  disabled={isFiltering || restorable.length === 0}
-                  onChange={toggleSelectAll}
-                  className="rounded border-border text-ink focus:ring-primary"
-                />
-              </TableHead>
-              <TableHead className="w-40 text-xs font-bold">Voucher #</TableHead>
-              <TableHead className="text-xs font-bold">Description / Requester</TableHead>
-              <TableHead className="w-32 text-xs font-bold">Category</TableHead>
-              <TableHead className="w-28 text-xs font-bold">Fund Source</TableHead>
-              <TableHead className="w-32 text-xs font-bold text-right">Amount (PHP)</TableHead>
-              <TableHead className="w-28 text-xs font-bold text-center">Status</TableHead>
-              <TableHead className="w-28 text-xs font-bold text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
+      <div className="flex-1 min-h-0 border border-border rounded-[8px] overflow-hidden bg-surface shadow-none flex flex-col">
+        <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto">
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-sidebar border-b border-border shadow-xs">
+              <TableRow className="bg-sidebar text-ink hover:bg-sidebar border-b border-border h-9">
+                <TableHead className="w-10 sticky top-0 z-10 bg-sidebar">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all archived disbursements"
+                    checked={restorable.length > 0 && restorable.every((d) => selectedIds.has(d.id))}
+                    disabled={isFiltering || restorable.length === 0}
+                    onChange={toggleSelectAll}
+                    className="rounded border-border text-ink focus:ring-primary"
+                  />
+                </TableHead>
+                <TableHead className="w-40 text-xs font-bold sticky top-0 z-10 bg-sidebar">Voucher #</TableHead>
+                <TableHead className="text-xs font-bold sticky top-0 z-10 bg-sidebar">Description / Requester</TableHead>
+                <TableHead className="w-32 text-xs font-bold sticky top-0 z-10 bg-sidebar">Category</TableHead>
+                <TableHead className="w-28 text-xs font-bold sticky top-0 z-10 bg-sidebar">Fund Source</TableHead>
+                <TableHead className="w-32 text-xs font-bold text-right sticky top-0 z-10 bg-sidebar">Amount (PHP)</TableHead>
+                <TableHead className="w-28 text-xs font-bold text-center sticky top-0 z-10 bg-sidebar">Status</TableHead>
+                <TableHead className="w-28 text-xs font-bold text-right sticky top-0 z-10 bg-sidebar">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
@@ -207,14 +213,17 @@ export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArc
                   item.disbursement_number ||
                   item.disbursementNumber ||
                   `DISB-${item.id.slice(0, 8)}`;
-                const isSelected = selectedIds.has(item.id);
+                const isChecked = selectedIds.has(item.id);
+                const isViewed = Boolean(selectedId && selectedId === item.id);
 
                 return (
                   <TableRow
                     key={item.id}
-                    className={`hover:bg-hover/60 cursor-pointer transition-colors ${
-                      isSelected ? 'bg-selected/40' : ''
-                    }`}
+                    aria-selected={isViewed}
+                    className={cn(
+                      'hover:bg-hover/60 cursor-pointer transition-colors border-b border-border',
+                      isViewed ? 'bg-selected text-ink' : isChecked ? 'bg-selected/40' : ''
+                    )}
                     onClick={() => onSelectDisbursement?.(item.id)}
                     data-testid={`archived-disbursement-row-${item.id}`}
                   >
@@ -222,7 +231,7 @@ export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArc
                       <input
                         type="checkbox"
                         aria-label={`Select ${disbNumber}`}
-                        checked={isSelected}
+                        checked={isChecked}
                         disabled={isFiltering || !canRestore(item)}
                         onChange={() => toggleSelectOne(item.id)}
                         className="rounded border-border text-ink focus:ring-primary"
@@ -296,10 +305,11 @@ export function DisbursementArchiveTab({ onSelectDisbursement }: DisbursementArc
             )}
           </TableBody>
         </Table>
+      </div>
 
         {/* Pagination Bar */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-2.5 border-t border-border bg-canvas/50 text-xs text-muted">
+          <div className="shrink-0 flex items-center justify-between px-4 py-2 border-t border-border bg-canvas/50 text-xs text-muted">
             <span>
               Page <span className="font-semibold text-ink">{page}</span> of{' '}
               <span className="font-semibold text-ink">{totalPages}</span>

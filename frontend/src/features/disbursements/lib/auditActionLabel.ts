@@ -16,6 +16,9 @@ const actionLabels: Record<string, string> = {
   delete: 'Deleted',
   payment_details_update: 'Payment Details Updated',
   update_payment_details: 'Payment Details Updated',
+  billing_issued: 'Funded via Client Billing Issuance',
+  billing_paid: 'Released via Client Billing Payment',
+  billing_unlinked: 'Billing Invoice Unlinked (Reverted to Approved)',
 };
 
 export function auditActionLabel(action?: string | null, status?: string | null): string {
