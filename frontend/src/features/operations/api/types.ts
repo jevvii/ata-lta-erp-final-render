@@ -11,6 +11,8 @@
  * - Zero `any` types
  */
 
+export type { TimeEntry, RawTimeEntryApi } from '@/features/dashboard/api/types';
+
 // ============================================================================
 // 1. Domain Enums and Union Types
 // ============================================================================
@@ -269,6 +271,8 @@ export interface Task {
   can_review?: boolean;
   canResubmit?: boolean;
   can_resubmit?: boolean;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -328,6 +332,10 @@ export interface WorkRequest {
   dueDate: string | null;
   work_order_number?: string | null;
   workOrderNumber?: string | null;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
+  clientNumber?: string | null;
+  client_number?: string | null;
   createdAt: string;
   updatedAt: string;
   version: number;
@@ -533,6 +541,12 @@ export interface DmsDocument {
   updated_at: string;
   createdAt?: string;
   updatedAt?: string;
+  can_comment?: boolean;
+  canComment?: boolean;
+  work_request_number?: string | null;
+  workRequestNumber?: string | null;
+  client_number?: string | null;
+  clientNumber?: string | null;
 }
 
 // ============================================================================
@@ -870,8 +884,8 @@ export interface TaskRelatedInvoice {
   workRequestId?: string | null;
   entity_id?: string | null;
   entityId?: string | null;
-  invoice_number?: string;
-  invoiceNumber?: string;
+  invoice_number?: string | null;
+  invoiceNumber?: string | null;
   amount?: number;
   total?: number;
   balance?: number;
@@ -894,8 +908,8 @@ export interface TaskRelatedDisbursement {
   workRequestId?: string | null;
   entity_id?: string | null;
   entityId?: string | null;
-  disbursement_number?: string;
-  disbursementNumber?: string;
+  disbursement_number?: string | null;
+  disbursementNumber?: string | null;
   category?: string;
   description?: string;
   amount?: number;
@@ -914,10 +928,10 @@ export interface TaskRelatedTransmittal {
   workRequestId?: string | null;
   entity_id?: string | null;
   entityId?: string | null;
-  transmittal_number?: string;
-  transmittalNumber?: string;
-  tracking_number?: string;
-  trackingNumber?: string;
+  transmittal_number?: string | null;
+  transmittalNumber?: string | null;
+  tracking_number?: string | null;
+  trackingNumber?: string | null;
   recipient_name?: string;
   recipientName?: string;
   status?: string;

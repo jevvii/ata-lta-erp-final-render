@@ -268,7 +268,7 @@ describe('Challenger Adversarial Stress Tests: Billing Module', () => {
       });
       expect(zeroItemsResult.success).toBe(false);
       if (!zeroItemsResult.success) {
-        expect(zeroItemsResult.error.errors[0]?.message).toBe('At least one line item is required');
+        expect(zeroItemsResult.error.issues[0]?.message).toBe('At least one line item is required');
       }
 
       // Negative amount rejected
@@ -278,7 +278,7 @@ describe('Challenger Adversarial Stress Tests: Billing Module', () => {
       });
       expect(negativeAmountResult.success).toBe(false);
       if (!negativeAmountResult.success) {
-        expect(negativeAmountResult.error.errors[0]?.message).toBe('Amount must be non-negative');
+        expect(negativeAmountResult.error.issues[0]?.message).toBe('Amount must be non-negative');
       }
 
       // Invalid status rejected (only Draft and Pending permitted on creation)

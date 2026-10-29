@@ -44,6 +44,8 @@ export interface ClientSnapshot {
   name: string;
   tin?: string | null;
   address?: string | null;
+  clientNumber?: string | null;
+  client_number?: string | null;
 }
 
 export interface Invoice {
@@ -52,8 +54,17 @@ export interface Invoice {
   entity_id: string;
   entity_code?: EntityCode;
   invoice_number: string;
+  invoiceNumber?: string;
   client_id: string;
+  clientId?: string;
+  client_number?: string | null;
+  clientNumber?: string | null;
   work_request_id?: string | null;
+  workRequestId?: string | null;
+  work_request_number?: string | null;
+  workRequestNumber?: string | null;
+  tracking_number?: string | null;
+  trackingNumber?: string | null;
   task_id?: string | null;
   taskId?: string | null;
   linked_task_id?: string | null;
@@ -80,6 +91,8 @@ export interface Invoice {
     id: string;
     title: string;
     workOrderNumber?: string | null;
+    workRequestNumber?: string | null;
+    work_request_number?: string | null;
     creatorName?: string | null;
     creatorEmail?: string | null;
   } | null;
@@ -167,11 +180,15 @@ export interface CreateLineItemInput {
 export interface CreateInvoiceInput {
   clientId: string;
   workRequestId: string;
+  clientNumber?: string | null;
+  client_number?: string | null;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
   linkedTaskId?: string | null;
   taskId?: string | null;
   task_id?: string | null;
   linkedTransmittalId?: string | null;
-  invoiceNumber: string;
+  invoiceNumber?: string;
   issueDate: string;
   dueDate: string;
   status?: InvoiceStatus;
@@ -183,7 +200,11 @@ export interface CreateInvoiceInput {
 export interface UpdateInvoiceInput {
   printDetails?: InvoicePrintDetails;
   clientId?: string;
+  clientNumber?: string | null;
+  client_number?: string | null;
   workRequestId?: string | null;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
   linkedTaskId?: string | null;
   linkedTransmittalId?: string | null;
   invoiceNumber?: string;

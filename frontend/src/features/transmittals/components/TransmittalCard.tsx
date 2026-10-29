@@ -134,12 +134,42 @@ export function TransmittalCard({
       {/* Client Name & Approval Badge */}
       <div className="space-y-1">
         <div
-          className="text-sm font-semibold text-[#1E293B] line-clamp-1"
+          className="text-sm font-semibold text-[#1E293B] line-clamp-1 flex items-center gap-1.5 flex-wrap"
           data-testid="transmittal-card-client"
           title={clientName}
         >
-          {clientName}
+          {Boolean(
+            transmittal.clientNumber ||
+              transmittal.client_number ||
+              transmittal.clients?.clientNumber ||
+              transmittal.clients?.client_number
+          ) && (
+            <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+              {transmittal.clientNumber ||
+                transmittal.client_number ||
+                transmittal.clients?.clientNumber ||
+                transmittal.clients?.client_number}
+            </span>
+          )}
+          <span>{clientName}</span>
         </div>
+        {Boolean(
+          transmittal.workRequestNumber ||
+            transmittal.work_request_number ||
+            transmittal.work_request_title ||
+            transmittal.workRequestTitle
+        ) && (
+          <div className="text-[11px] text-[#475569] flex items-center gap-1 truncate font-mono">
+            {Boolean(transmittal.workRequestNumber || transmittal.work_request_number) && (
+              <span className="font-medium tabular-nums">
+                {transmittal.workRequestNumber || transmittal.work_request_number}
+              </span>
+            )}
+            {(transmittal.work_request_title || transmittal.workRequestTitle) && (
+              <span className="font-sans truncate">· {transmittal.work_request_title || transmittal.workRequestTitle}</span>
+            )}
+          </div>
+        )}
         {transmittal.status === 'Draft' && (
           <div className="pt-0.5">
             <TransmittalApprovalBadge approved={transmittal.approved} status={transmittal.status} />

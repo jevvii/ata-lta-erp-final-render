@@ -59,6 +59,7 @@ vi.mock('@/lib/flags', () => ({
 const mockClients: Client[] = [
   {
     id: 'c-101',
+    clientNumber: 'CLI-ATA-0001',
     entity: 'ATA',
     name: 'Megaworld Prime Corp',
     tin: '111-222-333-000',
@@ -80,6 +81,7 @@ const mockClients: Client[] = [
   },
   {
     id: 'c-102',
+    clientNumber: 'CLI-ATA-0002',
     entity: 'ATA',
     name: 'Ayala Land Inc.',
     tin: '444-555-666-000',
@@ -314,7 +316,7 @@ describe('Clients UI Components & RBAC Integration', () => {
   });
 
   describe('Directory Features & Modals', () => {
-    it('opens ClientDetailModal on clicking view button', async () => {
+    it('renders persistent ID column in ClientTable and opens ClientDetailModal with ID badge on clicking view button', async () => {
       const { wrapper } = createWrapper();
       render(<ClientsPage />, { wrapper });
 
@@ -322,12 +324,19 @@ describe('Clients UI Components & RBAC Integration', () => {
         expect(screen.getByTestId('view-client-btn-c-101')).toBeInTheDocument();
       });
 
+      // Verify the new first ID column in ClientTable
+      expect(screen.getByRole('columnheader', { name: 'ID' })).toBeInTheDocument();
+      expect(screen.getByTestId('client-id-c-101')).toHaveTextContent('CLI-ATA-0001');
+      expect(screen.getByTestId('client-id-c-102')).toHaveTextContent('CLI-ATA-0002');
+
       fireEvent.click(screen.getByTestId('view-client-btn-c-101'));
 
       await waitFor(() => {
         expect(screen.getByTestId('client-detail-modal')).toBeInTheDocument();
       });
 
+      // Verify persistent clientNumber badge in modal header
+      expect(screen.getByTestId('client-detail-number')).toHaveTextContent('CLI-ATA-0001');
       expect(screen.getByTestId('client-detail-name')).toHaveTextContent('Megaworld Prime Corp');
       expect(screen.getByTestId('client-detail-tin')).toHaveTextContent('111-222-333-000');
       expect(screen.getByTestId('client-detail-rdo')).toHaveTextContent('RDO 044');

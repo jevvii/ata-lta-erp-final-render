@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   CheckCircle2,
   XCircle,
@@ -29,13 +29,27 @@ import { useEntityRealtimeSync } from '@/lib/realtime';
 import { disbursementKeys } from '../api/queryKeys';
 import type { Disbursement } from '../api/types';
 
+export type QueueSegment =
+  | 'all'
+  | 'initial_requests'
+  | 'initial'
+  | 'payment_releases'
+  | 'releases'
+  | 'ready_for_funding';
+
 export interface AdminApprovalQueueProps {
   onSelectDisbursement?: (id: string) => void;
+  pageSize?: number;
+  activeTab?: QueueSegment;
+  onTabChange?: (tab: QueueSegment) => void;
 }
 
-export type QueueSegment = 'all' | 'initial_requests' | 'payment_releases' | 'ready_for_funding';
-
-export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueProps) {
+export function AdminApprovalQueue({
+  onSelectDisbursement,
+  pageSize: propPageSize,
+  activeTab,
+  onTabChange,
+}: AdminApprovalQueueProps) {
   useEntityRealtimeSync({ table: 'disbursements' });
   const [search, setSearch] = useState('');
   const [rejectingItem, setRejectingItem] = useState<Disbursement | null>(null);
@@ -43,7 +57,7 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
   const [releasingItem, setReleasingItem] = useState<Disbursement | null>(null);
   const [fundingItem, setFundingItem] = useState<Disbursement | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const pageSize = propPageSize ?? 20;
 
   const currentUser = useSessionStore((state) => state.user);
   const isAdmin = currentUser?.role === 'Admin';
@@ -52,7 +66,16 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
   );
   const canAccessQueue = isAdmin || isAccounting;
 
-  const [segment, setSegment] = useState<QueueSegment>(isAdmin ? 'all' : 'payment_releases');
+  const [segment, setSegment] = useState<QueueSegment>(
+    activeTab ?? (isAdmin ? 'all' : 'payment_releases')
+  );
+  const userSwitchedTab = useRef(false);
+
+  useEffect(() => {
+    if (activeTab !== undefined) {
+      setSegment(activeTab);
+    }
+  }, [activeTab]);
 
   // Complete traversal queries for queues with exact predicates
   const {
@@ -81,8 +104,8 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
   });
 
   const isLoading =
-    (segment === 'initial_requests' && isLoadingInitial) ||
-    (segment === 'payment_releases' && isLoadingRelease) ||
+    ((segment === 'initial_requests' || segment === 'initial') && isLoadingInitial) ||
+    ((segment === 'payment_releases' || segment === 'releases') && isLoadingRelease) ||
     (segment === 'ready_for_funding' && isLoadingFunding) ||
     (segment === 'all' && (isLoadingInitial || isLoadingRelease));
 
@@ -91,6 +114,34 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
   const initialRequestsCount = counts?.initialRequests ?? initialResponse?.data?.length ?? 0;
   const paymentReleasesCount = counts?.paymentReleases ?? releaseResponse?.data?.length ?? 0;
   const readyForFundingCount = counts?.readyForFunding ?? fundingResponse?.data?.length ?? 0;
+
+  const handleSelectSegment = (nextSegment: QueueSegment) => {
+    userSwitchedTab.current = true;
+    setSegment(nextSegment);
+    onTabChange?.(nextSegment);
+  };
+
+  // Auto-switch to releases if initial requests are empty but payment releases are available
+  useEffect(() => {
+    if (userSwitchedTab.current) return;
+    const initialCount = counts?.initialRequests ?? initialResponse?.data?.length ?? 0;
+    const releaseCount = counts?.paymentReleases ?? releaseResponse?.data?.length ?? 0;
+    const isInitialEmpty = initialCount === 0;
+    const hasReleases = releaseCount > 0;
+    const countsLoaded = counts !== undefined || (!isLoadingInitial && !isLoadingRelease);
+
+    if (countsLoaded && isInitialEmpty && hasReleases) {
+      setSegment('payment_releases');
+      onTabChange?.('payment_releases');
+    }
+  }, [
+    counts,
+    isLoadingInitial,
+    isLoadingRelease,
+    initialResponse?.data?.length,
+    releaseResponse?.data?.length,
+    onTabChange,
+  ]);
 
   // Strict v2 items with predicate enforcement
   const items = useMemo(() => {
@@ -120,10 +171,10 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
         !item.archived
     );
 
-    if (segment === 'initial_requests') {
+    if (segment === 'initial_requests' || segment === 'initial') {
       return rawInitial;
     }
-    if (segment === 'payment_releases') {
+    if (segment === 'payment_releases' || segment === 'releases') {
       return rawRelease;
     }
     if (segment === 'ready_for_funding') {
@@ -256,7 +307,7 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
         {isAdmin && (
           <button
             type="button"
-            onClick={() => setSegment('all')}
+            onClick={() => handleSelectSegment('all')}
             className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
               segment === 'all'
                 ? 'bg-surface text-primary-hover shadow-2xs font-semibold'
@@ -270,9 +321,9 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
         {isAdmin && (
           <button
             type="button"
-            onClick={() => setSegment('initial_requests')}
+            onClick={() => handleSelectSegment('initial_requests')}
             className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
-              segment === 'initial_requests'
+              segment === 'initial_requests' || segment === 'initial'
                 ? 'bg-surface text-primary-hover shadow-2xs font-semibold'
                 : 'text-muted hover:text-ink'
             }`}
@@ -283,9 +334,9 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
         )}
         <button
           type="button"
-          onClick={() => setSegment('payment_releases')}
+          onClick={() => handleSelectSegment('payment_releases')}
           className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
-            segment === 'payment_releases'
+            segment === 'payment_releases' || segment === 'releases'
               ? 'bg-surface text-primary-hover shadow-2xs font-semibold'
               : 'text-muted hover:text-ink'
           }`}
@@ -297,7 +348,7 @@ export function AdminApprovalQueue({ onSelectDisbursement }: AdminApprovalQueueP
         </button>
         <button
           type="button"
-          onClick={() => setSegment('ready_for_funding')}
+          onClick={() => handleSelectSegment('ready_for_funding')}
           className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
             segment === 'ready_for_funding'
               ? 'bg-surface text-primary-hover shadow-2xs font-semibold'

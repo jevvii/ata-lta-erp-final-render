@@ -41,6 +41,7 @@ export function ClientDetailModal({
 
   if (!client) return null;
 
+  const clientCode = client.clientNumber || client.client_number;
   const isArchived = client.status === 'Archived' || Boolean(client.deletedAt);
   const pocUser = client.contactUserId
     ? registeredUsers.find((u) => u.id === client.contactUserId)
@@ -56,6 +57,15 @@ export function ClientDetailModal({
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
+                {clientCode && (
+                  <Badge
+                    variant="outline"
+                    className="bg-[#EFF6FF] text-[#1D4ED8] border-[#BFDBFE] rounded-[6px] px-2 py-0.5 font-mono text-xs font-semibold tabular-nums"
+                    data-testid="client-detail-number"
+                  >
+                    {clientCode}
+                  </Badge>
+                )}
                 <Badge
                   variant="outline"
                   className={`text-xs  font-bold tracking-normal rounded-[6px] ${

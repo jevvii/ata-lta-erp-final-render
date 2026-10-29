@@ -10,18 +10,13 @@ import {
   disableUserAction,
 } from '../api/useUsers';
 import {
-  useRetainerTemplatesList,
-  createRetainerTemplateAction,
-  updateRetainerTemplateAction,
-  deleteRetainerTemplateAction,
-} from '../api/useRetainerTemplates';
-import {
-  useRetainerGenerationsList,
+  useAuditLogsList,
   useAuditCount,
-} from '../api/useRetainerGenerations';
+} from '../api/useAuditLogs';
+import { isLocalMutation } from '@/lib/realtime';
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import { useSessionStore } from '@/lib/session';
-import type { AdminUser, RetainerTemplate, AuditLogResponse } from '../api/types';
+import type { AdminUser, AuditLogResponse } from '../api/types';
 
 function createHarness() {
   const queryClient = new QueryClient({
@@ -46,6 +41,7 @@ const mockUsers: AdminUser[] = [
     departments: ['Management', 'Accounting', 'Operations', 'Documentation', 'HR'],
     entities: ['ATA', 'LTA'],
     isActive: true,
+    version: 1,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
   },
@@ -57,38 +53,9 @@ const mockUsers: AdminUser[] = [
     departments: ['Operations'],
     entities: ['ATA'],
     isActive: true,
+    version: 3,
     createdAt: '2026-01-02T00:00:00Z',
     updatedAt: '2026-01-02T00:00:00Z',
-  },
-];
-
-const mockTemplates: RetainerTemplate[] = [
-  {
-    id: 'tpl-1',
-    entity_id: 'ent-ata',
-    name: 'Annual Tax Compliance Retainer',
-    description: 'Yearly BIR statutory returns',
-    client_id: 'c-1',
-    schedule: 'annual',
-    priority: 'Normal',
-    pf_amount: 35000,
-    recurrence: 'annual',
-    tasks: [
-      {
-        local_id: 'task_1',
-        title: 'Review Trial Balance',
-        phase: 'pre_processing',
-        default_assignees: ['u-2'],
-      },
-      {
-        local_id: 'task_2',
-        title: 'Compute Withholding Taxes',
-        phase: 'processing',
-        depends_on_local_id: 'task_1',
-      },
-    ],
-    created_at: '2026-01-01T00:00:00Z',
-    updated_at: '2026-01-01T00:00:00Z',
   },
 ];
 
@@ -96,15 +63,14 @@ const mockAuditLogs: AuditLogResponse = {
   data: [
     {
       id: 'aud-1',
-      action: 'retainer-template.generated',
-      tableName: 'retainer_template_generations',
-      recordId: 'rec-1',
+      action: 'user.updated',
+      tableName: 'users',
+      recordId: 'u-2',
       entity: 'ATA',
       userId: 'u-1',
       details: {
-        templateId: 'tpl-1',
-        periodLabel: 'FY-2026-SMOKE',
-        workRequestId: 'wr-1',
+        before: { role: 'Operations' },
+        after: { role: 'Manager' },
       },
       createdAt: '2026-10-04T08:00:00Z',
     },
@@ -117,7 +83,7 @@ const mockAuditLogs: AuditLogResponse = {
   },
 };
 
-describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
+describe('Admin Data Layer: TanStack Query Hooks, OCC, CDC Loop Prevention & Audit Logs', () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
@@ -173,8 +139,8 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
     });
   });
 
-  describe('User Mutation Actions (runBlockingAction)', () => {
-    it('createUserAction executes POST and handles success', async () => {
+  describe('User Mutation Actions (runBlockingAction + OCC + Loop Prevention)', () => {
+    it('createUserAction executes POST, registers local mutation, and handles success', async () => {
       const newUser: AdminUser = {
         id: 'u-3',
         name: 'Pedro Reyes',
@@ -183,6 +149,7 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
         departments: ['Documentation'],
         entities: ['LTA'],
         isActive: true,
+        version: 1,
         createdAt: '2026-10-04T00:00:00Z',
         updatedAt: '2026-10-04T00:00:00Z',
       };
@@ -203,6 +170,7 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
 
       expect(res.id).toBe('u-3');
       expect(res.email).toBe('pedro@ata-lta.ph');
+      expect(isLocalMutation('users', 'u-3', 1)).toBe(true);
     });
 
     it('createUserAction surfaces USER_LIMIT_REACHED error verbatim', async () => {
@@ -212,7 +180,8 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
         json: async () => ({
           status: 403,
           title: 'Forbidden',
-          detail: 'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.',
+          detail:
+            'Maximum number of user accounts (15) reached. Contact the administrator to disable an existing account before adding a new one.',
           code: 'USER_LIMIT_REACHED',
         }),
       } as Response);
@@ -231,23 +200,57 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
       expect(modalState.error?.detail).toContain('Maximum number of user accounts (15) reached');
     });
 
-    it('updateUserAction executes PUT and invalidates cache', async () => {
+    it('updateUserAction executes PUT with expectedVersion (If-Match) and registers local mutation', async () => {
       const updatedUser: AdminUser = {
         ...mockUsers[1]!,
         name: 'Maria Santos-Valdez',
+        version: 4,
       };
 
-      global.fetch = vi.fn().mockResolvedValue({
+      const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => ({ data: updatedUser }),
       } as Response);
+      global.fetch = fetchMock;
 
       const res = await updateUserAction('u-2', {
         name: 'Maria Santos-Valdez',
+        expectedVersion: 3,
       });
 
       expect(res.name).toBe('Maria Santos-Valdez');
+      expect(res.version).toBe(4);
+      expect(isLocalMutation('users', 'u-2', 4)).toBe(true);
+
+      const [, reqInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const headers = reqInit.headers as Record<string, string>;
+      expect(headers['If-Match']).toBe('3');
+    });
+
+    it('updateUserAction resets blocking modal store on HTTP 409 Concurrency Conflict so ConflictResolutionModal is not covered', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          status: 409,
+          title: 'Conflict',
+          code: 'CONCURRENCY_CONFLICT',
+          detail: 'User record was modified by another administrator.',
+        }),
+      } as Response);
+
+      await expect(
+        updateUserAction('u-2', {
+          name: 'Stale Write',
+          expectedVersion: 2,
+        })
+      ).rejects.toMatchObject({
+        status: 409,
+        code: 'CONCURRENCY_CONFLICT',
+      });
+
+      expect(useBlockingModalStore.getState().status).toBe('idle');
     });
 
     it('disableUserAction executes DELETE to soft-disable user', async () => {
@@ -257,109 +260,45 @@ describe('Admin Data Layer: TanStack Query Hooks & Blocking Mutations', () => {
         json: async () => ({}),
       } as Response);
 
-      await disableUserAction('u-2', 'Maria Santos');
+      await disableUserAction('u-2', 'Maria Santos', 'ALL', 3);
       const modalState = useBlockingModalStore.getState();
       expect(modalState.status).toBe('success');
       expect(modalState.successTitle).toBe('User Disabled');
+      expect(isLocalMutation('users', 'u-2', 4)).toBe(true);
     });
   });
 
-  describe('Retainer Template Query & Mutation Hooks', () => {
-    it('useRetainerTemplatesList fetches template list from /v1/operations/templates', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ data: mockTemplates }),
-      } as Response);
-
-      const { wrapper } = createHarness();
-      const { result } = renderHook(() => useRetainerTemplatesList(), { wrapper });
-
-      await waitFor(() => expect(result.current.isSuccess).toBe(true));
-      expect(result.current.data?.length).toBe(1);
-      expect(result.current.data?.[0]?.name).toBe('Annual Tax Compliance Retainer');
-    });
-
-    it('createRetainerTemplateAction executes POST and stores blueprint', async () => {
-      const newTemplate: RetainerTemplate = {
-        id: 'tpl-2',
-        entity_id: 'ent-ata',
-        name: 'Monthly Payroll Retainer',
-        description: null,
-        client_id: null,
-        schedule: 'monthly',
-        priority: 'Normal',
-        pf_amount: 15000,
-        recurrence: 'none',
-        tasks: [{ title: 'Process Timesheets', phase: 'pre_processing' }],
-        created_at: '2026-10-04T00:00:00Z',
-        updated_at: '2026-10-04T00:00:00Z',
-      };
-
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 201,
-        json: async () => ({ data: newTemplate }),
-      } as Response);
-
-      const res = await createRetainerTemplateAction({
-        name: 'Monthly Payroll Retainer',
-        schedule: 'monthly',
-        pfAmount: 15000,
-        tasks: [{ title: 'Process Timesheets', phase: 'pre_processing' }],
-      });
-
-      expect(res.id).toBe('tpl-2');
-      expect(res.name).toBe('Monthly Payroll Retainer');
-    });
-
-    it('updateRetainerTemplateAction executes PUT', async () => {
-      const updatedTemplate: RetainerTemplate = {
-        ...mockTemplates[0]!,
-        name: 'Updated Compliance Retainer',
-      };
-
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ data: updatedTemplate }),
-      } as Response);
-
-      const res = await updateRetainerTemplateAction('tpl-1', {
-        name: 'Updated Compliance Retainer',
-      });
-
-      expect(res.name).toBe('Updated Compliance Retainer');
-    });
-
-    it('deleteRetainerTemplateAction executes DELETE', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 204,
-        json: async () => ({}),
-      } as Response);
-
-      await deleteRetainerTemplateAction('tpl-1', 'Annual Tax Compliance Retainer');
-      const modalState = useBlockingModalStore.getState();
-      expect(modalState.status).toBe('success');
-      expect(modalState.successTitle).toBe('Template Deleted');
-    });
-  });
-
-  describe('Retainer Generation Logs Query Hooks', () => {
-    it('useRetainerGenerationsList queries /admin/audit with table=retainer_template_generations', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
+  describe('Audit Log Query Hooks (useAuditLogsList & useAuditCount)', () => {
+    it('useAuditLogsList queries /admin/audit with filter params', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
         json: async () => mockAuditLogs,
       } as Response);
+      global.fetch = fetchMock;
 
       const { wrapper } = createHarness();
-      const { result } = renderHook(() => useRetainerGenerationsList({ page: 1, limit: 20 }), { wrapper });
+      const { result } = renderHook(
+        () =>
+          useAuditLogsList({
+            page: 1,
+            limit: 20,
+            module: 'users',
+            search: 'Maria',
+            sortOrder: 'desc',
+          }),
+        { wrapper }
+      );
 
       await waitFor(() => expect(result.current.isSuccess).toBe(true));
       expect(result.current.data?.data.length).toBe(1);
       expect(result.current.data?.meta.total).toBe(1);
+
+      const calledUrl = String(fetchMock.mock.calls[0]?.[0] ?? '');
+      expect(calledUrl).toContain('/admin/audit');
+      expect(calledUrl).toContain('module=users');
+      expect(calledUrl).toContain('search=Maria');
+      expect(calledUrl).toContain('sortOrder=desc');
     });
 
     it('useAuditCount queries /admin/audit/count', async () => {

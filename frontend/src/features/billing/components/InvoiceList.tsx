@@ -452,11 +452,42 @@ export function InvoiceList({
                             {inv.entity_code}
                           </Badge>
                         )}
-                        <span>{inv.invoice_number}</span>
+                        <span className="font-mono">{inv.invoice_number}</span>
                       </div>
                     </TableCell>
                     <TableCell className="text-xs text-[#1E293B] py-3">
-                      {inv.clients?.name || '—'}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {Boolean(
+                          inv.client_number ||
+                            inv.clientNumber ||
+                            inv.clients?.clientNumber ||
+                            inv.clients?.client_number
+                        ) && (
+                          <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                            {inv.client_number ||
+                              inv.clientNumber ||
+                              inv.clients?.clientNumber ||
+                              inv.clients?.client_number}
+                          </span>
+                        )}
+                        <span>{inv.clients?.name || '—'}</span>
+                      </div>
+                      {Boolean(
+                        inv.work_request_number ||
+                          inv.workRequestNumber ||
+                          inv.work_request?.workRequestNumber ||
+                          inv.work_request?.workOrderNumber
+                      ) && (
+                        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[#475569]">
+                          <span className="font-mono font-medium tabular-nums">
+                            {inv.work_request_number ||
+                              inv.workRequestNumber ||
+                              inv.work_request?.workRequestNumber ||
+                              inv.work_request?.workOrderNumber}
+                          </span>
+                          {inv.work_request?.title && <span>· {inv.work_request.title}</span>}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-[#475569] py-3">
                       {inv.issue_date?.slice(0, 10) || '—'}
@@ -552,7 +583,7 @@ export function InvoiceList({
                           {inv.entity_code}
                         </Badge>
                       )}
-                      <span className="font-bold text-xs text-[#1E293B]">
+                      <span className="font-bold text-xs text-[#1E293B] font-mono">
                         {inv.invoice_number}
                       </span>
                     </div>
@@ -565,10 +596,41 @@ export function InvoiceList({
                     </span>
                   </div>
 
-                  <p className="text-xs font-medium text-[#1E293B] flex items-center gap-1">
-                    <Building className="w-3 h-3 text-[#475569]" />
+                  <p className="text-xs font-medium text-[#1E293B] flex items-center gap-1.5 flex-wrap">
+                    <Building className="w-3 h-3 text-[#475569] shrink-0" />
+                    {Boolean(
+                      inv.client_number ||
+                        inv.clientNumber ||
+                        inv.clients?.clientNumber ||
+                        inv.clients?.client_number
+                    ) && (
+                      <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                        {inv.client_number ||
+                          inv.clientNumber ||
+                          inv.clients?.clientNumber ||
+                          inv.clients?.client_number}
+                      </span>
+                    )}
                     <span className="truncate">{inv.clients?.name || 'No client linked'}</span>
                   </p>
+                  {Boolean(
+                    inv.work_request_number ||
+                      inv.workRequestNumber ||
+                      inv.work_request?.workRequestNumber ||
+                      inv.work_request?.workOrderNumber
+                  ) && (
+                    <p className="text-[11px] text-[#475569] font-mono flex items-center gap-1 mt-1">
+                      <span className="font-medium tabular-nums">
+                        {inv.work_request_number ||
+                          inv.workRequestNumber ||
+                          inv.work_request?.workRequestNumber ||
+                          inv.work_request?.workOrderNumber}
+                      </span>
+                      {inv.work_request?.title && (
+                        <span className="font-sans truncate">· {inv.work_request.title}</span>
+                      )}
+                    </p>
+                  )}
 
                   <div className="mt-2 pt-2 border-t border-[#E2E8F0] flex items-center justify-between text-xs text-[#475569]">
                     <span className="flex items-center gap-1">

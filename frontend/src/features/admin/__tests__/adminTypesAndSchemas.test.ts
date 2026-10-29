@@ -3,21 +3,12 @@ import {
   createUserSchema,
   updateUserSchema,
   userPasswordSchema,
-  createRetainerTemplateSchema,
-  retainerTemplateTaskSchema,
-  generateRetainerTemplateSchema,
+  adminUserResponseSchema,
+  listAuditQuerySchema,
   auditLogResponseSchema,
   problemDetailsSchema,
 } from '../api/schemas';
 import { generateSecurePassword, PASSWORD_CRITERIA } from '../utils/password';
-import {
-  computeUserEffectivePermissions,
-  getPermissionModule,
-  PERMISSION_KEYS,
-  ADMIN_EXCLUSIVE_PERMISSIONS,
-  testPermission,
-} from '../utils/permissionsMatrix';
-import type { AdminUser } from '../api/types';
 
 describe('Admin Module: Types & Zod Schemas', () => {
   describe('Password Complexity Schema (Spec 2.8 / R-14)', () => {
@@ -81,7 +72,7 @@ describe('Admin Module: Types & Zod Schemas', () => {
     });
   });
 
-  describe('User Creation & Update Schemas', () => {
+  describe('User Creation, Update & Response Schemas (with OCC Version)', () => {
     it('validates a complete valid user creation payload', () => {
       const input = {
         name: 'Maria Santos',
@@ -119,119 +110,63 @@ describe('Admin Module: Types & Zod Schemas', () => {
       expect(res.success).toBe(false);
     });
 
-    it('allows partial update schema for user edits', () => {
+    it('allows partial update schema with expectedVersion and status for user edits', () => {
       const res = updateUserSchema.safeParse({
         name: 'Maria Santos-Reyes',
         departments: ['Operations', 'Documentation'],
+        status: 'Active',
+        expectedVersion: 3,
+      });
+      expect(res.success).toBe(true);
+    });
+
+    it('validates adminUserResponseSchema including OCC version', () => {
+      const res = adminUserResponseSchema.safeParse({
+        id: 'u-1',
+        name: 'Juan Dela Cruz',
+        email: 'juan@ata-lta.ph',
+        role: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA', 'LTA'],
+        isActive: true,
+        status: 'Active',
+        version: 4,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
       });
       expect(res.success).toBe(true);
     });
   });
 
-  describe('Retainer Template Task & Template Schemas', () => {
-    it('validates task blueprint with pre_processing and processing phases', () => {
-      const preTask = {
-        title: 'Review Client Ledger',
-        phase: 'pre_processing',
-        default_assignees: ['c56a4180-65aa-42ec-a945-5fd2dec05382'],
-      };
-      const procTask = {
-        title: 'Compute Tax Withholding',
-        phase: 'processing',
-        depends_on_local_id: 'task_1',
-      };
-
-      expect(retainerTemplateTaskSchema.safeParse(preTask).success).toBe(true);
-      expect(retainerTemplateTaskSchema.safeParse(procTask).success).toBe(true);
-    });
-
-    it('strictly rejects tasks with invalid phases (P0-D phase model constraint)', () => {
-      const qaTask = {
-        title: 'QA Review',
-        phase: 'quality_assurance',
-      };
-      const compTask = {
-        title: 'Final Signoff',
-        phase: 'completion',
-      };
-      const arbitraryTask = {
-        title: 'Random Step',
-        phase: 'arbitrary_phase',
-      };
-
-      expect(retainerTemplateTaskSchema.safeParse(qaTask).success).toBe(false);
-      expect(retainerTemplateTaskSchema.safeParse(compTask).success).toBe(false);
-      expect(retainerTemplateTaskSchema.safeParse(arbitraryTask).success).toBe(false);
-    });
-
-    it('validates retainer template with recurrence none and annual', () => {
-      const noneTemplate = {
-        name: 'Ad-Hoc Advisory Retainer',
-        recurrence: 'none',
-        priority: 'Normal',
-        pfAmount: 25000,
-        tasks: [{ title: 'Advisory Memo', phase: 'pre_processing' }],
-      };
-      const annualTemplate = {
-        name: 'Annual Audit Compliance',
-        recurrence: 'annual',
-        schedule: 'annual',
-        tasks: [{ title: 'Audit Planning', phase: 'pre_processing' }],
-      };
-
-      expect(createRetainerTemplateSchema.safeParse(noneTemplate).success).toBe(true);
-      expect(createRetainerTemplateSchema.safeParse(annualTemplate).success).toBe(true);
-    });
-
-    it('rejects invalid recurrence frequency', () => {
-      const res = createRetainerTemplateSchema.safeParse({
-        name: 'Invalid Template',
-        recurrence: 'weekly',
+  describe('Audit Log Filter, Response & Problem Details Schemas', () => {
+    it('validates audit log query filter parameters', () => {
+      const res = listAuditQuerySchema.safeParse({
+        page: 2,
+        limit: 20,
+        offset: 20,
+        module: 'billing',
+        actor: 'u-1',
+        search: 'INV-2026',
+        from: '2026-01-01',
+        to: '2026-12-31',
+        sortOrder: 'desc',
       });
-      expect(res.success).toBe(false);
-    });
-  });
-
-  describe('Retainer Generation Schema & Conflict Handling', () => {
-    it('validates generation payload with period_label and overrides', () => {
-      const input = {
-        period_label: 'FY-2026',
-        overrides: {
-          title: 'Specialized 2026 Audit',
-          priority: 'Urgent',
-        },
-      };
-      const res = generateRetainerTemplateSchema.safeParse(input);
       expect(res.success).toBe(true);
     });
 
-    it('validates RFC 7807 problem details schema', () => {
-      const conflictError = {
-        status: 409,
-        title: 'Conflict',
-        code: 'PERIOD_ALREADY_GENERATED',
-        detail: 'Period already generated for this template',
-      };
-      const res = problemDetailsSchema.safeParse(conflictError);
-      expect(res.success).toBe(true);
-    });
-  });
-
-  describe('Audit Log Response Schema', () => {
-    it('validates audit log entries for retainer generations', () => {
+    it('validates audit log entries and pagination metadata', () => {
       const auditPayload = {
         data: [
           {
             id: 'd9b9328a-7954-4bb2-b362-e6e22f28b495',
-            action: 'retainer-template.generated',
-            tableName: 'retainer_template_generations',
+            action: 'user.updated',
+            tableName: 'users',
             recordId: 'rec-123',
             entity: 'ATA',
             userId: 'user-456',
             details: {
-              templateId: 'tpl-789',
-              periodLabel: 'FY-2026-SMOKE',
-              workRequestId: 'wr-101',
+              before: { role: 'Operations' },
+              after: { role: 'Manager' },
             },
             createdAt: '2026-10-04T08:00:00Z',
           },
@@ -247,95 +182,16 @@ describe('Admin Module: Types & Zod Schemas', () => {
       const res = auditLogResponseSchema.safeParse(auditPayload);
       expect(res.success).toBe(true);
     });
-  });
 
-  describe('Effective Permissions Matrix Engine', () => {
-    it('grants all 52 permission keys to Admin role', () => {
-      const user: AdminUser = {
-        id: 'u-admin',
-        name: 'System Admin',
-        email: 'admin@ata-lta.ph',
-        role: 'Admin',
-        departments: ['Management', 'Operations', 'Accounting', 'Documentation', 'HR'],
-        entities: ['ATA', 'LTA'],
-        isActive: true,
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
+    it('validates RFC 7807 problem details schema', () => {
+      const conflictError = {
+        status: 409,
+        title: 'Conflict',
+        code: 'CONCURRENCY_CONFLICT',
+        detail: 'User was modified by another session',
       };
-
-      const computed = computeUserEffectivePermissions(user);
-      expect(computed.isAdminSuperUser).toBe(true);
-      expect(computed.effectivePermissions.length).toBe(PERMISSION_KEYS.length);
-      expect(computed.effectivePermissions.length).toBe(52);
-
-      for (const key of ADMIN_EXCLUSIVE_PERMISSIONS) {
-        expect(computed.effectivePermissions).toContain(key);
-      }
-    });
-
-    it('grants Management permissions to Manager but strictly omits Admin-exclusive keys', () => {
-      const user: AdminUser = {
-        id: 'u-mgr',
-        name: 'Doc Manager',
-        email: 'dev-docs@ata-lta.ph',
-        role: 'Manager',
-        departments: ['Management', 'Documentation'],
-        entities: ['ATA', 'LTA'],
-        isActive: true,
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      };
-
-      const computed = computeUserEffectivePermissions(user);
-      expect(computed.isAdminSuperUser).toBe(false);
-
-      // Manager has users:view and retainers:use
-      expect(computed.effectivePermissions).toContain('users:view');
-      expect(computed.effectivePermissions).toContain('retainers:use');
-
-      // Manager MUST NOT have users:manage or retainers:edit
-      expect(computed.effectivePermissions).not.toContain('users:manage');
-      expect(computed.effectivePermissions).not.toContain('retainers:edit');
-      expect(computed.effectivePermissions).not.toContain('workflow:phase_transition');
-      expect(computed.effectivePermissions).not.toContain('workflow:qa_review');
-    });
-
-    it('correctly unions permissions across multiple departments', () => {
-      const opsAndDocsUser: AdminUser = {
-        id: 'u-multi',
-        name: 'Cross Staff',
-        email: 'staff@ata-lta.ph',
-        role: 'Operations',
-        departments: ['Operations', 'Documentation'],
-        entities: ['ATA'],
-        isActive: true,
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      };
-
-      const computed = computeUserEffectivePermissions(opsAndDocsUser);
-      // Both operations and documentation permissions should be present
-      expect(computed.effectivePermissions).toContain('workflow:task_upload'); // From Operations
-      expect(computed.effectivePermissions).toContain('dms:handover'); // From Documentation
-      expect(computed.effectivePermissions).toContain('transmittal:mark'); // From Documentation
-      // Admin keys must never leak
-      expect(computed.effectivePermissions).not.toContain('users:manage');
-      expect(computed.effectivePermissions).not.toContain('retainers:edit');
-    });
-
-    it('evaluates wildcard permissions correctly', () => {
-      const granted = new Set(['approve_change:*', 'bypass_review:*']);
-      expect(testPermission(granted, 'approve_change:tasks')).toBe(true);
-      expect(testPermission(granted, 'approve_change:invoices')).toBe(true);
-      expect(testPermission(granted, 'bypass_review:tasks')).toBe(true);
-      expect(testPermission(granted, 'users:manage')).toBe(false);
-    });
-
-    it('categorizes keys into meaningful module groups', () => {
-      expect(getPermissionModule('workflow:view')).toBe('Workflow & Operations');
-      expect(getPermissionModule('billing:edit')).toBe('Billing & Invoices');
-      expect(getPermissionModule('retainers:edit')).toBe('Retainer Templates');
-      expect(getPermissionModule('users:manage')).toBe('User Management');
+      const res = problemDetailsSchema.safeParse(conflictError);
+      expect(res.success).toBe(true);
     });
   });
 });

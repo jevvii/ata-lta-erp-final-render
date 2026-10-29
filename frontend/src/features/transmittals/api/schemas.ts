@@ -46,8 +46,12 @@ export const transmittalItemSchema = z.object({
  */
 export const createTransmittalSchema = z
   .object({
-    clientId: z.string().uuid('Client ID must be a valid UUID'),
-    workRequestId: z.string().uuid('Work request ID must be a valid UUID'),
+    clientId: z.string().guid('Client ID must be a valid UUID'),
+    clientNumber: z.string().max(50).optional().nullable(),
+    client_number: z.string().max(50).optional().nullable(),
+    workRequestId: z.string().guid('Work request ID must be a valid UUID'),
+    workRequestNumber: z.string().max(50).optional().nullable(),
+    work_request_number: z.string().max(50).optional().nullable(),
     trackingNumber: z
       .string()
       .min(1, 'Tracking number is required')
@@ -67,7 +71,7 @@ export const createTransmittalSchema = z
       .nullable(),
     linkedTaskId: z
       .string()
-      .uuid('Linked task ID must be a valid UUID'),
+      .guid('Linked task ID must be a valid UUID'),
     boardOrder: z.number().int().optional().default(0),
     status: z.never({ message: 'status forgery is prohibited: server assigns initial Draft status' }).optional(),
   })
@@ -87,8 +91,12 @@ export const createTransmittalSchema = z
  */
 export const updateTransmittalSchema = z
   .object({
-    clientId: z.string().uuid('Client ID must be a valid UUID').optional(),
-    workRequestId: z.string().uuid('Work request ID must be a valid UUID').optional(),
+    clientId: z.string().guid('Client ID must be a valid UUID').optional(),
+    clientNumber: z.string().max(50).optional().nullable(),
+    client_number: z.string().max(50).optional().nullable(),
+    workRequestId: z.string().guid('Work request ID must be a valid UUID').optional(),
+    workRequestNumber: z.string().max(50).optional().nullable(),
+    work_request_number: z.string().max(50).optional().nullable(),
     trackingNumber: z
       .string()
       .min(1, 'Tracking number is required')
@@ -109,7 +117,7 @@ export const updateTransmittalSchema = z
       .max(1000, 'Recipient details must be at most 1000 characters')
       .optional()
       .nullable(),
-    linkedTaskId: z.string().uuid('Linked task ID must be a valid UUID').optional(),
+    linkedTaskId: z.string().guid('Linked task ID must be a valid UUID').optional(),
     boardOrder: z.number().int().optional(),
     expectedVersion: z.number().int().positive().optional(),
   })

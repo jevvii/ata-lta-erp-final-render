@@ -41,6 +41,8 @@ export function trackLocalMutation(table: string, id: string, version?: number):
   });
 }
 
+export const registerLocalMutation = trackLocalMutation;
+
 /**
  * Checks whether an incoming record update corresponds to a locally dispatched mutation.
  */

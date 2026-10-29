@@ -29,6 +29,7 @@ export interface ReceiptViewerProps {
   receiptError?: unknown;
   onRefetchReceiptUrl: () => void | Promise<unknown>;
   workRequestTitle?: string | null;
+  isDocked?: boolean;
 }
 
 const ZOOM_STEPS = [50, 75, 100, 125, 150, 200, 250, 300];
@@ -43,6 +44,7 @@ export function ReceiptViewer({
   receiptError: _receiptError,
   onRefetchReceiptUrl,
   workRequestTitle,
+  isDocked = false,
 }: ReceiptViewerProps) {
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
@@ -135,6 +137,13 @@ export function ReceiptViewer({
     } as unknown as DmsDocument;
   }, [receiptData?.url, receiptData?.contentType, fileName, isPdf, receiptS3Key, workRequestTitle]);
 
+  const pdfViewerUrl = useMemo(() => {
+    if (!receiptData?.url) return '';
+    const baseUrl = receiptData.url.split('#')[0] || receiptData.url;
+    const fragment = zoom === 100 ? 'view=Fit' : `zoom=${zoom}`;
+    return `${baseUrl}#${fragment}`;
+  }, [receiptData?.url, zoom]);
+
   const handleZoomIn = () => {
     setZoom((prev) => {
       const next = ZOOM_STEPS.find((step) => step > prev);
@@ -180,7 +189,10 @@ export function ReceiptViewer({
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col space-y-2.5 h-full" data-testid="receipt-viewer-container">
+    <div
+      className={cn('flex flex-col gap-1.5 w-full', isPdf ? 'flex-1 min-h-0 h-full' : 'shrink-0')}
+      data-testid="receipt-viewer-container"
+    >
       {/* Loading signed URL status */}
       {(isLoadingReceipt || (isFetchingReceipt && !receiptData?.url)) && (
         <p role="status" className="text-xs text-muted">
@@ -354,7 +366,7 @@ export function ReceiptViewer({
           {/* Document Well */}
           {isImage ? (
             <div
-              className="w-full flex-1 min-h-[160px] max-h-[340px] sm:max-h-[380px] bg-viewer-bg rounded-[4px] border border-border p-1.5 overflow-auto flex items-center justify-center relative overscroll-contain"
+              className="w-full h-auto bg-viewer-bg rounded-[4px] border border-border p-1.5 overflow-x-auto flex items-start justify-center relative overscroll-contain"
               data-testid="receipt-preview-viewport"
             >
               {imageLoadError ? (
@@ -392,13 +404,14 @@ export function ReceiptViewer({
                   alt={fileName}
                   onError={() => setImageLoadError(true)}
                   style={{
-                    transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
+                    width: zoom === 100 ? undefined : `${zoom}%`,
+                    maxWidth: zoom <= 100 ? '100%' : 'none',
+                    height: 'auto',
+                    transform: rotation ? `rotate(${rotation}deg)` : undefined,
                     transition: 'transform 0.15s ease-out',
                     transformOrigin: 'center center',
-                    maxWidth: zoom <= 100 ? '100%' : 'none',
-                    maxHeight: zoom <= 100 ? '100%' : 'none',
                   }}
-                  className="object-contain select-none cursor-grab active:cursor-grabbing rounded-[2px]"
+                  className="max-w-full h-auto block object-contain select-none rounded-[2px]"
                   data-testid="receipt-preview-image"
                   loading="lazy"
                 />
@@ -406,18 +419,22 @@ export function ReceiptViewer({
             </div>
           ) : isPdf ? (
             <div
-              className="w-full flex-1 min-h-[160px] max-h-[340px] sm:max-h-[380px] bg-viewer-bg rounded-[4px] border border-border overflow-hidden flex flex-col"
+              className={cn(
+                'w-full bg-viewer-bg rounded-[4px] border border-border overflow-hidden flex flex-col',
+                isDocked ? 'flex-1 min-h-0 h-full' : 'flex-1 min-h-[70vh]'
+              )}
               data-testid="receipt-preview-viewport"
             >
               <object
-                data={receiptData.url}
+                key={pdfViewerUrl}
+                data={pdfViewerUrl}
                 type="application/pdf"
-                className="w-full flex-1 min-h-[220px]"
+                className={cn('w-full flex-1', isDocked ? 'min-h-0 h-full' : 'min-h-[70vh]')}
                 data-testid="receipt-pdf-object"
               >
                 <iframe
-                  src={receiptData.url}
-                  className="w-full h-full border-0"
+                  src={pdfViewerUrl}
+                  className={cn('w-full h-full flex-1 border-0', !isDocked && 'min-h-[70vh]')}
                   title={`PDF Preview: ${fileName}`}
                   data-testid="receipt-pdf-frame"
                 />

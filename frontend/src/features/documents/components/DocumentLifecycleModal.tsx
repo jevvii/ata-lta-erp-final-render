@@ -71,6 +71,20 @@ export function DocumentLifecycleModal({
           <DialogTitle>Update Physical Lifecycle</DialogTitle>
           <DialogDescription>
             Update custody tracking for <span className="font-semibold text-[#1E293B]">{document.original_name || document.file_name}</span>.
+            {((document.client_number || document.clientNumber) || (document.work_request_number || document.workRequestNumber)) && (
+              <span className="flex items-center gap-1.5 mt-1.5">
+                {(document.client_number || document.clientNumber) && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border">
+                    {document.client_number || document.clientNumber}
+                  </span>
+                )}
+                {(document.work_request_number || document.workRequestNumber) && (
+                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border">
+                    {document.work_request_number || document.workRequestNumber}
+                  </span>
+                )}
+              </span>
+            )}
           </DialogDescription>
         </DialogHeader>
 

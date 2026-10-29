@@ -535,12 +535,17 @@ export function DocumentUploadModal({
                     <SelectValue placeholder="Link to work request..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {workRequests.map((wr) => (
-                      <SelectItem key={wr.id} value={wr.id}>
-                        {(wr as { tracking_number?: string }).tracking_number || wr.title}
-                        {wr.clientName || wr.client_name ? ` — ${wr.clientName || wr.client_name}` : ''}
-                      </SelectItem>
-                    ))}
+                    {workRequests.map((wr) => {
+                      const wrNum = (wr as { work_request_number?: string; workRequestNumber?: string }).work_request_number || (wr as { work_request_number?: string; workRequestNumber?: string }).workRequestNumber;
+                      const titlePart = (wr as { tracking_number?: string }).tracking_number || wr.title;
+                      const clientPart = wr.clientName || wr.client_name ? ` — ${wr.clientName || wr.client_name}` : '';
+                      const displayTitle = wrNum ? `${wrNum} · ${titlePart}${clientPart}` : `${titlePart}${clientPart}`;
+                      return (
+                        <SelectItem key={wr.id} value={wr.id}>
+                          {displayTitle}
+                        </SelectItem>
+                      );
+                    })}
                   </SelectContent>
                 </Select>
               </div>

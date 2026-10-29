@@ -139,9 +139,11 @@ describe('Clients Module Schemas & Validation (clients@2.0.0)', () => {
   });
 
   describe('clientSchema', () => {
-    it('validates a complete client record', () => {
+    it('validates a complete client record with persistent clientNumber', () => {
       const valid = {
         id: 'c-test-1',
+        clientNumber: 'CLI-ATA-0001',
+        client_number: 'CLI-ATA-0001',
         entity: 'ATA',
         name: 'Megaworld Prime Corp',
         tin: '111-222-333-000',
@@ -163,6 +165,8 @@ describe('Clients Module Schemas & Validation (clients@2.0.0)', () => {
       };
       const parsed = clientSchema.parse(valid);
       expect(parsed.id).toBe('c-test-1');
+      expect(parsed.clientNumber).toBe('CLI-ATA-0001');
+      expect(parsed.client_number).toBe('CLI-ATA-0001');
       expect(parsed.name).toBe('Megaworld Prime Corp');
     });
   });

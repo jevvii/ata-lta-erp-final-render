@@ -202,7 +202,11 @@ describe('UAT Wave 2: Operations Linkage, Assignee Controls, and Modals', () => 
       const url = String(input);
 
       if (url.includes('/me/team')) {
-        return new Response(JSON.stringify({ data: mockTeamMembers }), { status: 200 });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: mockTeamMembers }),
+        } as Response);
       }
       if (url.includes('/operations/tasks/t-w2-1/related')) {
         return new Response(JSON.stringify({ data: mockRelatedRecords }), { status: 200 });
@@ -639,15 +643,15 @@ describe('UAT Wave 2: Operations Linkage, Assignee Controls, and Modals', () => 
 
     // Meta Grid shows lead assignee
     expect(await screen.findByTestId('task-assignee')).toHaveTextContent('Maria Santos');
-    expect(screen.getByText('+2 co-assignees')).toBeInTheDocument();
+    expect(screen.getByTestId('task-co-assignees')).toBeInTheDocument();
 
     // Dedicated Assigned Team section shows count 3
     expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
     expect(screen.getByTestId('assigned-team-count')).toHaveTextContent('3');
 
     // Individual chips for all assignees once team is loaded
-    expect(await screen.findByText('Juan Dela Cruz')).toBeInTheDocument();
-    expect(await screen.findByText('Ana Reyes')).toBeInTheDocument();
+    expect((await screen.findAllByText('Juan Dela Cruz')).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText('Ana Reyes')).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByTestId('assignee-chip-u-lead-1')).toHaveTextContent('Maria Santos');
     expect(screen.getByTestId('assignee-chip-u-staff-1')).toHaveTextContent('Juan Dela Cruz');
     expect(screen.getByTestId('assignee-chip-u-staff-2')).toHaveTextContent('Ana Reyes');

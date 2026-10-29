@@ -26,20 +26,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { useRetainerTemplateMutations } from '../api/useRetainerTemplates';
+import { useRetainerMutations } from '@/features/operations/api/useRetainers';
+import { operationsKeys } from '@/features/operations/api/queryKeys';
+import { runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { useClients } from '@/features/operations/api/useClients';
 import { TaskTypeSelect } from '@/features/operations/lib/taskTypes';
-import { useUsersList } from '../api/useUsers';
+import { useUsersList } from '@/features/admin/api/useUsers';
 import { usePermission } from '@/lib/permissions';
-import type { ChecklistItemData } from '@/features/operations/api/types';
 import type {
+  ChecklistItemData,
   RetainerTemplate,
   RetainerTemplateTask,
   CreateRetainerTemplateInput,
   CreatablePhase,
   Priority,
   RecurrenceType,
-} from '../api/types';
+} from '@/features/operations/api/types';
 
 export interface RetainerTemplateModalProps {
   template: RetainerTemplate | null;
@@ -55,7 +57,7 @@ export function RetainerTemplateModal({
   onSuccess,
 }: RetainerTemplateModalProps) {
   const canEditRetainers = usePermission('retainers:edit');
-  const { createTemplate, updateTemplate } = useRetainerTemplateMutations();
+  const { createTemplate, updateTemplate } = useRetainerMutations();
 
   const { data: clients = [] } = useClients(undefined, { enabled: isOpen });
   const { data: users = [] } = useUsersList({ enabled: isOpen && canEditRetainers });
@@ -296,11 +298,24 @@ export function RetainerTemplateModal({
     };
 
     try {
-      if (isEditing && template) {
-        await updateTemplate(template.id, payload);
-      } else {
-        await createTemplate(payload);
-      }
+      await runBlockingAction({
+        title: isEditing ? 'Updating Retainer Template' : 'Creating Retainer Template',
+        message: isEditing
+          ? 'Persisting template modifications to server...'
+          : `Saving retainer blueprint "${payload.name}" with ${payload.tasks?.length ?? 0} task(s)...`,
+        actionName: isEditing ? 'Update Retainer Template' : 'Create Retainer Template',
+        successTitle: isEditing ? 'Template Updated' : 'Template Created',
+        successMessage: isEditing
+          ? 'Retainer template updated successfully.'
+          : `Retainer template "${payload.name}" created successfully.`,
+        apiCall: async () => {
+          if (isEditing && template) {
+            return await updateTemplate({ id: template.id, data: payload });
+          }
+          return await createTemplate(payload);
+        },
+        invalidateQueries: [operationsKeys.templates()],
+      });
 
       if (onSuccess) onSuccess();
       onClose();

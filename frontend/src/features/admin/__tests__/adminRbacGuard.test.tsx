@@ -52,18 +52,21 @@ describe('Admin RBAC & RouteGuard Security (/admin)', () => {
           json: async () => ({ data: [] }),
         } as Response);
       }
-      if (u.includes('/operations/templates')) {
+      if (u.includes('/admin/audit/count')) {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => ({ data: [] }),
+          json: async () => ({ data: { total: 42 } }),
         } as Response);
       }
       if (u.includes('/admin/audit')) {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: async () => ({ data: [], meta: { total: 0, limit: 20, offset: 0, hasMore: false } }),
+          json: async () => ({
+            data: [],
+            meta: { total: 42, limit: 20, offset: 0, hasMore: false },
+          }),
         } as Response);
       }
       return Promise.resolve({
@@ -79,7 +82,6 @@ describe('Admin RBAC & RouteGuard Security (/admin)', () => {
   });
 
   it('renders <Forbidden /> screen with data-testid="forbidden-screen" when user lacks users:manage (e.g. dev-accs@ata-lta.ph)', async () => {
-    // Authenticate as Accounting staff (lacks users:manage)
     useSessionStore.getState().setSession({
       user: {
         id: 'user-accs',
@@ -106,7 +108,6 @@ describe('Admin RBAC & RouteGuard Security (/admin)', () => {
   });
 
   it('renders <Forbidden /> screen when authenticated as Manager (dev-docs@ata-lta.ph) who only has users:view', async () => {
-    // Manager has users:view, but strictly lacks users:manage
     useSessionStore.getState().setSession({
       user: {
         id: 'user-docs',
@@ -131,8 +132,7 @@ describe('Admin RBAC & RouteGuard Security (/admin)', () => {
     expect(screen.queryByTestId('admin-page')).not.toBeInTheDocument();
   });
 
-  it('renders Admin page and tabs when authenticated as Administrator (dev-admin@ata-lta.ph)', async () => {
-    // Admin has users:manage and retainers:edit
+  it('renders Admin page and strictly 2 tabs (Users and Audit Log) when authenticated as Administrator (dev-admin@ata-lta.ph)', async () => {
     useSessionStore.getState().setSession({
       user: {
         id: 'user-admin',
@@ -162,9 +162,14 @@ describe('Admin RBAC & RouteGuard Security (/admin)', () => {
 
     expect(screen.queryByTestId('forbidden-screen')).not.toBeInTheDocument();
     expect(screen.getByText('Enterprise Administration')).toBeInTheDocument();
+
+    // Strictly 2 tabs: User Management and Audit Log
     expect(screen.getByTestId('tab-trigger-users')).toBeInTheDocument();
-    expect(screen.getByTestId('tab-trigger-permissions')).toBeInTheDocument();
-    expect(screen.getByTestId('tab-trigger-retainers')).toBeInTheDocument();
-    expect(screen.getByTestId('tab-trigger-generations')).toBeInTheDocument();
+    expect(screen.getByTestId('tab-trigger-audit')).toBeInTheDocument();
+
+    // Legacy tabs must not exist
+    expect(screen.queryByTestId('tab-trigger-permissions')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tab-trigger-retainers')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tab-trigger-generations')).not.toBeInTheDocument();
   });
 });

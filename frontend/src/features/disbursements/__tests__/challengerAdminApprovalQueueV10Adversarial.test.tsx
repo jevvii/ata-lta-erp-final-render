@@ -438,7 +438,7 @@ describe('Challenger M4 Adversarial Verification — AdminApprovalQueue (F13 & F
       });
 
       const { wrapper } = createHarness();
-      render(<AdminApprovalQueue />, { wrapper });
+      render(<AdminApprovalQueue pageSize={10} />, { wrapper });
 
       await waitFor(() => {
         expect(screen.getByTestId('pending-item-disb-11-1')).toBeInTheDocument();
@@ -512,7 +512,7 @@ describe('Challenger M4 Adversarial Verification — AdminApprovalQueue (F13 & F
       });
 
       const { queryClient, wrapper } = createHarness();
-      render(<AdminApprovalQueue />, { wrapper });
+      render(<AdminApprovalQueue pageSize={10} />, { wrapper });
 
       await waitFor(() => {
         expect(screen.getByTestId('queue-page-indicator')).toHaveTextContent('Page 1 of 3');
@@ -611,7 +611,7 @@ describe('Challenger M4 Adversarial Verification — AdminApprovalQueue (F13 & F
       });
 
       const { wrapper } = createHarness();
-      render(<AdminApprovalQueue />, { wrapper });
+      render(<AdminApprovalQueue pageSize={10} />, { wrapper });
 
       await waitFor(() => {
         expect(screen.getByTestId('pending-item-disb-s-1')).toBeInTheDocument();

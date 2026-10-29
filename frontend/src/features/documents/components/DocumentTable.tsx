@@ -177,6 +177,20 @@ export function DocumentTable({
                             {doc.description}
                           </p>
                         )}
+                        {((doc.client_number || doc.clientNumber) || (doc.work_request_number || doc.workRequestNumber)) && (
+                          <div className="flex items-center gap-1.5 mt-1">
+                            {(doc.client_number || doc.clientNumber) && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border">
+                                {doc.client_number || doc.clientNumber}
+                              </span>
+                            )}
+                            {(doc.work_request_number || doc.workRequestNumber) && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border">
+                                {doc.work_request_number || doc.workRequestNumber}
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </TableCell>

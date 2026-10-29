@@ -337,6 +337,14 @@ describe('Adversarial Challenger 2 Stress Suite: Parcel OPS', () => {
             { status: 200 }
           );
         }
+        if (url.includes('/tasks/task-stress-101')) {
+          return new Response(
+            JSON.stringify({
+              data: { ...baseTask, checklist: [] },
+            }),
+            { status: 200 }
+          );
+        }
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       });
 
@@ -353,7 +361,10 @@ describe('Adversarial Challenger 2 Stress Suite: Parcel OPS', () => {
 
       const toggleBtn = screen.getByTestId('task-toggle-status-btn');
       expect(toggleBtn).toHaveTextContent('Mark Completed');
-      fireEvent.click(toggleBtn);
+      await waitFor(() => {
+        expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled();
+      });
+      fireEvent.click(screen.getByTestId('task-toggle-status-btn'));
 
       await waitFor(() => {
         expect(putBody).toEqual({ status: 'Completed' });

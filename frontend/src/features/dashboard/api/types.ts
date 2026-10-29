@@ -20,6 +20,8 @@ export interface TimeEntry {
   userId: string;
   userName?: string | null;
   userRole?: string | null;
+  userAvatarUrl?: string | null;
+  user_avatar_url?: string | null;
   taskId: string;
   entryDate: string; // YYYY-MM-DD
   durationMinutes: number; // 1 - 1440
@@ -33,6 +35,8 @@ export interface RawTimeEntryApi {
   user_id: string;
   user_name?: string | null;
   user_role?: string | null;
+  user_avatar_url?: string | null;
+  userAvatarUrl?: string | null;
   task_id: string;
   entry_date: string;
   duration_minutes: number;
@@ -260,7 +264,7 @@ export interface AssignableTaskOption {
   updatedAt?: string | null;
   completedAt?: string | null;
   priority?: string | null;
-  assigneesList?: Array<{ id: string; name: string; role?: string }>;
+  assigneesList?: Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }>;
   rawTask?: Task;
   rawWorkRequest?: WorkRequest;
 }
@@ -287,5 +291,5 @@ export interface DashboardWorkRequestItem {
   completedTasksCount: number;
   tasks: Task[];
   rawWorkRequest: WorkRequest;
-  assigneesList: Array<{ id: string; name: string; role?: string }>;
+  assigneesList: Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }>;
 }

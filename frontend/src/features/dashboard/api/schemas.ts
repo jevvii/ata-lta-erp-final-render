@@ -20,7 +20,7 @@ export const getMaxAllowedDate = (): string => {
 // ============================================================================
 
 export const createTimeEntrySchema = z.object({
-  task_id: z.string().uuid('task_id must be a valid UUID'),
+  task_id: z.string().guid('task_id must be a valid UUID'),
   entry_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'entry_date must be in YYYY-MM-DD format')
@@ -37,7 +37,7 @@ export const createTimeEntrySchema = z.object({
 });
 
 export const updateTimeEntrySchema = z.object({
-  task_id: z.string().uuid('task_id must be a valid UUID').optional(),
+  task_id: z.string().guid('task_id must be a valid UUID').optional(),
   entry_date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'entry_date must be in YYYY-MM-DD format')
@@ -94,7 +94,7 @@ export const rawNotificationItemApiSchema = z.object({
     'wr.qa_reroute',
     'disbursement.lifecycle',
   ]),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
   read_at: z.string().nullable().optional(),
   created_at: z.string(),
 });

@@ -22,6 +22,7 @@ import {
 import { useDashboardWorkRequests } from '../api/useDashboardWorkRequests';
 import { useSessionStore } from '@/lib/session';
 import { isTaskAssignee } from '@/features/operations/lib/taskScope';
+import { UserAvatar } from '@/components/common/UserAvatar';
 import type { DashboardWorkRequestItem } from '../api/types';
 
 export interface PendingTasksCardProps {
@@ -41,7 +42,6 @@ interface CardTheme {
   badgeBg: string;
   badgeText: string;
   badgeBorder: string;
-  avatarBg: string;
 }
 
 function parseDateString(dStr: string | null | undefined): Date | null {
@@ -73,16 +73,6 @@ function formatDueDate(dueDate: string | null | undefined): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function getInitials(name: string): string {
-  if (!name) return 'WR';
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'WR';
-  if (parts.length === 1) return (parts[0]?.slice(0, 2) || 'WR').toUpperCase();
-  const first = parts[0]?.[0] || '';
-  const last = parts[parts.length - 1]?.[0] || '';
-  return (first + last).toUpperCase();
-}
-
 /**
  * Color-code calendar Work Request cards strictly by:
  * 1. Completed within/before due date -> Green
@@ -103,7 +93,6 @@ function getWorkRequestTheme(wr: DashboardWorkRequestItem, today: Date): CardThe
     badgeBg: 'bg-[#D1FAE5]',
     badgeText: 'text-[#065F46]',
     badgeBorder: 'border-[#34D399]',
-    avatarBg: '#059669',
   };
 
   const overdueOrLateTheme: CardTheme = {
@@ -115,7 +104,6 @@ function getWorkRequestTheme(wr: DashboardWorkRequestItem, today: Date): CardThe
     badgeBg: 'bg-[#FFE4E6]',
     badgeText: 'text-[#991B1B]',
     badgeBorder: 'border-[#FB7185]',
-    avatarBg: '#E11D48',
   };
 
   const isCompleted =
@@ -142,7 +130,6 @@ function getWorkRequestTheme(wr: DashboardWorkRequestItem, today: Date): CardThe
       badgeBg: 'bg-[#EDE9FE]',
       badgeText: 'text-[#4C1D95]',
       badgeBorder: 'border-[#A78BFA]',
-      avatarBg: '#6D28D9',
     };
   }
 
@@ -162,7 +149,6 @@ function getWorkRequestTheme(wr: DashboardWorkRequestItem, today: Date): CardThe
       badgeBg: 'bg-[#FEF3C7]',
       badgeText: 'text-[#78350F]',
       badgeBorder: 'border-[#FBBF24]',
-      avatarBg: '#D97706',
     };
   }
 
@@ -176,7 +162,6 @@ function getWorkRequestTheme(wr: DashboardWorkRequestItem, today: Date): CardThe
     badgeBg: 'bg-[#DBEAFE]',
     badgeText: 'text-[#1E3A8A]',
     badgeBorder: 'border-[#60A5FA]',
-    avatarBg: '#1D4ED8',
   };
 }
 
@@ -487,7 +472,6 @@ export function PendingTasksCard({ onLogTimeForTask }: PendingTasksCardProps = {
       : 0;
 
     const cardPaddingClass = view === 'month' ? 'p-2' : view === 'week' || view === 'agenda' ? 'p-2.5' : 'p-3';
-    const avatarSizeClass = isNarrowCalendarView ? 'h-5 w-5 text-[10px]' : 'h-6 w-6 text-xs';
     const pillSizeClass = isNarrowCalendarView ? 'h-5 min-w-[20px] text-[10px]' : 'h-6 min-w-[24px] text-xs';
 
     return (
@@ -580,15 +564,18 @@ export function PendingTasksCard({ onLogTimeForTask }: PendingTasksCardProps = {
             className="flex items-center -space-x-1.5 min-w-0 shrink overflow-hidden"
             title={assignees.map((p) => p.name).join(', ')}
           >
-            {visibleAssignees.map((person, idx) => (
-              <div
-                key={person.id || idx}
-                className={`${avatarSizeClass} rounded-full border-[1.5px] border-white bg-white font-bold flex items-center justify-center shadow-2xs shrink-0`}
-                style={{ backgroundColor: theme.avatarBg, color: '#FFFFFF' }}
-                title={`${person.name}${person.role ? ` · ${person.role}` : ''}`}
-              >
-                {getInitials(person.name)}
-              </div>
+            {visibleAssignees.map((person) => (
+              <UserAvatar
+                key={person.id}
+                userId={person.id}
+                name={person.name}
+                avatarUrl={person.avatarUrl}
+                size="xs"
+                shape="circle"
+                ring
+                title={`${person.name} (${person.role})`}
+                className="h-5 w-5 text-[8px]"
+              />
             ))}
             {remainingCount > 0 && (
               <div

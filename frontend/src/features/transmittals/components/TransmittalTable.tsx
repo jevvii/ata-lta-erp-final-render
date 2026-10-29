@@ -340,8 +340,27 @@ export function TransmittalTable({
                       </td>
 
                       {/* Client */}
-                      <td className="py-3 px-4 font-medium text-[#1E293B] max-w-[180px] truncate" title={t.clients?.name}>
-                        {t.clients?.name || '—'}
+                      <td className="py-3 px-4 font-medium text-[#1E293B] max-w-[220px]" title={t.clients?.name}>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {Boolean(t.clientNumber || t.client_number || t.clients?.clientNumber || t.clients?.client_number) && (
+                            <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                              {t.clientNumber || t.client_number || t.clients?.clientNumber || t.clients?.client_number}
+                            </span>
+                          )}
+                          <span className="truncate">{t.clients?.name || '—'}</span>
+                        </div>
+                        {Boolean(t.workRequestNumber || t.work_request_number || t.work_request_title || t.workRequestTitle) && (
+                          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[#475569] truncate">
+                            {Boolean(t.workRequestNumber || t.work_request_number) && (
+                              <span className="font-mono font-medium tabular-nums">
+                                {t.workRequestNumber || t.work_request_number}
+                              </span>
+                            )}
+                            {(t.work_request_title || t.workRequestTitle) && (
+                              <span className="truncate">· {t.work_request_title || t.workRequestTitle}</span>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Status & Approval */}

@@ -1,3 +1,4 @@
 export * from './api';
 export * from './components';
-export * from './utils/permissionsMatrix';
+export * from './utils/password';
+export * from './utils/auditFormatters';

@@ -140,7 +140,7 @@ export function AdminApprovalModal({
           </DialogTitle>
           <DialogDescription className="text-xs text-muted">
             Authorize budget for disbursement{' '}
-            <span className="tabular-nums font-semibold text-ink">{disbNumber}</span>. Budget
+            <span className="tabular-nums font-semibold text-ink font-mono">{disbNumber}</span>. Budget
             authorization advances this request to{' '}
             <strong className="text-primary-hover">Approved</strong> status for payment instrument
             preparation by Accounting.

@@ -1,23 +1,15 @@
-/**
- * TypeScript Domain Models & Interface Contracts for Admin & Retainer Templates (Module #6)
- *
- * Citations:
- * - Frozen API Contract rbac-matrix@2.0.0 (docs/api-contracts/rbac-matrix.md)
- * - Retainers API Contract retainers@2.0.0 (docs/api-contracts/retainers.md)
- * - Retainer Templates Contract retainer-templates@2.0.0 (docs/api-contracts/modules/retainer-templates.md)
- * - Me Profile Contract me@2.0.0 (docs/api-contracts/modules/me.md)
- *
- * Compliance:
- * - Strict TypeScript 5.7+
- * - noUncheckedIndexedAccess: true compliant
- * - Zero `any` types
- */
-
-import type { ChecklistItemData } from '@/features/operations/api/types';
-
 // ============================================================================
-// 1. Roles, Departments & Primitive Enums
+// 1. User Management Types
 // ============================================================================
+
+export type DepartmentName =
+  | 'Management'
+  | 'Accounting'
+  | 'Operations'
+  | 'Documentation'
+  | 'HR';
+
+export type Department = DepartmentName;
 
 export type UserRole =
   | 'Admin'
@@ -27,24 +19,9 @@ export type UserRole =
   | 'Documentation'
   | 'HR';
 
-export type DepartmentName =
-  | 'Management'
-  | 'Accounting'
-  | 'Operations'
-  | 'Documentation'
-  | 'HR';
-
 export type EntityCode = 'ATA' | 'LTA';
 
-export type RecurrenceType = 'none' | 'annual';
-
-export type CreatablePhase = 'pre_processing' | 'processing';
-
-export type Priority = 'Low' | 'Normal' | 'High' | 'Urgent';
-
-// ============================================================================
-// 2. Admin User Entities & DTOs
-// ============================================================================
+export type UserStatus = 'Active' | 'Disabled';
 
 export interface AdminUser {
   id: string;
@@ -54,9 +31,16 @@ export interface AdminUser {
   departments: DepartmentName[];
   entities: EntityCode[];
   isActive: boolean;
+  status?: UserStatus;
+  version?: number;
+  avatarUrl?: string | null;
   createdAt: string;
   updatedAt: string;
+  userNumber?: string | null;
+  user_number?: string | null;
 }
+
+export type UserRecord = AdminUser;
 
 export interface CreateUserInput {
   email: string;
@@ -68,170 +52,84 @@ export interface CreateUserInput {
   password?: string;
 }
 
-export type UpdateUserInput = Partial<CreateUserInput>;
-
-// ============================================================================
-// 3. Retainer Template Entities & Task Blueprint
-// ============================================================================
-
-export interface RetainerTemplateTask {
-  id?: string | null;
-  local_id?: string | null;
-  localId?: string | null;
-  title: string;
-  description?: string | null;
-  phase: CreatablePhase;
-  default_assignees?: string[];
-  defaultAssignees?: string[];
-  depends_on_local_id?: string | null;
-  dependsOnLocalId?: string | null;
-  requiredLinkType?: string | null;
-  required_link_type?: string | null;
-  dueDate?: string | null;
-  checklist?: ChecklistItemData[];
-}
-
-export interface RetainerTemplate {
-  id: string;
-  entity_id: string;
-  entity?: EntityCode;
-  name: string;
-  title?: string;
-  description: string | null;
-  client_id: string | null;
-  clientId?: string | null;
-  schedule: string | null;
-  priority: Priority;
-  default_priority?: Priority;
-  defaultPriority?: Priority;
-  pf_amount: number;
-  pfAmount?: number;
-  recurrence: RecurrenceType;
-  tasks: RetainerTemplateTask[];
-  created_by?: string | null;
-  created_at: string;
-  updated_at: string;
-  deleted_at?: string | null;
-  entities?: { code: EntityCode };
-  clients?: { name: string };
-}
-
-export interface CreateRetainerTemplateInput {
-  name: string;
-  description?: string | null;
-  clientId?: string | null;
-  client_id?: string | null;
-  schedule?: string | null;
-  priority?: Priority;
-  pfAmount?: number;
-  pf_amount?: number;
-  recurrence?: RecurrenceType;
-  tasks?: RetainerTemplateTask[];
-}
-
-export type UpdateRetainerTemplateInput = Partial<CreateRetainerTemplateInput>;
-
-export interface RetainerGenerateOverrides {
-  title?: string;
-  description?: string | null;
-  clientId?: string | null;
-  client_id?: string | null;
-  priority?: Priority;
-  assignedTo?: string | null;
-  assigned_to?: string | null;
-  coAssignees?: string[];
-  co_assignees?: string[];
-  dueDate?: string | null;
-  due_date?: string | null;
-}
-
-export interface RetainerGenerateInput {
-  period_label?: string | null;
-  periodLabel?: string | null;
-  overrides?: RetainerGenerateOverrides;
-}
-
-export interface RetainerGenerationRecord {
-  id: string;
-  template_id: string;
-  work_request_id: string;
-  period_label: string | null;
-  generated_by: string;
-  generated_at: string;
-}
-
-export interface RetainerGenerateResponse {
-  id: string;
-  title: string;
-  phase: string;
-  status: string;
-  priority: string;
-  clientId: string | null;
-  generation: RetainerGenerationRecord;
+export interface UpdateUserInput {
+  email?: string;
+  name?: string;
+  role?: UserRole;
+  departments?: DepartmentName[];
+  entities?: EntityCode[];
+  isActive?: boolean;
+  status?: UserStatus;
+  password?: string;
+  expectedVersion?: number;
 }
 
 // ============================================================================
-// 4. Audit Log Entities & Retainer Generation Logs
+// 2. Audit Log Types
 // ============================================================================
-
-export interface RetainerGenerationAuditDetails {
-  templateId?: string;
-  workRequestId?: string;
-  periodLabel?: string | null;
-  [key: string]: unknown;
-}
 
 export interface AuditLogEntry {
   id: string;
   action: string;
-  tableName: string;
-  recordId: string;
-  entity: EntityCode | string;
-  userId: string;
-  details: Record<string, unknown>;
+  tableName: string | null;
+  table_name?: string | null;
+  recordId: string | null;
+  record_id?: string | null;
+  entity: string | null;
+  userId: string | null;
+  user_id?: string | null;
+  actorName?: string | null;
+  actorEmail?: string | null;
+  actorAvatarUrl?: string | null;
+  actor_avatar_url?: string | null;
+  ipAddress?: string | null;
+  ip_address?: string | null;
+  details: Record<string, unknown> | null;
   createdAt: string;
-}
-
-export interface AuditLogMeta {
-  total: number;
-  limit: number;
-  offset: number;
-  hasMore: boolean;
+  created_at?: string;
+  timestamp?: string;
+  auditNumber?: string | null;
+  audit_number?: string | null;
 }
 
 export interface AuditLogResponse {
   data: AuditLogEntry[];
-  meta: AuditLogMeta;
+  meta: {
+    total: number;
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
 }
 
-export interface ListAuditQuery {
-  table?: string;
-  action?: string;
-  userId?: string;
-  from?: string;
-  to?: string;
+export interface AuditLogFilterParams {
+  page?: number;
   limit?: number;
   offset?: number;
+  module?: string;
+  action?: string;
+  table?: string;
+  tableName?: string;
+  userId?: string;
+  actor?: string;
+  search?: string;
+  date?: string;
+  from?: string;
+  to?: string;
+  sortOrder?: 'asc' | 'desc';
+  entity?: string | null;
+  enabled?: boolean;
 }
 
 // ============================================================================
-// 5. RFC 7807 Problem Details
+// 3. RFC 7807 Problem Details Error Type
 // ============================================================================
 
-export interface ProblemDetails {
-  status: number;
+export interface ProblemDetailsError {
+  type?: string;
   title: string;
+  status: number;
   detail: string;
   code?: string;
-}
-
-// ============================================================================
-// 6. RBAC Matrix & Effective Permissions Helpers
-// ============================================================================
-
-export interface UserEffectivePermissions {
-  user: AdminUser;
-  effectivePermissions: string[];
-  departmentSources: Record<string, DepartmentName[]>;
-  isAdminSuperUser: boolean;
+  errors?: Record<string, string[]>;
 }

@@ -7,7 +7,7 @@
  * Reuses DocumentViewerModal from Operations.
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   FolderOpen,
@@ -100,6 +100,30 @@ export default function DocumentsPage() {
     },
     { enabled: canView }
   );
+
+  // Support deep-link ?docId=... from Audit Log
+  const urlDocId = searchParams.get('docId');
+  useEffect(() => {
+    if (!urlDocId || !canView) return;
+    const existing = listResponse?.data?.find((d) => d.id === urlDocId);
+    if (existing) {
+      setViewerDoc(existing);
+      return;
+    }
+    let cancelled = false;
+    apiRequest<{ data: DmsDocument }>(`/documents/${urlDocId}`)
+      .then((res) => {
+        if (!cancelled && res?.data) {
+          setViewerDoc(res.data);
+        }
+      })
+      .catch(() => {
+        // Ignore if deleted or inaccessible
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [urlDocId, canView, listResponse?.data]);
 
   // Tab change handler
   const handleTabChange = (newTab: string) => {
@@ -330,7 +354,16 @@ export default function DocumentsPage() {
       {/* Canonical DMS Document Viewer Modal */}
       <DocumentViewerModal
         isOpen={Boolean(viewerDoc)}
-        onClose={() => setViewerDoc(null)}
+        onClose={() => {
+          setViewerDoc(null);
+          if (urlDocId) {
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete('docId');
+              return next;
+            }, { replace: true });
+          }
+        }}
         document={viewerDoc}
       />
 

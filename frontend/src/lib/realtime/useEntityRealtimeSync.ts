@@ -32,6 +32,10 @@ export type RealtimeTable =
   | 'disbursements'
   | 'time_entries'
   | 'task_time_logs'
+  | 'users'
+  | 'user_departments'
+  | 'audit_logs'
+  | 'clients'
   | string;
 
 export interface UseEntityRealtimeSyncOptions<T = Record<string, unknown>> {
@@ -96,6 +100,12 @@ export function getDefaultDetailQueryKey(
     case 'time_entries':
     case 'task_time_logs':
       return dashboardKeys.timeEntries.detail(id);
+    case 'users':
+      return ['admin', 'users', 'detail', id];
+    case 'user_departments':
+      return undefined;
+    case 'audit_logs':
+      return ['admin', 'audit', 'detail', id];
     default:
       return [table, 'detail', id];
   }
@@ -121,6 +131,11 @@ export function getDefaultListRootKey(table: string): readonly unknown[] {
     case 'time_entries':
     case 'task_time_logs':
       return dashboardKeys.timeEntries.all;
+    case 'users':
+    case 'user_departments':
+      return ['admin', 'users'];
+    case 'audit_logs':
+      return ['admin', 'audit'];
     default:
       return [table, 'list'];
   }
@@ -182,8 +197,17 @@ export function normalizeCdcTask(record: Record<string, unknown>): Record<string
 export function normalizeCdcWorkRequest(record: Record<string, unknown>): Record<string, unknown> {
   if (!record || typeof record !== 'object') return record;
   const workRequestNo = record.work_request_no ?? record.workRequestNo;
+  const workRequestNumber =
+    record.work_request_number !== undefined
+      ? record.work_request_number
+      : (record.workRequestNumber ?? workRequestNo);
+  const finalWorkRequestNo = workRequestNo ?? workRequestNumber;
   const clientId = record.client_id ?? record.clientId;
   const clientName = record.client_name ?? record.clientName;
+  const clientNumber =
+    record.client_number !== undefined
+      ? record.client_number
+      : (record.clientNumber ?? null);
   const onHold = record.on_hold ?? record.onHold ?? false;
   const phaseEnteredAt = record.phase_entered_at ?? record.phaseEnteredAt ?? null;
   const requestedBy = record.requested_by ?? record.requestedBy ?? null;
@@ -194,12 +218,16 @@ export function normalizeCdcWorkRequest(record: Record<string, unknown>): Record
 
   return {
     ...record,
-    workRequestNo,
-    work_request_no: workRequestNo,
+    workRequestNo: finalWorkRequestNo,
+    work_request_no: finalWorkRequestNo,
+    workRequestNumber: workRequestNumber ?? finalWorkRequestNo,
+    work_request_number: workRequestNumber ?? finalWorkRequestNo,
     clientId,
     client_id: clientId,
     clientName,
     client_name: clientName,
+    clientNumber,
+    client_number: clientNumber,
     onHold,
     on_hold: onHold,
     phaseEnteredAt,
@@ -299,6 +327,7 @@ export function normalizeCdcTimeEntry(record: Record<string, unknown>): Record<s
   const userId = record.user_id ?? record.userId;
   const entryDate = record.entry_date ?? record.entryDate;
   const note = record.note ?? null;
+  const userAvatarUrl = (record.userAvatarUrl as string) || (record.user_avatar_url as string) || null;
   return {
     ...record,
     durationMinutes: Number(durationMinutes),
@@ -307,6 +336,8 @@ export function normalizeCdcTimeEntry(record: Record<string, unknown>): Record<s
     task_id: taskId,
     userId,
     user_id: userId,
+    userAvatarUrl,
+    user_avatar_url: userAvatarUrl,
     entryDate,
     entry_date: entryDate,
     note,
@@ -340,30 +371,223 @@ export function normalizeCdcTaskTimeLog(record: Record<string, unknown>): Record
 }
 
 /**
+ * Normalizes PostgreSQL CDC users records into unified objects with both
+ * camelCase and snake_case properties.
+ */
+export function normalizeCdcUser(record: Record<string, unknown>): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+  const rawIsActive = record.is_active !== undefined ? record.is_active : record.isActive;
+  const isActive =
+    rawIsActive !== undefined
+      ? Boolean(rawIsActive)
+      : record.status !== undefined
+        ? record.status !== 'Disabled'
+        : true;
+  const status = isActive === false ? 'Disabled' : 'Active';
+  const createdAt = record.created_at ?? record.createdAt;
+  const updatedAt = record.updated_at ?? record.updatedAt;
+  const version = Number(record.version ?? 1);
+  const userNumber =
+    record.user_number !== undefined
+      ? record.user_number
+      : (record.userNumber ?? null);
+
+  const normalized: Record<string, unknown> = {
+    ...record,
+    userNumber,
+    user_number: userNumber,
+    isActive,
+    is_active: isActive,
+    status,
+    createdAt,
+    created_at: createdAt,
+    updatedAt,
+    updated_at: updatedAt,
+    version,
+  };
+
+  if (Array.isArray(record.entities)) {
+    normalized.entities = record.entities;
+  }
+  if (Array.isArray(record.departments)) {
+    normalized.departments = record.departments;
+  }
+
+  return normalized;
+}
+
+/**
+ * Normalizes PostgreSQL CDC audit_logs records into unified objects with both
+ * camelCase and snake_case properties.
+ */
+export function normalizeCdcAuditLog(record: Record<string, unknown>): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+  const userId = record.user_id ?? record.userId ?? null;
+  const tableName = record.table_name ?? record.tableName ?? null;
+  const recordId = record.record_id ?? record.recordId ?? null;
+  const createdAt = record.created_at ?? record.createdAt;
+  const timestamp = record.timestamp ?? createdAt;
+  const auditNumber =
+    record.audit_number !== undefined
+      ? record.audit_number
+      : (record.auditNumber ?? null);
+
+  return {
+    ...record,
+    auditNumber,
+    audit_number: auditNumber,
+    userId,
+    user_id: userId,
+    tableName,
+    table_name: tableName,
+    recordId,
+    record_id: recordId,
+    createdAt,
+    created_at: createdAt,
+    timestamp,
+  };
+}
+
+/**
+ * Normalizes PostgreSQL CDC clients records into unified objects with both
+ * camelCase and snake_case properties.
+ */
+export function normalizeCdcClient(record: Record<string, unknown>): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+  const clientNumber =
+    record.client_number !== undefined
+      ? record.client_number
+      : (record.clientNumber ?? null);
+  return {
+    ...record,
+    clientNumber,
+    client_number: clientNumber,
+  };
+}
+
+/**
+ * Ensures snake_case <-> camelCase fields for persistent item numbers are preserved/mapped cleanly
+ * across all domain records:
+ * - audit_number <-> auditNumber
+ * - user_number <-> userNumber
+ * - client_number <-> clientNumber
+ * - work_request_number <-> workRequestNumber
+ * - invoice_number <-> invoiceNumber
+ * - disbursement_number <-> disbursementNumber
+ * - tracking_number <-> trackingNumber
+ */
+export function normalizePersistentItemNumbers(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+
+  let hasChange = false;
+  const out = { ...record };
+
+  if (record.audit_number !== undefined && record.auditNumber === undefined) {
+    out.auditNumber = record.audit_number;
+    hasChange = true;
+  } else if (record.auditNumber !== undefined && record.audit_number === undefined) {
+    out.audit_number = record.auditNumber;
+    hasChange = true;
+  }
+
+  if (record.user_number !== undefined && record.userNumber === undefined) {
+    out.userNumber = record.user_number;
+    hasChange = true;
+  } else if (record.userNumber !== undefined && record.user_number === undefined) {
+    out.user_number = record.userNumber;
+    hasChange = true;
+  }
+
+  if (record.client_number !== undefined && record.clientNumber === undefined) {
+    out.clientNumber = record.client_number;
+    hasChange = true;
+  } else if (record.clientNumber !== undefined && record.client_number === undefined) {
+    out.client_number = record.clientNumber;
+    hasChange = true;
+  }
+
+  if (record.work_request_number !== undefined && record.workRequestNumber === undefined) {
+    out.workRequestNumber = record.work_request_number;
+    hasChange = true;
+  } else if (record.workRequestNumber !== undefined && record.work_request_number === undefined) {
+    out.work_request_number = record.workRequestNumber;
+    hasChange = true;
+  }
+
+  if (record.invoice_number !== undefined && record.invoiceNumber === undefined) {
+    out.invoiceNumber = record.invoice_number;
+    hasChange = true;
+  } else if (record.invoiceNumber !== undefined && record.invoice_number === undefined) {
+    out.invoice_number = record.invoiceNumber;
+    hasChange = true;
+  }
+
+  if (record.disbursement_number !== undefined && record.disbursementNumber === undefined) {
+    out.disbursementNumber = record.disbursement_number;
+    hasChange = true;
+  } else if (record.disbursementNumber !== undefined && record.disbursement_number === undefined) {
+    out.disbursement_number = record.disbursementNumber;
+    hasChange = true;
+  }
+
+  if (record.tracking_number !== undefined && record.trackingNumber === undefined) {
+    out.trackingNumber = record.tracking_number;
+    hasChange = true;
+  } else if (record.trackingNumber !== undefined && record.tracking_number === undefined) {
+    out.tracking_number = record.trackingNumber;
+    hasChange = true;
+  }
+
+  return hasChange ? out : record;
+}
+
+/**
  * Dispatches raw incoming CDC payloads to table-specific normalizers.
  */
 export function normalizeCdcPayload(
   table: string,
   record: Record<string, unknown>
 ): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+  let normalized = record;
   switch (table) {
     case 'tasks':
-      return normalizeCdcTask(record);
+      normalized = normalizeCdcTask(record);
+      break;
     case 'work_requests':
-      return normalizeCdcWorkRequest(record);
+      normalized = normalizeCdcWorkRequest(record);
+      break;
     case 'operations_requests':
-      return normalizeCdcOperationsRequest(record);
+      normalized = normalizeCdcOperationsRequest(record);
+      break;
     case 'notifications':
-      return normalizeCdcNotification(record);
+      normalized = normalizeCdcNotification(record);
+      break;
     case 'task_assignees':
-      return normalizeCdcTaskAssignee(record);
+      normalized = normalizeCdcTaskAssignee(record);
+      break;
     case 'time_entries':
-      return normalizeCdcTimeEntry(record);
+      normalized = normalizeCdcTimeEntry(record);
+      break;
     case 'task_time_logs':
-      return normalizeCdcTaskTimeLog(record);
+      normalized = normalizeCdcTaskTimeLog(record);
+      break;
+    case 'users':
+      normalized = normalizeCdcUser(record);
+      break;
+    case 'audit_logs':
+      normalized = normalizeCdcAuditLog(record);
+      break;
+    case 'clients':
+      normalized = normalizeCdcClient(record);
+      break;
     default:
-      return record;
+      normalized = record;
+      break;
   }
+  return normalizePersistentItemNumbers(normalized);
 }
 
 /**
@@ -628,6 +852,16 @@ function invalidateCounts(queryClient: QueryClient, table: string): void {
     case 'notifications':
       void queryClient.invalidateQueries({ queryKey: ['notifications', 'unread-count'] });
       break;
+    case 'users':
+    case 'user_departments':
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit', 'count'] });
+      break;
+    case 'audit_logs':
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit', 'count'] });
+      break;
     default:
       void queryClient.invalidateQueries({ queryKey: [table, 'counts'] });
       break;
@@ -835,7 +1069,11 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         (incomingRecord.user_id || incomingRecord.userId)
           ? `${String(incomingRecord.task_id ?? incomingRecord.taskId)}:${String(incomingRecord.user_id ?? incomingRecord.userId)}`
           : undefined)
-      : undefined);
+      : options.table === 'user_departments'
+        ? ((incomingRecord.user_id || incomingRecord.userId)
+            ? `${String(incomingRecord.user_id ?? incomingRecord.userId)}:${String(incomingRecord.department_id ?? incomingRecord.departmentId ?? incomingRecord.department ?? 'dept')}`
+            : undefined)
+        : undefined);
   if (!id) {
     return false;
   }
@@ -867,9 +1105,14 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       : useSessionStore.getState().activeEntity;
   const targetUUID = options.activeEntityUUID || resolveEntityUUID(activeEntity);
 
-  if (options.table === 'task_assignees') {
-    // task_assignees has no entity_id column in its relational schema (task_id, user_id, assigned_at).
-    // Never discard mounted assignment events via tenant entity guards.
+  if (
+    options.table === 'task_assignees' ||
+    options.table === 'users' ||
+    options.table === 'user_departments' ||
+    options.table === 'audit_logs'
+  ) {
+    // task_assignees, users, user_departments, and audit_logs are cross-entity or relational tables.
+    // Never discard mounted assignment or admin events via single-entity tenant guards.
   } else if (activeEntity !== 'ALL') {
     // Preserve explicit null values; do not coalesce null into undefined
     const recordEntityId =
@@ -1208,7 +1451,7 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       invalidateAllProjectProtectedCaches(queryClient, activeEntity);
     }
   } else if (
-    ['work_requests', 'tasks', 'operations_requests'].includes(options.table) ||
+    ['work_requests', 'tasks', 'operations_requests', 'user_departments'].includes(options.table) ||
     (String(useSessionStore.getState().user?.role || '').trim().toLowerCase() !== 'admin' &&
     ['invoices', 'disbursements', 'transmittals', 'documents', 'time_entries', 'task_time_logs', 'task_assignees'].includes(options.table))
   ) {

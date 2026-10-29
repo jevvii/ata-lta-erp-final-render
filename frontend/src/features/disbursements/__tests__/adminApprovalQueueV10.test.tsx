@@ -259,7 +259,7 @@ describe('AdminApprovalQueue Governance & Reliability (F13 & F14 / R7 / V10)', (
       });
 
       const { wrapper } = createHarness();
-      render(<AdminApprovalQueue />, { wrapper });
+      render(<AdminApprovalQueue pageSize={10} />, { wrapper });
 
       // Page 1: Items 1 to 10 visible, 11 to 15 not visible
       await waitFor(() => {
@@ -370,7 +370,7 @@ describe('AdminApprovalQueue Governance & Reliability (F13 & F14 / R7 / V10)', (
       });
 
       const { wrapper } = createHarness();
-      render(<AdminApprovalQueue />, { wrapper });
+      render(<AdminApprovalQueue pageSize={10} />, { wrapper });
 
       // Page 1 displays items 1 to 10
       await waitFor(() => {
@@ -412,6 +412,125 @@ describe('AdminApprovalQueue Governance & Reliability (F13 & F14 / R7 / V10)', (
         expect(screen.getByTestId('pending-item-disb-huge-105')).toBeInTheDocument();
       });
       expect(screen.getByTestId('queue-page-info')).toHaveTextContent('Showing 101–105 of 105');
+    });
+
+    it('Requirement 5: default pageSize is 20 so 14 items fit on Page 1 without pagination bar', async () => {
+      setAdminSession();
+
+      const fourteenItems: Disbursement[] = Array.from({ length: 14 }, (_, i) => ({
+        id: `disb-14-${i + 1}`,
+        disbursement_number: `DISB-14-${i + 1}`,
+        entity_id: 'ent-1',
+        category: 'Transportation',
+        description: `Item ${i + 1}`,
+        amount: 250,
+        fund_source: 'Firm Fund',
+        status: 'Draft',
+        lifecycle_version: 2,
+        review_ready: true,
+        linked_work_request_id: '11111111-1111-1111-1111-111111111111',
+        version: 1,
+        created_at: new Date(Date.now() - i * 1000).toISOString(),
+        updated_at: new Date(Date.now() - i * 1000).toISOString(),
+      }));
+
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        const u = new URL(url, 'http://localhost');
+        const queue = u.searchParams.get('queue');
+        if (queue === 'initial_requests') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: fourteenItems, meta: { total: 14 } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: [], meta: { total: 0 } }),
+        };
+      });
+
+      const { wrapper } = createHarness();
+      render(<AdminApprovalQueue />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('pending-item-disb-14-1')).toBeInTheDocument();
+        expect(screen.getByTestId('pending-item-disb-14-14')).toBeInTheDocument();
+      });
+
+      // All 14 items fit on Page 1 because default pageSize = 20
+      expect(screen.queryByTestId('queue-pagination-bar')).not.toBeInTheDocument();
+    });
+
+    it('Requirement 6: auto-switches activeTab to payment releases when initialCount is 0 and releaseCount > 0', async () => {
+      setAdminSession();
+
+      const releaseItems: Disbursement[] = [
+        {
+          id: 'disb-rel-1',
+          disbursement_number: 'DISB-REL-01',
+          entity_id: 'ent-1',
+          category: 'Office Supplies',
+          description: 'Payment release item 1',
+          amount: 500,
+          fund_source: 'Client Fund',
+          status: 'Funded',
+          lifecycle_version: 2,
+          linked_work_request_id: '11111111-1111-1111-1111-111111111111',
+          version: 2,
+          created_at: '2026-10-20T10:00:00Z',
+          updated_at: '2026-10-20T10:00:00Z',
+        },
+      ];
+
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        const u = new URL(url, 'http://localhost');
+        if (u.pathname.includes('/counts')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: {
+                initialRequests: 0,
+                paymentReleases: 1,
+                readyForFunding: 0,
+              },
+            }),
+          };
+        }
+        const queue = u.searchParams.get('queue');
+        if (queue === 'payment_releases') {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: releaseItems, meta: { total: 1 } }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: [], meta: { total: 0 } }),
+        };
+      });
+
+      const onTabChange = vi.fn();
+      const { wrapper } = createHarness();
+      render(<AdminApprovalQueue onTabChange={onTabChange} />, { wrapper });
+
+      await waitFor(() => {
+        expect(onTabChange).toHaveBeenCalledWith('payment_releases');
+      });
+
+      // The Payment Releases subtab should be marked active
+      const releaseSubtab = screen.getByTestId('queue-subtab-payment-releases');
+      expect(releaseSubtab).toHaveClass('bg-surface');
+      expect(screen.getByTestId('pending-item-disb-rel-1')).toBeInTheDocument();
     });
   });
 });

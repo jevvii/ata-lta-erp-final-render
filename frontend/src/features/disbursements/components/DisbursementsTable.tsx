@@ -664,14 +664,22 @@ export function DisbursementsTable({
                           >
                             {item.description}
                           </p>
-                          <p className="text-xs tabular-nums text-muted truncate max-w-sm">
-                            {new Date(item.created_at || item.createdAt || '').toLocaleDateString()}
-                            {item.client_name ? ` • ${item.client_name}` : ''}
-                            {item.linked_work_request_name
-                              ? ` • ${item.linked_work_request_name}`
-                              : item.linked_work_request_order_number
-                                ? ` • ${item.linked_work_request_order_number}`
-                                : ''}
+                          <p className="text-xs tabular-nums text-muted truncate max-w-sm flex items-center gap-1 flex-wrap">
+                            <span>{new Date(item.created_at || item.createdAt || '').toLocaleDateString()}</span>
+                            {Boolean(item.clientNumber || item.client_number || item.clients?.clientNumber || item.clients?.client_number) && (
+                              <span className="font-mono text-xs font-medium text-text-secondary tabular-nums bg-canvas border border-border px-1 py-0.2 rounded">
+                                {item.clientNumber || item.client_number || item.clients?.clientNumber || item.clients?.client_number}
+                              </span>
+                            )}
+                            {item.client_name ? <span>• {item.client_name}</span> : null}
+                            {Boolean(item.workRequestNumber || item.work_request_number || item.linked_work_request_order_number) && (
+                              <span className="font-mono text-xs font-medium text-text-secondary tabular-nums bg-canvas border border-border px-1 py-0.2 rounded">
+                                {item.workRequestNumber || item.work_request_number || item.linked_work_request_order_number}
+                              </span>
+                            )}
+                            {item.linked_work_request_name ? (
+                              <span>• {item.linked_work_request_name}</span>
+                            ) : null}
                           </p>
                         </div>
                       </TableCell>

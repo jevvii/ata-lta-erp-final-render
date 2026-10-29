@@ -336,7 +336,7 @@ export function InvoiceCreateModal({
 
     const validation = createInvoiceSchema.safeParse(payload);
     if (!validation.success) {
-      setFormError(validation.error.errors[0]?.message || 'Validation error');
+      setFormError(validation.error.issues[0]?.message || 'Validation error');
       return;
     }
 
@@ -410,11 +410,17 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select a client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
+                  {clients.map((c) => {
+                    const clientNum =
+                      (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                      (c as { client_number?: string | null })?.client_number;
+                    const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -439,11 +445,24 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select work request..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {workRequests.map((wr) => (
-                    <SelectItem key={wr.id} value={wr.id}>
-                      {wr.title}
-                    </SelectItem>
-                  ))}
+                  {workRequests.map((wr) => {
+                    const wrNum =
+                      (wr as {
+                        workRequestNumber?: string | null;
+                        work_request_number?: string | null;
+                        workOrderNumber?: string | null;
+                        work_order_number?: string | null;
+                      })?.workRequestNumber ||
+                      (wr as { work_request_number?: string | null })?.work_request_number ||
+                      (wr as { workOrderNumber?: string | null })?.workOrderNumber ||
+                      (wr as { work_order_number?: string | null })?.work_order_number;
+                    const label = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                    return (
+                      <SelectItem key={wr.id} value={wr.id}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>

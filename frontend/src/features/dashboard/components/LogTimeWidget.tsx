@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
+import { UserAvatar } from '@/components/common/UserAvatar';
 import {
   useTimeSummary,
   useTimeEntriesList,
@@ -472,14 +473,14 @@ export function LogTimeWidget({
               {/* Explicit Assignee Stamp with Friendly Accent Avatar */}
               <div className="flex items-center justify-between gap-2 pt-1">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] bg-[#DBEAFE] text-[#1E40AF] border border-[#93C5FD] font-mono font-bold text-xs">
-                    {(activeTask?.assigneeName || user?.name || 'OP')
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)
-                      .toUpperCase()}
-                  </div>
+                  <UserAvatar
+                    userId={user?.id}
+                    name={activeTask?.assigneeName || user?.name || 'Operator'}
+                    avatarUrl={user?.avatarUrl}
+                    size="md"
+                    shape="rounded"
+                    className="h-9 w-9 text-[13px]"
+                  />
                   <div className="min-w-0 text-xs">
                     <div className="font-bold text-[#0F172A] truncate">
                       Assigned to: {activeTask?.assigneeName || user?.name || 'Operator'}

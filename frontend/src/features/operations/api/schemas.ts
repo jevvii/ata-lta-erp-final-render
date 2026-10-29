@@ -113,7 +113,7 @@ export const documentStatusEnum = z.enum(['active', 'pending_upload', 'failed'])
 // Helper for nullable UUID fields
 const nullableUuid = z.preprocess(
   (val) => (val === '' || val === undefined ? null : val),
-  z.string().uuid().nullable().optional()
+  z.string().guid().nullable().optional()
 );
 
 // ============================================================================
@@ -121,26 +121,26 @@ const nullableUuid = z.preprocess(
 // ============================================================================
 
 export const timeLogInputSchema = z.object({
-  id: z.string().uuid().optional(),
+  id: z.string().guid().optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be formatted as YYYY-MM-DD'),
   hours: z.number().nonnegative('Hours must be non-negative'),
   startTime: z.string().optional().nullable(),
   endTime: z.string().optional().nullable(),
-  userId: z.string().uuid().optional().nullable(),
+  userId: z.string().guid().optional().nullable(),
   note: z.string().max(2000).optional().nullable(),
   workerName: z.string().max(255).optional().nullable(),
-  checklistItemId: z.string().uuid().optional().nullable(),
+  checklistItemId: z.string().guid().optional().nullable(),
 });
 
 export const checklistItemInputSchema = z.object({
-  id: z.string().uuid().optional().nullable(),
+  id: z.string().guid().optional().nullable(),
   text: z.string().min(1, 'Checklist text cannot be empty'),
   category: z.string().max(100).optional().nullable(),
   completed: z.boolean().default(false),
   assigneeId: nullableUuid,
   assigneeName: z.string().max(255).optional().nullable(),
   dependsOn: z
-    .union([z.string().uuid(), z.array(z.string().uuid())])
+    .union([z.string().guid(), z.array(z.string().guid())])
     .optional()
     .nullable(),
   periodYear: z.string().max(50).optional().nullable(),
@@ -150,7 +150,7 @@ export const checklistItemInputSchema = z.object({
 export const phaseTaskInputSchema = z.object({
   title: z.string().min(1, 'Task title is required').max(255),
   description: z.string().max(2000).optional().nullable(),
-  assignees: z.array(z.string().uuid()).optional().default([]),
+  assignees: z.array(z.string().guid()).optional().default([]),
   depends_on: z
     .union([z.string().min(1), z.array(z.string().min(1))])
     .optional()
@@ -194,11 +194,10 @@ export const createWorkRequestPhasesSchema = z.object({
 // ============================================================================
 
 const workRequestDueDateSchema = z.string({
-  required_error: 'Due date is required',
-  invalid_type_error: 'Due date is required',
+  error: 'Due date is required',
 }).min(1, 'Due date is required').pipe(
   z.union([z.string().date(), z.string().datetime({ offset: true })], {
-    errorMap: () => ({ message: 'Due date must be a valid date or ISO timestamp' }),
+    error: 'Due date must be a valid date or ISO timestamp',
   })
 );
 
@@ -209,11 +208,15 @@ export const createWorkRequestSchema = z.object({
   entity: entityCodeEnum.optional(),
   status: z.string().max(50).optional(),
   phase: creatablePhaseEnum.optional().default('pre_processing'),
-  requestedBy: z.string().uuid().optional(),
+  requestedBy: z.string().guid().optional(),
   assignedTo: nullableUuid,
   coAssignees: z.array(z.string()).optional().default([]),
   dueDate: workRequestDueDateSchema,
   priority: priorityEnum.optional().default('Normal'),
+  workRequestNumber: z.string().optional().nullable(),
+  work_request_number: z.string().optional().nullable(),
+  clientNumber: z.string().optional().nullable(),
+  client_number: z.string().optional().nullable(),
   idempotency_key: z.string().optional().nullable(),
   idempotencyKey: z.string().optional().nullable(),
   phases: createWorkRequestPhasesSchema.optional().nullable(),
@@ -240,12 +243,12 @@ export const createTaskSchema = z.object({
   phase: creatablePhaseEnum.optional(),
   assigneeId: nullableUuid,
   assigneeName: z.string().max(255).optional().nullable(),
-  assignees: z.array(z.string().uuid()).optional().default([]),
+  assignees: z.array(z.string().guid()).optional().default([]),
   dueDate: z.string().optional().nullable(),
   displayOrder: z.number().int().optional().default(0),
   checklist: z.array(checklistItemInputSchema).optional(),
   timeLogs: z.array(timeLogInputSchema).optional(),
-  coAssignees: z.array(z.string().uuid()).optional().nullable(),
+  coAssignees: z.array(z.string().guid()).optional().nullable(),
   requiredLinkType: z.string().max(50).optional().nullable(),
 });
 
@@ -253,10 +256,10 @@ export const updateTaskSchema = createTaskSchema
   .partial()
   .extend({
     // Explicitly reject any attempt to mutate task phase (Rule R5 / TASK_PHASE_IMMUTABLE)
-    phase: z.never({ invalid_type_error: 'Task phase is immutable once created' }).optional(),
+    phase: z.never({ error: 'Task phase is immutable once created' }).optional(),
     expectedVersion: z.number().int().positive().optional(),
     checklistCompletions: z.array(z.object({
-      id: z.string().uuid(),
+      id: z.string().guid(),
       completed: z.boolean(),
     }).strict()).min(1).optional(),
   });
@@ -274,8 +277,8 @@ export const createPhaseTransitionRequestSchema = z
   .object({
     request_type: z.literal('wr_phase_transition').default('wr_phase_transition'),
     type: z.literal('wr_phase_transition').optional(),
-    work_request_id: z.string().uuid('Work request ID is required').optional(),
-    workRequestId: z.string().uuid().optional(),
+    work_request_id: z.string().guid('Work request ID is required').optional(),
+    workRequestId: z.string().guid().optional(),
     from_phase: z.enum(['pre_processing', 'processing', 'quality_assurance']).optional(),
     fromPhase: z.enum(['pre_processing', 'processing', 'quality_assurance']).optional(),
     to_phase: z.enum(['processing', 'quality_assurance', 'completion']).optional(),
@@ -324,8 +327,8 @@ export const resolveTransitionRequestSchema = z
 
 export const qaReviewTaskResultSchema = z
   .object({
-    task_id: z.string().uuid('Invalid task ID').optional(),
-    taskId: z.string().uuid().optional(),
+    task_id: z.string().guid('Invalid task ID').optional(),
+    taskId: z.string().guid().optional(),
     qa_status: z.enum(['passed', 'failed']).optional(),
     qaStatus: z.enum(['passed', 'failed']).optional(),
   })
@@ -360,8 +363,8 @@ export const retainerTemplateTaskSchema = z.object({
   title: z.string().min(1, 'Title is required').max(255),
   description: z.string().max(2000).optional().nullable(),
   phase: creatablePhaseEnum.default('pre_processing'),
-  default_assignees: z.array(z.string().uuid()).optional(),
-  defaultAssignees: z.array(z.string().uuid()).optional(),
+  default_assignees: z.array(z.string().guid()).optional(),
+  defaultAssignees: z.array(z.string().guid()).optional(),
   depends_on_local_id: z.string().optional().nullable(),
   dependsOnLocalId: z.string().optional().nullable(),
   requiredLinkType: z.string().max(50).optional().nullable(),

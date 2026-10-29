@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { DateInput } from '@/components/ui/date-input';
 import { workDate } from '@/lib/workDate';
+import { UserAvatar } from '../../../components/common/UserAvatar';
 import { useUpdateTimeEntry, useDeleteTimeEntry } from '@/features/dashboard/api/useTimeEntries';
 import type { TimeEntry } from '@/features/dashboard/api/types';
 
@@ -30,9 +31,6 @@ export function TaskTimeEntry({ entry, canManage, onDeleteError }: {
   const [error, setError] = useState<string | null>(null);
   const pending = update.isPending || remove.isPending;
   const name = entry.userName?.trim() || 'Unknown logger';
-  const initials = entry.userName?.trim().split(/\s+/).filter(Boolean)
-    .map((part) => part[0]).filter(Boolean);
-  const avatar = initials?.length ? `${initials[0]}${initials.length > 1 ? initials[initials.length - 1] : ''}`.toUpperCase() : '?';
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -76,9 +74,14 @@ export function TaskTimeEntry({ entry, canManage, onDeleteError }: {
   return (
     <div className="p-2.5 space-y-2 text-xs hover:bg-[#F8FAFC] transition-colors" data-testid={`time-entry-item-${entry.id}`}>
       <div className="flex items-start gap-2.5">
-        <span aria-hidden="true" className="h-8 w-8 shrink-0 rounded-full bg-[#F1F5F9] text-[#475569] flex items-center justify-center font-semibold">
-          {avatar}
-        </span>
+        <UserAvatar
+          userId={entry.userId}
+          name={entry.userName}
+          avatarUrl={entry.userAvatarUrl}
+          size="sm"
+          shape="circle"
+          className="h-7 w-7 text-[10px]"
+        />
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0 break-words">

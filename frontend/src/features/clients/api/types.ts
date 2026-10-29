@@ -30,6 +30,8 @@ export interface RegisteredUser {
 
 export interface Client {
   id: string;
+  clientNumber?: string | null;
+  client_number?: string | null;
   entity: 'ATA' | 'LTA' | string;
   name: string;
   tin: string;

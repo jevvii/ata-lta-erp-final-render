@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { LogOut, Building2, User, Menu, X } from 'lucide-react';
 import { useSessionStore } from '@/lib/session';
 import { signOut } from '@/lib/api';
@@ -27,12 +27,12 @@ import {
 } from '@/components/ui/dialog';
 import { useProfile } from '@/features/profile/api/useProfile';
 import { SidebarNavLinks } from './Sidebar';
+import { UserAvatar } from '@/components/common/UserAvatar';
 
 export function Topbar() {
   const { user, activeEntity, setActiveEntity } = useSessionStore();
   const { data: profile } = useProfile();
   const navigate = useNavigate();
-  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   const handleSignOut = () => {
@@ -45,19 +45,6 @@ export function Topbar() {
 
   const avatarUrl = user?.avatarUrl || profile?.avatarUrl || null;
   const displayName = profile?.name || user?.name || 'User';
-
-  useEffect(() => {
-    setAvatarLoadFailed(false);
-  }, [user?.avatarUrl, avatarUrl]);
-
-  const initials = displayName
-    ? displayName
-        .split(' ')
-        .map((n) => n[0])
-        .join('')
-        .slice(0, 2)
-        .toUpperCase()
-    : 'U';
 
   const primaryEntity = user?.entities && user.entities.length > 0 ? user.entities[0]! : 'ATA';
 
@@ -118,29 +105,19 @@ export function Topbar() {
               className="flex items-center gap-2.5 rounded-[6px] border border-[#E2E8F0] bg-[#FFFFFF] p-1 pr-2.5 hover:bg-[#F8FAFC] transition-colors cursor-pointer outline-none shadow-2xs"
               data-testid="user-menu-button"
             >
-              <div
-                className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[#1E3A8A] text-xs font-semibold text-[#FFFFFF] overflow-hidden shrink-0"
-                style={
-                  avatarUrl && !avatarLoadFailed
-                    ? {
-                        backgroundImage: `url('${avatarUrl}')`,
-                        backgroundSize: 'cover',
-                        backgroundPosition: 'center',
-                      }
-                    : undefined
-                }
+              <UserAvatar
+                userId={user?.id}
+                name={displayName}
+                email={user?.email}
+                avatarUrl={avatarUrl}
+                size="md"
+                shape="circle"
+                imgTestId="topbar-avatar-img"
+                initialsTestId="topbar-avatar-initials"
                 data-testid="topbar-user-avatar"
-              >
-                {(!avatarUrl || avatarLoadFailed) && initials}
-                {avatarUrl && !avatarLoadFailed && (
-                  <img
-                    src={avatarUrl}
-                    alt=""
-                    className="hidden"
-                    onError={() => setAvatarLoadFailed(true)}
-                  />
-                )}
-              </div>
+                className="h-7 w-7 text-[11px]"
+                imgClassName="hidden"
+              />
               <div className="hidden sm:flex flex-col text-left">
                 <span className="text-xs font-semibold text-[#1E293B] leading-tight">
                   {user?.name || 'User'}

@@ -15,7 +15,7 @@ export const contactDetailSchema = z.object({
 
 export const relatedCompanySchema = z.object({
   id: z.string().optional(),
-  relatedClientId: z.string().uuid('Related client must be a valid UUID'),
+  relatedClientId: z.string().guid('Related client must be a valid UUID'),
   relationship: z.string().max(100).optional().nullable(),
 });
 
@@ -33,7 +33,7 @@ export const createClientSchema = z.object({
   tradeName: z.string().max(255).optional().nullable(),
   contactUserId: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? null : val),
-    z.string().uuid('Invalid user UUID').nullable().optional()
+    z.string().guid('Invalid user UUID').nullable().optional()
   ),
   contactPerson: z.string().max(255).optional().nullable(),
   contactDetails: z.array(contactDetailSchema).optional(),
@@ -46,6 +46,8 @@ export const updateClientSchema = createClientSchema.partial().extend({
 
 export const clientSchema = z.object({
   id: z.string(),
+  clientNumber: z.string().nullable().optional(),
+  client_number: z.string().nullable().optional(),
   entity: z.string(),
   name: z.string(),
   tin: z.string(),

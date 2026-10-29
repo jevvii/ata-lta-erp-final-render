@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PresenceAvatars } from '@/components/common/PresenceAvatars';
+import { UserAvatar } from '../../../components/common/UserAvatar';
 import {
   Download,
   Upload,
@@ -780,13 +781,35 @@ export function DocumentViewerModal({
                 </div>
                 <div className="flex items-start justify-between gap-2">
                   <span className="text-[#475569] shrink-0">Work Request:</span>
-                  <span
-                    className="font-medium text-[#1E293B] text-right truncate"
-                    data-testid="doc-work-request"
-                  >
-                    {doc?.work_request_title || workRequest?.title || 'None / Not Linked'}
-                  </span>
+                  <div className="flex flex-col items-end min-w-0">
+                    <span
+                      className="font-medium text-[#1E293B] text-right truncate"
+                      data-testid="doc-work-request"
+                    >
+                      {doc?.work_request_title || workRequest?.title || 'None / Not Linked'}
+                    </span>
+                    {(doc?.work_request_number || doc?.workRequestNumber) && (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border mt-0.5">
+                        {doc.work_request_number || doc.workRequestNumber}
+                      </span>
+                    )}
+                  </div>
                 </div>
+                {(doc?.client_name || doc?.clientName || doc?.client_number || doc?.clientNumber) && (
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-[#475569] shrink-0">Client:</span>
+                    <div className="flex flex-col items-end min-w-0">
+                      <span className="font-medium text-[#1E293B] text-right truncate" data-testid="doc-client">
+                        {doc.client_name || doc.clientName || 'Client'}
+                      </span>
+                      {(doc.client_number || doc.clientNumber) && (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-text-secondary bg-canvas border border-border mt-0.5">
+                          {doc.client_number || doc.clientNumber}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-2">
                   <span className="text-[#475569] shrink-0">Linked Task:</span>
                   <span
@@ -824,10 +847,16 @@ export function DocumentViewerModal({
                       data-testid={`comment-item-${commentId}`}
                     >
                       <div className="flex items-center justify-between text-xs text-[#475569]">
-                        <span className="font-semibold text-[#1E293B]">
-                          <span aria-hidden="true" className="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-[6px] bg-[#F8FAFC] text-[#1E293B]">
-                            {sender.split(' ').map((part) => part[0]).slice(0, 2).join('')}
-                          </span>{sender}
+                        <span className="font-semibold text-[#1E293B] inline-flex items-center gap-1.5">
+                          <UserAvatar
+                            userId={comment.author_id || comment.userId || comment.user_id}
+                            name={comment.author_name || comment.userName || comment.user_name || sender}
+                            avatarUrl={comment.author_avatar_url || comment.authorAvatarUrl || comment.userAvatarUrl || comment.avatarUrl}
+                            size="sm"
+                            shape="rounded"
+                            className="h-7 w-7 rounded-[5px] text-[10px]"
+                          />
+                          <span>{sender}</span>
                         </span>
                         <span>
                           {comment.date || comment.created_at

@@ -3,6 +3,7 @@ import { Camera, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { UserAvatar } from '@/components/common/UserAvatar';
 import { useUploadAvatar, useUpdateProfile } from '../api/useProfile';
 import type { UserProfileData } from '../api/types';
 
@@ -11,23 +12,18 @@ interface ProfileDetailsCardProps {
   isLoading?: boolean;
 }
 
-function getInitials(name?: string): string {
-  if (!name) return 'U';
-  const parts = name.trim().split(/\s+/);
-  if (parts.length === 0 || !parts[0]) return 'U';
-  if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
-  const first = parts[0]?.[0] ?? '';
-  const second = parts[1]?.[0] ?? '';
-  return (first + second).toUpperCase() || 'U';
-}
-
 export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetailsCardProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [name, setName] = useState<string>(profile?.name || '');
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
-  const [avatarLoadFailed, setAvatarLoadFailed] = useState(false);
+
+  useEffect(() => {
+    if (profile?.name !== undefined) {
+      setName(profile.name);
+    }
+  }, [profile?.name]);
 
   const uploadAvatarMutation = useUploadAvatar();
   const updateProfileMutation = useUpdateProfile();
@@ -40,12 +36,14 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
 
     if (file.size > 5 * 1024 * 1024) {
       setStatusMessage({ type: 'error', text: 'File size exceeds 5MB limit.' });
+      e.target.value = '';
       return;
     }
 
     const validTypes = ['image/png', 'image/jpeg', 'image/webp'];
     if (!validTypes.includes(file.type)) {
       setStatusMessage({ type: 'error', text: 'Supported formats: PNG, JPEG, WebP.' });
+      e.target.value = '';
       return;
     }
 
@@ -63,13 +61,18 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
     e.preventDefault();
     setStatusMessage(null);
 
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setStatusMessage({ type: 'error', text: 'Full name cannot be empty.' });
+      return;
+    }
+
     try {
       if (selectedFile) {
         setStatusMessage({ type: 'info', text: 'Uploading avatar photo...' });
         await uploadAvatarMutation.mutateAsync(selectedFile);
       }
 
-      const trimmedName = name.trim();
       if (trimmedName && trimmedName !== profile?.name) {
         setStatusMessage({ type: 'info', text: 'Saving profile details...' });
         await updateProfileMutation.mutateAsync({ name: trimmedName });
@@ -77,6 +80,8 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
 
       setStatusMessage({ type: 'success', text: 'Details saved successfully.' });
       setSelectedFile(null);
+      setPreviewUrl(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err: unknown) {
       let message = 'Unable to save details.';
       if (err instanceof Error) {
@@ -91,11 +96,6 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
 
   const displayName = profile?.name || 'User';
   const displayAvatar = previewUrl || profile?.avatarUrl;
-  const initials = getInitials(name || displayName);
-
-  useEffect(() => {
-    setAvatarLoadFailed(false);
-  }, [displayAvatar]);
 
   return (
     <Card className="border-[#E2E8F0] dark:border-zinc-800 shadow-none" data-testid="profile-details-card">
@@ -106,29 +106,16 @@ export function ProfileDetailsCard({ profile, isLoading = false }: ProfileDetail
       <CardContent>
         {/* Avatar Upload Row */}
         <div className="flex items-center gap-5 pb-6 border-b border-[#E2E8F0] dark:border-zinc-800">
-          <div
-            className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-[6px] bg-primary/10 text-xl font-bold text-primary overflow-hidden border-[#E2E8F0] dark:border-zinc-800"
-            style={
-              displayAvatar && !avatarLoadFailed
-                ? {
-                    backgroundImage: `url('${displayAvatar}')`,
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                  }
-                : undefined
-            }
+          <UserAvatar
             data-testid="profile-avatar-circle"
-          >
-            {(!displayAvatar || avatarLoadFailed) && initials}
-            {displayAvatar && !avatarLoadFailed && (
-              <img
-                src={displayAvatar}
-                alt=""
-                className="hidden"
-                onError={() => setAvatarLoadFailed(true)}
-              />
-            )}
-          </div>
+            userId={profile?.id}
+            name={name || displayName}
+            email={profile?.email}
+            avatarUrl={displayAvatar}
+            shape="rounded"
+            className="h-20 w-20 rounded-[6px] text-xl border border-[#E2E8F0] dark:border-zinc-800"
+            imgClassName="hidden"
+          />
 
           <div className="flex flex-col gap-2">
             <span className="text-base font-semibold text-foreground" data-testid="profile-display-name">

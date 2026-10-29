@@ -25,6 +25,8 @@ export interface TransmittalClientInfo {
   name: string;
   address?: string | null;
   tin?: string | null;
+  client_number?: string | null;
+  clientNumber?: string | null;
 }
 
 export interface TransmittalItem {
@@ -52,8 +54,16 @@ export interface Transmittal {
   entityCode?: string;
   client_id: string;
   clientId?: string;
+  client_number?: string | null;
+  clientNumber?: string | null;
+  client_name?: string | null;
+  clientName?: string | null;
   work_request_id?: string | null;
   workRequestId?: string | null;
+  work_request_number?: string | null;
+  workRequestNumber?: string | null;
+  work_request_title?: string | null;
+  workRequestTitle?: string | null;
   linked_task_id?: string | null;
   linkedTaskId?: string | null;
   status: TransmittalStatus;
@@ -115,7 +125,11 @@ export interface CreateTransmittalItemInput {
 
 export interface CreateTransmittalInput {
   clientId: string;
+  clientNumber?: string | null;
+  client_number?: string | null;
   workRequestId: string;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
   trackingNumber?: string;
   items: CreateTransmittalItemInput[];
   notes?: string | null;
@@ -127,7 +141,11 @@ export interface CreateTransmittalInput {
 
 export interface UpdateTransmittalInput {
   clientId?: string;
+  clientNumber?: string | null;
+  client_number?: string | null;
   workRequestId?: string | null;
+  workRequestNumber?: string | null;
+  work_request_number?: string | null;
   trackingNumber?: string;
   items?: CreateTransmittalItemInput[];
   notes?: string | null;

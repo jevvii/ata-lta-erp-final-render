@@ -1,228 +1,278 @@
-import { useState, useMemo } from 'react';
-import {
-  KeyRound,
-  ShieldCheck,
-  Check,
-  Search,
-  Building2,
-  Mail,
-  Calendar,
-  Layers,
-} from 'lucide-react';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import {
-  computeUserEffectivePermissions,
-  getPermissionModule,
-  PERMISSION_KEYS,
-  testPermission,
-} from '../utils/permissionsMatrix';
-import type { AdminUser } from '../api/types';
+import { UserAvatar } from '@/components/common/UserAvatar';
+import type { AdminUser, EntityCode, UserRole } from '../api/types';
 
 export interface UserDetailModalProps {
   user: AdminUser | null;
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  open?: boolean;
+  onClose?: () => void;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function UserDetailModal({ user, isOpen, onClose }: UserDetailModalProps) {
-  const [filterQuery, setFilterQuery] = useState('');
+const ROLE_SUMMARIES: Record<UserRole, string> = {
+  Admin:
+    'Full administrative super-user access across all system modules, user provisioning, retainer template authoring, and system audit logs.',
+  Manager:
+    'Departmental leadership access including work request oversight, review approvals, retainer generation, and team workload visibility.',
+  Accounting:
+    'Financial operations access covering billing invoices, client statements, payment tracking, and disbursement vouchers.',
+  Operations:
+    'Core operational execution access covering work requests, task workflows, checklists, and time logging.',
+  Documentation:
+    'Document management and compliance access covering DMS records, physical/digital handovers, and transmittal logs.',
+  HR:
+    'Human resources and internal administration access covering personnel coordination and departmental support.',
+};
 
-  const effectiveInfo = useMemo(() => {
-    if (!user) return null;
-    return computeUserEffectivePermissions(user);
-  }, [user]);
+const ENTITY_LABELS: Record<EntityCode, string> = {
+  ATA: 'ATA (Asuncion & Tan Accountancy)',
+  LTA: 'LTA (Lopez & Tan Advisory)',
+};
 
-  const grantedSet = useMemo(() => {
-    if (!effectiveInfo) return new Set<string>();
-    return new Set(effectiveInfo.effectivePermissions);
-  }, [effectiveInfo]);
+function formatTimestamp(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+}
 
-  // Group the 52 permission keys by module
-  const groupedKeys = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const key of PERMISSION_KEYS) {
-      if (filterQuery.trim() && !key.toLowerCase().includes(filterQuery.toLowerCase())) {
-        continue;
-      }
-      const mod = getPermissionModule(key);
-      const list = map.get(mod) ?? [];
-      list.push(key);
-      map.set(mod, list);
-    }
-    return map;
-  }, [filterQuery]);
+export function UserDetailModal({
+  user,
+  isOpen,
+  open,
+  onClose,
+  onOpenChange,
+}: UserDetailModalProps) {
+  const modalOpen = isOpen ?? open ?? false;
 
-  if (!user || !effectiveInfo) return null;
+  const handleClose = () => {
+    if (onClose) onClose();
+    if (onOpenChange) onOpenChange(false);
+  };
+
+  if (!user) return null;
+
+  const isActive =
+    typeof user.isActive === 'boolean'
+      ? user.isActive
+      : user.status !== 'Disabled';
+  const version = user.version ?? 1;
+  const userCode = user.userNumber || user.user_number;
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="border-[#E2E8F0] rounded-[12px] shadow-float p-6 bg-[#FFFFFF] max-h-[90vh] overflow-y-auto max-w-2xl border"
+    <Dialog open={modalOpen} onOpenChange={(next) => !next && handleClose()}>
+      <DialogContent
+        className="max-w-lg rounded-[12px] border border-[#E2E8F0] bg-[#FFFFFF] p-6 shadow-float space-y-5"
         data-testid="user-detail-modal"
       >
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[6px] bg-[#F8FAFC] text-[#1E293B] font-bold text-sm">
-              {user.name.charAt(0).toUpperCase()}
+        <DialogHeader className="border-b border-[#E2E8F0] pb-4">
+          <div className="flex items-start justify-between gap-3 pr-6">
+            <div className="flex items-center gap-3">
+              <UserAvatar
+                userId={user.id}
+                name={user.name}
+                email={user.email}
+                avatarUrl={user.avatarUrl}
+                size="lg"
+                shape="rounded"
+                initialsTestId="user-detail-initials"
+                className="h-10 w-10 rounded-[8px] text-[14px]"
+              />
+              <div>
+                <DialogTitle
+                  className="text-lg font-semibold tracking-tight text-[#1E293B]"
+                  data-testid="user-detail-name"
+                >
+                  {user.name}
+                </DialogTitle>
+                <DialogDescription
+                  className="font-mono text-xs text-[#475569]"
+                  data-testid="user-detail-email"
+                >
+                  {user.email}
+                </DialogDescription>
+              </div>
             </div>
-            <div>
-              <DialogTitle className="text-base font-bold text-[#1E293B] flex items-center gap-2">
-                <span>{user.name}</span>
-                <Badge variant="outline" className="text-xs">
-                  {user.role}
+            <div className="flex items-center gap-1.5">
+              {userCode && (
+                <Badge
+                  variant="outline"
+                  data-testid="user-detail-code"
+                  className="rounded-[6px] border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 font-mono text-xs font-semibold tabular-nums text-[#1D4ED8]"
+                >
+                  {userCode}
                 </Badge>
-                {user.isActive ? (
-                  <span className="rounded-[6px] bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 border-emerald-200">
-                    Active
-                  </span>
-                ) : (
-                  <span className="rounded-[6px] bg-[#F8FAFC] px-2 py-0.5 text-xs font-medium text-[#475569] border-[#E2E8F0]">
-                    Disabled
-                  </span>
-                )}
-              </DialogTitle>
-              <DialogDescription className="text-xs text-[#475569] pt-0.5">
-                Profile details and effective permissions inspector
-              </DialogDescription>
+              )}
+              <Badge
+                variant="outline"
+                data-testid="user-detail-version"
+                className="rounded-[6px] border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 font-mono text-xs font-semibold tabular-nums text-[#475569]"
+              >
+                v{version}
+              </Badge>
+              <Badge
+                variant="outline"
+                data-testid="user-detail-status"
+                className={
+                  isActive
+                    ? 'rounded-[6px] border-[#A7F3D0] bg-[#ECFDF5] px-2 py-0.5 text-xs font-medium text-[#047857]'
+                    : 'rounded-[6px] border-[#E2E8F0] bg-[#F8FAFC] px-2 py-0.5 text-xs font-medium text-[#475569]'
+                }
+              >
+                {isActive ? 'Active' : 'Disabled'}
+              </Badge>
             </div>
           </div>
         </DialogHeader>
 
-        {/* Profile Card */}
-        <div className="rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC]/60 p-3.5 space-y-2 text-xs">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex items-center gap-2 text-[#475569]">
-              <Mail className="h-3.5 w-3.5 text-[#475569]" />
-              <span className="text-[#1E293B]">{user.email}</span>
-            </div>
-            <div className="flex items-center gap-2 text-[#475569]">
-              <Building2 className="h-3.5 w-3.5 text-[#475569]" />
-              <span>Entities: {user.entities.join(', ')}</span>
-            </div>
-            <div className="flex items-center gap-2 text-[#475569]">
-              <Layers className="h-3.5 w-3.5 text-[#475569]" />
-              <span>
-                Departments:{' '}
-                {user.role === 'Admin' || user.email === 'lorein@ata-lta.ph'
-                  ? 'Admin'
-                  : user.departments.length > 0
-                    ? user.departments.join(', ')
-                    : 'None assigned'}
+        <div className="space-y-4 text-xs text-[#1E293B]">
+          {/* 1. System Role & Role Summary */}
+          <div className="rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] p-3.5">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-[#1E293B]">
+                System Role
               </span>
-            </div>
-            <div className="flex items-center gap-2 text-[#475569]">
-              <Calendar className="h-3.5 w-3.5 text-[#475569]" />
-              <span>Created: {new Date(user.createdAt).toLocaleDateString()}</span>
-            </div>
-          </div>
-
-          {effectiveInfo.isAdminSuperUser && (
-            <div className="flex items-center gap-1.5 rounded-[6px] bg-amber-50 border-amber-200 p-2 text-xs text-amber-800 font-medium">
-              <ShieldCheck className="h-4 w-4 text-amber-600 shrink-0" />
-              <span>
-                <strong>Administrator Super-Privilege:</strong> Inherits all department permissions across all 5 departments plus all 8 exclusive administrative operations.
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Permissions Inspector Section */}
-        <div className="space-y-3 pt-1">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-[#1E293B]">
-              <KeyRound className="h-4 w-4 text-[#1E293B]" />
-              <span>Effective Permissions Inspector</span>
-              <Badge variant="outline" className="text-xs ml-1 bg-[#F8FAFC] text-[#1E293B]">
-                {effectiveInfo.effectivePermissions.length} / {PERMISSION_KEYS.length} granted
+              <Badge
+                variant="outline"
+                data-testid="user-detail-role"
+                className="rounded-[6px] border-[#BFDBFE] bg-[#EFF6FF] px-2 py-0.5 font-mono text-xs font-semibold text-[#1D4ED8]"
+              >
+                {user.role}
               </Badge>
             </div>
+            <p className="leading-relaxed text-[#475569]" data-testid="user-detail-role-summary">
+              {ROLE_SUMMARIES[user.role] ?? 'Standard operational role access.'}
+            </p>
+          </div>
 
-            <div className="relative w-48">
-              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#475569]" />
-              <Input
-                type="text"
-                placeholder="Filter permissions..."
-                value={filterQuery}
-                onChange={(e) => setFilterQuery(e.target.value)}
-                className="pl-8 text-xs h-7 bg-white"
-                data-testid="permissions-filter-input"
-              />
+          {/* 2. Authorized Entities */}
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-[#1E293B]">
+              Authorized Entities
+            </div>
+            <div
+              className="flex flex-wrap gap-2"
+              data-testid="user-detail-entities"
+            >
+              {user.entities && user.entities.length > 0 ? (
+                user.entities.map((ent) => (
+                  <div
+                    key={ent}
+                    className="flex items-center gap-2 rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2"
+                  >
+                    <Badge
+                      variant="outline"
+                      className={
+                        ent === 'ATA'
+                          ? 'bg-[#1D4ED8] text-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs font-bold px-2 py-0.5'
+                          : 'bg-[#FFFFFF] text-[#1E293B] border-[#E2E8F0] rounded-[6px] text-xs font-bold px-2 py-0.5'
+                      }
+                    >
+                      {ent}
+                    </Badge>
+                    <span className="text-xs font-medium text-[#1E293B]">
+                      {ENTITY_LABELS[ent] ?? ent}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <span className="italic text-[#475569]">No entities assigned</span>
+              )}
             </div>
           </div>
 
-          {/* Grouped Permission Keys Table */}
-          <div className="rounded-[8px] border-[#E2E8F0] divide-y divide-slate-200 max-h-72 overflow-y-auto bg-white text-xs">
-            {Array.from(groupedKeys.entries()).map(([moduleName, keys]) => (
-              <div key={moduleName} className="p-3 space-y-2">
-                <h4 className="font-semibold text-[#1E293B] text-xs tracking-normal text-[#475569]">
-                  {moduleName}
-                </h4>
-                <div className="grid grid-cols-1 gap-1.5">
-                  {keys.map((permKey) => {
-                    const isGranted = testPermission(grantedSet, permKey);
-                    const sources = effectiveInfo.departmentSources[permKey] ?? [];
+          {/* 3. Assigned Departments */}
+          <div className="space-y-1.5">
+            <div className="text-xs font-semibold text-[#1E293B]">
+              Assigned Departments
+            </div>
+            <div
+              className="flex flex-wrap gap-1.5"
+              data-testid="user-detail-departments"
+            >
+              {user.departments && user.departments.length > 0 ? (
+                user.departments.map((dept) => (
+                  <Badge
+                    key={dept}
+                    variant="outline"
+                    className="rounded-[6px] border-[#E2E8F0] bg-[#F8FAFC] px-2.5 py-1 text-xs font-medium text-[#1E293B]"
+                  >
+                    {dept}
+                  </Badge>
+                ))
+              ) : (
+                <span className="italic text-[#475569]" data-testid="user-detail-no-departments">
+                  No departments assigned
+                </span>
+              )}
+            </div>
+          </div>
 
-                    return (
-                      <div
-                        key={permKey}
-                        className={`flex items-center justify-between rounded-[6px] p-1.5 text-xs ${
-                          isGranted ? 'bg-emerald-50/50' : 'bg-[#F8FAFC]/50 opacity-60'
-                        }`}
-                        data-testid={`user-perm-${permKey}`}
-                        data-granted={isGranted ? 'true' : 'false'}
-                      >
-                        <div className="flex items-center gap-2">
-                          {isGranted ? (
-                            <span className="flex h-4 w-4 items-center justify-center rounded-[6px] bg-emerald-100 text-emerald-700">
-                              <Check className="h-3 w-3" />
-                            </span>
-                          ) : (
-                            <span className="flex h-4 w-4 items-center justify-center rounded-[6px] bg-[#E2E8F0] text-[#475569] font-bold text-xs">
-                              —
-                            </span>
-                          )}
-                          <span
-                            className={`text-xs ${
-                              isGranted ? 'font-semibold text-[#1E293B]' : 'text-[#475569]'
-                            }`}
-                          >
-                            {permKey}
-                          </span>
-                        </div>
-
-                        {/* Grant Origin / Source Badges */}
-                        <div className="flex items-center gap-1">
-                          {effectiveInfo.isAdminSuperUser && isGranted ? (
-                            <Badge variant="outline" className="text-xs py-0 px-1 border-amber-200 bg-amber-50 text-amber-700">
-                              Admin
-                            </Badge>
-                          ) : (
-                            sources.map((src) => (
-                              <Badge
-                                key={src}
-                                variant="outline"
-                                className="text-xs py-0 px-1 border-[#E2E8F0] bg-[#F8FAFC] text-[#1E293B]"
-                              >
-                                {src}
-                              </Badge>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+          {/* 4. Account Metadata */}
+          <div className="rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] p-3.5">
+            <div className="mb-2 text-xs font-semibold text-[#1E293B]">
+              Account Metadata
+            </div>
+            <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div>
+                <dt className="text-[11px] font-medium text-[#475569]">
+                  User ID
+                </dt>
+                <dd
+                  className="truncate font-mono text-xs font-medium tabular-nums text-[#1E293B]"
+                  title={user.id}
+                  data-testid="user-detail-id"
+                >
+                  {user.id}
+                </dd>
               </div>
-            ))}
+              <div>
+                <dt className="text-[11px] font-medium text-[#475569]">
+                  Created At
+                </dt>
+                <dd
+                  className="font-mono text-xs tabular-nums text-[#1E293B]"
+                  data-testid="user-detail-created-at"
+                >
+                  {formatTimestamp(user.createdAt)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-[11px] font-medium text-[#475569]">
+                  Updated At
+                </dt>
+                <dd
+                  className="font-mono text-xs tabular-nums text-[#1E293B]"
+                  data-testid="user-detail-updated-at"
+                >
+                  {formatTimestamp(user.updatedAt)}
+                </dd>
+              </div>
+            </dl>
           </div>
         </div>
+
+        <DialogFooter className="border-t border-[#E2E8F0] pt-4">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleClose}
+            data-testid="user-detail-close-btn"
+            className="h-9 rounded-[6px] border-[#E2E8F0] bg-[#FFFFFF] px-4 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] cursor-pointer"
+          >
+            Close
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

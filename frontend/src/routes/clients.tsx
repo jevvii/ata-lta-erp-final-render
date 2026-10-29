@@ -6,7 +6,7 @@
  * Mounts BlockingActionModal at root.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,7 @@ import { ModulePlaceholder } from '@/components/common/ModulePlaceholder';
 import { isModuleEnabled } from '@/lib/flags';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
+import { apiRequest } from '@/lib/api';
 import { BlockingActionModal } from '@/features/operations/components/BlockingActionModal';
 import {
   ClientFilterBar,
@@ -65,6 +66,32 @@ export default function ClientsPage() {
 
   const { archiveWithBlocking } = useArchiveClient();
   const { unarchiveWithBlocking } = useUnarchiveClient();
+
+  // Support deep-link ?clientId=... from Audit Log
+  const urlClientId = searchParams.get('clientId');
+  useEffect(() => {
+    if (!urlClientId || !canViewClients) return;
+    const existing = clientsData?.data?.find((c) => c.id === urlClientId);
+    if (existing) {
+      setSelectedClient(existing);
+      setIsDetailOpen(true);
+      return;
+    }
+    let cancelled = false;
+    apiRequest<{ data: Client }>(`/clients/${urlClientId}`)
+      .then((res) => {
+        if (!cancelled && res?.data) {
+          setSelectedClient(res.data);
+          setIsDetailOpen(true);
+        }
+      })
+      .catch(() => {
+        // Ignore if deleted or inaccessible
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [urlClientId, canViewClients, clientsData?.data]);
 
   // Flag Check
   if (!isModuleEnabled('Clients')) {
@@ -213,6 +240,13 @@ export default function ClientsPage() {
         onClose={() => {
           setIsDetailOpen(false);
           setSelectedClient(null);
+          if (urlClientId) {
+            setSearchParams((prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete('clientId');
+              return next;
+            }, { replace: true });
+          }
         }}
         onEdit={handleEdit}
       />

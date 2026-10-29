@@ -38,7 +38,10 @@ describe('work request clients follow the operating entity', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
-    useSessionStore.setState({ activeEntity: 'ALL' });
+    useSessionStore.setState({
+      activeEntity: 'ALL',
+      user: { id: 'admin-1', name: 'Admin', role: 'Admin', email: 'admin@example.com' } as any,
+    });
     // Return both entities deliberately to verify the UI also filters stale or
     // mixed responses instead of relying only on the scoped request.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({

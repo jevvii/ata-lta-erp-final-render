@@ -39,6 +39,7 @@ import { operationsKeys } from '../api/queryKeys';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { isUserAdmin } from '../lib/taskScope';
+import { TaskTypeBadge } from '../lib/taskTypes';
 import { useEntityRealtimeSync } from '@/lib/realtime';
 import type { Phase, OperationsRequest, WorkRequest } from '../api/types';
 
@@ -184,10 +185,14 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
       const title = wr.title || '';
       const client = wr.clientName || wr.client?.name || '';
       const creator = wr.assignedToName || resolveName(wr.assignedTo);
+      const wrNum = wr.workRequestNumber || wr.work_request_number || '';
+      const clientNum = wr.clientNumber || wr.client_number || '';
       return (
         title.toLowerCase().includes(q) ||
         client.toLowerCase().includes(q) ||
-        creator.toLowerCase().includes(q)
+        creator.toLowerCase().includes(q) ||
+        wrNum.toLowerCase().includes(q) ||
+        clientNum.toLowerCase().includes(q)
       );
     });
   }, [creationApprovals, wrSearch, resolveName]);
@@ -925,9 +930,18 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                         data-testid={`request-task-row-${task.id}`}
                       >
                         <div className="min-w-0">
-                          <span className={`font-medium block truncate ${task.status === 'Completed' ? 'line-through text-[#475569]' : 'text-[#1E293B]'}`}>
-                            {task.title}
-                          </span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <TaskTypeBadge
+                              value={
+                                task.requiredLinkType ??
+                                (task as unknown as { required_link_type?: string | null }).required_link_type
+                              }
+                              data-testid={`request-task-type-${task.id}`}
+                            />
+                            <span className={`font-medium block truncate ${task.status === 'Completed' ? 'line-through text-[#475569]' : 'text-[#1E293B]'}`}>
+                              {task.title}
+                            </span>
+                          </div>
                           <div className="flex items-center gap-2 text-xs text-[#475569] pt-0.5">
                             <span className="capitalize">{task.phase.replace('_', ' ')}</span>
                             <span>•</span>
@@ -1142,6 +1156,15 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                   >
                     <div className="flex items-center justify-between gap-1.5 pb-1">
                       <div className="flex items-center gap-1.5">
+                        {(() => {
+                          const wrCode = wr.workRequestNumber || wr.work_request_number;
+                          if (!wrCode) return null;
+                          return (
+                            <span className="font-mono text-[11px] font-semibold text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0] px-1.5 py-0.5 rounded-[4px] tabular-nums">
+                              {wrCode}
+                            </span>
+                          );
+                        })()}
                         <Badge
                           variant="secondary"
                           size="compact"
@@ -1223,6 +1246,15 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                   <div className="p-4 border-b border-[#E2E8F0] bg-[#F8FAFC] space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
+                        {(() => {
+                          const wrCode = selectedWr.workRequestNumber || selectedWr.work_request_number;
+                          if (!wrCode) return null;
+                          return (
+                            <span className="font-mono text-xs font-semibold text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded-[6px] tabular-nums">
+                              {wrCode}
+                            </span>
+                          );
+                        })()}
                         <Badge
                           variant="secondary"
                           size="compact"
@@ -1334,6 +1366,13 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
                                 <Badge variant="outline" size="compact" className="text-[11px] uppercase">
                                   {t.phase === 'processing' ? 'Processing' : 'Pre-processing'}
                                 </Badge>
+                                <TaskTypeBadge
+                                  value={
+                                    t.requiredLinkType ??
+                                    (t as unknown as { required_link_type?: string | null }).required_link_type
+                                  }
+                                  data-testid={`approval-task-type-${t.id || idx}`}
+                                />
                                 <span className="font-medium text-[#1E293B]">{t.title}</span>
                               </div>
                               <div className="flex items-center gap-3 text-[#64748B]">

@@ -49,14 +49,18 @@ export function normalizeTaskTypeValue(value?: string | null): CanonicalTaskType
 }
 
 export function getTaskTypeMeta(value?: string | null): TaskTypeOption {
+  if (value) {
+    const lower = value.trim().toLowerCase();
+    if (lower === 'transmittal') {
+      return { ...TASK_TYPE_OPTIONS[2]!, label: 'Transmittal', fullLabel: 'Transmittal' };
+    }
+    if (lower === 'disbursement') {
+      return { ...TASK_TYPE_OPTIONS[1]!, label: 'Disbursement', fullLabel: 'Disbursement' };
+    }
+  }
   const normalized = normalizeTaskTypeValue(value);
   if (normalized === 'billing') return TASK_TYPE_OPTIONS[1]!;
   if (normalized === 'documents') return TASK_TYPE_OPTIONS[2]!;
-  if (value) {
-    const lower = value.trim().toLowerCase();
-    if (lower === 'transmittal') return TASK_TYPE_OPTIONS[2]!;
-    if (lower === 'disbursement') return TASK_TYPE_OPTIONS[1]!;
-  }
   return TASK_TYPE_OPTIONS[0]!;
 }
 
@@ -113,6 +117,7 @@ export function TaskTypeSelect({
 
 export interface TaskTypeBadgeProps {
   value?: string | null;
+  showLabel?: boolean;
   showStandardLabel?: boolean;
   'data-testid'?: string;
   className?: string;
@@ -120,15 +125,16 @@ export interface TaskTypeBadgeProps {
 
 export function TaskTypeBadge({
   value,
+  showLabel = false,
   showStandardLabel = false,
   'data-testid': testId,
   className = '',
 }: TaskTypeBadgeProps) {
-  const normalized = normalizeTaskTypeValue(value);
   const meta = getTaskTypeMeta(value);
   const Icon = meta.Icon;
+  const shouldShowLabel = Boolean(showLabel || showStandardLabel);
 
-  if (normalized === '' && !showStandardLabel) {
+  if (!shouldShowLabel) {
     return (
       <span
         className={`inline-flex items-center justify-center shrink-0 ${className}`}

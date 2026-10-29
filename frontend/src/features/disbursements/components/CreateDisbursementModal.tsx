@@ -1036,11 +1036,29 @@ export function CreateDisbursementModal({
                 data-testid="select-work-request"
               >
                 <option value="">Select Work Request...</option>
-                {availableWorkRequests.map((wr) => (
-                  <option key={wr.id} value={wr.id}>
-                    {wr.title} — {wr.clientName || wr.client_name || 'Client'}
-                  </option>
-                ))}
+                {availableWorkRequests.map((wr) => {
+                  const wrNum =
+                    (wr as {
+                      workRequestNumber?: string | null;
+                      work_request_number?: string | null;
+                      workOrderNumber?: string | null;
+                      work_order_number?: string | null;
+                    })?.workRequestNumber ||
+                    (wr as { work_request_number?: string | null })?.work_request_number ||
+                    (wr as { workOrderNumber?: string | null })?.workOrderNumber ||
+                    (wr as { work_order_number?: string | null })?.work_order_number;
+                  const clientNum =
+                    (wr as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                    (wr as { client_number?: string | null })?.client_number;
+                  const clientLabel = wr.clientName || wr.client_name || 'Client';
+                  const clientPart = clientNum ? `${clientNum} · ${clientLabel}` : clientLabel;
+                  const titlePart = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                  return (
+                    <option key={wr.id} value={wr.id}>
+                      {titlePart} — {clientPart}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             {errors.linkedWorkRequestId && (

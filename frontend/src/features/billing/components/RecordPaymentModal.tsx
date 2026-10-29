@@ -81,7 +81,7 @@ export function RecordPaymentModal({
 
     const validation = recordPaymentSchema.safeParse(payload);
     if (!validation.success) {
-      setFormError(validation.error.errors[0]?.message || 'Invalid payment parameters.');
+      setFormError(validation.error.issues[0]?.message || 'Invalid payment parameters.');
       return;
     }
 

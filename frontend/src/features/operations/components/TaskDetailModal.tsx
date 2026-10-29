@@ -249,9 +249,7 @@ export function TaskDetailModal({
     }
   }, [isTaskDetailErrorDenied, isRelatedErrorDenied, effectiveWrId, effectiveTaskId, activeEntity, currentUser?.id, queryClient]);
 
-  const liveTask = isTaskDenied
-    ? null
-    : Array.isArray(rawLiveTask)
+  const rawTask = Array.isArray(rawLiveTask)
     ? rawLiveTask.find((t) => t?.id === effectiveTaskId)
     : rawLiveTask;
 
@@ -259,8 +257,8 @@ export function TaskDetailModal({
   // When genuinely fresh, non-null matching task data arrives without error, clear the denied latch.
   useEffect(() => {
     if (
-      liveTask &&
-      liveTask.id === effectiveTaskId &&
+      rawTask &&
+      rawTask.id === effectiveTaskId &&
       !isTaskError &&
       !isTaskPlaceholder &&
       deniedScope
@@ -268,7 +266,11 @@ export function TaskDetailModal({
       setDeniedScope(null);
       void refetchRelated();
     }
-  }, [liveTask, effectiveTaskId, isTaskError, isTaskPlaceholder, deniedScope, refetchRelated]);
+  }, [rawTask, effectiveTaskId, isTaskError, isTaskPlaceholder, deniedScope, refetchRelated]);
+
+  const liveTask = isTaskDenied
+    ? (rawTask && !isTaskError && !isTaskPlaceholder ? rawTask : null)
+    : rawTask;
 
   const currentTask = useMemo<Task | null>(() => {
     if (isTaskDenied || isScopeStale) return null;
@@ -1121,7 +1123,20 @@ export function TaskDetailModal({
               </DialogTitle>
               {workRequest && (
                 <p className="text-xs text-[#475569]">
-                  Work Request: <span className="font-semibold text-[#1E293B]">{workRequest.title}</span>
+                  Work Request:{' '}
+                  {(() => {
+                    const wrCode = workRequest.workRequestNumber || workRequest.work_request_number;
+                    return (
+                      <>
+                        {wrCode && (
+                          <span className="font-mono text-xs font-semibold text-[#475569] mr-1.5 tabular-nums">
+                            [{wrCode}]
+                          </span>
+                        )}
+                        <span className="font-semibold text-[#1E293B]">{workRequest.title}</span>
+                      </>
+                    );
+                  })()}
                 </p>
               )}
             </div>
@@ -1919,34 +1934,42 @@ export function TaskDetailModal({
                         Disbursements ({disbursements.length})
                       </span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {disbursements.map((d) => (
-                          <a
-                            key={d.id}
-                            href={`/disbursements?disbursementId=${d.id}`}
-                            className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
-                            data-testid={`linked-disbursement-${d.id}`}
-                          >
-                            <div className="flex items-center gap-2 truncate">
-                              <CreditCard className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                              <div className="truncate">
-                                <span className="font-bold text-[#1E293B] block truncate">
-                                  {d.category || 'Disbursement'}
-                                </span>
-                                <span className="text-xs text-[#475569] block truncate">
-                                  {d.description || 'No description'}
-                                </span>
+                        {disbursements.map((d) => {
+                          const disbNo = d.disbursement_number || d.disbursementNumber;
+                          return (
+                            <a
+                              key={d.id}
+                              href={`/disbursements?disbursementId=${d.id}`}
+                              className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
+                              data-testid={`linked-disbursement-${d.id}`}
+                            >
+                              <div className="flex items-center gap-2 truncate">
+                                <CreditCard className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                                <div className="truncate">
+                                  {disbNo && (
+                                    <span className="font-mono text-xs font-medium text-[#475569] tabular-nums block truncate">
+                                      {disbNo}
+                                    </span>
+                                  )}
+                                  <span className="font-bold text-[#1E293B] block truncate">
+                                    {d.category || 'Disbursement'}
+                                  </span>
+                                  <span className="text-xs text-[#475569] block truncate">
+                                    {d.description || 'No description'}
+                                  </span>
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {d.amount != null && (
-                                <span className="tabular-nums text-xs font-bold text-[#1E293B]">
-                                  ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                </span>
-                              )}
-                              <ExternalLink className="h-3 w-3 text-[#475569]" />
-                            </div>
-                          </a>
-                        ))}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {d.amount != null && (
+                                  <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                    ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                  </span>
+                                )}
+                                <ExternalLink className="h-3 w-3 text-[#475569]" />
+                              </div>
+                            </a>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

@@ -19,6 +19,10 @@ export {
   triggerCrossDomainCoInvalidations,
   normalizeCdcTimeEntry,
   normalizeCdcTaskTimeLog,
+  normalizeCdcUser,
+  normalizeCdcAuditLog,
+  normalizeCdcClient,
+  normalizePersistentItemNumbers,
   triggerTimeEntryCoInvalidation,
 } from './useEntityRealtimeSync';
 export type {
@@ -27,6 +31,7 @@ export type {
 } from './useEntityRealtimeSync';
 export {
   trackLocalMutation,
+  registerLocalMutation,
   isLocalMutation,
   isSelfOriginatedPayload,
   clearLocalMutationsForTesting,

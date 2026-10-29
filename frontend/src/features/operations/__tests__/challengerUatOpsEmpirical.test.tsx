@@ -758,6 +758,14 @@ describe('Empirical Adversarial Challenge Suite: Parcel OPS UAT Fixes', () => {
             { status: 200 }
           );
         }
+        if (url.includes('/operations/work-requests/wr-uat-100/tasks/task-201')) {
+          return new Response(
+            JSON.stringify({
+              data: { ...mockTasks[0]!, checklist: [] },
+            }),
+            { status: 200 }
+          );
+        }
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       });
 
@@ -777,7 +785,10 @@ describe('Empirical Adversarial Challenge Suite: Parcel OPS UAT Fixes', () => {
       const toggleBtn = screen.getByTestId('task-toggle-status-btn');
       expect(toggleBtn).toHaveTextContent('Mark Completed');
 
-      fireEvent.click(toggleBtn);
+      await waitFor(() => {
+        expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled();
+      });
+      fireEvent.click(screen.getByTestId('task-toggle-status-btn'));
 
       await waitFor(() => {
         expect(patchedStatus).toBe('Completed');

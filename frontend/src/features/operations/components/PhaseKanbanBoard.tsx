@@ -173,6 +173,12 @@ function PhaseKanbanBoardInner({
   // Active Work Request Details & Tasks
   const { data: currentWr } = useWorkRequestDetail(effectiveWrId);
   const activeWr = currentWr || workRequests.find((w) => w.id === effectiveWrId);
+  const activeWrCode = activeWr
+    ? activeWr.workRequestNumber || activeWr.work_request_number
+    : undefined;
+  const activeWrFullLabel = activeWr
+    ? `${activeWrCode ? `${activeWrCode} · ` : ''}${activeWr.title} (${activeWr.entity})`
+    : undefined;
   const { data: tasks = [] } = useWorkRequestTasks(effectiveWrId, {
     enabled: Boolean(effectiveWrId),
   });
@@ -498,32 +504,57 @@ function PhaseKanbanBoardInner({
   return (
     <div className="space-y-4" data-testid="phase-kanban-board">
       {/* 1. Header Toolbar & Work Request Selector */}
-      <div className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[8px] shadow-card flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="w-72">
-            <label className="text-xs tracking-normal font-bold text-[#1E293B] block mb-1">
+      <div
+        className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[8px] shadow-card flex flex-nowrap items-end justify-between gap-3 overflow-x-auto"
+        data-testid="kanban-header-toolbar"
+      >
+        <div className="flex flex-nowrap items-end gap-2.5 flex-1">
+          <div
+            className="w-64 xl:w-72 min-w-[170px] shrink"
+            data-testid="kanban-wr-select-wrapper"
+          >
+            <label className="text-xs tracking-normal font-bold text-[#1E293B] block mb-1 whitespace-nowrap">
               Select Work Request
             </label>
             <Select value={effectiveWrId} onValueChange={handleSelectWr}>
               <SelectTrigger
                 className="h-9 text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B]"
                 data-testid="kanban-wr-select"
+                title={activeWrFullLabel}
               >
                 <SelectValue placeholder="Choose a work request" />
               </SelectTrigger>
-              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                {workRequests.map((wr) => (
-                  <SelectItem key={wr.id} value={wr.id} className="text-xs">
-                    {wr.title} ({wr.entity})
-                  </SelectItem>
-                ))}
+              <SelectContent className="max-w-[min(36rem,calc(100vw-2rem))] rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                {workRequests.map((wr) => {
+                  const wrCode = wr.workRequestNumber || wr.work_request_number;
+                  return (
+                    <SelectItem key={wr.id} value={wr.id} className="text-xs">
+                      {wrCode ? `${wrCode} · ` : ''}{wr.title} ({wr.entity})
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>
 
           {activeWr && (
-            <div className="flex items-center gap-2 pt-4">
-              <Badge variant={activeWr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
+            <div
+              className="flex flex-nowrap items-center gap-1.5 h-9 shrink-0"
+              data-testid="kanban-wr-badges"
+            >
+              {activeWrCode && (
+                <span
+                  className="font-mono text-xs font-semibold text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded-[6px] tabular-nums whitespace-nowrap shrink-0"
+                  data-testid="kanban-wr-number"
+                >
+                  {activeWrCode}
+                </span>
+              )}
+              <Badge
+                variant={activeWr.entity === 'LTA' ? 'lta' : 'ata'}
+                size="compact"
+                className="whitespace-nowrap shrink-0"
+              >
                 {activeWr.entity}
               </Badge>
               {activeWr.priority && (
@@ -536,6 +567,7 @@ function PhaseKanbanBoardInner({
                         : 'secondary'
                   }
                   size="compact"
+                  className="whitespace-nowrap shrink-0"
                 >
                   {activeWr.priority.endsWith('Priority') ? activeWr.priority : `${activeWr.priority} Priority`}
                 </Badge>
@@ -548,24 +580,24 @@ function PhaseKanbanBoardInner({
                 return (
                   <>
                     <span
-    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] border text-xs font-semibold ${phaseInfo.badgeClass}`}
-    title={`Phase: ${phaseInfo.label}`}
-  >
-    <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
-    <PhaseIcon className="w-3.5 h-3.5 shrink-0" />
-    <span>Phase: {phaseInfo.label}</span>
-  </span>
-  <span
-    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] border text-xs font-semibold ${statusInfo.badgeClass}`}
-    title={`Status: ${statusInfo.label}`}
-  >
-    <span className={`w-1.5 h-1.5 rounded-full ${statusInfo.dotClass}`} />
-    <StatusIcon className="w-3 h-3 shrink-0" />
-    <span>{statusInfo.label}</span>
-  </span>
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] border text-xs font-semibold whitespace-nowrap shrink-0 ${phaseInfo.badgeClass}`}
+                      title={`Phase: ${phaseInfo.label}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${phaseInfo.dotClass}`} />
+                      <PhaseIcon className="w-3.5 h-3.5 shrink-0" />
+                      <span>Phase: {phaseInfo.label}</span>
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] border text-xs font-semibold whitespace-nowrap shrink-0 ${statusInfo.badgeClass}`}
+                      title={`Status: ${statusInfo.label}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusInfo.dotClass}`} />
+                      <StatusIcon className="w-3 h-3 shrink-0" />
+                      <span>{statusInfo.label}</span>
+                    </span>
                     {activeWr.dueDate && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] tabular-nums text-xs font-bold bg-[#F8FAFC] text-[#1E293B] border-[#E2E8F0]">
-                        <Calendar className="w-3 h-3 text-[#475569]" />
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] tabular-nums text-xs font-bold bg-[#F8FAFC] text-[#1E293B] border border-[#E2E8F0] whitespace-nowrap shrink-0">
+                        <Calendar className="w-3 h-3 text-[#475569] shrink-0" />
                         <span>Due: {new Date(activeWr.dueDate).toLocaleDateString()}</span>
                       </span>
                     )}
@@ -576,7 +608,7 @@ function PhaseKanbanBoardInner({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-nowrap items-center gap-2 h-9 shrink-0" data-testid="kanban-header-actions">
           {effectiveWrId && <PresenceAvatars roomId={effectiveWrId} />}
           {activeWr && (
             <Button
@@ -589,7 +621,7 @@ function PhaseKanbanBoardInner({
                 }
                 setIsSidePeekOpen(true);
               }}
-              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs"
+              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
               data-testid="kanban-back-sidepeek-btn"
               title="Go back to Work Request Side Peek"
             >
@@ -606,7 +638,7 @@ function PhaseKanbanBoardInner({
                 if (onEditWorkRequest) onEditWorkRequest(activeWr);
                 else setIsEditModalOpen(true);
               }}
-              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs"
+              className="text-xs tracking-normal rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] gap-1.5 cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
               data-testid="kanban-edit-wr-btn"
             >
               <Edit3 className="h-3.5 w-3.5 text-[#475569]" />

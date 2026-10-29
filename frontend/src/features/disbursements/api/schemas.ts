@@ -51,16 +51,22 @@ export const createDisbursementSchema = z.object({
     .max(2000, 'Description cannot exceed 2000 characters'),
   amount: z.number().positive('Amount must be greater than 0'),
   fundSource: z.enum(FUND_SOURCES, {
-    errorMap: () => ({ message: 'Fund source must be Firm Fund or Client Fund' }),
+    error: 'Fund source must be Firm Fund or Client Fund',
   }),
-  linkedWorkRequestId: z.string().uuid('Valid Work Request UUID is required'),
-  clientId: z.string().uuid('Invalid Client UUID').nullable().optional(),
+  linkedWorkRequestId: z.string().guid('Valid Work Request UUID is required'),
+  clientId: z.string().guid('Invalid Client UUID').nullable().optional(),
   employeeId: z.string().max(100).nullable().optional(),
-  linkedInvoiceId: z.string().uuid('Invalid Invoice UUID').nullable().optional(),
-  linkedTaskId: z.string().uuid('Valid Task UUID is required'),
-  taskId: z.string().uuid('Valid Task UUID is required').optional().nullable(),
-  task_id: z.string().uuid('Valid Task UUID is required').optional().nullable(),
-  linkedTransmittalId: z.string().uuid('Invalid Transmittal UUID').nullable().optional(),
+  linkedInvoiceId: z.string().guid('Invalid Invoice UUID').nullable().optional(),
+  linkedTaskId: z.string().guid('Valid Task UUID is required'),
+  taskId: z.string().guid('Valid Task UUID is required').optional().nullable(),
+  task_id: z.string().guid('Valid Task UUID is required').optional().nullable(),
+  linkedTransmittalId: z.string().guid('Invalid Transmittal UUID').nullable().optional(),
+  disbursementNumber: z.string().max(50).nullable().optional(),
+  disbursement_number: z.string().max(50).nullable().optional(),
+  clientNumber: z.string().max(50).nullable().optional(),
+  client_number: z.string().max(50).nullable().optional(),
+  workRequestNumber: z.string().max(50).nullable().optional(),
+  work_request_number: z.string().max(50).nullable().optional(),
   dueDate: z.string().nullable().optional(),
   notes: z.string().max(2000, 'Notes cannot exceed 2000 characters').nullable().optional(),
   receiptS3Key: z.string().max(500, 'Receipt S3 key cannot exceed 500 characters').nullable().optional(),
@@ -68,7 +74,7 @@ export const createDisbursementSchema = z.object({
   // Anti-forgery guard: status MUST NOT be set by the caller
   status: z
     .never({
-      message: 'Explicit status cannot be set on creation; status forgery is prohibited',
+      error: 'Explicit status cannot be set on creation; status forgery is prohibited',
     })
     .optional(),
 });
@@ -94,7 +100,7 @@ export const updateDisbursementSchema = createDisbursementSchema.partial().exten
  */
 export const rejectDisbursementSchema = z.object({
   reason: z
-    .string({ required_error: 'Rejection reason is required' })
+    .string({ error: 'Rejection reason is required' })
     .trim()
     .min(1, 'Rejection reason is required')
     .max(500, 'Rejection reason cannot exceed 500 characters'),
@@ -119,7 +125,7 @@ export const releasePaymentSchema = z.object({
  */
 export const releaseDisbursementSchema = z.object({
   expectedVersion: z
-    .number({ required_error: 'Expected version is required' })
+    .number({ error: 'Expected version is required' })
     .int('Expected version must be an integer')
     .positive('Expected version must be a positive integer'),
 });
@@ -130,7 +136,7 @@ export const releaseDisbursementSchema = z.object({
  */
 export const approveDisbursementSchema = z.object({
   expectedVersion: z
-    .number({ required_error: 'Expected version is required' })
+    .number({ error: 'Expected version is required' })
     .int('Expected version must be an integer')
     .positive('Expected version must be a positive integer'),
 });
@@ -141,25 +147,25 @@ export const approveDisbursementSchema = z.object({
  */
 export const fundDisbursementSchema = z.object({
   method: z
-    .string({ required_error: 'Payment method is required' })
+    .string({ error: 'Payment method is required' })
     .trim()
     .min(1, 'Payment method is required')
     .max(50, 'Payment method cannot exceed 50 characters'),
   bank: z
-    .string({ required_error: 'Bank or payment source is required' })
+    .string({ error: 'Bank or payment source is required' })
     .trim()
     .min(1, 'Bank or payment source is required')
     .max(100, 'Bank name cannot exceed 100 characters'),
   reference: z
-    .string({ required_error: 'Payment reference is required' })
+    .string({ error: 'Payment reference is required' })
     .trim()
     .min(1, 'Payment reference is required')
     .max(100, 'Payment reference cannot exceed 100 characters'),
   date: z
-    .string({ required_error: 'Payment date is required' })
+    .string({ error: 'Payment date is required' })
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Valid date YYYY-MM-DD is required'),
   expectedVersion: z
-    .number({ required_error: 'Expected version is required' })
+    .number({ error: 'Expected version is required' })
     .int('Expected version must be an integer')
     .positive('Expected version must be a positive integer'),
 });
@@ -169,7 +175,7 @@ export const fundDisbursementSchema = z.object({
  */
 export const resendDraftSchema = z.object({
   expectedVersion: z
-    .number({ required_error: 'Expected version is required' })
+    .number({ error: 'Expected version is required' })
     .int('Expected version must be an integer')
     .positive('Expected version must be a positive integer'),
 });
@@ -179,7 +185,7 @@ export const resendDraftSchema = z.object({
  */
 export const updatePaymentDetailsSchema = z.object({
   method: z
-    .string({ required_error: 'Payment method is required' })
+    .string({ error: 'Payment method is required' })
     .trim()
     .min(1, 'Payment method is required')
     .max(50, 'Payment method cannot exceed 50 characters'),
@@ -196,10 +202,10 @@ export const updatePaymentDetailsSchema = z.object({
     .nullable()
     .optional(),
   date: z
-    .string({ required_error: 'Payment date is required' })
+    .string({ error: 'Payment date is required' })
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'Valid date YYYY-MM-DD is required'),
   expectedVersion: z
-    .number({ required_error: 'Expected version is required' })
+    .number({ error: 'Expected version is required' })
     .int('Expected version must be an integer')
     .positive('Expected version must be a positive integer'),
 });
@@ -209,15 +215,15 @@ export const updatePaymentDetailsSchema = z.object({
  */
 export const receiptUploadReservationSchema = z.object({
   filename: z
-    .string({ required_error: 'Filename is required' })
+    .string({ error: 'Filename is required' })
     .trim()
     .min(1, 'Filename is required')
     .max(255, 'Filename cannot exceed 255 characters'),
   contentType: z.enum(['application/pdf', 'image/png', 'image/jpeg'], {
-    errorMap: () => ({ message: 'Only PDF, PNG, and JPEG files are allowed' }),
+    error: 'Only PDF, PNG, and JPEG files are allowed',
   }),
   size: z
-    .number({ required_error: 'File size is required' })
+    .number({ error: 'File size is required' })
     .int()
     .positive('File size must be positive')
     .max(10485760, 'File size cannot exceed 10 MiB'),
@@ -230,8 +236,8 @@ export const disbursementFiltersSchema = z.object({
   status: z.enum(DISBURSEMENT_STATUSES).optional(),
   category: z.string().optional(),
   fundSource: z.enum(FUND_SOURCES).optional(),
-  linkedTaskId: z.string().uuid('Invalid Task UUID').optional(),
-  linkedTransmittalId: z.string().uuid('Invalid Transmittal UUID').optional(),
+  linkedTaskId: z.string().guid('Invalid Task UUID').optional(),
+  linkedTransmittalId: z.string().guid('Invalid Transmittal UUID').optional(),
   search: z.string().optional(),
   archived: z.union([z.boolean(), z.string()]).optional(),
   queue: z
@@ -271,7 +277,7 @@ export const createDisbursementTemplateSchema = z.object({
   fundSource: z.enum(FUND_SOURCES).nullable().optional(),
   schedule: z.string().max(50).nullable().optional(),
   description: z.string().max(2000).nullable().optional(),
-  linkedWorkRequestId: z.string().uuid().nullable().optional(),
-  linkedInvoiceId: z.string().uuid().nullable().optional(),
-  linkedTransmittalId: z.string().uuid().nullable().optional(),
+  linkedWorkRequestId: z.string().guid().nullable().optional(),
+  linkedInvoiceId: z.string().guid().nullable().optional(),
+  linkedTransmittalId: z.string().guid().nullable().optional(),
 });

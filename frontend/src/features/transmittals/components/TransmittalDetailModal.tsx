@@ -179,8 +179,23 @@ export function TransmittalDetailModal({
                   <Building className="h-3.5 w-3.5 text-[#475569]" />
                   Client Details
                 </div>
-                <div className="text-sm font-semibold text-[#1E293B]" data-testid="detail-client-name">
-                  {transmittal.clients?.name || 'Client not assigned'}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {Boolean(
+                    transmittal.clientNumber ||
+                      transmittal.client_number ||
+                      transmittal.clients?.clientNumber ||
+                      transmittal.clients?.client_number
+                  ) && (
+                    <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1.5 py-0.5 rounded">
+                      {transmittal.clientNumber ||
+                        transmittal.client_number ||
+                        transmittal.clients?.clientNumber ||
+                        transmittal.clients?.client_number}
+                    </span>
+                  )}
+                  <div className="text-sm font-semibold text-[#1E293B]" data-testid="detail-client-name">
+                    {transmittal.clients?.name || 'Client not assigned'}
+                  </div>
                 </div>
                 {transmittal.clients?.address && (
                   <div className="text-xs text-[#475569] flex items-start gap-1">
@@ -211,6 +226,33 @@ export function TransmittalDetailModal({
                 )}
               </div>
             </div>
+
+            {/* Linked Work Request */}
+            {Boolean(
+              transmittal.workRequestNumber ||
+                transmittal.work_request_number ||
+                transmittal.work_request_title ||
+                transmittal.workRequestTitle ||
+                transmittal.work_request_id ||
+                transmittal.workRequestId
+            ) && (
+              <div className="bg-[#F8FAFC] p-3 rounded-[8px] border-[#E2E8F0] flex items-center justify-between text-xs">
+                <span className="font-semibold text-[#1E293B]">Linked Work Request:</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {Boolean(transmittal.workRequestNumber || transmittal.work_request_number) && (
+                    <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1.5 py-0.5 rounded">
+                      {transmittal.workRequestNumber || transmittal.work_request_number}
+                    </span>
+                  )}
+                  <span className="text-[#1E293B]">
+                    {transmittal.work_request_title ||
+                      transmittal.workRequestTitle ||
+                      transmittal.work_request_id ||
+                      transmittal.workRequestId}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Document Line Items Table (Item-rows-only fix) */}
             <div className="space-y-2">

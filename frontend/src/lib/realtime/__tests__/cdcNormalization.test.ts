@@ -545,3 +545,65 @@ describe('Dual-Case Normalization Engine (Tier 2: Boundary & Corner Cases)', () 
     expect(wrDeleted.deleted_at).toBe('2026-10-10T15:30:00Z');
   });
 });
+
+describe('Dual-Case Normalization Engine (Tier 3: Persistent Item Numbers Preservation)', () => {
+  it('1. preserves audit_number <-> auditNumber on audit_logs CDC events', () => {
+    const raw = { id: 'aud-1', audit_number: 'AUR-0042', action: 'user.created' };
+    const norm = normalizeCdcPayload('audit_logs', raw);
+    expect(norm.auditNumber).toBe('AUR-0042');
+    expect(norm.audit_number).toBe('AUR-0042');
+
+    const camel = { id: 'aud-2', auditNumber: 'AUR-0099', action: 'invoice.paid' };
+    const normCamel = normalizeCdcPayload('audit_logs', camel);
+    expect(normCamel.auditNumber).toBe('AUR-0099');
+    expect(normCamel.audit_number).toBe('AUR-0099');
+  });
+
+  it('2. preserves user_number <-> userNumber on users CDC events', () => {
+    const raw = { id: 'usr-1', user_number: 'USR-08', email: 'test@firm.com' };
+    const norm = normalizeCdcPayload('users', raw);
+    expect(norm.userNumber).toBe('USR-08');
+    expect(norm.user_number).toBe('USR-08');
+
+    const camel = { id: 'usr-2', userNumber: 'USR-15', email: 'test2@firm.com' };
+    const normCamel = normalizeCdcPayload('users', camel);
+    expect(normCamel.userNumber).toBe('USR-15');
+    expect(normCamel.user_number).toBe('USR-15');
+  });
+
+  it('3. preserves client_number <-> clientNumber on clients CDC events', () => {
+    const raw = { id: 'cli-1', client_number: 'CLI-ATA-0001', name: 'Acme Corp' };
+    const norm = normalizeCdcPayload('clients', raw);
+    expect(norm.clientNumber).toBe('CLI-ATA-0001');
+    expect(norm.client_number).toBe('CLI-ATA-0001');
+
+    const camel = { id: 'cli-2', clientNumber: 'CLI-LTA-0002', name: 'Beta Ltd' };
+    const normCamel = normalizeCdcPayload('clients', camel);
+    expect(normCamel.clientNumber).toBe('CLI-LTA-0002');
+    expect(normCamel.client_number).toBe('CLI-LTA-0002');
+  });
+
+  it('4. preserves work_request_number <-> workRequestNumber on work_requests CDC events', () => {
+    const raw = { id: 'wr-1', work_request_number: 'WR-ATA-2026-0001', title: 'Tax Audit' };
+    const norm = normalizeCdcPayload('work_requests', raw);
+    expect(norm.workRequestNumber).toBe('WR-ATA-2026-0001');
+    expect(norm.work_request_number).toBe('WR-ATA-2026-0001');
+    expect(norm.workRequestNo).toBe('WR-ATA-2026-0001');
+  });
+
+  it('5. preserves invoice_number, disbursement_number, and tracking_number cleanly', () => {
+    const inv = normalizeCdcPayload('invoices', { id: 'inv-1', invoice_number: 'ATA-SI-2026-0001' });
+    expect(inv.invoiceNumber).toBe('ATA-SI-2026-0001');
+    expect(inv.invoice_number).toBe('ATA-SI-2026-0001');
+
+    const disb = normalizeCdcPayload('disbursements', {
+      id: 'disb-1',
+      disbursement_number: 'DISB-ATA-20260418-0001',
+      tracking_number: 'TR-ATA-2026-0001',
+    });
+    expect(disb.disbursementNumber).toBe('DISB-ATA-20260418-0001');
+    expect(disb.disbursement_number).toBe('DISB-ATA-20260418-0001');
+    expect(disb.trackingNumber).toBe('TR-ATA-2026-0001');
+    expect(disb.tracking_number).toBe('TR-ATA-2026-0001');
+  });
+});

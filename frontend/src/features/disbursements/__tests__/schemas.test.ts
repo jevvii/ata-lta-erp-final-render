@@ -65,7 +65,7 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
         const result = createDisbursementSchema.safeParse(payloadWithStatus);
         expect(result.success).toBe(false);
         if (!result.success) {
-          const statusError = result.error.errors.find((e) => e.path.includes('status'));
+          const statusError = result.error.issues.find((e) => e.path.includes('status'));
           expect(statusError).toBeDefined();
           expect(statusError?.message).toContain('status forgery is prohibited');
         }
@@ -174,7 +174,7 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       const result = rejectDisbursementSchema.safeParse({ reason: '     ' });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.errors[0]?.message).toContain('Rejection reason is required');
+        expect(result.error.issues[0]?.message).toContain('Rejection reason is required');
       }
     });
 
@@ -183,7 +183,7 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       const result = rejectDisbursementSchema.safeParse({ reason: tooLong });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.errors[0]?.message).toContain('cannot exceed 500 characters');
+        expect(result.error.issues[0]?.message).toContain('cannot exceed 500 characters');
       }
     });
   });

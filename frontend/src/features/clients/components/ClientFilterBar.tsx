@@ -83,7 +83,7 @@ export function ClientFilterBar({
           <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[#475569]" />
           <Input
             type="text"
-            placeholder="Search by client name, TIN, or trade name..."
+            placeholder="Search by ID, client name, TIN, or contact..."
             value={filters.search ?? ''}
             onChange={(e) => onFilterChange({ search: e.target.value, page: 1 })}
             className="pl-8 text-xs h-9 bg-[#FFFFFF] rounded-[6px] border border-[#E2E8F0] focus-visible:border-[#1D4ED8]"

@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import { getEligibleStaff, useTeam } from '../api/useTeam';
+import { UserAvatar } from '../../../components/common/UserAvatar';
 import { TaskTypeSelect } from '../lib/taskTypes';
 import { canEmployeeCreateTask } from '../lib/taskScope';
 import { useSessionStore } from '@/lib/session';
@@ -48,14 +49,7 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
     : getEligibleStaff(team);
   // Re-check scope on each render so a removed WR member cannot be submitted.
   const assignee = eligible.find((member) => member.id === assigneeId);
-  const initials = assignee?.name
-    .trim()
-    .split(/\s+/)
-    .map((part) => part[0])
-    .filter(Boolean);
-  const avatar = initials
-    ? `${initials[0] ?? ''}${initials.length > 1 ? initials[initials.length - 1] : ''}`
-    : '';
+  const selectedAssignee = assignee;
 
   useLayoutEffect(() => {
     const input = titleRef.current;
@@ -207,13 +201,24 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
           </button>
         )}
         <label
-          className={`${controlClass} w-7 rounded-[6px] ${assignee ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs font-bold' : 'border-dashed border-[#E2E8F0]'}`}
-          title={assignee?.name ?? 'Unassigned'}
+          className={`${controlClass} w-7 rounded-[6px] ${selectedAssignee ? 'hover:bg-transparent' : 'border-dashed border-[#E2E8F0]'}`}
+          title={selectedAssignee?.name ?? 'Unassigned'}
         >
-          {assignee ? avatar.toUpperCase() : <User className="h-4 w-4" />}
+          {selectedAssignee ? (
+            <UserAvatar
+              userId={selectedAssignee.id}
+              name={selectedAssignee.name}
+              avatarUrl={selectedAssignee.avatarUrl}
+              size="xs"
+              shape="rounded"
+              className="h-5 w-5 rounded-[4px] text-[10px]"
+            />
+          ) : (
+            <User className="h-4 w-4" />
+          )}
           <select
             aria-label="Lead assignee"
-            value={assignee?.id ?? ''}
+            value={selectedAssignee?.id ?? ''}
             disabled={teamLoading || teamError}
             onChange={(event) => setAssigneeId(event.target.value)}
             className="absolute inset-0 h-full w-full cursor-pointer opacity-0"

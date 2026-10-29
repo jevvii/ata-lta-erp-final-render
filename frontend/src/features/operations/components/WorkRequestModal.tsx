@@ -339,18 +339,26 @@ export function WorkRequestModal({
     }
     setClientError(null);
 
+    let hasValidationErrors = false;
+
     if (!isEditMode && !dueDate) {
       setDueDateError('Due date is required');
-      return;
+      hasValidationErrors = true;
+    } else {
+      setDueDateError(null);
     }
-    setDueDateError(null);
 
     // 2. Mandatory Manager Validation
     if (!assignedTo) {
       setManagerError('Manager is required');
+      hasValidationErrors = true;
+    } else {
+      setManagerError(null);
+    }
+
+    if (hasValidationErrors) {
       return;
     }
-    setManagerError(null);
 
     // 3. Client-side Dependency DAG Check
     const depCheck = validateDependencies(
@@ -669,13 +677,20 @@ export function WorkRequestModal({
       >
         <DialogHeader className="px-6 py-4 border-b border-[#E2E8F0]">
           <div className="flex items-center justify-between">
-            <DialogTitle className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
-              {isResubmitMode
-                ? 'Resubmit Work Request'
-                : isEditMode
-                ? 'Edit Work Request'
-                : 'New Work Request'}
-            </DialogTitle>
+            <div className="flex items-center gap-2">
+              <DialogTitle className="text-lg font-semibold uppercase tracking-tight text-[#1E293B]">
+                {isResubmitMode
+                  ? 'Resubmit Work Request'
+                  : isEditMode
+                  ? 'Edit Work Request'
+                  : 'New Work Request'}
+              </DialogTitle>
+              {isEditMode && Boolean(workRequest?.workRequestNumber || workRequest?.work_request_number) && (
+                <span className="font-mono text-xs font-semibold text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded-[6px] tabular-nums">
+                  {workRequest?.workRequestNumber || workRequest?.work_request_number}
+                </span>
+              )}
+            </div>
           </div>
         </DialogHeader>
 

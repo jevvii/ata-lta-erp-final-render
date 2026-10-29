@@ -347,7 +347,7 @@ export function InvoiceDetailModal({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               <div className="flex items-center gap-2">
-                <DialogTitle className="text-lg font-bold text-[#1E293B]">
+                <DialogTitle className="text-lg font-bold text-[#1E293B] font-mono">
                   {invoice.invoice_number}
                 </DialogTitle>
                 {invoice.entity_code && (
@@ -370,6 +370,43 @@ export function InvoiceDetailModal({
               <p className="text-xs text-[#475569] mt-0.5">
                 Created {invoice.created_at?.slice(0, 10)} • Due {invoice.due_date?.slice(0, 10)}
               </p>
+              {Boolean(
+                invoice.work_request_number ||
+                  invoice.workRequestNumber ||
+                  invoice.work_request?.workRequestNumber ||
+                  invoice.work_request?.workOrderNumber
+              ) && (
+                <div className="flex items-center gap-1.5 mt-0.5 text-xs text-[#475569] flex-wrap">
+                  <span>Work Request:</span>
+                  <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                    {invoice.work_request_number ||
+                      invoice.workRequestNumber ||
+                      invoice.work_request?.workRequestNumber ||
+                      invoice.work_request?.workOrderNumber}
+                  </span>
+                  {(invoice.work_request?.title || invoice.work_request_title) && (
+                    <span className="font-medium text-[#1E293B]">
+                      {invoice.work_request?.title || invoice.work_request_title}
+                    </span>
+                  )}
+                </div>
+              )}
+              {Boolean(
+                (invoice as { tracking_number?: string | null; trackingNumber?: string | null })
+                  .tracking_number ||
+                  (invoice as { tracking_number?: string | null; trackingNumber?: string | null })
+                    .trackingNumber
+              ) && (
+                <div className="flex items-center gap-1.5 mt-0.5 text-xs text-[#475569]">
+                  <span>Transmittal:</span>
+                  <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                    {(invoice as { tracking_number?: string | null; trackingNumber?: string | null })
+                      .tracking_number ||
+                      (invoice as { tracking_number?: string | null; trackingNumber?: string | null })
+                        .trackingNumber}
+                  </span>
+                </div>
+              )}
               {(invoice.work_request?.creatorName || invoice.work_request_creator_name) && (
                 <p className="text-xs text-[#475569] mt-0.5" data-testid="invoice-wr-requester">
                   Work Request Requester:{' '}
@@ -516,9 +553,24 @@ export function InvoiceDetailModal({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <p className="font-bold text-[#1E293B] text-sm">
-                {printDetails.clientName || '—'}
-              </p>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {Boolean(
+                  invoice.client_number ||
+                    invoice.clientNumber ||
+                    invoice.clients?.clientNumber ||
+                    invoice.clients?.client_number
+                ) && (
+                  <span className="font-mono text-xs font-medium text-[#475569] tabular-nums bg-[#F8FAFC] border border-[#E2E8F0] px-1 py-0.2 rounded">
+                    {invoice.client_number ||
+                      invoice.clientNumber ||
+                      invoice.clients?.clientNumber ||
+                      invoice.clients?.client_number}
+                  </span>
+                )}
+                <p className="font-bold text-[#1E293B] text-sm">
+                  {printDetails.clientName || '—'}
+                </p>
+              </div>
               {printDetails.clientTin && (
                 <p className="text-[#475569] font-mono text-xs mt-0.5">
                   TIN: {printDetails.clientTin}

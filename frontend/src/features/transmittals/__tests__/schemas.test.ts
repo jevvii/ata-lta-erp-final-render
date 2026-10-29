@@ -42,7 +42,7 @@ describe('Transmittals Zod Schemas (transmittals@2.0.0)', () => {
       const res = transmittalItemSchema.safeParse(item);
       expect(res.success).toBe(false);
       if (!res.success) {
-        expect(res.error.errors[0]?.message).toContain('Description is required');
+        expect(res.error.issues[0]?.message).toContain('Description is required');
       }
     });
 
@@ -120,7 +120,7 @@ describe('Transmittals Zod Schemas (transmittals@2.0.0)', () => {
       const res = createTransmittalSchema.safeParse(payload);
       expect(res.success).toBe(false);
       if (!res.success) {
-        const itemError = res.error.errors.find((e) => e.path.includes('items'));
+        const itemError = res.error.issues.find((e) => e.path.includes('items'));
         expect(itemError?.message).toContain('At least 1 item is required');
       }
     });
@@ -140,7 +140,7 @@ describe('Transmittals Zod Schemas (transmittals@2.0.0)', () => {
         const res = createTransmittalSchema.safeParse(payload);
         expect(res.success).toBe(false);
         if (!res.success) {
-          const statusError = res.error.errors.find((e) => e.path.includes('status'));
+          const statusError = res.error.issues.find((e) => e.path.includes('status'));
           expect(statusError).toBeDefined();
           expect(statusError?.message).toContain('status forgery is prohibited');
         }

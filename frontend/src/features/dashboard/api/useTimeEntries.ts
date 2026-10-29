@@ -36,6 +36,7 @@ export function mapRawTimeEntry(raw: RawTimeEntryApi): TimeEntry {
     userId: raw.user_id,
     userName: raw.user_name ?? null,
     userRole: raw.user_role ?? null,
+    userAvatarUrl: (raw.userAvatarUrl as string) || (raw.user_avatar_url as string) || null,
     taskId: raw.task_id,
     entryDate: raw.entry_date,
     durationMinutes: raw.duration_minutes,

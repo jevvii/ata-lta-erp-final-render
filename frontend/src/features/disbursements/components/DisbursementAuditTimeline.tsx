@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { UserAvatar } from '../../../components/common/UserAvatar';
 import { DisbursementStatusBadge } from './DisbursementStatusBadge';
 import { receiptDisplayName } from '../lib/receiptDisplayName';
 import { auditActionLabel } from '../lib/auditActionLabel';
@@ -123,11 +124,6 @@ export function DisbursementAuditTimeline({ item }: { item: Disbursement }) {
           event.actorName?.trim() ||
           (actorId ? 'Unknown actor' : 'System');
         const role = event.actor_role || event.actorRole;
-        const words = name.split(/\s+/);
-        const initials =
-          name === 'Unknown actor'
-            ? '?'
-            : `${words[0]?.[0] || ''}${words.length > 1 ? words[words.length - 1]?.[0] || '' : ''}`.toUpperCase();
         const oldStatus = event.old_status || event.from_status || event.fromStatus;
         const newStatus = event.new_status || event.to_status || event.toStatus;
         const timestamp = event.created_at || event.timestamp || event.createdAt || '';
@@ -143,12 +139,14 @@ export function DisbursementAuditTimeline({ item }: { item: Disbursement }) {
             className="flex items-start gap-2.5"
             data-testid="lifecycle-audit-entry"
           >
-            <span
-              aria-hidden="true"
-              className="h-8 w-8 shrink-0 rounded-full bg-sidebar text-muted flex items-center justify-center font-semibold"
-            >
-              {initials}
-            </span>
+            <UserAvatar
+              userId={event.actor_id ?? event.actorId}
+              name={event.actor_name ?? event.actorName ?? name}
+              avatarUrl={event.actor_avatar_url ?? event.actorAvatarUrl}
+              size="sm"
+              shape="circle"
+              className="h-7 w-7 text-[10px]"
+            />
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold text-ink break-words">{name}</span>

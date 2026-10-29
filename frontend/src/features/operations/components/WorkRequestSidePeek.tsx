@@ -61,6 +61,7 @@ import {
   canResubmitTask,
 } from '../lib/taskScope';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
+import { TaskTypeBadge } from '../lib/taskTypes';
 import { TaskDetailModal } from './TaskDetailModal';
 import { DocumentViewerModal } from './DocumentViewerModal';
 import { RejectReasonModal } from './RejectReasonModal';
@@ -535,6 +536,18 @@ export function WorkRequestSidePeek({
                 <div className="flex flex-wrap items-center gap-2">
                   {workRequest && (
                     <>
+                      {(() => {
+                        const wrCode = workRequest.workRequestNumber || workRequest.work_request_number;
+                        if (!wrCode) return null;
+                        return (
+                          <span
+                            className="font-mono text-xs font-semibold text-[#475569] bg-[#F8FAFC] border border-[#E2E8F0] px-2 py-0.5 rounded-[6px] tabular-nums"
+                            data-testid="side-peek-wr-number"
+                          >
+                            {wrCode}
+                          </span>
+                        );
+                      })()}
                       <Badge
                         variant={workRequest.entity === 'LTA' ? 'lta' : 'ata'}
                         size="compact"
@@ -762,12 +775,19 @@ export function WorkRequestSidePeek({
                           <Building className="h-3.5 w-3.5 text-[#475569] shrink-0" />
                           Client
                         </span>
-                        <span
-                          className="font-bold text-[#1E293B] truncate max-w-[160px]"
-                          data-testid="side-peek-client"
-                        >
-                          {workRequest.clientName || '—'}
-                        </span>
+                        <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+                          <span
+                            className="font-bold text-[#1E293B] truncate"
+                            data-testid="side-peek-client"
+                          >
+                            {workRequest.clientName || '—'}
+                          </span>
+                          {(workRequest.clientNumber || workRequest.client_number) && (
+                            <span className="font-mono text-[11px] text-[#64748B] tabular-nums shrink-0">
+                              ({workRequest.clientNumber || workRequest.client_number})
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Due Date */}
@@ -920,10 +940,13 @@ export function WorkRequestSidePeek({
                                 title="Click to view full task details, log time, and upload documents"
                               >
                                 <div className="flex items-start gap-2.5 min-w-0 w-full sm:flex-1">
-                                  <CheckCircle2
-                                    className={`h-4.5 w-4.5 shrink-0 mt-0.5 ${
-                                      isCompleted ? 'text-[#1E293B]' : 'text-[#94A3B8]'
-                                    }`}
+                                  <TaskTypeBadge
+                                    value={
+                                      task.requiredLinkType ??
+                                      (task as unknown as { required_link_type?: string | null }).required_link_type
+                                    }
+                                    className="mt-1"
+                                    data-testid={`side-peek-task-type-${task.id}`}
                                   />
                                   <div className="min-w-0 flex-1">
                                     <span
@@ -1373,39 +1396,47 @@ export function WorkRequestSidePeek({
                               Disbursements ({relatedDisbursements.length})
                             </span>
                             <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden divide-y divide-[#E2E8F0] bg-[#FFFFFF]">
-                              {relatedDisbursements.map((d) => (
-                                <a
-                                  key={d.id}
-                                  href={`/disbursements?disbursementId=${d.id}`}
-                                  className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
-                                  data-testid={`side-peek-disbursement-${d.id}`}
-                                >
-                                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                    <CreditCard className="h-4 w-4 text-[#475569] shrink-0" />
-                                    <div className="min-w-0 flex-1">
-                                      <span className="font-semibold text-xs text-[#1E293B] block truncate">
-                                        {d.category || 'Disbursement'}
-                                      </span>
-                                      <span className="text-xs text-[#475569] block truncate">
-                                        {d.description || 'No description'}
-                                      </span>
+                              {relatedDisbursements.map((d) => {
+                                const disbNo = d.disbursement_number || d.disbursementNumber;
+                                return (
+                                  <a
+                                    key={d.id}
+                                    href={`/disbursements?disbursementId=${d.id}`}
+                                    className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-[#F8FAFC] transition-colors"
+                                    data-testid={`side-peek-disbursement-${d.id}`}
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                      <CreditCard className="h-4 w-4 text-[#475569] shrink-0" />
+                                      <div className="min-w-0 flex-1">
+                                        {disbNo && (
+                                          <span className="font-mono text-xs font-medium text-[#475569] tabular-nums block truncate">
+                                            {disbNo}
+                                          </span>
+                                        )}
+                                        <span className="font-semibold text-xs text-[#1E293B] block truncate">
+                                          {d.category || 'Disbursement'}
+                                        </span>
+                                        <span className="text-xs text-[#475569] block truncate">
+                                          {d.description || 'No description'}
+                                        </span>
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    {d.amount != null && (
-                                      <span className="tabular-nums text-xs font-bold text-[#1E293B]">
-                                        ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                      </span>
-                                    )}
-                                    {d.status && (
-                                      <Badge variant={d.status === 'Released' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
-                                        {d.status}
-                                      </Badge>
-                                    )}
-                                    <ExternalLink className="h-3 w-3 text-[#475569]" />
-                                  </div>
-                                </a>
-                              ))}
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {d.amount != null && (
+                                        <span className="tabular-nums text-xs font-bold text-[#1E293B]">
+                                          ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                        </span>
+                                      )}
+                                      {d.status && (
+                                        <Badge variant={d.status === 'Released' ? 'success' : 'outline'} size="compact" className="text-xs rounded-[6px]">
+                                          {d.status}
+                                        </Badge>
+                                      )}
+                                      <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                    </div>
+                                  </a>
+                                );
+                              })}
                             </div>
                           </div>
                         )}

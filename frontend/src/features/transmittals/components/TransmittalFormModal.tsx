@@ -423,7 +423,7 @@ export function TransmittalFormModal({
                 disabled={true}
                 readOnly={true}
                 placeholder="Auto-generated on Save"
-                className="tabular-nums text-xs bg-[#F8FAFC] text-[#475569] cursor-not-allowed"
+                className="font-mono tabular-nums text-xs bg-[#F8FAFC] text-[#475569] cursor-not-allowed"
                 data-testid="tracking-number-input"
               />
               <p className="text-xs text-[#475569] flex items-center gap-1">
@@ -447,11 +447,14 @@ export function TransmittalFormModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name} ({c.entity})
-                    </SelectItem>
-                  ))}
+                  {clients.map((c) => {
+                    const clientNum = (c as { client_number?: string; clientNumber?: string }).client_number || (c as { client_number?: string; clientNumber?: string }).clientNumber;
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        {clientNum ? `${clientNum} · ${c.name} (${c.entity})` : `${c.name} (${c.entity})`}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               {errors.clientId && (
@@ -484,11 +487,17 @@ export function TransmittalFormModal({
                   <SelectValue placeholder="Link to work request..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {availableWorkRequests.map((wr) => (
-                    <SelectItem key={wr.id} value={wr.id}>
-                      {wr.tracking_number || wr.title} — {wr.client_name || 'Client'}
-                    </SelectItem>
-                  ))}
+                  {availableWorkRequests.map((wr) => {
+                    const wrNum = (wr as { work_request_number?: string; workRequestNumber?: string }).work_request_number || (wr as { work_request_number?: string; workRequestNumber?: string }).workRequestNumber;
+                    const clientPart = wr.client_name || 'Client';
+                    const titlePart = wr.tracking_number || wr.title;
+                    const displayTitle = wrNum ? `${wrNum} · ${titlePart}` : titlePart;
+                    return (
+                      <SelectItem key={wr.id} value={wr.id}>
+                        {displayTitle} — {clientPart}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               {errors.workRequestId && (

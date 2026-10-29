@@ -148,23 +148,23 @@ describe('Milestone 1 Adversarial Challenge & Boundary Stress Suite', () => {
       it('createWorkRequestSchema rejects malformed UUIDs on clientId and assignedTo', () => {
         // Valid UUID
         expect(
-          createWorkRequestSchema.safeParse({ title: 'WR', clientId: validUuid }).success
+          createWorkRequestSchema.safeParse({ title: 'WR', clientId: validUuid, dueDate: '2026-12-31' }).success
         ).toBe(true);
 
         // Empty string preprocessed to null
         expect(
-          createWorkRequestSchema.safeParse({ title: 'WR', clientId: '' }).success
+          createWorkRequestSchema.safeParse({ title: 'WR', clientId: '', dueDate: '2026-12-31' }).success
         ).toBe(true);
 
         // Invalid UUIDs
         expect(
-          createWorkRequestSchema.safeParse({ title: 'WR', clientId: '0' }).success
+          createWorkRequestSchema.safeParse({ title: 'WR', clientId: '0', dueDate: '2026-12-31' }).success
         ).toBe(false);
         expect(
-          createWorkRequestSchema.safeParse({ title: 'WR', clientId: 'not-a-uuid' }).success
+          createWorkRequestSchema.safeParse({ title: 'WR', clientId: 'not-a-uuid', dueDate: '2026-12-31' }).success
         ).toBe(false);
         expect(
-          createWorkRequestSchema.safeParse({ title: 'WR', assignedTo: 'not-a-uuid' }).success
+          createWorkRequestSchema.safeParse({ title: 'WR', assignedTo: 'not-a-uuid', dueDate: '2026-12-31' }).success
         ).toBe(false);
       });
 

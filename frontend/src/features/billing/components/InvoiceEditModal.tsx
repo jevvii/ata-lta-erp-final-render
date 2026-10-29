@@ -712,13 +712,23 @@ export function InvoiceEditModal({
               </SelectTrigger>
               <SelectContent>
                 {clientId && !clients.some((c) => c.id === clientId) && (
-                  <SelectItem value={clientId}>{invoice.clients?.name || clientId}</SelectItem>
-                )}
-                {clients.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
+                  <SelectItem value={clientId}>
+                    {invoice.client_number || invoice.clientNumber
+                      ? `${invoice.client_number || invoice.clientNumber} · ${invoice.clients?.name || clientId}`
+                      : invoice.clients?.name || clientId}
                   </SelectItem>
-                ))}
+                )}
+                {clients.map((c) => {
+                  const clientNum =
+                    (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                    (c as { client_number?: string | null })?.client_number;
+                  const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                  return (
+                    <SelectItem key={c.id} value={c.id}>
+                      {label}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>
@@ -745,13 +755,30 @@ export function InvoiceEditModal({
               <SelectContent>
                 <SelectItem value="__none__">None (Direct Client Invoice)</SelectItem>
                 {workRequestId && !workRequests.some((wr) => wr.id === workRequestId) && (
-                  <SelectItem value={workRequestId}>{workRequestId}</SelectItem>
-                )}
-                {workRequests.map((wr) => (
-                  <SelectItem key={wr.id} value={wr.id}>
-                    {wr.title}
+                  <SelectItem value={workRequestId}>
+                    {invoice.work_request_number || invoice.workRequestNumber || invoice.work_request?.workOrderNumber || invoice.work_request?.workRequestNumber
+                      ? `${invoice.work_request_number || invoice.workRequestNumber || invoice.work_request?.workOrderNumber || invoice.work_request?.workRequestNumber} · ${invoice.work_request?.title || invoice.work_request_title || workRequestId}`
+                      : invoice.work_request?.title || invoice.work_request_title || workRequestId}
                   </SelectItem>
-                ))}
+                )}
+                {workRequests.map((wr) => {
+                  const wrNum =
+                    (wr as {
+                      workRequestNumber?: string | null;
+                      work_request_number?: string | null;
+                      workOrderNumber?: string | null;
+                      work_order_number?: string | null;
+                    })?.workRequestNumber ||
+                    (wr as { work_request_number?: string | null })?.work_request_number ||
+                    (wr as { workOrderNumber?: string | null })?.workOrderNumber ||
+                    (wr as { work_order_number?: string | null })?.work_order_number;
+                  const label = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                  return (
+                    <SelectItem key={wr.id} value={wr.id}>
+                      {label}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

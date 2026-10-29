@@ -112,7 +112,7 @@ export interface Rfc7807ProblemDetails {
 export const phaseTaskInputSchema = z.object({
   title: z.string().trim().min(1, 'Task title is required').max(255),
   description: z.string().optional().nullable(),
-  assignees: z.array(z.string().uuid()).optional().default([]),
+  assignees: z.array(z.string().guid()).optional().default([]),
   depends_on: z.union([z.string(), z.array(z.string())]).optional().nullable(),
   local_id: z.string().optional().nullable(),
   status: z.string().optional().nullable(),
@@ -135,12 +135,12 @@ export const phasesInputSchema = z.object({
 export const createWorkRequestSchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(255),
   description: z.string().optional().nullable(),
-  clientId: z.string().uuid('Invalid client ID').optional().nullable(),
+  clientId: z.string().guid('Invalid client ID').optional().nullable(),
   entity: z.enum(['ATA', 'LTA', 'ALL']).optional(),
   status: z.string().max(50).optional(),
   phase: z.enum(['pre_processing', 'processing']).optional().default('pre_processing'),
-  requestedBy: z.string().uuid().optional(),
-  assignedTo: z.string().uuid().optional().nullable(),
+  requestedBy: z.string().guid().optional(),
+  assignedTo: z.string().guid().optional().nullable(),
   coAssignees: z.array(z.string()).optional().default([]),
   dueDate: z.string().optional().nullable(),
   priority: z.string().max(50).optional().default('Normal'),
@@ -159,8 +159,8 @@ export const createTaskSchema = z.object({
   description: z.string().optional().nullable(),
   status: z.string().max(50).optional().default('Draft'),
   phase: z.enum(['pre_processing', 'processing']).optional(),
-  assigneeId: z.string().uuid().optional().nullable(),
-  assignees: z.array(z.string().uuid()).optional().default([]),
+  assigneeId: z.string().guid().optional().nullable(),
+  assignees: z.array(z.string().guid()).optional().default([]),
   dueDate: z.string().optional().nullable(),
   displayOrder: z.number().int().optional().default(0),
 });
@@ -177,7 +177,7 @@ export const advanceWorkRequestSchema = z.object({
 });
 
 export const qaReviewTaskResultSchema = z.object({
-  task_id: z.string().uuid('Invalid task ID'),
+  task_id: z.string().guid('Invalid task ID'),
   qa_status: z.enum(['passed', 'failed']),
 });
 
@@ -192,7 +192,7 @@ export const rerouteSchema = z.object({
 
 export const createPhaseTransitionRequestSchema = z.object({
   request_type: z.literal('wr_phase_transition'),
-  work_request_id: z.string().uuid('Work request ID is required'),
+  work_request_id: z.string().guid('Work request ID is required'),
   from_phase: z.enum(['pre_processing', 'processing', 'quality_assurance']),
   to_phase: z.enum(['processing', 'quality_assurance', 'completion']),
   notes: z.string().max(2000).optional(),
@@ -202,7 +202,7 @@ export const updateOperationsRequestSchema = z
   .object({
     status: z.enum(['pending', 'fulfilled', 'rejected', 'cancelled']),
     rejectionReason: z.string().max(2000).optional().nullable(),
-    fulfilledBy: z.string().uuid().optional().nullable(),
+    fulfilledBy: z.string().guid().optional().nullable(),
   })
   .refine(
     (data) => {
@@ -220,9 +220,9 @@ export const generateRetainerTemplateSchema = z.object({
     .object({
       title: z.string().min(1).max(255).optional(),
       description: z.string().max(2000).optional().nullable(),
-      clientId: z.string().uuid().optional().nullable(),
+      clientId: z.string().guid().optional().nullable(),
       priority: z.string().max(50).optional(),
-      assignedTo: z.string().uuid().optional().nullable(),
+      assignedTo: z.string().guid().optional().nullable(),
       dueDate: z.string().optional().nullable(),
     })
     .optional(),

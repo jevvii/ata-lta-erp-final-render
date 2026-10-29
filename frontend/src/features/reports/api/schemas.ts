@@ -33,7 +33,7 @@ export const monthlyPendingQuerySchema = z.object({
 
 export const agingQuerySchema = z
   .object({
-    clientId: z.string().uuid().optional(),
+    clientId: z.string().guid().optional(),
   })
   .optional();
 

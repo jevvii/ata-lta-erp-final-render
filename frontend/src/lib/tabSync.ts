@@ -8,10 +8,14 @@ import { isFeatureEnabled } from './flags';
 
 export type TabSyncDomain =
   | 'operations'
+  | 'tasks'
   | 'billing'
   | 'disbursements'
+  | 'documents'
   | 'transmittals'
-  | 'clients';
+  | 'clients'
+  | 'notifications'
+  | 'admin';
 
 export type TabSyncType =
   | 'ENTITY_MUTATED'
@@ -239,6 +243,10 @@ export function handleIncomingTabSyncMessage(
       void queryClient.invalidateQueries({ queryKey: ['operations', 'workRequests', 'counts'] });
       void queryClient.invalidateQueries({ queryKey: ['operations', 'requests', 'counts'] });
     }
+    if (domain === 'admin') {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    }
     return;
   }
 
@@ -358,6 +366,10 @@ export function handleIncomingTabSyncMessage(
 
     // 3. Reconcile secondary counters (Spec §4.2)
     void queryClient.invalidateQueries({ queryKey: [domain, 'counts'] });
+    if (domain === 'admin') {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    }
   } else {
     // If entityData is not provided, mark stale / invalidate the entity and list queries
     void queryClient.invalidateQueries({
@@ -366,11 +378,15 @@ export function handleIncomingTabSyncMessage(
         return (
           Array.isArray(key) &&
           key[0] === domain &&
-          (key.includes(entityId) || key.includes('list') || key.includes('lists'))
+          (key.includes(entityId) || key.includes('list') || key.includes('lists') || key.includes('users') || key.includes('audit'))
         );
       },
     });
     void queryClient.invalidateQueries({ queryKey: [domain, 'counts'] });
+    if (domain === 'admin') {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+    }
   }
 }
 

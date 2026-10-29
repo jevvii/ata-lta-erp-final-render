@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { useSessionStore } from '@/lib/session';
 import { isFeatureEnabled } from '@/lib/flags';
 import { queryClient } from '@/lib/api';
+import { UserAvatar } from './UserAvatar';
 
 export interface ViewerPresence {
   userId: string;
@@ -50,33 +51,38 @@ export function getAvatarColorClass(idOrName: string): string {
   return AVATAR_BG_COLORS[index] ?? 'bg-[#1E3A8A] text-white';
 }
 
-export function getCachedUserAvatar(userIdOrKey?: string, userEmail?: string): string | null {
+export function getCachedUserAvatar(
+  userIdOrKey?: string,
+  userEmail?: string,
+  userName?: string
+): string | null {
   try {
-    const team = queryClient.getQueryData<Array<{ id?: string; email?: string; avatarUrl?: string | null }>>(['me', 'team']);
-    if (Array.isArray(team)) {
-      const match = team.find(
-        (m) =>
-          (m.id && userIdOrKey && m.id === userIdOrKey) ||
-          (m.email && userEmail && m.email.toLowerCase() === userEmail.toLowerCase())
-      );
-      if (match?.avatarUrl && typeof match.avatarUrl === 'string' && match.avatarUrl.trim() !== '') {
-        return match.avatarUrl.trim();
-      }
-    }
-  } catch {
-    // safe fallback
-  }
-
-  try {
-    const adminUsers = queryClient.getQueryData<Array<{ id?: string; email?: string; avatarUrl?: string | null }>>(['admin', 'users']);
-    if (Array.isArray(adminUsers)) {
-      const match = adminUsers.find(
-        (m) =>
-          (m.id && userIdOrKey && m.id === userIdOrKey) ||
-          (m.email && userEmail && m.email.toLowerCase() === userEmail.toLowerCase())
-      );
-      if (match?.avatarUrl && typeof match.avatarUrl === 'string' && match.avatarUrl.trim() !== '') {
-        return match.avatarUrl.trim();
+    const candidateQueries = [
+      ...queryClient.getQueriesData<unknown>({ queryKey: ['me', 'team'] }),
+      ...queryClient.getQueriesData<unknown>({ queryKey: ['admin', 'users'] }),
+    ];
+    for (const [, queryData] of candidateQueries) {
+      if (!queryData) continue;
+      const list = Array.isArray(queryData)
+        ? queryData
+        : Array.isArray((queryData as { data?: unknown[] }).data)
+        ? (queryData as { data: unknown[] }).data
+        : [];
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        const itemId = rec.id ? String(rec.id) : null;
+        const itemEmail = rec.email ? String(rec.email) : null;
+        const itemName = rec.name ? String(rec.name) : null;
+        const matchesId = Boolean(userIdOrKey && itemId && itemId === userIdOrKey);
+        const matchesEmail = Boolean(userEmail && itemEmail && itemEmail.toLowerCase() === userEmail.toLowerCase());
+        const matchesName = Boolean(userName && itemName && itemName.trim().toLowerCase() === userName.trim().toLowerCase());
+        if (matchesId || matchesEmail || matchesName) {
+          const rawUrl = rec.avatarUrl || rec.avatar_url;
+          if (typeof rawUrl === 'string' && rawUrl.trim() !== '') {
+            return rawUrl.trim();
+          }
+        }
       }
     }
   } catch {
@@ -110,7 +116,7 @@ export function extractViewers(
         typeof rawAvatar === 'string' && rawAvatar.trim() !== ''
           ? rawAvatar.trim()
           : null;
-      const avatarUrl = resolvedAvatar || getCachedUserAvatar(id, email);
+      const avatarUrl = resolvedAvatar || getCachedUserAvatar(id, email, name);
 
       if (currentUserId && id === currentUserId) continue;
       if (currentUserEmail && email && email.toLowerCase() === currentUserEmail.toLowerCase()) continue;
@@ -153,7 +159,6 @@ export function PresenceAvatars({
   const [otherViewers, setOtherViewers] = useState<ViewerPresence[]>([]);
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
   const [isOverflowHovered, setIsOverflowHovered] = useState(false);
-  const [failedAvatarIds, setFailedAvatarIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setOtherViewers((prev) => (prev.length > 0 ? [] : prev));
@@ -391,10 +396,8 @@ export function PresenceAvatars({
       {visibleViewers.map((viewer) => {
         const isHovered = hoveredUserId === viewer.userId;
         const tooltipText = `Viewing now: ${viewer.name} (${viewer.role})`;
-        const initials = getInitials(viewer.name);
         const colorClass = getAvatarColorClass(viewer.userId || viewer.name);
-        const effectiveAvatarUrl = viewer.avatarUrl || getCachedUserAvatar(viewer.userId, viewer.email);
-        const hasValidAvatar = Boolean(effectiveAvatarUrl && !failedAvatarIds[viewer.userId]);
+        const effectiveAvatarUrl = viewer.avatarUrl || getCachedUserAvatar(viewer.userId, viewer.email, viewer.name);
 
         return (
           <div
@@ -409,22 +412,15 @@ export function PresenceAvatars({
             onFocus={() => setHoveredUserId(viewer.userId)}
             onBlur={() => setHoveredUserId(null)}
           >
-            <div
-              className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-semibold border-2 border-white shadow-2xs cursor-pointer ${colorClass}`}
-            >
-              {hasValidAvatar && effectiveAvatarUrl ? (
-                <img
-                  src={effectiveAvatarUrl}
-                  alt={viewer.name}
-                  className="h-full w-full rounded-full object-cover"
-                  onError={() => {
-                    setFailedAvatarIds((prev) => ({ ...prev, [viewer.userId]: true }));
-                  }}
-                />
-              ) : (
-                <span>{initials}</span>
-              )}
-            </div>
+            <UserAvatar
+              userId={viewer.userId}
+              name={viewer.name}
+              email={viewer.email}
+              avatarUrl={effectiveAvatarUrl}
+              size="sm"
+              shape="circle"
+              className={`border-2 border-white shadow-2xs cursor-pointer font-semibold ${colorClass}`}
+            />
 
             {/* Live presence active green dot */}
             <span

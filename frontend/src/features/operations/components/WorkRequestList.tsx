@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useInRouterContext } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -81,11 +81,21 @@ export interface WorkRequestListProps {
   onCreateNew?: () => void;
 }
 
-export function WorkRequestList({
+interface WorkRequestListInnerProps extends WorkRequestListProps {
+  searchParams: URLSearchParams;
+  setSearchParams: (
+    updater: URLSearchParams | ((prev: URLSearchParams) => URLSearchParams),
+    navigateOptions?: { replace?: boolean }
+  ) => void;
+}
+
+function WorkRequestListInner({
   onViewDetails,
   onEdit,
   onCreateNew,
-}: WorkRequestListProps) {
+  searchParams,
+  setSearchParams,
+}: WorkRequestListInnerProps) {
   // Realtime CDC Subscriptions (Parcel E)
   useEntityRealtimeSync({ table: 'work_requests' });
   useEntityRealtimeSync({ table: 'tasks' });
@@ -94,7 +104,6 @@ export function WorkRequestList({
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
   // Side Peek state (UAT-GEN2), synced with URL search params
-  const [searchParams, setSearchParams] = useSearchParams();
   const urlPeekWrId = searchParams.get('peekWrId');
   const [peekWrId, setPeekWrId] = useState<string | null>(() => urlPeekWrId || null);
 
@@ -178,6 +187,22 @@ export function WorkRequestList({
         return false;
       }
 
+      // Search / Filter by text (including workRequestNumber and clientNumber)
+      if (debouncedSearch.trim()) {
+        const q = debouncedSearch.trim().toLowerCase();
+        const titleMatch = wr.title?.toLowerCase().includes(q);
+        const descMatch = wr.description ? wr.description.toLowerCase().includes(q) : false;
+        const wrNum = wr.workRequestNumber || wr.work_request_number;
+        const wrNumMatch = wrNum ? wrNum.toLowerCase().includes(q) : false;
+        const clientNum = wr.clientNumber || wr.client_number;
+        const clientNumMatch = clientNum ? clientNum.toLowerCase().includes(q) : false;
+        const clientName = wr.clientName || (wr as unknown as { client_name?: string }).client_name || wr.client?.name;
+        const clientNameMatch = clientName ? clientName.toLowerCase().includes(q) : false;
+        if (!titleMatch && !descMatch && !wrNumMatch && !clientNumMatch && !clientNameMatch) {
+          return false;
+        }
+      }
+
       // Phase Filter
       if (phaseFilter !== 'all' && wr.phase !== phaseFilter) return false;
 
@@ -245,6 +270,7 @@ export function WorkRequestList({
     });
   }, [
     workRequests,
+    debouncedSearch,
     phaseFilter,
     statusFilter,
     priorityFilter,
@@ -743,6 +769,9 @@ export function WorkRequestList({
                     aria-label="Select all on page"
                   />
                 </TableHead>
+                <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] whitespace-nowrap">
+                  ID
+                </TableHead>
                 <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] w-1/3">
                   Work Request
                 </TableHead>
@@ -780,6 +809,11 @@ export function WorkRequestList({
                       />
                     </TableCell>
 
+                    {/* ID */}
+                    <TableCell className="font-mono text-xs font-medium text-[#475569] tabular-nums whitespace-nowrap">
+                      {wr.workRequestNumber || wr.work_request_number || '—'}
+                    </TableCell>
+
                     {/* Title & Badges */}
                     <TableCell className="font-medium text-xs text-[#1E293B]">
                       <div className="flex flex-col space-y-1">
@@ -812,14 +846,25 @@ export function WorkRequestList({
 
                     {/* Client & Entity */}
                     <TableCell className="text-xs text-[#1E293B]">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold">
-                          {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
-                        </span>
-                        <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
-                          {wr.entity}
-                        </Badge>
-                      </div>
+                      {(() => {
+                        const clientCode = wr.clientNumber || wr.client_number;
+                        const clientName = wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—';
+                        return (
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold">{clientName}</span>
+                              <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
+                                {wr.entity}
+                              </Badge>
+                            </div>
+                            {clientCode && (
+                              <span className="font-mono text-[11px] text-[#64748B] tabular-nums">
+                                {clientCode}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
 
                     {/* Priority */}
@@ -1056,6 +1101,15 @@ export function WorkRequestList({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="space-y-1">
+                    {(() => {
+                      const wrCode = wr.workRequestNumber || wr.work_request_number;
+                      if (!wrCode) return null;
+                      return (
+                        <div className="inline-flex items-center px-1.5 py-0.5 rounded-[4px] bg-[#F8FAFC] border border-[#E2E8F0] font-mono text-[11px] font-semibold text-[#475569] tabular-nums">
+                          {wrCode}
+                        </div>
+                      );
+                    })()}
                     <h4
                       onClick={() => setPeekWrId(wr.id)}
                       className="font-bold text-xs text-[#1E293B] hover:text-[#1D4ED8] cursor-pointer line-clamp-1"
@@ -1067,6 +1121,11 @@ export function WorkRequestList({
                       <span className="truncate max-w-40">
                         {wr.clientName || clients.find((c) => c.id === wr.clientId)?.name || '—'}
                       </span>
+                      {(wr.clientNumber || wr.client_number) && (
+                        <span className="font-mono text-[11px] text-[#64748B] tabular-nums">
+                          ({wr.clientNumber || wr.client_number})
+                        </span>
+                      )}
                       <Badge variant={wr.entity === 'LTA' ? 'lta' : 'ata'} size="compact">
                         {wr.entity}
                       </Badge>
@@ -1303,4 +1362,35 @@ export function WorkRequestList({
       />
     </div>
   );
+}
+
+function RouterWorkRequestList(props: WorkRequestListProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  return <WorkRequestListInner {...props} searchParams={searchParams} setSearchParams={setSearchParams} />;
+}
+
+function StandaloneWorkRequestList(props: WorkRequestListProps) {
+  const [searchParams, setSearchParams] = useState(() => new URLSearchParams());
+  return (
+    <WorkRequestListInner
+      {...props}
+      searchParams={searchParams}
+      setSearchParams={(updater) => {
+        setSearchParams((prev) => {
+          if (typeof updater === 'function') {
+            return updater(prev);
+          }
+          return updater;
+        });
+      }}
+    />
+  );
+}
+
+export function WorkRequestList(props: WorkRequestListProps) {
+  const inRouter = useInRouterContext();
+  if (inRouter) {
+    return <RouterWorkRequestList {...props} />;
+  }
+  return <StandaloneWorkRequestList {...props} />;
 }

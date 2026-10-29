@@ -51,6 +51,12 @@ export function AppContent() {
 
       try {
         const me = await getMe();
+        const currentEntity = useSessionStore.getState().activeEntity;
+        const isCurrentValid =
+          currentEntity &&
+          ((me.role === 'Admin' && currentEntity === 'ALL') ||
+            (Array.isArray(me.entities) && me.entities.includes(currentEntity as 'ATA' | 'LTA')));
+
         setSession({
           user: {
             id: me.id,
@@ -63,7 +69,7 @@ export function AppContent() {
             avatarUrl: me.avatarUrl,
           },
           permissions: me.permissions || [],
-          activeEntity: me.activeEntity || (me.entities?.[0] ?? 'ATA'),
+          activeEntity: isCurrentValid ? currentEntity : (me.activeEntity || (me.entities?.[0] ?? 'ATA')),
           unreadCount: me.unread_notifications ?? 0,
         });
       } catch (err) {

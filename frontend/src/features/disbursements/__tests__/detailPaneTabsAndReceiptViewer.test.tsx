@@ -545,4 +545,122 @@ describe('Branch 04: Detail Pane Tabs & Receipt Attachment Viewer', () => {
       });
     });
   });
+
+  // --------------------------------------------------------------------------
+  // 8. Full-Height Preview & Uncapped Attachment Viewports (Docked vs Mobile)
+  // --------------------------------------------------------------------------
+  describe('Full-Height Preview & Uncapped Attachment Viewports (Docked vs Mobile)', () => {
+    it('docked PDF: stretches full height with flex chain, default #view=Fit fragment, and scrollable sibling tabs with hidden inactive states', async () => {
+      sessionStorage.setItem('disb.detailTab', 'attachment');
+      const { wrapper } = createHarness();
+      render(
+        <DisbursementDetailBody
+          isOpen
+          isDocked={true}
+          initialDisbursement={mockDisbWithPdfReceipt}
+          onClose={vi.fn()}
+        />,
+        { wrapper }
+      );
+
+      // 1. Verify <Tabs> flex chain
+      const tablist = screen.getByRole('tablist');
+      const tabsRoot = tablist.parentElement;
+      expect(tabsRoot).toHaveClass('flex-1', 'min-h-0', 'flex', 'flex-col');
+
+      // 2. Verify PDF viewport full-height classes without max-h caps
+      const viewport = await screen.findByTestId('receipt-preview-viewport');
+      expect(viewport).toHaveClass('flex-1', 'min-h-0', 'h-full');
+      expect(viewport.className).not.toContain('max-h-[340px]');
+      expect(viewport.className).not.toContain('max-h-[380px]');
+
+      // 3. Verify PDF object and iframe default fragment (#view=Fit)
+      const pdfObj = screen.getByTestId('receipt-pdf-object');
+      const pdfFrame = screen.getByTestId('receipt-pdf-frame');
+      expect(pdfObj).toHaveAttribute('data', 'https://storage.test/receipts/official_invoice.pdf#view=Fit');
+      expect(pdfFrame).toHaveAttribute('src', 'https://storage.test/receipts/official_invoice.pdf#view=Fit');
+
+      // 4. Click Zoom In -> #zoom=125
+      const zoomInBtn = screen.getByRole('button', { name: /zoom in/i });
+      fireEvent.click(zoomInBtn);
+      expect(screen.getByTestId('receipt-pdf-object')).toHaveAttribute(
+        'data',
+        'https://storage.test/receipts/official_invoice.pdf#zoom=125'
+      );
+      expect(screen.getByTestId('receipt-pdf-frame')).toHaveAttribute(
+        'src',
+        'https://storage.test/receipts/official_invoice.pdf#zoom=125'
+      );
+
+      // 5. Click Fit -> #view=Fit
+      const fitBtn = screen.getByRole('button', { name: /^fit$/i });
+      fireEvent.click(fitBtn);
+      expect(screen.getByTestId('receipt-pdf-object')).toHaveAttribute(
+        'data',
+        'https://storage.test/receipts/official_invoice.pdf#view=Fit'
+      );
+      expect(screen.getByTestId('receipt-pdf-frame')).toHaveAttribute(
+        'src',
+        'https://storage.test/receipts/official_invoice.pdf#view=Fit'
+      );
+
+      // 6. Verify sibling tabs have overflow-y-auto and data-[state=inactive]:hidden
+      const infoContent = screen.getByTestId('tab-content-information');
+      expect(infoContent).toHaveClass('overflow-y-auto', 'data-[state=inactive]:hidden');
+
+      const approvalContent = screen.getByTestId('tab-content-approval');
+      expect(approvalContent).toHaveClass('overflow-y-auto', 'data-[state=inactive]:hidden');
+
+      const paymentContent = screen.getByTestId('tab-content-payment');
+      expect(paymentContent).toHaveClass('overflow-y-auto', 'data-[state=inactive]:hidden');
+
+      const logContent = screen.getByTestId('tab-content-log');
+      expect(logContent).toHaveClass('overflow-y-auto', 'data-[state=inactive]:hidden');
+    });
+
+    it('non-docked drawer PDF: viewport has min-h-[70vh] and zero max-h cap', async () => {
+      sessionStorage.setItem('disb.detailTab', 'attachment');
+      const { wrapper } = createHarness();
+      render(
+        <DisbursementDetailDrawer
+          isOpen={true}
+          initialDisbursement={mockDisbWithPdfReceipt}
+          onClose={vi.fn()}
+        />,
+        { wrapper }
+      );
+
+      const viewport = await screen.findByTestId('receipt-preview-viewport');
+      expect(viewport).toHaveClass('min-h-[70vh]');
+      expect(viewport.className).not.toContain('max-h-[340px]');
+      expect(viewport.className).not.toContain('max-h-[380px]');
+    });
+
+    it('docked image receipt: viewport adopts image height (h-auto, no flex-1, no min-h-[160px]) and image has h-auto with no maxHeight cap', async () => {
+      sessionStorage.setItem('disb.detailTab', 'attachment');
+      const { wrapper } = createHarness();
+      render(
+        <DisbursementDetailBody
+          isOpen
+          isDocked={true}
+          initialDisbursement={mockDisbWithImageReceipt}
+          onClose={vi.fn()}
+        />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('receipt-viewer-container')).toHaveClass('shrink-0');
+
+      const viewport = await screen.findByTestId('receipt-preview-viewport');
+      expect(viewport).toHaveClass('h-auto', 'overflow-x-auto');
+      expect(viewport).not.toHaveClass('flex-1');
+      expect(viewport.className).not.toContain('min-h-[160px]');
+      expect(viewport.className).not.toContain('max-h-[340px]');
+      expect(viewport.className).not.toContain('max-h-[380px]');
+
+      const img = screen.getByTestId('receipt-preview-image');
+      expect(img).toHaveClass('h-auto');
+      expect(img.style.maxHeight).toBeFalsy();
+    });
+  });
 });

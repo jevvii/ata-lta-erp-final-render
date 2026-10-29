@@ -54,7 +54,11 @@ export function OperationsArchiveTab({
         const q = search.toLowerCase();
         const titleMatch = wr.title.toLowerCase().includes(q);
         const clientMatch = wr.clientName?.toLowerCase().includes(q) || false;
-        if (!titleMatch && !clientMatch) return false;
+        const wrNum = wr.workRequestNumber || wr.work_request_number;
+        const wrNumMatch = wrNum ? wrNum.toLowerCase().includes(q) : false;
+        const clientNum = wr.clientNumber || wr.client_number;
+        const clientNumMatch = clientNum ? clientNum.toLowerCase().includes(q) : false;
+        if (!titleMatch && !clientMatch && !wrNumMatch && !clientNumMatch) return false;
       }
 
       return true;
@@ -137,6 +141,9 @@ export function OperationsArchiveTab({
         <Table>
           <TableHeader>
             <TableRow className="bg-[#F8FAFC] hover:bg-[#F8FAFC] border-b border-[#E2E8F0]">
+              <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] whitespace-nowrap">
+                ID
+              </TableHead>
               <TableHead className="text-xs font-bold tracking-normal text-[#1E293B] w-1/3">
                 Work Request
               </TableHead>
@@ -153,13 +160,13 @@ export function OperationsArchiveTab({
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-xs text-[#475569]">
+                <TableCell colSpan={8} className="text-center py-8 text-xs text-[#475569]">
                   Loading archived requests...
                 </TableCell>
               </TableRow>
             ) : filteredList.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-12">
+                <TableCell colSpan={8} className="text-center py-12">
                   <div className="flex flex-col items-center justify-center space-y-2 text-[#475569]">
                     <Archive className="h-8 w-8 text-[#475569]/50" />
                     <p className="text-xs font-medium">No archived work requests found</p>
@@ -172,6 +179,11 @@ export function OperationsArchiveTab({
             ) : (
               filteredList.map((wr) => (
                 <TableRow key={wr.id} className="hover:bg-[#F8FAFC]/60 border-b border-[#E2E8F0]" data-testid={`archive-row-${wr.id}`}>
+                  {/* ID */}
+                  <TableCell className="font-mono text-xs font-medium text-[#475569] tabular-nums whitespace-nowrap">
+                    {wr.workRequestNumber || wr.work_request_number || '—'}
+                  </TableCell>
+
                   {/* Title */}
                   <TableCell className="text-xs text-[#1E293B]">
                     <div className="flex flex-col">
@@ -186,7 +198,14 @@ export function OperationsArchiveTab({
 
                   {/* Client */}
                   <TableCell className="text-xs text-[#1E293B]">
-                    {wr.clientName || '—'}
+                    <div className="flex flex-col">
+                      <span>{wr.clientName || '—'}</span>
+                      {(wr.clientNumber || wr.client_number) && (
+                        <span className="font-mono text-[11px] text-[#64748B] tabular-nums">
+                          {wr.clientNumber || wr.client_number}
+                        </span>
+                      )}
+                    </div>
                   </TableCell>
 
                   {/* Entity */}

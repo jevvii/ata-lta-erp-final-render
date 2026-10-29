@@ -36,6 +36,7 @@ const baseMockDoc: DmsDocument = {
   status: 'active',
   document_lifecycle: 'stored',
   archived: false,
+  can_comment: true,
   file_size: 1024,
   content_type: 'application/pdf',
   storage_path: '/files/test.pdf',

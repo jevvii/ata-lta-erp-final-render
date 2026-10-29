@@ -383,7 +383,7 @@ export function DisbursementDetailBody({
               <div className="flex items-center justify-between gap-2">
                 <div className="space-y-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-base font-bold text-ink truncate">
+                    <h2 className="text-base font-bold text-ink truncate font-mono">
                       {disbNumber || 'Disbursement Details'}
                     </h2>
                     {item && (
@@ -507,7 +507,7 @@ export function DisbursementDetailBody({
               )}
 
               {/* Eyeshare-Style Unified Tab Strip (TOKENS.md §4.3) */}
-              <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+              <Tabs value={activeTab} onValueChange={handleTabChange} className={cn('w-full', isDocked && 'flex-1 min-h-0 flex flex-col')}>
                 <TabsList className="w-full justify-start rounded-none bg-table-header px-1 py-0.5 border-b border-border flex flex-nowrap overflow-x-auto scrollbar-none gap-0.5 h-7 shrink-0">
                   <TabsTrigger
                     value="attachment"
@@ -564,7 +564,7 @@ export function DisbursementDetailBody({
                 </TabsList>
 
                 {/* Tab 1: Attachment */}
-                <TabsContent value="attachment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto flex flex-col p-1.5" : "mt-4 space-y-3")}>
+                <TabsContent value="attachment" data-testid="tab-content-attachment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto flex flex-col p-1.5 data-[state=inactive]:hidden" : "mt-4 space-y-3 data-[state=inactive]:hidden")}>
                   <ReceiptViewer
                     key={`${item.id}:${item.receipt_s3_key || item.receiptS3Key || item.receipt_filename || item.receiptFilename || ''}`}
                     receiptFileName={item.receipt_filename || item.receiptFilename}
@@ -576,11 +576,12 @@ export function DisbursementDetailBody({
                     receiptError={receiptError}
                     onRefetchReceiptUrl={refetchReceiptUrl}
                     workRequestTitle={effectiveWrName}
+                    isDocked={isDocked}
                   />
                 </TabsContent>
 
                 {/* Tab 2: Information */}
-                <TabsContent value="information" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-hidden flex flex-col gap-1.5 p-2 text-[11px]" : "mt-4 space-y-4")}>
+                <TabsContent value="information" data-testid="tab-content-information" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
                   {/* Voucher Editing Entry Points */}
                   {canEditVoucher && (
                     <div className="space-y-3">
@@ -685,8 +686,13 @@ export function DisbursementDetailBody({
                     <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                       <div>
                         <dt className="text-muted text-[10px] uppercase font-medium">Client Association</dt>
-                        <dd className="font-semibold text-ink text-xs flex items-center gap-1">
+                        <dd className="font-semibold text-ink text-xs flex items-center gap-1.5 flex-wrap">
                           <Building className="h-3.5 w-3.5 text-muted shrink-0" />
+                          {Boolean(item.clientNumber || item.client_number || item.clients?.clientNumber || item.clients?.client_number) && (
+                            <span className="font-mono text-xs font-medium text-text-secondary tabular-nums bg-canvas border border-border px-1 py-0.2 rounded">
+                              {item.clientNumber || item.client_number || item.clients?.clientNumber || item.clients?.client_number}
+                            </span>
+                          )}
                           <span className="truncate">{clientName}</span>
                         </dd>
                       </div>
@@ -725,10 +731,15 @@ export function DisbursementDetailBody({
                       <div className="col-span-2">
                         <dt className="text-muted text-[10px] uppercase font-medium">Linked Work Request</dt>
                         <dd
-                          className="text-ink flex items-center gap-1 font-medium text-xs"
+                          className="text-ink flex items-center gap-1.5 font-medium text-xs flex-wrap"
                           data-testid="drawer-work-request"
                         >
                           <FileText className="h-3.5 w-3.5 text-muted shrink-0" />
+                          {Boolean(item.workRequestNumber || item.work_request_number) && (
+                            <span className="font-mono text-xs font-medium text-text-secondary tabular-nums bg-canvas border border-border px-1 py-0.2 rounded">
+                              {item.workRequestNumber || item.work_request_number}
+                            </span>
+                          )}
                           <span className="truncate">
                             {effectiveWrOrder && effectiveWrName
                               ? `${effectiveWrOrder} — ${effectiveWrName}`
@@ -781,7 +792,7 @@ export function DisbursementDetailBody({
                 </TabsContent>
 
                 {/* Tab 3: Approval */}
-                <TabsContent value="approval" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-hidden flex flex-col gap-1.5 p-2 text-[11px]" : "mt-4 space-y-4")}>
+                <TabsContent value="approval" data-testid="tab-content-approval" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
                   {/* Approval Review Status Card */}
                   <div className="p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft">
                     <div className="flex items-center justify-between">
@@ -868,7 +879,7 @@ export function DisbursementDetailBody({
                 </TabsContent>
 
                 {/* Tab 4: Payment */}
-                <TabsContent value="payment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-hidden flex flex-col gap-1.5 p-2 text-[11px]" : "mt-4 space-y-4")}>
+                <TabsContent value="payment" data-testid="tab-content-payment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
                   <div className="p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft">
                     <div className="flex items-center justify-between">
                       <h4 className="font-semibold text-ink text-xs flex items-center gap-1.5">
@@ -957,8 +968,8 @@ export function DisbursementDetailBody({
                 </TabsContent>
 
                 {/* Tab 5: Log */}
-                <TabsContent value="log" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-hidden flex flex-col gap-1.5 p-2 text-[11px]" : "mt-4 space-y-3")}>
-                  <div className={cn('p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft', isDocked && 'min-h-0 overflow-y-auto')}>
+                <TabsContent value="log" data-testid="tab-content-log" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-3 data-[state=inactive]:hidden")}>
+                  <div className="p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft">
                     <h4 className="font-semibold text-ink text-xs flex items-center gap-1.5">
                       <Clock className="h-4 w-4 text-muted" />
                       <span>Audit & Lifecycle Timeline</span>

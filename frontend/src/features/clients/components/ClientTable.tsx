@@ -66,6 +66,7 @@ export function ClientTable({
       <Table data-testid="clients-table">
         <TableHeader>
           <TableRow className="bg-[#F8FAFC] border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
+            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] w-[120px]">ID</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] w-1/4">Client Name</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">TIN & RDO</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Entity</TableHead>
@@ -87,6 +88,14 @@ export function ClientTable({
                 onClick={() => onView(client)}
                 data-testid={`client-row-${client.id}`}
               >
+                {/* ID */}
+                <TableCell
+                  className="py-3 font-mono text-xs font-medium text-[#475569] tabular-nums whitespace-nowrap"
+                  data-testid={`client-id-${client.id}`}
+                >
+                  {client.clientNumber || client.client_number || '—'}
+                </TableCell>
+
                 {/* Name & Trade Name */}
                 <TableCell className="py-3">
                   <div className="space-y-0.5">
