@@ -69,6 +69,13 @@ export interface Invoice {
   taskId?: string | null;
   linked_task_id?: string | null;
   linked_transmittal_id?: string | null;
+  linkedTransmittalId?: string | null;
+  linked_transmittal_summary?: {
+    id?: string;
+    tracking_number?: string;
+    status?: string;
+    recipient_name?: string | null;
+  } | null;
   issue_date: string;
   due_date: string;
   status: InvoiceStatus;

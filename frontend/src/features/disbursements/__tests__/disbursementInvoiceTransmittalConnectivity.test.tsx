@@ -285,12 +285,12 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
           description: 'SEC Filing Fee Reimbursement',
           amount: 5500,
           status: 'Released',
-          source_of_funds: 'Firm Fund',
+          fund_source: 'Firm Fund',
         },
       ],
       issue_date: '2026-10-29',
       due_date: '2026-11-29',
-      status: 'Issued',
+      status: 'Sent',
       subtotal: 25500,
       total: 25500,
       amount_paid: 0,
@@ -306,7 +306,7 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
           id: 'li-1',
           description: 'Filing Fee — SEC Filing Fee Reimbursement (DISB-ATA-20261029-100)',
           amount: 5500,
-          type: 'Reimbursable Expense',
+          type: 'Other',
         },
       ],
       payments: [],
@@ -350,6 +350,7 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
       recipient_name: 'Maria Clara',
       recipient_details: 'Makati City',
       notes: 'Deliver via LBC',
+      board_order: 1,
       archived: false,
       version: 1,
       created_at: '2026-10-29T08:00:00Z',
@@ -369,6 +370,7 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
           category: 'Transportation',
           description: 'LBC Courier Fee',
           amount: 350,
+          fund_source: 'Firm Fund',
           status: 'Released',
         },
       ],
@@ -378,6 +380,8 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
           invoice_number: 'INV-ATA-202610-200',
           status: 'Issued',
           total: 18000,
+          amount_paid: 0,
+          balance: 18000,
         },
       ],
     };
@@ -491,7 +495,7 @@ describe('Disbursement ↔ Invoice & Transmittal Cross-Module Connectivity', () 
   it('preserves enriched linked_invoice_summary on raw CDC UPDATE when FK is unchanged and invalidates when FK changes', () => {
     const { queryClient } = createHarness();
     const detailKey = disbursementKeys.detail('disb-cdc-1');
-    const listKey = disbursementKeys.list({ page: 1 });
+    const listKey = disbursementKeys.list('ATA', { page: 1 });
 
     const initialDisb: Disbursement = {
       id: 'disb-cdc-1',
