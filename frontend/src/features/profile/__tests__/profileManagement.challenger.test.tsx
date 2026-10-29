@@ -6,6 +6,7 @@ import React from 'react';
 import ProfilePage from '@/routes/profile';
 import { Topbar } from '@/components/layout/Topbar';
 import { ProfileDetailsCard } from '../components/ProfileDetailsCard';
+import { ProfilePasswordCard } from '../components/ProfilePasswordCard';
 import { useSessionStore, type UserProfile } from '@/lib/session';
 import * as api from '@/lib/api';
 import { evaluatePassword, generateSecurePassword } from '../lib/passwordUtils';
@@ -96,10 +97,45 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       });
 
       expect(screen.getByTestId('profile-display-name')).toHaveTextContent('Juan dela Cruz');
-      expect(screen.getByTestId('profile-avatar-circle')).toHaveTextContent('JD');
+      expect(screen.getByTestId('profile-avatar-circle')).toHaveTextContent('JC');
       expect(screen.getByTestId('profile-name-input')).toHaveValue('Juan dela Cruz');
       expect(screen.getByTestId('profile-email-input')).toHaveValue('test-user@ata-lta.ph');
       expect(screen.getByTestId('profile-email-input')).toBeDisabled();
+    });
+
+    it('syncs name input and display name when profile.name updates after mount', () => {
+      const initialProfile = { ...mockUserProfile, name: 'Initial Name' };
+      const { rerender } = render(
+        React.createElement(ProfileDetailsCard, { profile: initialProfile }),
+        { wrapper: createWrapper() }
+      );
+
+      expect(screen.getByTestId('profile-display-name')).toHaveTextContent('Initial Name');
+      expect(screen.getByTestId('profile-name-input')).toHaveValue('Initial Name');
+
+      const updatedProfile = { ...mockUserProfile, name: 'Updated Full Name' };
+      rerender(React.createElement(ProfileDetailsCard, { profile: updatedProfile }));
+
+      expect(screen.getByTestId('profile-display-name')).toHaveTextContent('Updated Full Name');
+      expect(screen.getByTestId('profile-name-input')).toHaveValue('Updated Full Name');
+    });
+
+    it('rejects whitespace-only Full Name with error message', async () => {
+      render(React.createElement(ProfileDetailsCard, { profile: mockUserProfile }), {
+        wrapper: createWrapper(),
+      });
+
+      const nameInput = screen.getByTestId('profile-name-input');
+      fireEvent.change(nameInput, { target: { value: '    ' } });
+
+      const saveBtn = screen.getByTestId('profile-save-details-btn');
+      fireEvent.click(saveBtn);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('profile-avatar-status')).toHaveTextContent(
+          'Full name cannot be empty.'
+        );
+      });
     });
   });
 
@@ -393,6 +429,29 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
         );
       });
     });
+
+    it('renders Good strength badge and 3 active segments with bg-[#1D4ED8] when 4 of 5 criteria are met', () => {
+      render(React.createElement(ProfilePasswordCard), { wrapper: createWrapper() });
+
+      const newPasswordInput = screen.getByTestId('profile-new-password-input');
+      // 'Password123' satisfies length, upper, lower, number (4 of 5)
+      fireEvent.change(newPasswordInput, { target: { value: 'Password123' } });
+
+      const badge = screen.getByTestId('password-strength-badge');
+      expect(badge).toHaveTextContent('Good');
+      expect(badge.className).toContain('bg-[#1D4ED8]/15');
+      expect(badge.className).toContain('text-[#1D4ED8]');
+
+      const segment0 = screen.getByTestId('password-strength-segment-0');
+      const segment1 = screen.getByTestId('password-strength-segment-1');
+      const segment2 = screen.getByTestId('password-strength-segment-2');
+      const segment3 = screen.getByTestId('password-strength-segment-3');
+
+      expect(segment0).toHaveClass('bg-[#1D4ED8]');
+      expect(segment1).toHaveClass('bg-[#1D4ED8]');
+      expect(segment2).toHaveClass('bg-[#1D4ED8]');
+      expect(segment3).toHaveClass('bg-border');
+    });
   });
 
   describe('Vector 4: Preferences Section Removed from Profile', () => {
@@ -417,7 +476,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       render(React.createElement(Topbar), { wrapper: createWrapper() });
 
       const avatarEl = screen.getByTestId('topbar-user-avatar');
-      expect(avatarEl).toHaveTextContent('JD');
+      expect(avatarEl).toHaveTextContent('JC');
 
       const userBtn = screen.getByTestId('user-menu-button');
       fireEvent.pointerDown(userBtn, { button: 0, ctrlKey: false });
@@ -442,7 +501,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       await waitFor(() => {
         expect(avatarEl).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
       });
-      expect(avatarEl).not.toHaveTextContent('JD');
+      expect(avatarEl).not.toHaveTextContent('JC');
     });
 
     it('falls back to user initials when Topbar avatar image probe fails to load', async () => {
@@ -465,7 +524,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       fireEvent.error(probeImg!);
 
       await waitFor(() => {
-        expect(avatarEl).toHaveTextContent('JD');
+        expect(avatarEl).toHaveTextContent('JC');
       });
       expect(avatarEl).not.toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
     });
@@ -485,7 +544,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       fireEvent.error(probeImg!);
 
       await waitFor(() => {
-        expect(avatarEl).toHaveTextContent('JD');
+        expect(avatarEl).toHaveTextContent('JC');
       });
 
       // Update avatarUrl in session store
@@ -527,7 +586,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
 
       const avatarCircle = screen.getByTestId('profile-avatar-circle');
       expect(avatarCircle).toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
-      expect(avatarCircle).not.toHaveTextContent('JD');
+      expect(avatarCircle).not.toHaveTextContent('JC');
 
       const probeImg = avatarCircle.querySelector('img');
       expect(probeImg).toBeInTheDocument();
@@ -536,7 +595,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
       fireEvent.error(probeImg!);
 
       await waitFor(() => {
-        expect(avatarCircle).toHaveTextContent('JD');
+        expect(avatarCircle).toHaveTextContent('JC');
       });
       expect(avatarCircle).not.toHaveStyle({ backgroundImage: `url('${avatarUrl}')` });
     });

@@ -116,13 +116,23 @@ export function useResolvedAvatarUrl({
   email?: string | null;
   avatarUrl?: string | null;
 }): string | null {
+  // Always call hooks unconditionally at the top level
+  const sessionUser = useSessionStore((s) => s.user);
+
+  let hookQueryClient = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    hookQueryClient = useQueryClient();
+  } catch {
+    hookQueryClient = null;
+  }
+
   // 1. Direct non-empty prop takes highest precedence
   if (typeof avatarUrl === 'string' && avatarUrl.trim() !== '') {
     return avatarUrl.trim();
   }
 
   // 2. Check current session user
-  const sessionUser = useSessionStore((s) => s.user);
   if (sessionUser?.avatarUrl && typeof sessionUser.avatarUrl === 'string' && sessionUser.avatarUrl.trim() !== '') {
     const matchesId = Boolean(userId && sessionUser.id && sessionUser.id === userId);
     const matchesEmail = Boolean(email && sessionUser.email && sessionUser.email.toLowerCase() === email.toLowerCase());
@@ -133,14 +143,6 @@ export function useResolvedAvatarUrl({
   }
 
   // 3. Check QueryClient cache: try useQueryClient() hook, then fallback to globalQueryClient
-  let hookQueryClient = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    hookQueryClient = useQueryClient();
-  } catch {
-    hookQueryClient = null;
-  }
-
   const clientsToCheck = [hookQueryClient, globalQueryClient].filter(Boolean);
 
   for (const qc of clientsToCheck) {

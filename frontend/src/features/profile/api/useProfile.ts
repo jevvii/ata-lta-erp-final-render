@@ -19,6 +19,74 @@ export function useProfile() {
   });
 }
 
+export function syncUserAcrossCaches(
+  queryClient: ReturnType<typeof useQueryClient>,
+  updatedProfile: UserProfileData
+) {
+  queryClient.setQueryData(profileKeys.me(), updatedProfile);
+  void queryClient.invalidateQueries({ queryKey: profileKeys.me() });
+  void queryClient.invalidateQueries({ queryKey: ['me'] });
+  void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+
+  const current = useSessionStore.getState();
+  if (current.user) {
+    current.setSession({
+      user: {
+        ...current.user,
+        name: updatedProfile.name !== undefined ? updatedProfile.name : current.user.name,
+        avatarUrl: updatedProfile.avatarUrl !== undefined ? updatedProfile.avatarUrl : current.user.avatarUrl,
+        preferences: (updatedProfile.preferences as Record<string, unknown>) ?? current.user.preferences,
+      },
+      permissions: current.permissions,
+      activeEntity: current.activeEntity,
+      unreadCount: current.unreadCount,
+    });
+  }
+  current.updateUser?.({
+    name: updatedProfile.name,
+    avatarUrl: updatedProfile.avatarUrl,
+    preferences: (updatedProfile.preferences as Record<string, unknown>) ?? {},
+  });
+
+  queryClient.setQueriesData<unknown>(
+    { queryKey: ['me', 'team'] },
+    (old: unknown) => {
+      if (!old) return old;
+      if (Array.isArray(old)) {
+        return old.map((m) => {
+          if (!m || typeof m !== 'object') return m;
+          const rec = m as Record<string, unknown>;
+          const matches = rec.id === updatedProfile.id || rec.email === updatedProfile.email;
+          if (!matches) return m;
+          return {
+            ...rec,
+            ...(updatedProfile.name !== undefined ? { name: updatedProfile.name } : {}),
+            ...(updatedProfile.avatarUrl !== undefined ? { avatarUrl: updatedProfile.avatarUrl } : {}),
+          };
+        });
+      }
+      if (typeof old === 'object' && Array.isArray((old as { data?: unknown[] }).data)) {
+        const obj = old as { data: unknown[] };
+        return {
+          ...obj,
+          data: obj.data.map((m) => {
+            if (!m || typeof m !== 'object') return m;
+            const rec = m as Record<string, unknown>;
+            const matches = rec.id === updatedProfile.id || rec.email === updatedProfile.email;
+            if (!matches) return m;
+            return {
+              ...rec,
+              ...(updatedProfile.name !== undefined ? { name: updatedProfile.name } : {}),
+              ...(updatedProfile.avatarUrl !== undefined ? { avatarUrl: updatedProfile.avatarUrl } : {}),
+            };
+          }),
+        };
+      }
+      return old;
+    }
+  );
+}
+
 export function useUpdateProfile() {
   const queryClient = useQueryClient();
 
@@ -31,41 +99,7 @@ export function useUpdateProfile() {
       return res.data;
     },
     onSuccess: (updatedProfile) => {
-      queryClient.setQueryData(profileKeys.me(), updatedProfile);
-      void queryClient.invalidateQueries({ queryKey: profileKeys.me() });
-      void queryClient.invalidateQueries({ queryKey: ['me'] });
-
-      const current = useSessionStore.getState();
-      if (current.user) {
-        current.setSession({
-          user: {
-            ...current.user,
-            name: updatedProfile.name ?? current.user.name,
-            avatarUrl: updatedProfile.avatarUrl !== undefined ? updatedProfile.avatarUrl : current.user.avatarUrl,
-            preferences: (updatedProfile.preferences as Record<string, unknown>) ?? current.user.preferences,
-          },
-          permissions: current.permissions,
-          activeEntity: current.activeEntity,
-          unreadCount: current.unreadCount,
-        });
-      }
-      current.updateUser?.({
-        name: updatedProfile.name,
-        avatarUrl: updatedProfile.avatarUrl,
-        preferences: (updatedProfile.preferences as Record<string, unknown>) ?? {},
-      });
-
-      queryClient.setQueriesData<Array<{ id?: string; email?: string; avatarUrl?: string | null; name?: string }>>(
-        { queryKey: ['me', 'team'] },
-        (old) => {
-          if (!Array.isArray(old)) return old;
-          return old.map((m) =>
-            m.id === updatedProfile.id || m.email === updatedProfile.email
-              ? { ...m, name: updatedProfile.name, avatarUrl: updatedProfile.avatarUrl }
-              : m
-          );
-        }
-      );
+      syncUserAcrossCaches(queryClient, updatedProfile);
     },
   });
 }
@@ -118,38 +152,7 @@ export function useUploadAvatar() {
       return patchRes.data;
     },
     onSuccess: (updatedProfile) => {
-      queryClient.setQueryData(profileKeys.me(), updatedProfile);
-      void queryClient.invalidateQueries({ queryKey: profileKeys.me() });
-      void queryClient.invalidateQueries({ queryKey: ['me'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
-
-      const current = useSessionStore.getState();
-      if (current.user) {
-        current.setSession({
-          user: {
-            ...current.user,
-            avatarUrl: updatedProfile.avatarUrl !== undefined ? updatedProfile.avatarUrl : current.user.avatarUrl,
-          },
-          permissions: current.permissions,
-          activeEntity: current.activeEntity,
-          unreadCount: current.unreadCount,
-        });
-      }
-      current.updateUser?.({
-        avatarUrl: updatedProfile.avatarUrl,
-      });
-
-      queryClient.setQueriesData<Array<{ id?: string; email?: string; avatarUrl?: string | null; name?: string }>>(
-        { queryKey: ['me', 'team'] },
-        (old) => {
-          if (!Array.isArray(old)) return old;
-          return old.map((m) =>
-            m.id === updatedProfile.id || m.email === updatedProfile.email
-              ? { ...m, avatarUrl: updatedProfile.avatarUrl }
-              : m
-          );
-        }
-      );
+      syncUserAcrossCaches(queryClient, updatedProfile);
     },
   });
 }
