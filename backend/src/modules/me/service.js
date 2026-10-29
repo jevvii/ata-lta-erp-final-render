@@ -70,8 +70,20 @@ const getProfile = async (userId) => {
 const updateProfile = async ({ userId, data }) => {
   const existing = await getProfile(userId);
 
+  if (data.name !== undefined) {
+    if (typeof data.name !== 'string' || data.name.trim().length === 0) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Bad Request',
+        detail: 'Name cannot be empty',
+      });
+    }
+  }
+
+  const resolvedName = data.name !== undefined ? data.name.trim() : existing.name;
+
   const updates = {
-    name: data.name ?? existing.name,
+    name: resolvedName,
     preferences: {
       ...(existing.preferences || {}),
       ...(data.preferences || {}),
@@ -114,6 +126,22 @@ const changePassword = async ({ userId, authUserId, email, currentPassword, newP
     });
   }
 
+  if (newPassword.length > 128) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'New password must not exceed 128 characters',
+    });
+  }
+
+  if (currentPassword === newPassword) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Bad Request',
+      detail: 'New password must be different from your current password',
+    });
+  }
+
   // Resolve user email if not directly provided
   let userEmail = email;
   if (!userEmail) {
@@ -147,7 +175,8 @@ const changePassword = async ({ userId, authUserId, email, currentPassword, newP
     });
   }
 
-  const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(authUserId, {
+  const targetAuthUserId = authUserId || signInData.user.id;
+  const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(targetAuthUserId, {
     password: newPassword,
   });
 
@@ -171,6 +200,8 @@ const changePassword = async ({ userId, authUserId, email, currentPassword, newP
       detail: 'Password changed but unable to update profile timestamp',
     });
   }
+
+  evictUserProfile(userId);
 };
 
 const getAvatarUploadUrl = async ({ userId, contentType = 'image/png' }) => {
