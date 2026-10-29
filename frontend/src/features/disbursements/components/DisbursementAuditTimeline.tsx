@@ -18,6 +18,10 @@ const detailFields: Record<string, string> = {
   bank: 'Bank',
   reference: 'Reference',
   date: 'Payment date',
+  invoice_number: 'Invoice Number',
+  payment_method: 'Payment Method',
+  payment_reference: 'Payment Reference',
+  reason: 'Reason',
 };
 const money = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' });
 function detailValue(key: string, value: unknown): string {

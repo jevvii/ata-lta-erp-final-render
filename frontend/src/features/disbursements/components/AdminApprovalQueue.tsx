@@ -4,16 +4,25 @@ import {
   XCircle,
   Clock,
   Search,
-  Receipt,
   FileText,
   User,
   Building,
   AlertCircle,
   DollarSign,
   ShieldAlert,
+  CreditCard,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import { RejectReasonModal } from '@/features/operations/components/RejectReasonModal';
 import { AdminApprovalModal } from './AdminApprovalModal';
 import { ReleaseFundsModal } from './FundsReleaseActions';
@@ -27,7 +36,8 @@ import { DisbursementStatusBadge } from './DisbursementStatusBadge';
 import { useSessionStore } from '@/lib/session';
 import { useEntityRealtimeSync } from '@/lib/realtime';
 import { disbursementKeys } from '../api/queryKeys';
-import type { Disbursement } from '../api/types';
+import { isBillingControlledDisbursement, type Disbursement } from '../api/types';
+import { cn } from '@/lib/utils';
 
 export type QueueSegment =
   | 'all'
@@ -38,6 +48,7 @@ export type QueueSegment =
   | 'ready_for_funding';
 
 export interface AdminApprovalQueueProps {
+  selectedId?: string | null;
   onSelectDisbursement?: (id: string) => void;
   pageSize?: number;
   activeTab?: QueueSegment;
@@ -45,6 +56,7 @@ export interface AdminApprovalQueueProps {
 }
 
 export function AdminApprovalQueue({
+  selectedId,
   onSelectDisbursement,
   pageSize: propPageSize,
   activeTab,
@@ -64,10 +76,11 @@ export function AdminApprovalQueue({
   const isAccounting = Boolean(
     currentUser?.role === 'Accounting' || currentUser?.departments?.includes('Accounting')
   );
+  const isAccountingOnly = isAccounting && !isAdmin;
   const canAccessQueue = isAdmin || isAccounting;
 
   const [segment, setSegment] = useState<QueueSegment>(
-    activeTab ?? (isAdmin ? 'all' : 'payment_releases')
+    activeTab ?? (isAdmin ? 'all' : 'ready_for_funding')
   );
   const userSwitchedTab = useRef(false);
 
@@ -111,39 +124,8 @@ export function AdminApprovalQueue({
 
   // Server counts
   const { data: counts } = useDisbursementCounts({ enabled: canAccessQueue });
-  const initialRequestsCount = counts?.initialRequests ?? initialResponse?.data?.length ?? 0;
-  const paymentReleasesCount = counts?.paymentReleases ?? releaseResponse?.data?.length ?? 0;
-  const readyForFundingCount = counts?.readyForFunding ?? fundingResponse?.data?.length ?? 0;
 
-  const handleSelectSegment = (nextSegment: QueueSegment) => {
-    userSwitchedTab.current = true;
-    setSegment(nextSegment);
-    onTabChange?.(nextSegment);
-  };
-
-  // Auto-switch to releases if initial requests are empty but payment releases are available
-  useEffect(() => {
-    if (userSwitchedTab.current) return;
-    const initialCount = counts?.initialRequests ?? initialResponse?.data?.length ?? 0;
-    const releaseCount = counts?.paymentReleases ?? releaseResponse?.data?.length ?? 0;
-    const isInitialEmpty = initialCount === 0;
-    const hasReleases = releaseCount > 0;
-    const countsLoaded = counts !== undefined || (!isLoadingInitial && !isLoadingRelease);
-
-    if (countsLoaded && isInitialEmpty && hasReleases) {
-      setSegment('payment_releases');
-      onTabChange?.('payment_releases');
-    }
-  }, [
-    counts,
-    isLoadingInitial,
-    isLoadingRelease,
-    initialResponse?.data?.length,
-    releaseResponse?.data?.length,
-    onTabChange,
-  ]);
-
-  // Strict v2 items with predicate enforcement
+  // Strict v2 items with predicate enforcement, billing-controlled filtering, and Accounting scoping
   const items = useMemo(() => {
     const rawInitial = (initialResponse?.data ?? []).filter(
       (item) =>
@@ -152,7 +134,11 @@ export function AdminApprovalQueue({
         item.review_ready === true &&
         Number.isInteger(item.version) &&
         (item.version ?? 0) > 0 &&
-        !item.archived
+        !item.archived &&
+        (!isAccountingOnly ||
+          item.created_by === currentUser?.id ||
+          item.requested_by === currentUser?.id ||
+          item.employee_id === currentUser?.id)
     );
     const rawRelease = (releaseResponse?.data ?? []).filter(
       (item) =>
@@ -160,7 +146,8 @@ export function AdminApprovalQueue({
         item.status === 'Funded' &&
         Number.isInteger(item.version) &&
         (item.version ?? 0) > 0 &&
-        !item.archived
+        !item.archived &&
+        !isBillingControlledDisbursement(item)
     );
     const rawFunding = (fundingResponse?.data ?? []).filter(
       (item) =>
@@ -168,7 +155,8 @@ export function AdminApprovalQueue({
         item.status === 'Approved' &&
         Number.isInteger(item.version) &&
         (item.version ?? 0) > 0 &&
-        !item.archived
+        !item.archived &&
+        !isBillingControlledDisbursement(item)
     );
 
     if (segment === 'initial_requests' || segment === 'initial') {
@@ -192,7 +180,81 @@ export function AdminApprovalQueue({
       return timeB - timeA;
     });
     return combined;
-  }, [segment, initialResponse?.data, releaseResponse?.data, fundingResponse?.data]);
+  }, [
+    segment,
+    initialResponse?.data,
+    releaseResponse?.data,
+    fundingResponse?.data,
+    isAccountingOnly,
+    currentUser?.id,
+  ]);
+
+  const rawInitialCount = useMemo(() => {
+    return (initialResponse?.data ?? []).filter(
+      (item) =>
+        item.lifecycle_version === 2 &&
+        item.status === 'Draft' &&
+        item.review_ready === true &&
+        !item.archived &&
+        (!isAccountingOnly ||
+          item.created_by === currentUser?.id ||
+          item.requested_by === currentUser?.id ||
+          item.employee_id === currentUser?.id)
+    ).length;
+  }, [initialResponse?.data, isAccountingOnly, currentUser?.id]);
+
+  const rawReleaseCount = useMemo(() => {
+    return (releaseResponse?.data ?? []).filter(
+      (item) =>
+        item.lifecycle_version === 2 &&
+        item.status === 'Funded' &&
+        !item.archived &&
+        !isBillingControlledDisbursement(item)
+    ).length;
+  }, [releaseResponse?.data]);
+
+  const rawFundingCount = useMemo(() => {
+    return (fundingResponse?.data ?? []).filter(
+      (item) =>
+        item.lifecycle_version === 2 &&
+        item.status === 'Approved' &&
+        !item.archived &&
+        !isBillingControlledDisbursement(item)
+    ).length;
+  }, [fundingResponse?.data]);
+
+  const initialRequestsCount = isAccountingOnly ? rawInitialCount : (counts?.initialRequests ?? rawInitialCount);
+  const paymentReleasesCount = counts?.paymentReleases ?? rawReleaseCount;
+  const readyForFundingCount = counts?.readyForFunding ?? rawFundingCount;
+
+  const handleSelectSegment = (nextSegment: QueueSegment) => {
+    userSwitchedTab.current = true;
+    setSegment(nextSegment);
+    onTabChange?.(nextSegment);
+  };
+
+  // Auto-switch to releases if initial requests are empty but payment releases are available
+  useEffect(() => {
+    if (userSwitchedTab.current) return;
+    const initialCount = initialRequestsCount;
+    const releaseCount = paymentReleasesCount;
+    const isInitialEmpty = initialCount === 0;
+    const hasReleases = releaseCount > 0;
+    const countsLoaded = counts !== undefined || (!isLoadingInitial && !isLoadingRelease);
+
+    if (isAdmin && countsLoaded && isInitialEmpty && hasReleases) {
+      setSegment('payment_releases');
+      onTabChange?.('payment_releases');
+    }
+  }, [
+    counts,
+    isLoadingInitial,
+    isLoadingRelease,
+    initialRequestsCount,
+    paymentReleasesCount,
+    isAdmin,
+    onTabChange,
+  ]);
 
   useEffect(() => {
     setPage(1);
@@ -252,13 +314,13 @@ export function AdminApprovalQueue({
   }
 
   return (
-    <div className="space-y-4" data-testid="admin-approval-queue">
+    <div className="flex flex-col h-full w-full min-h-0 overflow-hidden gap-3" data-testid="admin-approval-queue">
       {(isErrorInitial || isErrorRelease || isErrorFunding) && (
         <div
           role="alert"
-          className="rounded border border-warning-border bg-warning-surface p-3 text-xs text-warning"
+          className="shrink-0 rounded border border-warning-border bg-warning-surface p-3 text-xs text-warning flex items-center justify-between"
         >
-          The queue could not be refreshed. Review current records before taking action.
+          <span>The queue could not be refreshed. Review current records before taking action.</span>
           <Button
             type="button"
             variant="outline"
@@ -268,13 +330,14 @@ export function AdminApprovalQueue({
               void refetchRelease();
               void refetchFunding();
             }}
+            className="text-xs h-7"
           >
             Refresh queues
           </Button>
         </div>
       )}
       {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold text-ink flex items-center gap-2">
             <Clock className="h-5 w-5 text-warning" />
@@ -301,7 +364,7 @@ export function AdminApprovalQueue({
 
       {/* Queue Segmentation Sub-tabs */}
       <div
-        className="flex items-center gap-1.5 p-1 bg-sidebar rounded-[8px] border border-border text-xs w-full overflow-x-auto whitespace-nowrap"
+        className="shrink-0 flex items-center gap-1.5 p-1 bg-sidebar rounded-[8px] border border-border text-xs w-full overflow-x-auto whitespace-nowrap"
         data-testid="queue-segmentation-tabs"
       >
         {isAdmin && (
@@ -318,7 +381,7 @@ export function AdminApprovalQueue({
             All Pending ({initialRequestsCount + paymentReleasesCount})
           </button>
         )}
-        {isAdmin && (
+        {(isAdmin || isAccountingOnly) && (
           <button
             type="button"
             onClick={() => handleSelectSegment('initial_requests')}
@@ -329,9 +392,23 @@ export function AdminApprovalQueue({
             }`}
             data-testid="queue-subtab-initial"
           >
-            Initial Requests ({initialRequestsCount})
+            {isAdmin
+              ? `Initial Requests (${initialRequestsCount})`
+              : `My Draft Requests (${initialRequestsCount})`}
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => handleSelectSegment('ready_for_funding')}
+          className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
+            segment === 'ready_for_funding'
+              ? 'bg-surface text-primary-hover shadow-2xs font-semibold'
+              : 'text-muted hover:text-ink'
+          }`}
+          data-testid="queue-subtab-funding"
+        >
+          Ready for Funding ({readyForFundingCount})
+        </button>
         <button
           type="button"
           onClick={() => handleSelectSegment('payment_releases')}
@@ -345,18 +422,6 @@ export function AdminApprovalQueue({
           {isAdmin
             ? `Payment Releases (${paymentReleasesCount})`
             : `Funded Tracking (${paymentReleasesCount})`}
-        </button>
-        <button
-          type="button"
-          onClick={() => handleSelectSegment('ready_for_funding')}
-          className={`px-3 py-1 rounded-[6px] font-medium transition-[background-color,border-color,color,box-shadow] ${
-            segment === 'ready_for_funding'
-              ? 'bg-surface text-primary-hover shadow-2xs font-semibold'
-              : 'text-muted hover:text-ink'
-          }`}
-          data-testid="queue-subtab-funding"
-        >
-          Ready for Funding ({readyForFundingCount})
         </button>
       </div>
 
@@ -382,209 +447,382 @@ export function AdminApprovalQueue({
           </p>
         </div>
       ) : (
-        /* Items list */
-        <div className="grid gap-3" data-testid="pending-queue-items-list">
-          {paginatedItems.map((item) => {
-            const disbNumber =
-              item.disbursement_number || item.disbursementNumber || `DISB-${item.id.slice(0, 8)}`;
-            const clientName =
-              item.client_name || item.clientName || item.clients?.name || 'Firm Internal';
-            const workRequestId = item.linked_work_request_id || item.linkedWorkRequestId;
-
-            const isReturnedDraft = item.status === 'Draft' && item.review_ready === false;
-            const cannotApprove = isReturnedDraft;
-            const approveTitle = isReturnedDraft
-              ? 'Returned voucher awaiting requester correction'
-              : 'Approve voucher';
-
-            return (
-              <div
-                key={item.id}
-                className="p-4 bg-surface border border-border rounded-[6px] hover:border-border transition-colors shadow-none space-y-3"
-                data-testid={`pending-item-${item.id}`}
-              >
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-ink">{disbNumber}</span>
-                      <DisbursementStatusBadge
-                        status={item.status}
-                        reviewReady={item.review_ready}
-                      />
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-[6px] bg-canvas text-muted">
-                        {item.category}
-                      </span>
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-[6px] bg-canvas text-ink">
-                        {item.fund_source || item.fundSource}
-                      </span>
-                    </div>
-                    <p className="text-xs text-ink font-medium line-clamp-2">
-                      {item.description}
-                    </p>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <span
-                      className="text-sm font-bold text-ink block"
-                      data-testid={`item-amount-${item.id}`}
-                    >
-                      ₱{item.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-                    </span>
-                    <span className="text-xs tabular-nums text-muted">
-                      {new Date(item.created_at || item.createdAt || '').toLocaleDateString()}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Metadata strip */}
-                <div className="flex flex-wrap items-center gap-4 text-xs text-muted pt-1 border-t border-border">
-                  <span className="flex items-center gap-1">
-                    <Building className="h-3 w-3 text-muted" />
-                    {clientName}
-                  </span>
-                  {(item.linked_work_request_name ||
-                    item.linked_work_request_order_number ||
-                    workRequestId) && (
-                    <span className="flex items-center gap-1">
-                      <FileText className="h-3 w-3 text-muted" />
-                      WR:{' '}
-                      <span className="tabular-nums" data-testid={`pending-item-wr-${item.id}`}>
-                        {item.linked_work_request_order_number && item.linked_work_request_name
-                          ? `${item.linked_work_request_order_number} — ${item.linked_work_request_name}`
-                          : item.linked_work_request_name ||
-                            item.linked_work_request_order_number ||
-                            'Work Request Linked'}
-                      </span>
-                    </span>
-                  )}
-                  {(item.employee_name ||
+        /* Unified Table/Row System */
+        <div
+          className="flex-1 min-h-0 border border-border rounded-[8px] overflow-hidden bg-surface shadow-2xs flex flex-col"
+          data-testid="pending-queue-table-container"
+        >
+          <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto">
+            <Table
+              role="grid"
+              aria-label="Pending approvals table"
+              data-testid="pending-queue-table"
+              className="w-full text-xs"
+            >
+              <TableHeader className="sticky top-0 z-10 bg-sidebar border-b border-border shadow-xs">
+                <TableRow role="row" className="bg-sidebar hover:bg-sidebar border-b border-border h-9">
+                  <TableHead className="w-2 p-0 sticky top-0 z-10 bg-sidebar" aria-label="Selection indicator" />
+                  <TableHead className="w-36 text-xs font-semibold text-text-secondary sticky top-0 z-10 bg-sidebar">
+                    Voucher Ref
+                  </TableHead>
+                  <TableHead className="w-48 text-xs font-semibold text-text-secondary sticky top-0 z-10 bg-sidebar">
+                    Stage / Required Action
+                  </TableHead>
+                  <TableHead className="min-w-[180px] text-xs font-semibold text-text-secondary sticky top-0 z-10 bg-sidebar">
+                    Client & Work Request
+                  </TableHead>
+                  <TableHead className="min-w-[180px] text-xs font-semibold text-text-secondary sticky top-0 z-10 bg-sidebar">
+                    Description & Requester
+                  </TableHead>
+                  <TableHead className="w-28 text-xs font-semibold text-text-secondary sticky top-0 z-10 bg-sidebar">
+                    Fund Source
+                  </TableHead>
+                  <TableHead className="w-28 text-xs font-semibold text-text-secondary text-right sticky top-0 z-10 bg-sidebar">
+                    Amount (PHP)
+                  </TableHead>
+                  <TableHead className="w-48 text-xs font-semibold text-text-secondary text-right sticky top-0 z-10 bg-sidebar">
+                    Actions
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody data-testid="pending-queue-items-list">
+                {paginatedItems.map((item) => {
+                  const disbNumber =
+                    item.disbursement_number ||
+                    item.disbursementNumber ||
+                    `DISB-${item.id.slice(0, 8)}`;
+                  const clientName =
+                    item.client_name || item.clientName || item.clients?.name || 'Firm Internal';
+                  const clientNum =
+                    item.client_number ||
+                    item.clientNumber ||
+                    item.clients?.client_number ||
+                    item.clients?.clientNumber;
+                  const workRequestId = item.linked_work_request_id || item.linkedWorkRequestId;
+                  const wrNumber =
+                    item.work_request_number ||
+                    item.workRequestNumber ||
+                    item.linked_work_request_order_number;
+                  const requesterName =
+                    item.employee_name ||
                     item.employeeName ||
                     item.requested_by_name ||
                     item.requestedByName ||
                     item.created_by_name ||
                     item.createdByName ||
                     item.requested_by ||
-                    item.requestedBy ||
                     item.created_by ||
-                    item.createdBy) && (
-                    <span className="flex items-center gap-1">
-                      <User className="h-3 w-3 text-muted" />
-                      {item.employee_name ||
-                        item.employeeName ||
-                        item.requested_by_name ||
-                        item.requestedByName ||
-                        item.created_by_name ||
-                        item.createdByName ||
-                        item.requested_by ||
-                        item.requestedBy ||
-                        item.created_by ||
-                        item.createdBy}
-                    </span>
-                  )}
-                  {(item.receipt_filename || item.receiptFilename) && (
-                    <span className="flex items-center gap-1 text-ink">
-                      <Receipt className="h-3 w-3" />
-                      {item.receipt_filename || item.receiptFilename}
-                    </span>
-                  )}
-                </div>
+                    'Requester';
 
-                {/* Duty Separation & Readiness Notices */}
-                {isReturnedDraft && (
-                  <div
-                    className="flex items-center gap-1.5 text-xs font-medium text-warning bg-warning-surface px-2.5 py-1 rounded border border-warning-border"
-                    data-testid={`needs-correction-notice-${item.id}`}
-                  >
-                    <AlertCircle className="h-3.5 w-3.5 text-warning shrink-0" />
-                    <span>Awaiting Requester Correction</span>
-                  </div>
-                )}
+                  const isReturnedDraft = item.status === 'Draft' && item.review_ready === false;
+                  const cannotApprove = isReturnedDraft;
+                  const approveTitle = isReturnedDraft
+                    ? 'Returned voucher awaiting requester correction'
+                    : 'Approve voucher';
+                  const fundSource =
+                    item.fund_source || item.fundSource || item.source_of_funds || 'Firm Fund';
+                  const linkedInvNumber =
+                    item.linked_invoice_number ||
+                    item.linked_invoice?.invoice_number ||
+                    item.linked_invoice_summary?.invoice_number;
 
-                {/* Actions */}
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-                  {onSelectDisbursement && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onSelectDisbursement(item.id)}
-                      className="text-xs h-7 mr-auto"
-                      data-testid={`view-detail-btn-${item.id}`}
-                    >
-                      View Details
-                    </Button>
-                  )}
+                  const isSelected = Boolean(selectedId && selectedId === item.id);
 
-                  {/* Approved status: Accounting or Admin can prepare payment */}
-                  {item.status === 'Approved' && (isAdmin || isAccounting) && (
-                    <Button
-                      type="button"
-                      variant="default"
-                      size="sm"
-                      onClick={() => setFundingItem(item)}
-                      className="text-xs h-7 bg-primary hover:bg-primary-hover text-inverse font-medium"
-                      data-testid={`fund-btn-${item.id}`}
-                    >
-                      <DollarSign className="h-3.5 w-3.5 mr-1" />
-                      Prepare Payment
-                    </Button>
-                  )}
-
-                  {/* Admin actions on Draft or Funded */}
-                  {isAdmin && item.status !== 'Rejected' && item.status !== 'Approved' && (
-                    <>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setRejectingItem(item)}
-                        className="text-xs h-7 text-danger border-danger-border hover:bg-danger-surface"
-                        data-testid={`reject-btn-${item.id}`}
-                      >
-                        <XCircle className="h-3.5 w-3.5 mr-1 text-danger-solid" />
-                        Reject
-                      </Button>
-                      {item.status === 'Funded' ? (
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          title="Release payment funds"
-                          onClick={() => setReleasingItem(item)}
-                          className="text-xs h-7 bg-primary hover:bg-primary-hover text-inverse font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                          data-testid={`release-btn-${item.id}`}
-                        >
-                          <DollarSign className="h-3.5 w-3.5 mr-1" />
-                          Release
-                        </Button>
-                      ) : (
-                        <Button
-                          type="button"
-                          variant="default"
-                          size="sm"
-                          disabled={cannotApprove}
-                          title={approveTitle}
-                          onClick={() => handleApprove(item)}
-                          className="text-xs h-7 bg-success hover:bg-success text-inverse font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                          data-testid={`approve-btn-${item.id}`}
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                          Approve
-                        </Button>
+                  return (
+                    <TableRow
+                      key={item.id}
+                      role="row"
+                      aria-selected={isSelected}
+                      onClick={() => onSelectDisbursement?.(item.id)}
+                      className={cn(
+                        'cursor-pointer transition-colors duration-150 motion-safe:ease-out border-b border-border last:border-0 h-[52px]',
+                        isSelected ? 'bg-selected text-ink' : 'hover:bg-hover/60 text-ink'
                       )}
-                    </>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                      data-testid={`pending-item-${item.id}`}
+                      data-row-id={item.id}
+                    >
+                      {/* Selection indicator */}
+                      <TableCell className="w-2 p-0 text-center">
+                        <div
+                          className={cn(
+                            'w-[3px] h-8 rounded-r-xs transition-[background-color] duration-150 motion-safe:ease-out',
+                            isSelected ? 'bg-primary' : 'bg-transparent'
+                          )}
+                          aria-hidden="true"
+                        />
+                      </TableCell>
+
+                      {/* 1. Voucher Ref & Date */}
+                      <TableCell className="align-middle py-2">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono text-xs font-bold text-ink">
+                              {disbNumber}
+                            </span>
+                            <span className="text-[10px] font-semibold px-1 py-0.2 rounded border bg-canvas text-muted">
+                              {item.entity_code || item.entityCode || 'ATA'}
+                            </span>
+                          </div>
+                          <span className="text-[11px] tabular-nums text-muted block">
+                            {new Date(item.created_at || item.createdAt || '').toLocaleDateString()}
+                          </span>
+                        </div>
+                      </TableCell>
+
+                      {/* 2. Stage / Required Action (Discernible Distinctions) */}
+                      <TableCell className="align-middle py-2">
+                        <div className="space-y-1">
+                          {item.status === 'Draft' ? (
+                            isReturnedDraft ? (
+                              <div
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[11px] font-semibold bg-danger-surface text-danger border border-danger-border"
+                                data-testid={`needs-correction-notice-${item.id}`}
+                              >
+                                <AlertCircle className="h-3 w-3 shrink-0 text-danger-solid" />
+                                <span>Needs Correction</span>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                <CheckCircle2 className="h-3 w-3 shrink-0 text-amber-600" />
+                                <span>Step 1 · Initial Approval</span>
+                              </div>
+                            )
+                          ) : item.status === 'Approved' ? (
+                            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                              <DollarSign className="h-3 w-3 shrink-0 text-blue-600" />
+                              <span>Step 2 · Ready for Funding</span>
+                            </div>
+                          ) : item.status === 'Funded' ? (
+                            <div className="space-y-0.5">
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <DollarSign className="h-3 w-3 shrink-0 text-emerald-600" />
+                                <span>Step 3 · Release Sign-off</span>
+                              </div>
+                              {(item.payment_bank || item.paymentBank) && (
+                                <div className="text-[10px] text-muted flex items-center gap-1 font-mono truncate max-w-[180px]">
+                                  <CreditCard className="h-2.5 w-2.5 shrink-0" />
+                                  <span>
+                                    {item.payment_bank || item.paymentBank}{' '}
+                                    {item.payment_reference ? `· ${item.payment_reference}` : ''}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <DisbursementStatusBadge
+                              status={item.status}
+                              reviewReady={item.review_ready}
+                            />
+                          )}
+                        </div>
+                      </TableCell>
+
+                      {/* 3. Client & Work Request */}
+                      <TableCell className="align-middle py-2 max-w-[220px]">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1 text-ink font-medium truncate">
+                            <Building className="h-3 w-3 text-muted shrink-0" />
+                            {Boolean(clientNum) && (
+                              <span className="font-mono text-[10px] text-muted bg-canvas border border-border px-1 py-0.2 rounded">
+                                {clientNum}
+                              </span>
+                            )}
+                            <span className="truncate">{clientName}</span>
+                          </div>
+                          {(item.linked_work_request_name || wrNumber || workRequestId) && (
+                            <div
+                              className="flex items-center gap-1 text-[11px] text-muted truncate"
+                              data-testid={`pending-item-wr-${item.id}`}
+                            >
+                              <FileText className="h-3 w-3 shrink-0 text-muted" />
+                              {Boolean(wrNumber) && (
+                                <span className="font-mono text-[10px] text-text-secondary bg-canvas border border-border px-1 py-0.2 rounded">
+                                  {wrNumber}
+                                </span>
+                              )}
+                              <span className="truncate">
+                                {item.linked_work_request_name || 'Work Request'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+
+                      {/* 4. Description & Requester */}
+                      <TableCell className="align-middle py-2 max-w-[240px]">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-medium px-1.5 py-0.2 rounded bg-canvas text-muted border border-border shrink-0">
+                              {item.category}
+                            </span>
+                            <span className="text-xs text-ink font-medium truncate block">
+                              {item.description}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 text-[11px] text-muted truncate">
+                            <User className="h-2.5 w-2.5 shrink-0" />
+                            <span className="truncate">{requesterName}</span>
+                          </div>
+                        </div>
+                      </TableCell>
+
+                      {/* 5. Fund Source */}
+                      <TableCell className="align-middle py-2">
+                        <div className="space-y-0.5">
+                          <span
+                            className={cn(
+                              'inline-block px-1.5 py-0.5 rounded-[4px] text-[10px] font-semibold border',
+                              fundSource === 'Client Fund'
+                                ? 'bg-primary-light text-primary-hover border-blue-300'
+                                : 'bg-canvas text-ink border-border'
+                            )}
+                          >
+                            {fundSource}
+                          </span>
+                          {linkedInvNumber && (
+                            <div className="text-[10px] font-mono font-medium text-primary flex items-center gap-0.5">
+                              <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                              <span>{linkedInvNumber}</span>
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+
+                      {/* 6. Amount */}
+                      <TableCell className="align-middle py-2 text-right">
+                        <span
+                          className="text-xs font-bold font-mono tabular-nums text-ink block"
+                          data-testid={`item-amount-${item.id}`}
+                        >
+                          ₱{item.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                        </span>
+                      </TableCell>
+
+                      {/* 7. Inline Actions */}
+                      <TableCell className="align-middle py-2 text-right">
+                        <div
+                          className="flex items-center justify-end gap-1.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {/* Approved status: Accounting or Admin can prepare payment */}
+                          {item.status === 'Approved' && (isAdmin || isAccounting) && (
+                            <Button
+                              type="button"
+                              variant="default"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFundingItem(item);
+                              }}
+                              className="text-xs h-7 px-2 bg-primary hover:bg-primary-hover text-inverse font-medium cursor-pointer"
+                              data-testid={`fund-btn-${item.id}`}
+                            >
+                              <DollarSign className="h-3 w-3 mr-1" />
+                              Prepare Payment
+                            </Button>
+                          )}
+
+                          {/* Admin actions on Draft */}
+                          {isAdmin && item.status === 'Draft' && (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRejectingItem(item);
+                                }}
+                                className="text-xs h-7 px-2 text-danger border-danger-border hover:bg-danger-surface cursor-pointer"
+                                data-testid={`reject-btn-${item.id}`}
+                              >
+                                <XCircle className="h-3 w-3 mr-1 text-danger-solid" />
+                                Reject
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="default"
+                                size="sm"
+                                disabled={cannotApprove}
+                                title={approveTitle}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApprove(item);
+                                }}
+                                className="text-xs h-7 px-2.5 bg-success hover:bg-success text-inverse font-medium disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                                data-testid={`approve-btn-${item.id}`}
+                              >
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                                Approve
+                              </Button>
+                            </>
+                          )}
+
+                          {/* Admin actions on Funded */}
+                          {isAdmin && item.status === 'Funded' && (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setRejectingItem(item);
+                                }}
+                                className="text-xs h-7 px-2 text-danger border-danger-border hover:bg-danger-surface cursor-pointer"
+                                data-testid={`reject-btn-${item.id}`}
+                              >
+                                <XCircle className="h-3 w-3 mr-1 text-danger-solid" />
+                                Reject
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="default"
+                                size="sm"
+                                title="Release payment funds"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReleasingItem(item);
+                                }}
+                                className="text-xs h-7 px-2.5 bg-primary hover:bg-primary-hover text-inverse font-medium disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                                data-testid={`release-btn-${item.id}`}
+                              >
+                                <DollarSign className="h-3 w-3 mr-1" />
+                                Release
+                              </Button>
+                            </>
+                          )}
+
+                          {onSelectDisbursement && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onSelectDisbursement(item.id);
+                              }}
+                              className="text-xs h-7 px-1.5 text-muted hover:text-ink cursor-pointer"
+                              data-testid={`view-detail-btn-${item.id}`}
+                            >
+                              View
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
         </div>
       )}
 
       {/* Pagination Controls */}
       {filteredItems.length > pageSize && (
         <div
-          className="flex items-center justify-between px-2 pt-2 text-xs text-muted border-t border-border"
+          className="shrink-0 flex items-center justify-between px-2 pt-2 text-xs text-muted border-t border-border"
           data-testid="queue-pagination-bar"
         >
           <span data-testid="queue-page-info">
@@ -599,7 +837,7 @@ export function AdminApprovalQueue({
               disabled={page <= 1}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               data-testid="queue-prev-page"
-              className="h-7 px-2 text-xs"
+              className="h-7 px-2 text-xs cursor-pointer"
             >
               Previous
             </Button>
@@ -613,7 +851,7 @@ export function AdminApprovalQueue({
               disabled={page >= totalPages}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               data-testid="queue-next-page"
-              className="h-7 px-2 text-xs"
+              className="h-7 px-2 text-xs cursor-pointer"
             >
               Next
             </Button>

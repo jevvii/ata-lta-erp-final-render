@@ -317,12 +317,18 @@ export function InvoiceCreateModal({
     return list.filter((d) => {
       const dWrId = d.linked_work_request_id || d.linkedWorkRequestId;
       const dInvId = d.linked_invoice_id || d.linkedInvoiceId;
+      const fundSource =
+        d.fund_source ||
+        d.fundSource ||
+        (d as { source_of_funds?: string; sourceOfFunds?: string }).source_of_funds ||
+        (d as { source_of_funds?: string; sourceOfFunds?: string }).sourceOfFunds;
       return (
-        !d.archived &&
-        d.status !== 'Rejected' &&
-        d.status !== 'Cancelled' &&
-        (!dWrId || dWrId === workRequestId) &&
+        fundSource === 'Client Fund' &&
+        d.status === 'Approved' &&
         !dInvId &&
+        !d.archived &&
+        (d.lifecycle_version ?? 2) === 2 &&
+        (!dWrId || dWrId === workRequestId) &&
         !linkedDisbursementIds.includes(d.id)
       );
     });
@@ -814,11 +820,10 @@ export function InvoiceCreateModal({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <span className="font-bold text-[#1E293B] block">
-                    Unbilled Disbursements for this Work Request
+                    Approved Client-Funded Disbursements
                   </span>
                   <span className="text-[11px] text-[#475569]">
-                    Import client-reimbursable or government fee vouchers directly as invoice line
-                    items and link them for SOP Step 2.5 tracking.
+                    Only Approved Client Fund vouchers are eligible to be billed and linked. Import as reimbursable expense line items for SOP Step 2.5 tracking.
                   </span>
                 </div>
                 {unbilledDisbursements.length > 1 && (

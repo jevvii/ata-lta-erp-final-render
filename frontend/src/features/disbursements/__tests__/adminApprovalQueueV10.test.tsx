@@ -532,5 +532,89 @@ describe('AdminApprovalQueue Governance & Reliability (F13 & F14 / R7 / V10)', (
       expect(releaseSubtab).toHaveClass('bg-surface');
       expect(screen.getByTestId('pending-item-disb-rel-1')).toBeInTheDocument();
     });
+
+    it('highlights the active/viewed voucher when selectedId is provided and triggers onSelectDisbursement on click', async () => {
+      setAdminSession();
+      const testItems: Disbursement[] = [
+        {
+          id: 'disb-sel-1',
+          disbursement_number: 'DISB-SEL-001',
+          entity_id: 'ent-1',
+          category: 'Supplies',
+          description: 'Selected expense',
+          amount: 500,
+          fund_source: 'Firm Fund',
+          status: 'Draft',
+          lifecycle_version: 2,
+          review_ready: true,
+          version: 1,
+          created_by: 'u-admin-1',
+          created_at: '2026-10-20T08:00:00Z',
+          updated_at: '2026-10-20T08:00:00Z',
+        },
+        {
+          id: 'disb-sel-2',
+          disbursement_number: 'DISB-SEL-002',
+          entity_id: 'ent-1',
+          category: 'Utilities',
+          description: 'Unselected expense',
+          amount: 800,
+          fund_source: 'Firm Fund',
+          status: 'Draft',
+          lifecycle_version: 2,
+          review_ready: true,
+          version: 1,
+          created_by: 'u-admin-1',
+          created_at: '2026-10-21T08:00:00Z',
+          updated_at: '2026-10-21T08:00:00Z',
+        },
+      ];
+
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        const u = new URL(String(url), 'http://localhost');
+        if (u.pathname.includes('/counts')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({
+              data: {
+                initialRequests: 2,
+                paymentReleases: 0,
+                readyForFunding: 0,
+              },
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: testItems, meta: { total: 2 } }),
+        };
+      });
+
+      const onSelect = vi.fn();
+      const { wrapper } = createHarness();
+      render(
+        <AdminApprovalQueue
+          selectedId="disb-sel-1"
+          onSelectDisbursement={onSelect}
+        />,
+        { wrapper }
+      );
+
+      const row1 = await screen.findByTestId('pending-item-disb-sel-1');
+      const row2 = await screen.findByTestId('pending-item-disb-sel-2');
+
+      expect(row1).toHaveAttribute('aria-selected', 'true');
+      expect(row1).toHaveClass('bg-selected');
+
+      expect(row2).toHaveAttribute('aria-selected', 'false');
+      expect(row2).not.toHaveClass('bg-selected');
+
+      fireEvent.click(row2);
+      expect(onSelect).toHaveBeenCalledWith('disb-sel-2');
+    });
   });
 });

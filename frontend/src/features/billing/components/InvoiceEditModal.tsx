@@ -18,6 +18,7 @@ import { useClients, type ClientSummary } from '@/features/operations/api/useCli
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
 import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import {
@@ -150,6 +151,7 @@ export function InvoiceEditModal({
 
   // Dynamic Line Items
   const [lineItems, setLineItems] = useState<EditableLineItem[]>([]);
+  const [linkedDisbursementIds, setLinkedDisbursementIds] = useState<string[]>([]);
 
   // Conflict Modal State
   const [conflictState, setConflictState] = useState<{
@@ -245,12 +247,16 @@ export function InvoiceEditModal({
           },
         ]);
       }
+
+      const initialDisbIds = (invoice.linked_disbursements || []).map((d) => d.id);
+      setLinkedDisbursementIds(initialDisbIds);
     } else if (!isOpen) {
       setSelectedTaskId('');
       setOriginTaskId('');
       setOriginWrId('');
       setStoredLinkageError(null);
       setFormError(null);
+      setLinkedDisbursementIds([]);
     }
   }, [isOpen, invoice]);
 
@@ -333,6 +339,134 @@ export function InvoiceEditModal({
     const matchedWr = workRequests.find((w) => w.id === newWrId);
     if (matchedWr?.client_id) {
       setClientId(matchedWr.client_id);
+    }
+  };
+
+  const { data: wrDisbursementsData } = useDisbursements(
+    {
+      workRequestId: workRequestId || undefined,
+      clientId: clientId || undefined,
+      archived: false,
+      limit: 100,
+    },
+    { enabled: isOpen && Boolean(clientId || workRequestId) }
+  );
+
+  const eligibleDisbursements = useMemo(() => {
+    if (!clientId && !workRequestId) return [];
+    const rawList = Array.isArray(wrDisbursementsData?.data) ? wrDisbursementsData.data : [];
+    const fromInvoice = invoice?.linked_disbursements || [];
+
+    const map = new Map<
+      string,
+      {
+        id: string;
+        disbursement_number: string;
+        description: string;
+        amount: number;
+        category: string;
+        status: string;
+        fund_source: string;
+      }
+    >();
+
+    for (const d of fromInvoice) {
+      map.set(d.id, {
+        id: d.id,
+        disbursement_number: d.disbursement_number,
+        description: d.description,
+        amount: d.amount,
+        category: d.category,
+        status: d.status,
+        fund_source: d.fund_source,
+      });
+    }
+
+    for (const d of rawList) {
+      const fundSource =
+        d.fund_source ||
+        d.fundSource ||
+        (d as { source_of_funds?: string; sourceOfFunds?: string }).source_of_funds ||
+        (d as { source_of_funds?: string; sourceOfFunds?: string }).sourceOfFunds;
+      const isClientFund = fundSource === 'Client Fund';
+      const isApproved = d.status === 'Approved';
+      const dInvId = d.linked_invoice_id || d.linkedInvoiceId;
+      const isLinkedToThis = dInvId === invoice?.id || linkedDisbursementIds.includes(d.id);
+      const isUnlinked = !dInvId;
+
+      if (
+        isClientFund &&
+        isApproved &&
+        !d.archived &&
+        (d.lifecycle_version ?? 2) === 2 &&
+        (isLinkedToThis || isUnlinked)
+      ) {
+        if (!map.has(d.id)) {
+          const disbNum =
+            d.disbursement_number || d.disbursementNumber || `DISB-${d.id.slice(0, 8)}`;
+          map.set(d.id, {
+            id: d.id,
+            disbursement_number: disbNum,
+            description: d.description,
+            amount: d.amount,
+            category: d.category,
+            status: d.status,
+            fund_source: fundSource,
+          });
+        }
+      }
+    }
+
+    return Array.from(map.values());
+  }, [
+    wrDisbursementsData,
+    invoice?.linked_disbursements,
+    invoice?.id,
+    clientId,
+    workRequestId,
+    linkedDisbursementIds,
+  ]);
+
+  const handleToggleDisbursement = (disbId: string) => {
+    setLinkedDisbursementIds((prev) =>
+      prev.includes(disbId) ? prev.filter((id) => id !== disbId) : [...prev, disbId]
+    );
+  };
+
+  const handleImportDisbursementLine = (d: {
+    id: string;
+    disbursement_number: string;
+    description: string;
+    amount: number;
+    category: string;
+  }) => {
+    const disbNum = d.disbursement_number;
+    const alreadyImported = lineItems.some((li) => li.description.includes(disbNum));
+    if (alreadyImported) return;
+
+    const mappedType: LineItemType =
+      d.category === 'Professional Fee'
+        ? 'Professional Fee'
+        : d.category === 'Government Fee' || d.category === 'Filing Fee'
+          ? 'Government Fee'
+          : 'Other';
+
+    const newLineItem: EditableLineItem = {
+      id: `item-disb-${d.id}-${Date.now()}`,
+      description: `[${disbNum}] ${d.description}`,
+      amount: String(d.amount),
+      type: mappedType,
+    };
+
+    setLineItems((prev) => {
+      if (prev.length === 1 && !prev[0]!.description.trim()) {
+        return [newLineItem];
+      }
+      return [...prev, newLineItem];
+    });
+
+    if (!linkedDisbursementIds.includes(d.id)) {
+      setLinkedDisbursementIds((prev) => [...prev, d.id]);
     }
   };
 
@@ -562,6 +696,7 @@ export function InvoiceEditModal({
       issueDate,
       dueDate,
       lineItems: parsedLineItems,
+      linkedDisbursementIds,
       notes: notes.trim() || null,
       terms: terms.trim() || null,
       expectedVersion: currentVersion,
@@ -893,6 +1028,79 @@ export function InvoiceEditModal({
           isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
           workRequestId={workRequestId}
         />
+
+        {/* Linked Client-Funded Disbursements Section */}
+        {eligibleDisbursements.length > 0 && (
+          <div
+            className="space-y-2 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[8px]"
+            data-testid="linked-disbursements-picker"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-[#1E293B] uppercase tracking-wide">
+                  Linked Client-Funded Disbursements ({linkedDisbursementIds.length} linked)
+                </h4>
+                <p className="text-[11px] text-[#475569]">
+                  Check vouchers to link. Lifecycle (Funded/Released) is synchronized with this invoice.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5 max-h-36 overflow-y-auto">
+              {eligibleDisbursements.map((d) => {
+                const disbNum = d.disbursement_number || `DISB-${d.id.slice(0, 8)}`;
+                const isLinked = linkedDisbursementIds.includes(d.id);
+                return (
+                  <div
+                    key={d.id}
+                    className="flex items-center justify-between gap-2 p-2 bg-white border border-[#E2E8F0] rounded-[6px]"
+                    data-testid={`eligible-disbursement-row-${d.id}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <input
+                        type="checkbox"
+                        checked={isLinked}
+                        onChange={() => handleToggleDisbursement(d.id)}
+                        disabled={!canEditFinancials}
+                        className="rounded border-[#CBD5E1] text-[#1D4ED8] focus:ring-[#1D4ED8] cursor-pointer"
+                        data-testid={`checkbox-link-disbursement-${d.id}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono font-semibold text-[#1E293B]">{disbNum}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-semibold">
+                            Client Fund
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[#475569] text-[10px] font-semibold">
+                            {d.status}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#475569] truncate mt-0.5">{d.description}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="font-mono font-bold text-[#1E293B] tabular-nums">
+                        {formatCurrency(d.amount)}
+                      </span>
+                      {canEditFinancials && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleImportDisbursementLine(d)}
+                          className="h-7 px-2 text-xs cursor-pointer"
+                          data-testid={`btn-import-disbursement-line-${d.id}`}
+                        >
+                          + Line
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* 2. Dynamic Line Items Section */}
         <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">

@@ -139,6 +139,20 @@ export function LinkBillingTransmittalModal({
     disbursement.sourceOfFunds ||
     'Firm Fund';
 
+  const isClientFund = fundSource === 'Client Fund';
+  const isStatusEligibleForInvoiceLinking =
+    disbursement.status === 'Approved' || disbursement.status === 'Draft';
+  const canLinkInvoice = isClientFund && isStatusEligibleForInvoiceLinking;
+
+  const linkedInvStatus =
+    disbursement.linked_invoice_status ||
+    disbursement.linked_invoice?.status ||
+    (disbursement as { linked_invoice_summary?: { status?: string } }).linked_invoice_summary?.status ||
+    '';
+
+  const isInvoiceLocked =
+    disbursement.status === 'Released' || linkedInvStatus === 'Paid';
+
   const isInvalidLifecycle = disbursement.lifecycle_version !== 2;
   const isMissingVersion = typeof disbursement.version !== 'number' || disbursement.version < 1;
 
@@ -161,11 +175,15 @@ export function LinkBillingTransmittalModal({
 
     const { startId, startVersion, isStale } = captureContext();
 
+    const invoiceIdToSubmit = isInvoiceLocked
+      ? (disbursement.linked_invoice_id || disbursement.linkedInvoiceId || null)
+      : (linkedInvoiceId ? linkedInvoiceId : null);
+
     try {
       await updateWithBlocking({
         id: startId!,
         data: {
-          linkedInvoiceId: linkedInvoiceId ? linkedInvoiceId : null,
+          linkedInvoiceId: invoiceIdToSubmit,
           linkedTransmittalId: linkedTransmittalId ? linkedTransmittalId : null,
           expectedVersion: startVersion!,
         },
@@ -260,7 +278,7 @@ export function LinkBillingTransmittalModal({
                   <span>Linked Billing (Invoice)</span>
                 </label>
 
-                {!linkedInvoiceId && onOpenCreateBilling && (
+                {!linkedInvoiceId && onOpenCreateBilling && canLinkInvoice && !isInvoiceLocked && (
                   <Button
                     type="button"
                     variant="ghost"
@@ -282,7 +300,7 @@ export function LinkBillingTransmittalModal({
                 id="modal-link-invoice-select"
                 value={linkedInvoiceId}
                 onChange={(e) => setLinkedInvoiceId(e.target.value)}
-                disabled={!workRequestId || isPending || isSubmitting}
+                disabled={!workRequestId || isPending || isSubmitting || isInvoiceLocked || !canLinkInvoice}
                 className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
                 data-testid="modal-select-linked-invoice"
               >
@@ -296,10 +314,20 @@ export function LinkBillingTransmittalModal({
                   </option>
                 ))}
               </select>
-              <p className="text-[11px] text-muted">
-                Linking a client invoice enables SOP Step 2.5 Client Fund payment verification and
-                reimbursable expense tracking.
-              </p>
+              {isInvoiceLocked ? (
+                <p className="text-[11px] text-warning font-medium">
+                  Invoice link is locked because the linked billing has been paid and released.
+                </p>
+              ) : !canLinkInvoice ? (
+                <p className="text-[11px] text-muted">
+                  Invoice linking is only available for Approved or Draft Client Fund disbursements.
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted">
+                  Linking a client invoice enables SOP Step 2.5 Client Fund payment verification and
+                  reimbursable expense tracking.
+                </p>
+              )}
             </div>
 
             {/* Linked Transmittal Selector */}

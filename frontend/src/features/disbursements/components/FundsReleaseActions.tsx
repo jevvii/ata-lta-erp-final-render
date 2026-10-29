@@ -15,6 +15,7 @@ import { useSessionStore } from '@/lib/session';
 import { isConcurrencyConflictError } from '@/components/common/ConflictResolutionModal';
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import type { Disbursement } from '../api/types';
+import { isBillingControlledDisbursement } from '../api/types';
 import { useLiveModalContext } from '../lib/useLiveModalContext';
 
 export interface ReleaseFundsModalProps {
@@ -312,6 +313,25 @@ export function FundsReleaseActions({ disbursement, onSuccess }: FundsReleaseAct
   // Legacy records have no financial actions
   if (disbursement.lifecycle_version === 1) {
     return null;
+  }
+
+  if (isBillingControlledDisbursement(disbursement)) {
+    const linkedInvNumber =
+      disbursement.linked_invoice_number ||
+      disbursement.linkedInvoiceNumber ||
+      disbursement.linked_invoice?.invoice_number ||
+      (disbursement as { linked_invoice_summary?: { invoice_number?: string } }).linked_invoice_summary?.invoice_number ||
+      'Invoice';
+    return (
+      <div className="flex items-center gap-2" data-testid="funds-release-actions">
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary border border-primary/20"
+          data-testid="billing-controlled-badge"
+        >
+          Billing Controlled ({linkedInvNumber})
+        </span>
+      </div>
+    );
   }
 
   const canShowFund = disbursement.status === 'Approved' && (isAdmin || isAccounting);

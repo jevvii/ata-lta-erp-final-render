@@ -84,6 +84,7 @@ import { LinkBillingTransmittalModal } from '../LinkBillingTransmittalModal';
 import { InvoiceCreateModal } from '@/features/billing/components/InvoiceCreateModal';
 import { RejectReasonModal } from '@/features/operations/components/RejectReasonModal';
 import type { Disbursement } from '../../api/types';
+import { isBillingControlledDisbursement } from '../../api/types';
 import type { ApiError } from '@/lib/api';
 
 export interface DisbursementActionRailProps {
@@ -412,10 +413,30 @@ export function DisbursementActionRail({
     }
   };
 
+  const isBillingControlled = isBillingControlledDisbursement(item);
+  const fundSource =
+    item.fund_source ||
+    item.fundSource ||
+    (item as { source_of_funds?: string; sourceOfFunds?: string }).source_of_funds ||
+    (item as { source_of_funds?: string; sourceOfFunds?: string }).sourceOfFunds;
+  const isClientFund = fundSource === 'Client Fund';
+
+  const linkedInvNumber =
+    item.linked_invoice_number ||
+    item.linkedInvoiceNumber ||
+    item.linked_invoice?.invoice_number ||
+    item.linked_invoice_summary?.invoice_number ||
+    'Invoice';
+  const linkedInvStatus =
+    item.linked_invoice_status ||
+    item.linked_invoice?.status ||
+    item.linked_invoice_summary?.status ||
+    '';
+
   // Visibility Flags
   const showApprove = isAdmin && item.status === 'Draft' && isV2 && !isArchived;
-  const showFund = item.status === 'Approved' && isV2 && canFund && !isArchived;
-  const showRelease = item.status === 'Funded' && isV2 && isAdmin && !isArchived;
+  const showFund = item.status === 'Approved' && isV2 && canFund && !isArchived && !isBillingControlled;
+  const showRelease = item.status === 'Funded' && isV2 && isAdmin && !isArchived && !isBillingControlled;
   const showResend = item.status === 'Rejected' && isV2 && isAdmin && !isArchived;
   const showEdit = canEditVoucher;
   const showEditPayment =
@@ -424,13 +445,18 @@ export function DisbursementActionRail({
     hasVersion &&
     isV2 &&
     !isArchived &&
-    item.status !== 'Rejected' &&
-    item.status !== 'Cancelled' &&
+    isClientFund &&
+    item.status === 'Approved' &&
+    (isAdmin || canFund) &&
     Boolean(workRequestId) &&
     canCreateBilling;
   const showLinkRecords = canLinkRecords;
   const showPrint = true; // Print Voucher is available on any loaded voucher
-  const showReject = isAdmin && isV2 && (item.status === 'Draft' || item.status === 'Funded') && !isArchived;
+  const showReject =
+    isAdmin &&
+    isV2 &&
+    (item.status === 'Draft' || (item.status === 'Funded' && !isBillingControlled)) &&
+    !isArchived;
   const showArchive = item.status === 'Released' && isV2 && isAdmin && !isArchived;
   const showRestore = item.status === 'Released' && isV2 && isAdmin && isArchived;
 
@@ -457,6 +483,35 @@ export function DisbursementActionRail({
 
       {/* Button Groups Container */}
       <div className="flex-1 overflow-y-auto overscroll-contain p-1.5 flex flex-col gap-1">
+        {/* Billing-Controlled Callout */}
+        {isBillingControlled && (
+          <div
+            className="p-2 bg-primary/5 border border-primary/20 rounded-[4px] text-[11px] space-y-1"
+            data-testid="rail-billing-controlled-callout"
+          >
+            <div className="flex items-center justify-between gap-1">
+              <span className="font-semibold text-primary flex items-center gap-1">
+                <Receipt className="h-3 w-3 shrink-0" />
+                <span className="truncate">Billing Controlled · {linkedInvNumber}</span>
+              </span>
+              {linkedInvStatus && (
+                <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-medium shrink-0">
+                  {linkedInvStatus}
+                </span>
+              )}
+            </div>
+            <p className="text-muted text-[10px] leading-tight">
+              {item.status === 'Approved'
+                ? `Awaiting client invoice issuance (${linkedInvNumber})`
+                : item.status === 'Funded'
+                  ? `Billed via ${linkedInvNumber} (${linkedInvStatus || 'Active'}) · Releases automatically when paid`
+                  : item.status === 'Released'
+                    ? `Paid & released via ${linkedInvNumber}`
+                    : `Controlled via ${linkedInvNumber}`}
+            </p>
+          </div>
+        )}
+
         {/* 1. Primary Decision Group (Approve — the single filled primary per view) */}
         {hasPrimaryDecision && (
           <div className="flex flex-col gap-1" data-testid="rail-group-primary">
