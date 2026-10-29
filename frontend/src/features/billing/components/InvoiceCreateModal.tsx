@@ -1,5 +1,5 @@
 import { DateInput } from '@/components/ui/date-input';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Plus, Trash2, ArrowUp, ArrowDown, FileText, AlertCircle } from 'lucide-react';
 import {
   Dialog,
@@ -30,6 +30,9 @@ import {
 import { useInvoices } from '../api/useInvoices';
 import { createInvoiceSchema, LINE_ITEM_TYPES } from '../api/schemas';
 import { createInvoiceAction } from '../api/useBillingMutations';
+import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
+import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
+import type { Disbursement } from '@/features/disbursements/api/types';
 import { useSessionStore } from '@/lib/session';
 import { formatCurrency, getNextInvoiceNumber } from '../utils/formatters';
 import type { LineItemType, CreateLineItemInput } from '../api/types';
@@ -45,6 +48,14 @@ export interface FinancialPrefill {
   workRequestId?: string;
   taskId?: string;
   clientId?: string;
+  linkedTransmittalId?: string;
+  attachedDisbursement?: {
+    id: string;
+    disbursement_number?: string;
+    description: string;
+    amount: number;
+    category: string;
+  };
 }
 
 export interface InvoiceCreateModalProps {
@@ -77,6 +88,8 @@ export function InvoiceCreateModal({
   const [clientId, setClientId] = useState('');
   const [workRequestId, setWorkRequestId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
+  const [linkedTransmittalId, setLinkedTransmittalId] = useState('');
+  const [linkedDisbursementIds, setLinkedDisbursementIds] = useState<string[]>([]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [issueDate, setIssueDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = useState(() => {
@@ -113,22 +126,68 @@ export function InvoiceCreateModal({
   const isAdmin = isRoleAdmin(currentUser);
   const effectiveEntity = activeEntity !== 'ALL' ? activeEntity : undefined;
 
+  const prevIsOpenRef = useRef(false);
+  const lastPrefillKeyRef = useRef<string>('');
+
+  const currentPrefillKey = useMemo(() => {
+    if (!prefill) return '';
+    return [
+      prefill.workRequestId || '',
+      prefill.clientId || '',
+      prefill.taskId || '',
+      prefill.linkedTransmittalId || '',
+      prefill.attachedDisbursement?.id || '',
+    ].join(':');
+  }, [prefill]);
+
   // Prefill contract synchronization (UAT2-7-contract-side)
   useEffect(() => {
     if (isOpen) {
-      setWorkRequestId(prefill?.workRequestId || '');
-      setClientId(prefill?.clientId || '');
-      setSelectedTaskId(prefill?.taskId || '');
-      setFormError(null);
-    } else {
+      const isJustOpened = !prevIsOpenRef.current;
+      const isPrefillTargetChanged =
+        currentPrefillKey !== '' && currentPrefillKey !== lastPrefillKeyRef.current;
+
+      if (isJustOpened || isPrefillTargetChanged) {
+        lastPrefillKeyRef.current = currentPrefillKey;
+        setWorkRequestId(prefill?.workRequestId || '');
+        setClientId(prefill?.clientId || '');
+        setSelectedTaskId(prefill?.taskId || '');
+        setLinkedTransmittalId(prefill?.linkedTransmittalId || '');
+        if (prefill?.attachedDisbursement) {
+          const ad = prefill.attachedDisbursement;
+          const mappedType: LineItemType =
+            ad.category === 'Professional Fee'
+              ? 'Professional Fee'
+              : ad.category === 'Government Fee' || ad.category === 'Filing Fee'
+                ? 'Government Fee'
+                : 'Other';
+          setLinkedDisbursementIds([ad.id]);
+          setLineItems([
+            {
+              id: `item-disb-${ad.id}`,
+              description: `[${ad.disbursement_number || 'DISB'}] ${ad.description}`,
+              amount: String(ad.amount),
+              type: mappedType,
+            },
+          ]);
+        } else {
+          setLinkedDisbursementIds([]);
+        }
+        setFormError(null);
+      }
+    } else if (prevIsOpenRef.current) {
+      lastPrefillKeyRef.current = '';
       setWorkRequestId('');
       setClientId('');
       setSelectedTaskId('');
+      setLinkedTransmittalId('');
+      setLinkedDisbursementIds([]);
       setInvoiceNumber('');
       setNotes('');
       setFormError(null);
     }
-  }, [isOpen, prefill]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen, currentPrefillKey, prefill]);
 
   // Auto-detect and populate associated client when work request is selected
   useEffect(() => {
@@ -144,12 +203,16 @@ export function InvoiceCreateModal({
     setClientId(newClientId);
     setWorkRequestId('');
     setSelectedTaskId('');
+    setLinkedTransmittalId('');
+    setLinkedDisbursementIds([]);
     setFormError(null);
   };
 
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
     setSelectedTaskId('');
+    setLinkedTransmittalId('');
+    setLinkedDisbursementIds([]);
     setFormError(null);
     if (!prefill?.clientId) {
       const matchedWr = workRequests.find((w) => w.id === newWrId);
@@ -161,7 +224,7 @@ export function InvoiceCreateModal({
 
   const isClientLocked = Boolean(prefill?.clientId || prefill?.workRequestId);
   const isWrLocked = Boolean(prefill?.workRequestId);
-  const isTaskLocked = Boolean(prefill?.taskId);
+  const isTaskLocked = Boolean(prefill?.taskId && !prefill?.attachedDisbursement);
 
   const selectedWorkRequest = useMemo(
     () => workRequests.find((w) => w.id === workRequestId),
@@ -185,14 +248,126 @@ export function InvoiceCreateModal({
     recordType: 'invoice',
     isOpen,
     entity: effectiveEntity,
-    currentTaskId: prefill?.taskId || null,
+    currentTaskId: prefill?.attachedDisbursement ? null : prefill?.taskId || null,
     selectedTaskId,
     onSelectTask: (taskId) => setSelectedTaskId(taskId),
     isTaskLocked,
   });
 
+  // When creating billing from a disbursement, if the disbursement's task belongs to another user
+  // (e.g. Liaison) and the current user is non-Admin (e.g. Accounting), auto-select the current user's
+  // own assignable task on the Work Request so they are not blocked by task assignment rules.
+  useEffect(() => {
+    if (
+      isOpen &&
+      prefill?.attachedDisbursement &&
+      !isAdmin &&
+      tasks.length > 0 &&
+      (!selectedTaskId || (prefill.taskId && selectedTaskId === prefill.taskId))
+    ) {
+      const isCurrentSelectedAssigned = selectedTaskId
+        ? isTaskAssignee(currentUser, tasks.find((t) => t.id === selectedTaskId))
+        : false;
+
+      if (!isCurrentSelectedAssigned) {
+        const firstAssignable = taskOptions.find((opt) => !opt.disabled);
+        if (firstAssignable && selectedTaskId !== firstAssignable.id) {
+          setSelectedTaskId(firstAssignable.id);
+        }
+      }
+    }
+  }, [
+    isOpen,
+    prefill?.attachedDisbursement,
+    prefill?.taskId,
+    isAdmin,
+    tasks,
+    selectedTaskId,
+    currentUser,
+    taskOptions,
+  ]);
+
   // Existing Invoices for sequential number calculation
   const { data: existingInvoicesData } = useInvoices({ limit: 100 }, { enabled: isOpen });
+
+  // Work Request Transmittals & Unbilled Disbursements (SOP Step 2.5 / Step 2.7)
+  const { data: wrTransmittalsData } = useTransmittals(
+    { workRequestId: workRequestId || undefined, archived: false, limit: 100 },
+    { enabled: isOpen && Boolean(workRequestId) }
+  );
+  const availableTransmittals = useMemo(() => {
+    if (!workRequestId) return [];
+    const list = Array.isArray(wrTransmittalsData?.data) ? wrTransmittalsData.data : [];
+    return list.filter(
+      (tr) =>
+        !tr.archived &&
+        tr.status !== 'Cancelled' &&
+        (!(tr.work_request_id || tr.workRequestId) ||
+          (tr.work_request_id || tr.workRequestId) === workRequestId)
+    );
+  }, [wrTransmittalsData, workRequestId]);
+
+  const { data: wrDisbursementsData } = useDisbursements(
+    { workRequestId: workRequestId || undefined, archived: false, limit: 100 },
+    { enabled: isOpen && Boolean(workRequestId) }
+  );
+  const unbilledDisbursements = useMemo(() => {
+    if (!workRequestId) return [];
+    const list = Array.isArray(wrDisbursementsData?.data) ? wrDisbursementsData.data : [];
+    return list.filter((d) => {
+      const dWrId = d.linked_work_request_id || d.linkedWorkRequestId;
+      const dInvId = d.linked_invoice_id || d.linkedInvoiceId;
+      return (
+        !d.archived &&
+        d.status !== 'Rejected' &&
+        d.status !== 'Cancelled' &&
+        (!dWrId || dWrId === workRequestId) &&
+        !dInvId &&
+        !linkedDisbursementIds.includes(d.id)
+      );
+    });
+  }, [wrDisbursementsData, workRequestId, linkedDisbursementIds]);
+
+  const mapDisbursementToLineItem = (d: Disbursement): EditableLineItem => {
+    const disbNum =
+      d.disbursement_number || d.disbursementNumber || `DISB-${d.id.slice(0, 8)}`;
+    const mappedType: LineItemType =
+      d.category === 'Professional Fee'
+        ? 'Professional Fee'
+        : d.category === 'Government Fee' || d.category === 'Filing Fee'
+          ? 'Government Fee'
+          : 'Other';
+    return {
+      id: `item-disb-${d.id}`,
+      description: `[${disbNum}] ${d.description}`,
+      amount: String(d.amount),
+      type: mappedType,
+    };
+  };
+
+  const handleImportDisbursement = (d: Disbursement) => {
+    const newItem = mapDisbursementToLineItem(d);
+    setLineItems((prev) => {
+      if (prev.length === 1 && !prev[0]!.description.trim()) {
+        return [newItem];
+      }
+      return [...prev, newItem];
+    });
+    setLinkedDisbursementIds((prev) => (prev.includes(d.id) ? prev : [...prev, d.id]));
+  };
+
+  const handleImportAllDisbursements = () => {
+    if (unbilledDisbursements.length === 0) return;
+    const newItems = unbilledDisbursements.map(mapDisbursementToLineItem);
+    const newIds = unbilledDisbursements.map((d) => d.id);
+    setLineItems((prev) => {
+      if (prev.length === 1 && !prev[0]!.description.trim()) {
+        return newItems;
+      }
+      return [...prev, ...newItems];
+    });
+    setLinkedDisbursementIds((prev) => Array.from(new Set([...prev, ...newIds])));
+  };
 
   // Auto-generate sequential invoice number matching prototype
   useEffect(() => {
@@ -325,6 +500,8 @@ export function InvoiceCreateModal({
       ...(SUPPORT_TASK_ID_PAYLOAD && trimmedTaskId
         ? { taskId: trimmedTaskId, task_id: trimmedTaskId }
         : {}),
+      ...(linkedTransmittalId ? { linkedTransmittalId } : {}),
+      ...(linkedDisbursementIds.length > 0 ? { linkedDisbursementIds } : {}),
       invoiceNumber: invoiceNumber.trim(),
       issueDate,
       dueDate,
@@ -347,7 +524,7 @@ export function InvoiceCreateModal({
         onCreated();
       }
     } catch (err: unknown) {
-      const apiErr = err as { code?: string; message?: string };
+      const apiErr = err as { code?: string; message?: string; status?: number };
       if (apiErr?.code === 'TASK_REQUIRED') {
         setFormError('A valid linked task is required.');
       } else if (apiErr?.code === 'TASK_WR_MISMATCH') {
@@ -359,6 +536,17 @@ export function InvoiceCreateModal({
         apiErr?.code === 'FORBIDDEN_TASK_ATTACHMENT'
       ) {
         setFormError('You must be assigned to this task.');
+      } else if (
+        apiErr?.status === 409 ||
+        apiErr?.code === 'DISBURSEMENT_ALREADY_BILLED' ||
+        apiErr?.code === 'CONCURRENCY_CONFLICT'
+      ) {
+        void queryClient.invalidateQueries({ queryKey: ['disbursements'] });
+        void queryClient.invalidateQueries({ queryKey: ['billing'] });
+        setFormError(
+          apiErr?.message ||
+            'One or more linked disbursements were already billed or modified by another user. Caches have been refreshed.'
+        );
       } else {
         setFormError(apiErr?.message || 'Failed to create invoice.');
       }
@@ -388,6 +576,22 @@ export function InvoiceCreateModal({
           >
             <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
             <span>{formError}</span>
+          </div>
+        )}
+
+        {prefill?.attachedDisbursement && (
+          <div
+            className="p-3 bg-blue-50 border border-blue-200 rounded-[6px] text-xs text-blue-800 flex items-center justify-between gap-2"
+            data-testid="attached-disbursement-banner"
+          >
+            <span>
+              Attached to Disbursement{' '}
+              <strong className="font-mono">
+                {prefill.attachedDisbursement.disbursement_number ||
+                  prefill.attachedDisbursement.id}
+              </strong>{' '}
+              — will auto-link upon invoice creation.
+            </span>
           </div>
         )}
 
@@ -560,6 +764,37 @@ export function InvoiceCreateModal({
                 />
               </div>
             </div>
+
+            <div className="sm:col-span-2">
+              <label
+                htmlFor="create-invoice-transmittal"
+                className="text-xs font-semibold text-[#1E293B] block mb-1"
+              >
+                Linked Transmittal (Optional)
+              </label>
+              <select
+                id="create-invoice-transmittal"
+                value={linkedTransmittalId}
+                onChange={(e) => setLinkedTransmittalId(e.target.value)}
+                disabled={!workRequestId || Boolean(prefill?.linkedTransmittalId)}
+                className="w-full h-9 text-xs px-2.5 border rounded-[6px] bg-white border-[#E2E8F0] text-[#1E293B] disabled:bg-slate-50 disabled:cursor-not-allowed"
+                data-testid="select-linked-transmittal"
+              >
+                <option value="">
+                  {!workRequestId
+                    ? 'Select work request first...'
+                    : 'None (No transmittal linked)'}
+                </option>
+                {availableTransmittals.map((tr) => (
+                  <option key={tr.id} value={tr.id}>
+                    {tr.tracking_number} — {tr.status}
+                    {tr.recipient_name || tr.recipientName
+                      ? ` — ${tr.recipient_name || tr.recipientName}`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <TaskBlockingAlert
@@ -569,6 +804,95 @@ export function InvoiceCreateModal({
             isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
             workRequestId={workRequestId}
           />
+
+          {/* 1b. Unbilled Disbursements 1-Click Import Panel */}
+          {workRequestId && (unbilledDisbursements.length > 0 || linkedDisbursementIds.length > 0) && (
+            <div
+              className="p-3 bg-slate-50 border border-[#E2E8F0] rounded-[8px] space-y-2 text-xs"
+              data-testid="unbilled-disbursements-panel"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="font-bold text-[#1E293B] block">
+                    Unbilled Disbursements for this Work Request
+                  </span>
+                  <span className="text-[11px] text-[#475569]">
+                    Import client-reimbursable or government fee vouchers directly as invoice line
+                    items and link them for SOP Step 2.5 tracking.
+                  </span>
+                </div>
+                {unbilledDisbursements.length > 1 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleImportAllDisbursements}
+                    className="h-7 text-xs shrink-0 cursor-pointer"
+                    data-testid="btn-import-all-disbursements"
+                  >
+                    + Import All ({unbilledDisbursements.length})
+                  </Button>
+                )}
+              </div>
+
+              {unbilledDisbursements.length > 0 && (
+                <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                  {unbilledDisbursements.map((d) => {
+                    const disbNum =
+                      d.disbursement_number || d.disbursementNumber || `DISB-${d.id.slice(0, 8)}`;
+                    return (
+                      <div
+                        key={d.id}
+                        className="flex items-center justify-between gap-2 p-2 bg-white border border-[#E2E8F0] rounded-[6px]"
+                        data-testid={`unbilled-disbursement-row-${d.id}`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-semibold text-[#1E293B]">
+                              {disbNum}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[#475569] text-[10px] font-semibold">
+                              {d.category}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 text-[10px] font-semibold">
+                              {d.fund_source || d.fundSource}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[#475569] truncate mt-0.5">
+                            {d.description}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-mono font-bold text-[#1E293B] tabular-nums">
+                            {formatCurrency(d.amount)}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleImportDisbursement(d)}
+                            className="h-7 px-2 text-xs cursor-pointer"
+                            data-testid={`btn-import-disbursement-${d.id}`}
+                          >
+                            + Import
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {linkedDisbursementIds.length > 0 && (
+                <div
+                  className="text-[11px] text-emerald-700 font-medium pt-1"
+                  data-testid="imported-disbursements-count"
+                >
+                  ✓ {linkedDisbursementIds.length} disbursement voucher(s) queued to link on save.
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 2. Dynamic Line Items Section */}
           <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">

@@ -43,6 +43,7 @@ export function useInvoices(
         params.append('status', filters.status);
       }
       if (filters?.clientId) params.append('clientId', filters.clientId);
+      if (filters?.workRequestId) params.append('workRequestId', filters.workRequestId);
       if (filters?.linkedTaskId) params.append('linkedTaskId', filters.linkedTaskId);
       if (filters?.linkedTransmittalId) {
         params.append('linkedTransmittalId', filters.linkedTransmittalId);

@@ -72,6 +72,8 @@ export const createTransmittalSchema = z
     linkedTaskId: z
       .string()
       .guid('Linked task ID must be a valid UUID'),
+    linkedDisbursementIds: z.array(z.string().guid()).optional(),
+    linkedInvoiceIds: z.array(z.string().guid()).optional(),
     boardOrder: z.number().int().optional().default(0),
     status: z.never({ message: 'status forgery is prohibited: server assigns initial Draft status' }).optional(),
   })
@@ -118,6 +120,8 @@ export const updateTransmittalSchema = z
       .optional()
       .nullable(),
     linkedTaskId: z.string().guid('Linked task ID must be a valid UUID').optional(),
+    linkedDisbursementIds: z.array(z.string().guid()).optional(),
+    linkedInvoiceIds: z.array(z.string().guid()).optional(),
     boardOrder: z.number().int().optional(),
     expectedVersion: z.number().int().positive().optional(),
   })

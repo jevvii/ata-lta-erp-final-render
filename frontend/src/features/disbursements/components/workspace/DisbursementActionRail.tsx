@@ -52,10 +52,13 @@ import {
   ArchiveRestore,
   RefreshCw,
   FileText,
+  Receipt,
+  Link2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useSessionStore } from '@/lib/session';
+import { hasPermission } from '@/lib/permissions';
 import {
   useDisbursementDetail,
   useRejectDisbursement,
@@ -77,6 +80,8 @@ import { ReleaseFundsModal } from '../FundsReleaseActions';
 import { DisbursementEditModal } from '../DisbursementEditModal';
 import { EditPaymentDetailsModal } from '../EditPaymentDetailsModal';
 import { DisbursementPrintModal } from '../DisbursementPrintModal';
+import { LinkBillingTransmittalModal } from '../LinkBillingTransmittalModal';
+import { InvoiceCreateModal } from '@/features/billing/components/InvoiceCreateModal';
 import { RejectReasonModal } from '@/features/operations/components/RejectReasonModal';
 import type { Disbursement } from '../../api/types';
 import type { ApiError } from '@/lib/api';
@@ -98,6 +103,7 @@ export function DisbursementActionRail({
 }: DisbursementActionRailProps) {
   const queryClient = useQueryClient();
   const user = useSessionStore((state) => state.user);
+  const permissions = useSessionStore((state) => state.permissions);
   const activeEntity = useSessionStore((state) => state.activeEntity);
 
   const effectiveId = selectedId || selectedDisbursement?.id;
@@ -109,7 +115,57 @@ export function DisbursementActionRail({
     }
   );
 
-  const item: Disbursement | null = selectedDisbursement || fetchedItem || null;
+  const [cacheRevision, setCacheRevision] = useState(0);
+  useEffect(() => {
+    if (!effectiveId) return;
+    const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+      if (event?.type !== 'updated') return;
+      const qKey = event?.query?.queryKey;
+      if (Array.isArray(qKey) && qKey[0] === 'disbursements') {
+        setCacheRevision((c) => c + 1);
+      }
+    });
+    return () => unsubscribe();
+  }, [queryClient, effectiveId]);
+
+  const item: Disbursement | null = (() => {
+    void cacheRevision;
+    let latestCached: Disbursement | undefined = fetchedItem;
+    if (effectiveId) {
+      const detailCached = queryClient.getQueryData<Disbursement>(
+        disbursementKeys.detail(effectiveId)
+      );
+      if (detailCached && typeof detailCached === 'object') {
+        latestCached = detailCached;
+      } else {
+        const listQueries = queryClient.getQueriesData<
+          { data?: Disbursement[] } | Disbursement[]
+        >({
+          queryKey: disbursementKeys.lists(),
+        });
+        for (const [, listData] of listQueries) {
+          const arr = Array.isArray(listData) ? listData : listData?.data;
+          const found = Array.isArray(arr)
+            ? arr.find((d) => d?.id === effectiveId)
+            : undefined;
+          if (found) {
+            latestCached = found;
+            break;
+          }
+        }
+      }
+    }
+
+    if (selectedDisbursement && latestCached) {
+      const propVersion = selectedDisbursement.version ?? 0;
+      const cachedVersion = latestCached.version ?? 0;
+      if (cachedVersion >= propVersion) {
+        return { ...selectedDisbursement, ...latestCached };
+      }
+      return selectedDisbursement;
+    }
+    return latestCached || selectedDisbursement || null;
+  })();
 
   // Live modal concurrency context
   const { captureContext } = useLiveModalContext({
@@ -133,6 +189,8 @@ export function DisbursementActionRail({
   const [isPaymentEditModalOpen, setIsPaymentEditModalOpen] = useState(false);
   const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
+  const [isCreateBillingModalOpen, setIsCreateBillingModalOpen] = useState(false);
+  const [isLinkRecordsModalOpen, setIsLinkRecordsModalOpen] = useState(false);
   const [conflictModalState, setConflictModalState] = useState<{
     isOpen: boolean;
     error?: unknown;
@@ -148,6 +206,8 @@ export function DisbursementActionRail({
     setIsPaymentEditModalOpen(false);
     setIsPrintModalOpen(false);
     setIsRejectModalOpen(false);
+    setIsCreateBillingModalOpen(false);
+    setIsLinkRecordsModalOpen(false);
     setConflictModalState({ isOpen: false });
   }, [effectiveId, user?.id, activeEntity]);
 
@@ -193,6 +253,9 @@ export function DisbursementActionRail({
   const isAccounting = Boolean(
     user?.role === 'Accounting' || user?.departments?.includes('Accounting')
   );
+  const isDocumentation = Boolean(
+    user?.role === 'Documentation' || user?.departments?.includes('Documentation')
+  );
   const canFund = isAdmin || isAccounting;
 
   const isOwnRequest = Boolean(
@@ -208,6 +271,32 @@ export function DisbursementActionRail({
   const isArchived = Boolean(item.archived || item.archived_at || item.archivedAt || isArchiveTab);
   const isNeedsCorrection = item.status === 'Draft' && item.review_ready === false;
 
+  const workRequestId =
+    item.linked_work_request_id ||
+    item.linkedWorkRequestId ||
+    item.work_request_id ||
+    item.workRequestId;
+
+  const canCreateBilling =
+    isAdmin ||
+    isAccounting ||
+    hasPermission(permissions, 'billing:create') ||
+    hasPermission(permissions, 'billing:edit') ||
+    hasPermission(permissions, 'billing:*');
+
+  const canLinkRecords =
+    hasVersion &&
+    isV2 &&
+    !isArchived &&
+    item.status !== 'Rejected' &&
+    item.status !== 'Cancelled' &&
+    Boolean(workRequestId) &&
+    (isAdmin || isAccounting || isDocumentation || isOwnRequest);
+
+  const hasLinkedInvoice = Boolean(
+    item.linked_invoice_id || item.linkedInvoiceId || item.linked_invoice_summary?.id
+  );
+
   const canEditVoucher =
     hasVersion &&
     !isArchived &&
@@ -219,6 +308,31 @@ export function DisbursementActionRail({
     item.disbursement_number ||
     item.disbursementNumber ||
     `DISB-${item.id.slice(0, 8)}`;
+
+  const reimbursableTaskId =
+    item.linked_task_id ||
+    item.linkedTaskId ||
+    item.task_id ||
+    item.taskId ||
+    undefined;
+
+  const createBillingPrefill =
+    item && workRequestId
+      ? {
+          workRequestId,
+          clientId: item.client_id || item.clientId || undefined,
+          taskId: reimbursableTaskId,
+          linkedTransmittalId:
+            item.linked_transmittal_id || item.linkedTransmittalId || undefined,
+          attachedDisbursement: {
+            id: item.id,
+            disbursement_number: disbNumber,
+            description: item.description,
+            amount: item.amount,
+            category: item.category,
+          },
+        }
+      : undefined;
 
   // Mutation Handlers
   const handleResendDraft = async () => {
@@ -306,6 +420,15 @@ export function DisbursementActionRail({
   const showEdit = canEditVoucher;
   const showEditPayment =
     (item.status === 'Funded' || item.status === 'Released') && isV2 && canFund && !isArchived;
+  const showCreateBilling =
+    hasVersion &&
+    isV2 &&
+    !isArchived &&
+    item.status !== 'Rejected' &&
+    item.status !== 'Cancelled' &&
+    Boolean(workRequestId) &&
+    canCreateBilling;
+  const showLinkRecords = canLinkRecords;
   const showPrint = true; // Print Voucher is available on any loaded voucher
   const showReject = isAdmin && isV2 && (item.status === 'Draft' || item.status === 'Funded') && !isArchived;
   const showArchive = item.status === 'Released' && isV2 && isAdmin && !isArchived;
@@ -313,7 +436,8 @@ export function DisbursementActionRail({
 
   const hasPrimaryDecision = showApprove;
   const hasWorkflow = showFund || showRelease || showResend;
-  const hasRecord = showEdit || showEditPayment || showPrint;
+  const hasRecord =
+    showEdit || showEditPayment || showCreateBilling || showLinkRecords || showPrint;
   const hasDanger = showReject || showArchive;
   const hasArchiveGroup = showRestore;
 
@@ -444,6 +568,43 @@ export function DisbursementActionRail({
               >
                 <CreditCard className="h-3.5 w-3.5 shrink-0 text-primary" />
                 <span className="truncate">Edit Payment Details</span>
+              </Button>
+            )}
+
+            {showCreateBilling && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={hasLinkedInvoice}
+                title={
+                  hasLinkedInvoice
+                    ? 'Already linked to a billing invoice. Use Link Billing & Transmittal to change it.'
+                    : 'Create Billing attached to this voucher'
+                }
+                onClick={() => setIsCreateBillingModalOpen(true)}
+                className="w-full h-7 px-1.5 py-1 text-[11px] font-medium justify-start gap-1 rounded-[4px] bg-surface hover:bg-hover text-ink border border-border transition-[background-color,border-color,color,box-shadow,transform] duration-150 motion-safe:ease-out motion-safe:enabled:active:scale-[0.96] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="rail-create-billing-btn"
+              >
+                <Receipt className="h-3.5 w-3.5 shrink-0 text-primary" />
+                <span className="truncate">
+                  {hasLinkedInvoice ? 'Billing Linked' : 'Create Billing'}
+                </span>
+              </Button>
+            )}
+
+            {showLinkRecords && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                title="Link or update Billing Invoice and Transmittal for this voucher"
+                onClick={() => setIsLinkRecordsModalOpen(true)}
+                className="w-full h-7 px-1.5 py-1 text-[11px] font-medium justify-start gap-1 rounded-[4px] bg-surface hover:bg-hover text-ink border border-border transition-[background-color,border-color,color,box-shadow,transform] duration-150 motion-safe:ease-out motion-safe:enabled:active:scale-[0.96] cursor-pointer"
+                data-testid="rail-link-billing-transmittal-btn"
+              >
+                <Link2 className="h-3.5 w-3.5 shrink-0 text-primary" />
+                <span className="truncate">Link Billing &amp; Transmittal</span>
               </Button>
             )}
 
@@ -581,6 +742,47 @@ export function DisbursementActionRail({
           isOpen={isPrintModalOpen}
           disbursement={item}
           onClose={() => setIsPrintModalOpen(false)}
+        />
+      )}
+
+      {isCreateBillingModalOpen && item && workRequestId && (
+        <InvoiceCreateModal
+          isOpen={isCreateBillingModalOpen}
+          onClose={() => setIsCreateBillingModalOpen(false)}
+          onCreated={() => {
+            setIsCreateBillingModalOpen(false);
+            if (effectiveId) {
+              void queryClient.invalidateQueries({
+                queryKey: disbursementKeys.detail(effectiveId),
+              });
+            }
+            void queryClient.invalidateQueries({ queryKey: disbursementKeys.lists() });
+          }}
+          prefill={createBillingPrefill}
+        />
+      )}
+
+      {isLinkRecordsModalOpen && item && (
+        <LinkBillingTransmittalModal
+          isOpen={isLinkRecordsModalOpen}
+          disbursement={item}
+          onClose={() => setIsLinkRecordsModalOpen(false)}
+          onOpenCreateBilling={
+            showCreateBilling && !hasLinkedInvoice
+              ? () => {
+                  setIsLinkRecordsModalOpen(false);
+                  setIsCreateBillingModalOpen(true);
+                }
+              : undefined
+          }
+          onConflict={(err) => {
+            setIsLinkRecordsModalOpen(false);
+            setConflictModalState({
+              isOpen: true,
+              error: err,
+              attemptedStatus: item.status,
+            });
+          }}
         />
       )}
 

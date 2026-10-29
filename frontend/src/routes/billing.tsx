@@ -27,6 +27,8 @@ import type { Invoice } from '@/features/billing/api/types';
 
 export default function BillingPage() {
   useEntityRealtimeSync({ table: 'invoices' });
+  useEntityRealtimeSync({ table: 'disbursements' });
+  useEntityRealtimeSync({ table: 'transmittals' });
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'invoices';
 

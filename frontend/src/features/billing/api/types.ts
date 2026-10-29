@@ -98,11 +98,30 @@ export interface Invoice {
   } | null;
   work_request_title?: string | null;
   work_request_creator_name?: string | null;
+  linked_transmittal_tracking_number?: string | null;
+  linked_transmittal?: {
+    id: string;
+    tracking_number: string;
+    status: string;
+    recipient_name?: string | null;
+  } | null;
+  linked_disbursements?: Array<{
+    id: string;
+    disbursement_number: string;
+    category: string;
+    description: string;
+    amount: number;
+    fund_source: string;
+    status: string;
+    due_date?: string | null;
+    created_at?: string;
+  }>;
 }
 
 export interface InvoiceFilters {
   status?: InvoiceStatus | 'All';
   clientId?: string;
+  workRequestId?: string;
   linkedTaskId?: string;
   linkedTransmittalId?: string;
   search?: string;
@@ -188,6 +207,7 @@ export interface CreateInvoiceInput {
   taskId?: string | null;
   task_id?: string | null;
   linkedTransmittalId?: string | null;
+  linkedDisbursementIds?: string[];
   invoiceNumber?: string;
   issueDate: string;
   dueDate: string;
@@ -207,6 +227,7 @@ export interface UpdateInvoiceInput {
   work_request_number?: string | null;
   linkedTaskId?: string | null;
   linkedTransmittalId?: string | null;
+  linkedDisbursementIds?: string[];
   invoiceNumber?: string;
   issueDate?: string;
   dueDate?: string;

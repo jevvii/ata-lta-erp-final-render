@@ -689,4 +689,170 @@ describe('F04: Invoice Standalone Task Scoping & Validation', () => {
     const putRequests = posts.filter((p) => p.url.includes('/invoices/'));
     expect(putRequests).toHaveLength(0);
   });
+
+  it('pre-fills the Linked Task field from attached disbursement for allowed Admin users', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'admin-user',
+        name: 'Admin Worker',
+        email: 'admin@ata-lta.ph',
+        role: 'Admin',
+        departments: ['Management'],
+        entities: ['ATA'],
+      },
+      permissions: ['billing:view', 'billing:edit', 'billing:create'],
+      activeEntity: 'ATA',
+    });
+
+    const posts: { url: string; body: Record<string, unknown> }[] = [];
+    setupMockFetch(posts);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+
+    render(
+      <QueryClientProvider client={client}>
+        <InvoiceCreateModal
+          isOpen
+          onClose={vi.fn()}
+          prefill={{
+            workRequestId: WR_1,
+            clientId: CLIENT_1,
+            taskId: TASK_UNASSIGNED,
+            attachedDisbursement: {
+              id: '11111111-1111-4111-8111-111111111191',
+              disbursement_number: 'DISB-ATA-20261029-001',
+              description: 'SEC Certified True Copy',
+              amount: 3500,
+              category: 'Government Fee',
+            },
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    // Wait for tasks query to succeed
+    await waitFor(() => {
+      const qState = client.getQueryState(operationsKeys.tasks(WR_1, 'ATA'));
+      expect(qState?.status).toBe('success');
+    });
+
+    // Submit invoice as Admin
+    fireEvent.click(screen.getByTestId('btn-submit-invoice'));
+
+    await waitFor(() => {
+      expect(posts.length).toBe(1);
+    });
+    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_UNASSIGNED);
+    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111191']);
+  });
+
+  it('pre-fills the Linked Task field from attached disbursement for assigned task workers', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: CALLER_USER_ID,
+        name: 'Accounting Worker',
+        email: 'acct@ata-lta.ph',
+        role: 'Accounting',
+        departments: ['Accounting'],
+        entities: ['ATA'],
+      },
+      permissions: ['billing:view', 'billing:edit', 'billing:create'],
+      activeEntity: 'ATA',
+    });
+
+    const posts: { url: string; body: Record<string, unknown> }[] = [];
+    setupMockFetch(posts);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+
+    render(
+      <QueryClientProvider client={client}>
+        <InvoiceCreateModal
+          isOpen
+          onClose={vi.fn()}
+          prefill={{
+            workRequestId: WR_1,
+            clientId: CLIENT_1,
+            taskId: TASK_ASSIGNED,
+            attachedDisbursement: {
+              id: '11111111-1111-4111-8111-111111111192',
+              disbursement_number: 'DISB-ATA-20261029-002',
+              description: 'Accounting Document Delivery',
+              amount: 500,
+              category: 'Other',
+            },
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    // Wait for tasks query
+    await waitFor(() => {
+      const qState = client.getQueryState(operationsKeys.tasks(WR_1, 'ATA'));
+      expect(qState?.status).toBe('success');
+    });
+
+    // Submit invoice as assigned worker
+    fireEvent.click(screen.getByTestId('btn-submit-invoice'));
+
+    await waitFor(() => {
+      expect(posts.length).toBe(1);
+    });
+    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_ASSIGNED);
+    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111192']);
+  });
+
+  it('auto-selects assignable billing task when attached disbursement has a task assigned to someone else', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: CALLER_USER_ID,
+        name: 'Accounting Worker',
+        email: 'acct@ata-lta.ph',
+        role: 'Accounting',
+        departments: ['Accounting'],
+        entities: ['ATA'],
+      },
+      permissions: ['billing:view', 'billing:edit', 'billing:create'],
+      activeEntity: 'ATA',
+    });
+
+    const posts: { url: string; body: Record<string, unknown> }[] = [];
+    setupMockFetch(posts);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+
+    render(
+      <QueryClientProvider client={client}>
+        <InvoiceCreateModal
+          isOpen
+          onClose={vi.fn()}
+          prefill={{
+            workRequestId: WR_1,
+            clientId: CLIENT_1,
+            taskId: TASK_UNASSIGNED,
+            attachedDisbursement: {
+              id: '11111111-1111-4111-8111-111111111193',
+              disbursement_number: 'DISB-ATA-20261029-003',
+              description: 'Ops Filing Fee',
+              amount: 1500,
+              category: 'Government Fee',
+            },
+          }}
+        />
+      </QueryClientProvider>
+    );
+
+    // Wait for tasks query and auto-selection of first assignable task
+    await waitFor(() => {
+      const qState = client.getQueryState(operationsKeys.tasks(WR_1, 'ATA'));
+      expect(qState?.status).toBe('success');
+    });
+
+    // Submit invoice
+    fireEvent.click(screen.getByTestId('btn-submit-invoice'));
+
+    await waitFor(() => {
+      expect(posts.length).toBe(1);
+    });
+    // Auto-selected CALLER_USER_ID's assignable task instead of unassigned task
+    expect(posts[0].body.linkedTaskId || posts[0].body.taskId).toBe(TASK_ASSIGNED);
+    expect(posts[0].body.linkedDisbursementIds).toEqual(['11111111-1111-4111-8111-111111111193']);
+  });
 });

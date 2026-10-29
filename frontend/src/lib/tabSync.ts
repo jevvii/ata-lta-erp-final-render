@@ -191,6 +191,19 @@ export function broadcastEntityChange<T = unknown>(
   }
 }
 
+function invalidateLinkedCrossDomainCaches(queryClient: QueryClient, domain: string): void {
+  if (domain === 'billing') {
+    void queryClient.invalidateQueries({ queryKey: ['disbursements'] });
+    void queryClient.invalidateQueries({ queryKey: ['transmittals'] });
+  } else if (domain === 'disbursements') {
+    void queryClient.invalidateQueries({ queryKey: ['billing'] });
+    void queryClient.invalidateQueries({ queryKey: ['transmittals'] });
+  } else if (domain === 'transmittals') {
+    void queryClient.invalidateQueries({ queryKey: ['disbursements'] });
+    void queryClient.invalidateQueries({ queryKey: ['billing'] });
+  }
+}
+
 /**
  * Processes an incoming tab sync message and updates TanStack Query caches.
  */
@@ -247,6 +260,7 @@ export function handleIncomingTabSyncMessage(
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
     }
+    invalidateLinkedCrossDomainCaches(queryClient, domain);
     return;
   }
 
@@ -370,6 +384,7 @@ export function handleIncomingTabSyncMessage(
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
     }
+    invalidateLinkedCrossDomainCaches(queryClient, domain);
   } else {
     // If entityData is not provided, mark stale / invalidate the entity and list queries
     void queryClient.invalidateQueries({
@@ -387,6 +402,7 @@ export function handleIncomingTabSyncMessage(
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
     }
+    invalidateLinkedCrossDomainCaches(queryClient, domain);
   }
 }
 

@@ -19,6 +19,8 @@ import {
   getDisbursementPrintDetails,
   type DisbursementPrintDetails,
 } from '@/lib/disbursementDocument';
+import { useInvoices } from '@/features/billing/api/useInvoices';
+import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
 import type { Disbursement, FundSource, UpdateDisbursementInput } from '../api/types';
 import { useLiveModalContext } from '../lib/useLiveModalContext';
 
@@ -50,6 +52,8 @@ export function DisbursementEditModal({
   const isAdmin = currentUser?.role === 'Admin';
   const isAccounting =
     currentUser?.role === 'Accounting' || Boolean(currentUser?.departments?.includes('Accounting'));
+  const isDocumentation =
+    currentUser?.role === 'Documentation' || Boolean(currentUser?.departments?.includes('Documentation'));
   const isOwner =
     Boolean(currentUser?.id) &&
     (disbursement.created_by === currentUser?.id ||
@@ -64,13 +68,19 @@ export function DisbursementEditModal({
     disbursement.version > 0;
   const isDraft = disbursement.status === 'Draft';
   const isFinancialEditable = isLifecycleV2 && isDraft;
+  const canEditLinks =
+    isLifecycleV2 &&
+    disbursement.status !== 'Rejected' &&
+    disbursement.status !== 'Cancelled' &&
+    (isAdmin || isAccounting || isDocumentation || isOwner);
 
   // Requesters can edit their own Draft; Admin and Accounting can correct an authorized Draft.
   // Admin can edit financial fields if isFinancialEditable, OR edit print-only fields on other saved stages.
+  // Post-Draft link attaching (Q4): Admin, Accounting, Documentation, or Owner can update linkedInvoiceId/linkedTransmittalId.
   const canEdit =
     !disbursement.archived &&
     isValidPositiveVersion &&
-    (isAdmin || ((isOwner || isAccounting) && isFinancialEditable));
+    (isAdmin || canEditLinks || ((isOwner || isAccounting) && isFinancialEditable));
 
   const { captureContext, contextKey } = useLiveModalContext({
     isOpen,
@@ -86,6 +96,8 @@ export function DisbursementEditModal({
   const [fundSource, setFundSource] = useState<FundSource>('Firm Fund');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [linkedInvoiceId, setLinkedInvoiceId] = useState('');
+  const [linkedTransmittalId, setLinkedTransmittalId] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptFilename, setReceiptFilename] = useState<string>('');
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
@@ -116,6 +128,10 @@ export function DisbursementEditModal({
     setFundSource(disbursement.fund_source || disbursement.fundSource || 'Firm Fund');
     setDueDate((disbursement.due_date || disbursement.dueDate || '').slice(0, 10));
     setNotes(disbursement.notes || '');
+    setLinkedInvoiceId(disbursement.linked_invoice_id || disbursement.linkedInvoiceId || '');
+    setLinkedTransmittalId(
+      disbursement.linked_transmittal_id || disbursement.linkedTransmittalId || ''
+    );
     setReceiptFile(null);
     setReceiptFilename(disbursement.receipt_filename || disbursement.receiptFilename || '');
     setIsUploadingReceipt(false);
@@ -196,6 +212,37 @@ export function DisbursementEditModal({
     };
   }, [isOpen, canEdit, saving, isUploadingReceipt]);
 
+  const wrId = disbursement.linked_work_request_id || disbursement.linkedWorkRequestId || undefined;
+  const isValidWrUuid = Boolean(
+    wrId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(wrId.trim())
+  );
+  const { data: wrInvoicesData } = useInvoices(
+    { workRequestId: wrId, archived: false, limit: 100 },
+    { enabled: isOpen && canEdit && isValidWrUuid }
+  );
+  const availableInvoices = (
+    Array.isArray(wrInvoicesData?.data) ? wrInvoicesData.data : []
+  ).filter(
+    (inv) =>
+      !inv.archived &&
+      inv.status !== 'Cancelled' &&
+      (!inv.work_request_id || inv.work_request_id === wrId)
+  );
+
+  const { data: wrTransmittalsData } = useTransmittals(
+    { workRequestId: wrId, archived: false, limit: 100 },
+    { enabled: isOpen && canEdit && isValidWrUuid }
+  );
+  const availableTransmittals = (
+    Array.isArray(wrTransmittalsData?.data) ? wrTransmittalsData.data : []
+  ).filter(
+    (tr) =>
+      !tr.archived &&
+      tr.status !== 'Cancelled' &&
+      (!(tr.work_request_id || tr.workRequestId) ||
+        (tr.work_request_id || tr.workRequestId) === wrId)
+  );
+
   if (!isOpen || !canEdit) return null;
 
   const save = async (event: React.FormEvent) => {
@@ -256,6 +303,16 @@ export function DisbursementEditModal({
           payload.receiptS3Key = uploadResult.receiptS3Key;
           payload.receiptFilename = uploadResult.receiptFilename;
         }
+      }
+
+      const initialInvoiceId = disbursement.linked_invoice_id || disbursement.linkedInvoiceId || '';
+      const initialTransmittalId =
+        disbursement.linked_transmittal_id || disbursement.linkedTransmittalId || '';
+      if (linkedInvoiceId !== initialInvoiceId || (!isFinancialEditable && !isAdmin)) {
+        payload.linkedInvoiceId = linkedInvoiceId ? linkedInvoiceId.trim() : null;
+      }
+      if (linkedTransmittalId !== initialTransmittalId || (!isFinancialEditable && !isAdmin)) {
+        payload.linkedTransmittalId = linkedTransmittalId ? linkedTransmittalId.trim() : null;
       }
 
       if (isAdmin && Object.keys(printDetails).length > 0) {
@@ -407,6 +464,44 @@ export function DisbursementEditModal({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
+          </label>
+          <label className="text-sm space-y-1">
+            Linked Invoice (Optional)
+            <select
+              aria-label="Linked Invoice"
+              className="w-full border border-border rounded-[6px] p-2 bg-surface text-ink"
+              value={linkedInvoiceId}
+              onChange={(e) => setLinkedInvoiceId(e.target.value)}
+              data-testid="edit-select-linked-invoice"
+            >
+              <option value="">None (No linked invoice)</option>
+              {availableInvoices.map((inv) => (
+                <option key={inv.id} value={inv.id}>
+                  {inv.invoice_number} — {inv.status} — ₱
+                  {Number(inv.total || 0).toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm space-y-1">
+            Linked Transmittal (Optional)
+            <select
+              aria-label="Linked Transmittal"
+              className="w-full border border-border rounded-[6px] p-2 bg-surface text-ink"
+              value={linkedTransmittalId}
+              onChange={(e) => setLinkedTransmittalId(e.target.value)}
+              data-testid="edit-select-linked-transmittal"
+            >
+              <option value="">None (No linked transmittal)</option>
+              {availableTransmittals.map((tr) => (
+                <option key={tr.id} value={tr.id}>
+                  {tr.tracking_number} — {tr.status}
+                  {tr.recipient_name || tr.recipientName
+                    ? ` — ${tr.recipient_name || tr.recipientName}`
+                    : ''}
+                </option>
+              ))}
+            </select>
           </label>
           {isFinancialEditable && (
             <div className="space-y-1 sm:col-span-2">

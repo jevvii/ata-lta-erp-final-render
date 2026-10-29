@@ -199,6 +199,9 @@ export function useDisbursementsList(
       if (filters?.status) params.append('status', filters.status);
       if (filters?.category) params.append('category', filters.category);
       if (filters?.fundSource) params.append('fundSource', filters.fundSource);
+      const wrId = filters?.workRequestId || filters?.linkedWorkRequestId;
+      if (wrId) params.append('workRequestId', wrId);
+      if (filters?.linkedInvoiceId) params.append('linkedInvoiceId', filters.linkedInvoiceId);
       if (filters?.linkedTaskId) params.append('linkedTaskId', filters.linkedTaskId);
       if (filters?.linkedTransmittalId) params.append('linkedTransmittalId', filters.linkedTransmittalId);
       if (filters?.search) params.append('search', filters.search);
@@ -216,6 +219,8 @@ export function useDisbursementsList(
     enabled: options?.enabled ?? true,
   });
 }
+
+export const useDisbursements = useDisbursementsList;
 
 /**
  * 1b. Fetch all disbursements for a status across all pages (F4 / Queue Complete Traversal).
@@ -387,7 +392,7 @@ export function useDisbursementDetail(
         queryKey: disbursementKeys.lists(),
       })) {
         if (key[2] !== currentEntity) continue;
-        const hit = list?.data?.find((d) => d.id === id);
+        const hit = Array.isArray(list?.data) ? list.data.find((d) => d.id === id) : undefined;
         if (hit) return hit;
       }
       return undefined;
@@ -466,6 +471,8 @@ export function useCreateDisbursement() {
       queryClient.invalidateQueries({
         queryKey: disbursementKeys.counts(activeEntity),
       });
+      queryClient.invalidateQueries({ queryKey: ['billing'] });
+      queryClient.invalidateQueries({ queryKey: ['transmittals'] });
     },
   });
 
@@ -489,6 +496,8 @@ export function useCreateDisbursement() {
       invalidateQueries: [
         disbursementKeys.all,
         disbursementKeys.counts(activeEntity),
+        ['billing'],
+        ['transmittals'],
       ],
       successTitle: 'Disbursement Created',
       successMessage: 'Draft voucher created and queued for Admin budget approval.',
@@ -545,6 +554,8 @@ export function useUpdateDisbursement() {
       queryClient.invalidateQueries({
         queryKey: disbursementKeys.counts(activeEntity),
       });
+      queryClient.invalidateQueries({ queryKey: ['billing'] });
+      queryClient.invalidateQueries({ queryKey: ['transmittals'] });
     },
   });
 
@@ -559,6 +570,8 @@ export function useUpdateDisbursement() {
       apiCall: async () => mutation.mutateAsync(params),
       invalidateQueries: [
         disbursementKeys.counts(activeEntity),
+        ['billing'],
+        ['transmittals'],
       ],
       successTitle: 'Disbursement Updated',
       successMessage: 'Changes have been saved successfully.',

@@ -172,6 +172,31 @@ export interface Disbursement {
   lifecycleHistory?: DisbursementLifecycleEvent[];
   linked_work_request_name?: string | null;
   linked_work_request_order_number?: string | null;
+  linked_invoice_number?: string | null;
+  linked_invoice_status?: string | null;
+  linked_invoice_total?: number | null;
+  linked_invoice_amount_paid?: number | null;
+  linked_invoice_balance?: number | null;
+  linked_invoice?: {
+    id: string;
+    invoice_number: string;
+    status: string;
+    total: number;
+    amount_paid: number;
+    balance: number;
+    due_date?: string | null;
+  } | null;
+  linked_transmittal_tracking_number?: string | null;
+  linked_transmittal_status?: string | null;
+  linked_transmittal_recipient_name?: string | null;
+  linked_transmittal?: {
+    id: string;
+    tracking_number: string;
+    status: string;
+    recipient_name?: string | null;
+    approved?: boolean;
+  } | null;
+  linked_task_title?: string | null;
   employee_name?: string | null;
   employeeName?: string | null;
   requested_by_name?: string | null;
@@ -265,6 +290,9 @@ export interface DisbursementFilters {
   status?: DisbursementStatus;
   category?: string;
   fundSource?: FundSource;
+  workRequestId?: string;
+  linkedWorkRequestId?: string;
+  linkedInvoiceId?: string;
   linkedTaskId?: string;
   linkedTransmittalId?: string;
   search?: string;

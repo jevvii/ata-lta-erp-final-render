@@ -5,6 +5,7 @@
  * and comprehensive audit trail metadata.
  */
 
+import { useState } from 'react';
 import {
   FileText,
   Building,
@@ -18,9 +19,11 @@ import {
   Layers,
   MapPin,
   Lock,
+  Plus,
 } from 'lucide-react';
 import { transmittalKeys } from '../api/queryKeys';
 import { useScopedRecordGuard } from '@/lib/useScopedRecordGuard';
+import { CreateDisbursementModal } from '@/features/disbursements/components/CreateDisbursementModal';
 import {
   Dialog,
   DialogContent,
@@ -107,6 +110,7 @@ export function TransmittalDetailModal({
   const canDelete = hasPermission(permissions, 'transmittal:delete');
 
   const isSendDisabled = !isAdmin && !transmittal?.approved;
+  const [isRequestDisbursementOpen, setIsRequestDisbursementOpen] = useState(false);
 
   if (isScopeStale || !isOpen) return null;
 
@@ -305,6 +309,71 @@ export function TransmittalDetailModal({
               </div>
             </div>
 
+            {/* Linked Disbursements & Invoices */}
+            {((transmittal.linked_disbursements && transmittal.linked_disbursements.length > 0) ||
+              (transmittal.linked_invoices && transmittal.linked_invoices.length > 0)) && (
+              <div className="space-y-2" data-testid="transmittal-linked-records">
+                <h4 className="text-xs font-bold text-[#1E293B] tracking-normal flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5 text-[#1E293B]" />
+                  Linked Disbursements &amp; Invoices
+                </h4>
+                <div className="p-3 bg-[#F8FAFC] rounded-[8px] border border-[#E2E8F0] space-y-2 text-xs">
+                  {transmittal.linked_disbursements && transmittal.linked_disbursements.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="font-semibold text-[#475569] block">
+                        Linked Disbursements ({transmittal.linked_disbursements.length}):
+                      </span>
+                      <div className="space-y-1">
+                        {transmittal.linked_disbursements.map((d) => (
+                          <div
+                            key={d.id}
+                            className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded border border-[#E2E8F0]"
+                            data-testid={`transmittal-linked-disb-${d.id}`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono font-semibold text-[#1E293B]">
+                                {d.disbursement_number || `DISB-${d.id.slice(0, 8)}`}
+                              </span>
+                              <span className="text-[#475569] truncate">{d.description}</span>
+                            </div>
+                            <Badge variant="outline" className="text-[10px] py-0 px-1.5 shrink-0">
+                              {d.status}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {transmittal.linked_invoices && transmittal.linked_invoices.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="font-semibold text-[#475569] block">
+                        Linked Invoices ({transmittal.linked_invoices.length}):
+                      </span>
+                      <div className="space-y-1">
+                        {transmittal.linked_invoices.map((inv) => (
+                          <div
+                            key={inv.id}
+                            className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded border border-[#E2E8F0]"
+                            data-testid={`transmittal-linked-invoice-${inv.id}`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-mono font-semibold text-[#1E293B]">
+                                {inv.invoice_number}
+                              </span>
+                            </div>
+                            <Badge variant="outline" className="text-[10px] py-0 px-1.5 shrink-0">
+                              {inv.status}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Notes Section */}
             {transmittal.notes && (
               <div className="p-3 bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] space-y-1">
@@ -365,6 +434,19 @@ export function TransmittalDetailModal({
               >
                 <Edit2 className="h-3.5 w-3.5" />
                 Edit
+              </Button>
+            )}
+
+            {transmittal && !transmittal.archived && transmittal.status !== 'Cancelled' && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setIsRequestDisbursementOpen(true)}
+                className="h-8 text-xs gap-1"
+                data-testid="transmittal-request-disbursement-btn"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                + Request Disbursement
               </Button>
             )}
 
@@ -444,6 +526,21 @@ export function TransmittalDetailModal({
             </Button>
           </div>
         </DialogFooter>
+
+        {transmittal && isRequestDisbursementOpen && (
+          <CreateDisbursementModal
+            open={isRequestDisbursementOpen}
+            onClose={() => setIsRequestDisbursementOpen(false)}
+            prefill={{
+              workRequestId: transmittal.work_request_id || transmittal.workRequestId || undefined,
+              clientId: transmittal.client_id || transmittal.clientId || undefined,
+              taskId: transmittal.linked_task_id || transmittal.linkedTaskId || undefined,
+              linkedTransmittalId: transmittal.id,
+              defaultCategory: 'Transportation',
+              defaultDescription: `Courier / delivery expense for Transmittal ${transmittal.tracking_number}`,
+            }}
+          />
+        )}
           </>
         )}
       </DialogContent>

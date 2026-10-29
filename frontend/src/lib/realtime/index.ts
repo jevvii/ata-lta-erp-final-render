@@ -17,6 +17,7 @@ export {
   isTaskListOfTargetWr,
   triggerTaskCoInvalidations,
   triggerCrossDomainCoInvalidations,
+  mergeCdcRecordPreservingEnrichedLinks,
   normalizeCdcTimeEntry,
   normalizeCdcTaskTimeLog,
   normalizeCdcUser,

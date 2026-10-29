@@ -65,6 +65,8 @@ function useIsDesktop() {
 export default function DisbursementsPage() {
   // Realtime CDC Subscriptions (Parcel E) — kept active across all tabs
   useEntityRealtimeSync({ table: 'disbursements' });
+  useEntityRealtimeSync({ table: 'invoices' });
+  useEntityRealtimeSync({ table: 'transmittals' });
   const [searchParams, setSearchParams] = useSearchParams();
   const rawActiveTab = searchParams.get('tab') || 'all';
 

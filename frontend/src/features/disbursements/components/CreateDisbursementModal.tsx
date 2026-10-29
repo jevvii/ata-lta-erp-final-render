@@ -30,6 +30,8 @@ import {
   isTaskOfWorkRequest,
 } from '@/features/operations/lib/taskScope';
 import { useTeam } from '@/features/operations/api/useTeam';
+import { useInvoices } from '@/features/billing/api/useInvoices';
+import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
 import type { ClientSummary } from '@/features/operations/api/useClients';
 import type { WorkRequest, Task } from '@/features/operations/api/types';
 import type { CreateDisbursementInput, FundSource } from '../api/types';
@@ -44,6 +46,10 @@ export interface FinancialPrefill {
   workRequestId?: string;
   taskId?: string;
   clientId?: string;
+  linkedInvoiceId?: string;
+  linkedTransmittalId?: string;
+  defaultCategory?: string;
+  defaultDescription?: string;
 }
 
 export interface CreateDisbursementModalProps {
@@ -54,6 +60,10 @@ export interface CreateDisbursementModalProps {
   defaultWorkRequestId?: string;
   defaultClientId?: string;
   defaultTaskId?: string;
+  defaultInvoiceId?: string;
+  defaultTransmittalId?: string;
+  defaultCategory?: string;
+  defaultDescription?: string;
 }
 
 // Keep an uncertain submission blocked across attachment replacement, modal reopen and page refresh.
@@ -124,12 +134,20 @@ export function CreateDisbursementModal({
   defaultWorkRequestId = '',
   defaultClientId = '',
   defaultTaskId = '',
+  defaultInvoiceId = '',
+  defaultTransmittalId = '',
+  defaultCategory = '',
+  defaultDescription = '',
 }: CreateDisbursementModalProps) {
   const { createWithBlocking, isPending } = useCreateDisbursement();
   const { data: team = [] } = useTeam();
 
-  const [category, setCategory] = useState<string>(DISBURSEMENT_CATEGORIES[0]);
-  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState<string>(
+    prefill?.defaultCategory || defaultCategory || DISBURSEMENT_CATEGORIES[0]
+  );
+  const [description, setDescription] = useState(
+    prefill?.defaultDescription || defaultDescription || ''
+  );
   const [amount, setAmount] = useState<string>('');
   const [fundSource, setFundSource] = useState<FundSource>('Firm Fund');
   const [linkedWorkRequestId, setLinkedWorkRequestId] = useState(
@@ -137,6 +155,12 @@ export function CreateDisbursementModal({
   );
   const [clientId, setClientId] = useState(prefill?.clientId || defaultClientId || '');
   const [selectedTaskId, setSelectedTaskId] = useState(prefill?.taskId || defaultTaskId || '');
+  const [linkedInvoiceId, setLinkedInvoiceId] = useState(
+    prefill?.linkedInvoiceId || defaultInvoiceId || ''
+  );
+  const [linkedTransmittalId, setLinkedTransmittalId] = useState(
+    prefill?.linkedTransmittalId || defaultTransmittalId || ''
+  );
   const [employeeId, setEmployeeId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
@@ -400,9 +424,13 @@ export function CreateDisbursementModal({
     prevIsOpenRef.current = isOpen;
 
     if (isOpen && !wasOpen) {
+      setCategory(prefill?.defaultCategory || defaultCategory || DISBURSEMENT_CATEGORIES[0]);
+      setDescription(prefill?.defaultDescription || defaultDescription || '');
       setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
       setClientId(prefill?.clientId || defaultClientId || '');
       setSelectedTaskId(prefill?.taskId || defaultTaskId || '');
+      setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
+      setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
       setEmployeeId('');
       setReceiptFile(null);
       setReceiptFilename('');
@@ -418,6 +446,8 @@ export function CreateDisbursementModal({
       setLinkedWorkRequestId('');
       setClientId('');
       setSelectedTaskId('');
+      setLinkedInvoiceId('');
+      setLinkedTransmittalId('');
       setEmployeeId('');
       setDueDate('');
       setNotes('');
@@ -438,18 +468,34 @@ export function CreateDisbursementModal({
       if (prefill?.taskId && prefill.taskId !== selectedTaskId) {
         setSelectedTaskId(prefill.taskId);
       }
+      if (prefill?.linkedInvoiceId && prefill.linkedInvoiceId !== linkedInvoiceId) {
+        setLinkedInvoiceId(prefill.linkedInvoiceId);
+      }
+      if (prefill?.linkedTransmittalId && prefill.linkedTransmittalId !== linkedTransmittalId) {
+        setLinkedTransmittalId(prefill.linkedTransmittalId);
+      }
     }
   }, [
     isOpen,
     prefill?.workRequestId,
     prefill?.clientId,
     prefill?.taskId,
+    prefill?.linkedInvoiceId,
+    prefill?.linkedTransmittalId,
+    prefill?.defaultCategory,
+    prefill?.defaultDescription,
     defaultWorkRequestId,
     defaultClientId,
     defaultTaskId,
+    defaultInvoiceId,
+    defaultTransmittalId,
+    defaultCategory,
+    defaultDescription,
     linkedWorkRequestId,
     clientId,
     selectedTaskId,
+    linkedInvoiceId,
+    linkedTransmittalId,
   ]);
 
   // Auto-detect client and target entity from selected work request
@@ -468,6 +514,39 @@ export function CreateDisbursementModal({
 
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId || defaultTaskId);
+  const isInvoiceLocked = Boolean(prefill?.linkedInvoiceId || defaultInvoiceId);
+  const isTransmittalLocked = Boolean(prefill?.linkedTransmittalId || defaultTransmittalId);
+
+  const { data: wrInvoicesData } = useInvoices(
+    { workRequestId: linkedWorkRequestId || undefined, archived: false, limit: 100 },
+    { enabled: canFetch && Boolean(linkedWorkRequestId) }
+  );
+  const availableInvoices = React.useMemo(() => {
+    if (!linkedWorkRequestId) return [];
+    const list = Array.isArray(wrInvoicesData?.data) ? wrInvoicesData.data : [];
+    return list.filter(
+      (inv) =>
+        !inv.archived &&
+        inv.status !== 'Cancelled' &&
+        (!inv.work_request_id || inv.work_request_id === linkedWorkRequestId)
+    );
+  }, [wrInvoicesData, linkedWorkRequestId]);
+
+  const { data: wrTransmittalsData } = useTransmittals(
+    { workRequestId: linkedWorkRequestId || undefined, archived: false, limit: 100 },
+    { enabled: canFetch && Boolean(linkedWorkRequestId) }
+  );
+  const availableTransmittals = React.useMemo(() => {
+    if (!linkedWorkRequestId) return [];
+    const list = Array.isArray(wrTransmittalsData?.data) ? wrTransmittalsData.data : [];
+    return list.filter(
+      (tr) =>
+        !tr.archived &&
+        tr.status !== 'Cancelled' &&
+        (!(tr.work_request_id || tr.workRequestId) ||
+          (tr.work_request_id || tr.workRequestId) === linkedWorkRequestId)
+    );
+  }, [wrTransmittalsData, linkedWorkRequestId]);
 
   // WR-Task query & selectability hook
   const {
@@ -562,6 +641,8 @@ export function CreateDisbursementModal({
   const handleSelectWorkRequest = (wrId: string) => {
     setLinkedWorkRequestId(wrId);
     setSelectedTaskId('');
+    if (!isInvoiceLocked) setLinkedInvoiceId('');
+    if (!isTransmittalLocked) setLinkedTransmittalId('');
     if (wrId !== linkedWorkRequestId) setUploadedReceipt(null);
     if (errors.linkedWorkRequestId) {
       setErrors((prev) => ({ ...prev, linkedWorkRequestId: '' }));
@@ -655,14 +736,16 @@ export function CreateDisbursementModal({
   };
 
   const resetForm = () => {
-    setCategory(DISBURSEMENT_CATEGORIES[0]);
+    setCategory(prefill?.defaultCategory || defaultCategory || DISBURSEMENT_CATEGORIES[0]);
     setCustomCategory('');
-    setDescription('');
+    setDescription(prefill?.defaultDescription || defaultDescription || '');
     setAmount('');
     setFundSource('Firm Fund');
     setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
     setClientId(prefill?.clientId || defaultClientId || '');
     setSelectedTaskId(prefill?.taskId || '');
+    setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
+    setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
     setEmployeeId('');
     setDueDate('');
     setNotes('');
@@ -894,6 +977,8 @@ export function CreateDisbursementModal({
         linkedWorkRequestId: capturedTarget.workRequestId.trim(),
         clientId: capturedTarget.clientId ? capturedTarget.clientId.trim() : null,
         linkedTaskId: capturedTarget.taskId ? capturedTarget.taskId.trim() : null,
+        ...(linkedInvoiceId.trim() ? { linkedInvoiceId: linkedInvoiceId.trim() } : {}),
+        ...(linkedTransmittalId.trim() ? { linkedTransmittalId: linkedTransmittalId.trim() } : {}),
         employeeId: currentUser?.id || null, // Locked to session user
         dueDate: dueDate ? dueDate : null,
         notes: notes.trim() ? notes.trim() : null,
@@ -1134,6 +1219,63 @@ export function CreateDisbursementModal({
             isPhaseOrPrereqBlocked={isPhaseOrPrereqBlocked}
             workRequestId={linkedWorkRequestId}
           />
+
+          {/* Optional Linked Invoice & Linked Transmittal (SOP Step 2.5 & Step 2.7) */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-ink">
+                Linked Invoice (Optional)
+              </label>
+              <select
+                value={linkedInvoiceId}
+                onChange={(e) => setLinkedInvoiceId(e.target.value)}
+                disabled={!linkedWorkRequestId || isInvoiceLocked}
+                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
+                data-testid="select-linked-invoice"
+              >
+                <option value="">
+                  {!linkedWorkRequestId
+                    ? 'Select Work Request first...'
+                    : 'None (Link later or Firm Fund)'}
+                </option>
+                {availableInvoices.map((inv) => (
+                  <option key={inv.id} value={inv.id}>
+                    {inv.invoice_number} — {inv.status} — ₱
+                    {Number(inv.total || 0).toLocaleString('en-PH', {
+                      minimumFractionDigits: 2,
+                    })}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-ink">
+                Linked Transmittal (Optional)
+              </label>
+              <select
+                value={linkedTransmittalId}
+                onChange={(e) => setLinkedTransmittalId(e.target.value)}
+                disabled={!linkedWorkRequestId || isTransmittalLocked}
+                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
+                data-testid="select-linked-transmittal"
+              >
+                <option value="">
+                  {!linkedWorkRequestId
+                    ? 'Select Work Request first...'
+                    : 'None (No transmittal linked)'}
+                </option>
+                {availableTransmittals.map((tr) => (
+                  <option key={tr.id} value={tr.id}>
+                    {tr.tracking_number} — {tr.status}
+                    {tr.recipient_name || tr.recipientName
+                      ? ` — ${tr.recipient_name || tr.recipientName}`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
           {/* Category & Fund Source */}
           <div className="grid grid-cols-2 gap-3">
