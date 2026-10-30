@@ -167,8 +167,8 @@ describe('Lane C: Task Scoping Rules (taskScope.ts)', () => {
       expect(canRequestInvoice(accountingUser, baseTask, baseWr, [baseTask])).toBe(false);
     });
 
-    it('allows non-Documentation assigned Operations staff to request invoice', () => {
-      expect(canRequestInvoice(opsAssignedUser, baseTask, baseWr, [baseTask])).toBe(true);
+    it('disallows non-Documentation assigned Operations staff to request invoice (requests discontinued)', () => {
+      expect(canRequestInvoice(opsAssignedUser, baseTask, baseWr, [baseTask])).toBe(false);
     });
 
     it('denies unassigned users not in WR team', () => {

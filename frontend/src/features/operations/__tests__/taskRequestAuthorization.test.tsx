@@ -113,7 +113,7 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
     expect(canRequestTransmittal(wrManagerUser, targetTask, baseWr, [targetTask, siblingTask])).toBe(false);
   });
 
-  it('allows primary lead assignee and relational co-assignee for Operations and Manager', () => {
+  it('denies invoice and transmittal requests even for primary lead assignee and relational co-assignee (requests discontinued)', () => {
     // 1. Lead assignee
     const leadOpsUser: UserProfile = {
       id: 'emp-lead-1',
@@ -124,8 +124,8 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
       entities: ['ATA'],
     };
     expect(isTaskAssignee(leadOpsUser, targetTask)).toBe(true);
-    expect(canRequestInvoice(leadOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
-    expect(canRequestTransmittal(leadOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
+    expect(canRequestInvoice(leadOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
+    expect(canRequestTransmittal(leadOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
 
     // 2. Relational co-assignee
     const coOpsUser: UserProfile = {
@@ -137,8 +137,8 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
       entities: ['ATA'],
     };
     expect(isTaskAssignee(coOpsUser, targetTask)).toBe(true);
-    expect(canRequestInvoice(coOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
-    expect(canRequestTransmittal(coOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
+    expect(canRequestInvoice(coOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
+    expect(canRequestTransmittal(coOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
 
     // 3. Manager assigned as lead
     const leadMgrUser: UserProfile = {
@@ -149,11 +149,11 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
       departments: ['Management'],
       entities: ['ATA'],
     };
-    expect(canRequestInvoice(leadMgrUser, targetTask, baseWr, [targetTask])).toBe(true);
-    expect(canRequestTransmittal(leadMgrUser, targetTask, baseWr, [targetTask])).toBe(true);
+    expect(canRequestInvoice(leadMgrUser, targetTask, baseWr, [targetTask])).toBe(false);
+    expect(canRequestTransmittal(leadMgrUser, targetTask, baseWr, [targetTask])).toBe(false);
   });
 
-  it('supports legacy role profiles and department profiles consistently', () => {
+  it('denies requests across legacy role profiles and department profiles consistently (requests discontinued)', () => {
     const legacyOpsUser: UserProfile = {
       id: 'emp-lead-1',
       email: 'legacy.ops@ata-lta.ph',
@@ -162,8 +162,8 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
       departments: [],
       entities: ['ATA'],
     };
-    expect(canRequestInvoice(legacyOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
-    expect(canRequestTransmittal(legacyOpsUser, targetTask, baseWr, [targetTask])).toBe(true);
+    expect(canRequestInvoice(legacyOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
+    expect(canRequestTransmittal(legacyOpsUser, targetTask, baseWr, [targetTask])).toBe(false);
 
     const legacyMgrUser: UserProfile = {
       id: 'emp-lead-1',
@@ -173,8 +173,8 @@ describe('F01 & F03: Operations Requests Assignment Scoping Unit Tests', () => {
       departments: [],
       entities: ['ATA'],
     };
-    expect(canRequestInvoice(legacyMgrUser, targetTask, baseWr, [targetTask])).toBe(true);
-    expect(canRequestTransmittal(legacyMgrUser, targetTask, baseWr, [targetTask])).toBe(true);
+    expect(canRequestInvoice(legacyMgrUser, targetTask, baseWr, [targetTask])).toBe(false);
+    expect(canRequestTransmittal(legacyMgrUser, targetTask, baseWr, [targetTask])).toBe(false);
   });
 
   it('preserves direct issuance and role exclusion boundaries', () => {

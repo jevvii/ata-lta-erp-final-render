@@ -259,60 +259,32 @@ export function isTaskOfWorkRequest(
 
 /**
  * Request Invoice from Accounting:
- * Allowed for Operations, HR, Management, or assigned employee when invoice is needed.
- * Strictly requires target-task assignment (isTaskAssignee). Parent/sibling WR fallback eliminated.
- * Non-Admin accounts with effective Documentation membership cannot request invoice billing.
+ * Task-level requests for invoices have been discontinued entirely per business requirements.
+ * Direct invoice creation by authorized users (+ Invoice) is used instead.
+ * Always returns false.
  */
 export function canRequestInvoice(
-  user: UserProfile | null | undefined,
-  task: Task | null | undefined,
+  _user: UserProfile | null | undefined,
+  _task: Task | null | undefined,
   _workRequest?: WorkRequest | null | undefined,
   _tasks: Task[] = []
 ): boolean {
-  if (!user || !task) return false;
-  if (!isTaskAssignee(user, task)) return false;
-  if (isUserAdmin(user)) return false; // Admin links directly
-  const isAccounting = isUserAccounting(user);
-  if (isAccounting) return false; // Accounting links directly
-
-  // Non-Admin Documentation cannot request invoice billing (even if assigned or in Operations)
-  if (isUserDocumentation(user)) return false;
-
-  const allowedDepts = ['operations', 'hr', 'management'];
-  const hasAllowedDept =
-    (Array.isArray(user.departments) &&
-      user.departments.some((d) => allowedDepts.includes(String(d).toLowerCase()))) ||
-    ['manager', 'operations', 'hr'].includes(String(user.role || '').toLowerCase()) ||
-    user.role === 'Staff';
-
-  return hasAllowedDept;
+  return false;
 }
 
 /**
  * Request Transmittal from Documentation:
- * Allowed for Operations, HR, Management, or assigned employee when transmittal is needed.
- * Strictly requires target-task assignment (isTaskAssignee). Parent/sibling WR fallback eliminated.
+ * Task-level requests for transmittals have been discontinued entirely per business requirements.
+ * Direct transmittal creation by authorized users (+ Transmittal) is used instead.
+ * Always returns false.
  */
 export function canRequestTransmittal(
-  user: UserProfile | null | undefined,
-  task: Task | null | undefined,
+  _user: UserProfile | null | undefined,
+  _task: Task | null | undefined,
   _workRequest?: WorkRequest | null | undefined,
   _tasks: Task[] = []
 ): boolean {
-  if (!user || !task) return false;
-  if (!isTaskAssignee(user, task)) return false;
-  if (isUserAdmin(user)) return false; // Admin links directly
-  if (isUserDocumentation(user)) return false; // Documentation links directly
-  if (isUserAccounting(user)) return false; // Accounting only uploads docs and links invoices on assigned billing tasks
-
-  const allowedDepts = ['operations', 'hr', 'management'];
-  const hasAllowedDept =
-    (Array.isArray(user.departments) &&
-      user.departments.some((d) => allowedDepts.includes(String(d).toLowerCase()))) ||
-    ['manager', 'operations', 'hr'].includes(String(user.role || '').toLowerCase()) ||
-    user.role === 'Staff';
-
-  return hasAllowedDept;
+  return false;
 }
 
 /**

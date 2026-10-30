@@ -126,10 +126,10 @@ describe('Cross-Worktree Integration Harness (Backend + Enterprise-v2 React)', (
         expect(runFrontendTaskScope('canRequestInvoice', [acc, task, wr])).toBe(false);
       });
 
-      it('F09-5: canRequestInvoice returns true for assigned Operations staff', () => {
+      it('F09-5: canRequestInvoice returns false for assigned Operations staff (requests discontinued)', () => {
         const opsUser = { id: 'user-ops', role: 'Staff', departments: ['Operations'] };
         const assignedTask = { id: 'task-1', assigneeId: 'user-ops' };
-        expect(runFrontendTaskScope('canRequestInvoice', [opsUser, assignedTask, wr])).toBe(true);
+        expect(runFrontendTaskScope('canRequestInvoice', [opsUser, assignedTask, wr])).toBe(false);
       });
     });
 
