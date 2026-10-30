@@ -93,6 +93,8 @@ export function getDefaultDetailQueryKey(
       return billingKeys.invoiceDetail(id);
     case 'disbursements':
       return disbursementKeys.detail(id);
+    case 'transmittals':
+      return transmittalKeys.detail(id);
     case 'operations_requests':
       return operationsKeys.requestDetail(id);
     case 'documents':
@@ -124,6 +126,8 @@ export function getDefaultListRootKey(table: string): readonly unknown[] {
       return billingKeys.invoices();
     case 'disbursements':
       return disbursementKeys.lists();
+    case 'transmittals':
+      return transmittalKeys.lists();
     case 'operations_requests':
       return operationsKeys.requests();
     case 'documents':
@@ -758,15 +762,26 @@ export function triggerCrossDomainCoInvalidations(
 
   switch (table) {
     case 'invoices':
+      if (taskId) {
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(taskId) });
+      }
+      void queryClient.invalidateQueries({ queryKey: disbursementKeys.all });
+      void queryClient.invalidateQueries({ queryKey: transmittalKeys.all });
+      break;
     case 'disbursements':
       if (taskId) {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(taskId) });
       }
+      void queryClient.invalidateQueries({ queryKey: billingKeys.invoices() });
+      void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+      void queryClient.invalidateQueries({ queryKey: transmittalKeys.all });
       break;
     case 'transmittals':
       if (taskId) {
         void queryClient.invalidateQueries({ queryKey: operationsKeys.taskRelated(taskId) });
       }
+      void queryClient.invalidateQueries({ queryKey: disbursementKeys.all });
+      void queryClient.invalidateQueries({ queryKey: billingKeys.all });
       break;
     case 'documents':
       void queryClient.invalidateQueries({ queryKey: documentKeys.lists() });
@@ -798,6 +813,101 @@ export function triggerCrossDomainCoInvalidations(
       }
       break;
   }
+}
+
+/**
+ * Preserves API-enriched summary/join fields across raw PostgreSQL CDC updates
+ * when foreign key IDs have not changed, or clears stale enriched summaries and
+ * signals a targeted refetch (`linksChanged: true`) when a foreign key ID is modified or cleared.
+ */
+export function mergeCdcRecordPreservingEnrichedLinks(
+  table: string,
+  cached: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>
+): { merged: Record<string, unknown>; linksChanged: boolean } {
+  if (!cached || typeof cached !== 'object') {
+    const hasLinkOnIncoming =
+      (table === 'disbursements' &&
+        Boolean(
+          incoming.linked_invoice_id ||
+            incoming.linkedInvoiceId ||
+            incoming.linked_transmittal_id ||
+            incoming.linkedTransmittalId
+        )) ||
+      (table === 'invoices' &&
+        Boolean(incoming.linked_transmittal_id || incoming.linkedTransmittalId));
+    return { merged: { ...incoming }, linksChanged: hasLinkOnIncoming };
+  }
+
+  const merged: Record<string, unknown> = { ...cached, ...incoming };
+  let linksChanged = false;
+
+  if (table === 'disbursements') {
+    const oldInvId = (cached.linked_invoice_id ?? cached.linkedInvoiceId ?? null) as string | null;
+    const hasNewInvKey = 'linked_invoice_id' in incoming || 'linkedInvoiceId' in incoming;
+    const newInvId = hasNewInvKey
+      ? ((incoming.linked_invoice_id ?? incoming.linkedInvoiceId ?? null) as string | null)
+      : oldInvId;
+
+    if (oldInvId !== newInvId) {
+      linksChanged = true;
+      if (!newInvId || !('linked_invoice_summary' in incoming)) {
+        merged.linked_invoice_summary = null;
+        merged.linked_invoice_number = null;
+        merged.linked_invoice_status = null;
+        merged.linked_invoice_total = null;
+      }
+    } else if (newInvId && !('linked_invoice_summary' in incoming) && cached.linked_invoice_summary) {
+      merged.linked_invoice_summary = cached.linked_invoice_summary;
+      merged.linked_invoice_number = cached.linked_invoice_number;
+      merged.linked_invoice_status = cached.linked_invoice_status;
+      merged.linked_invoice_total = cached.linked_invoice_total;
+    }
+
+    const oldTrxId = (cached.linked_transmittal_id ?? cached.linkedTransmittalId ?? null) as string | null;
+    const hasNewTrxKey = 'linked_transmittal_id' in incoming || 'linkedTransmittalId' in incoming;
+    const newTrxId = hasNewTrxKey
+      ? ((incoming.linked_transmittal_id ?? incoming.linkedTransmittalId ?? null) as string | null)
+      : oldTrxId;
+
+    if (oldTrxId !== newTrxId) {
+      linksChanged = true;
+      if (!newTrxId || !('linked_transmittal_summary' in incoming)) {
+        merged.linked_transmittal_summary = null;
+        merged.linked_transmittal_number = null;
+        merged.linked_transmittal_status = null;
+      }
+    } else if (newTrxId && !('linked_transmittal_summary' in incoming) && cached.linked_transmittal_summary) {
+      merged.linked_transmittal_summary = cached.linked_transmittal_summary;
+      merged.linked_transmittal_number = cached.linked_transmittal_number;
+      merged.linked_transmittal_status = cached.linked_transmittal_status;
+    }
+  } else if (table === 'invoices') {
+    const oldTrxId = (cached.linked_transmittal_id ?? cached.linkedTransmittalId ?? null) as string | null;
+    const hasNewTrxKey = 'linked_transmittal_id' in incoming || 'linkedTransmittalId' in incoming;
+    const newTrxId = hasNewTrxKey
+      ? ((incoming.linked_transmittal_id ?? incoming.linkedTransmittalId ?? null) as string | null)
+      : oldTrxId;
+
+    if (oldTrxId !== newTrxId) {
+      linksChanged = true;
+      if (!newTrxId || !('linked_transmittal_summary' in incoming)) {
+        merged.linked_transmittal_summary = null;
+        merged.linked_transmittal_number = null;
+        merged.linked_transmittal_status = null;
+      }
+    } else if (newTrxId && !('linked_transmittal_summary' in incoming) && cached.linked_transmittal_summary) {
+      merged.linked_transmittal_summary = cached.linked_transmittal_summary;
+      merged.linked_transmittal_number = cached.linked_transmittal_number;
+      merged.linked_transmittal_status = cached.linked_transmittal_status;
+    }
+
+    if (!('linked_disbursements' in incoming) && cached.linked_disbursements) {
+      merged.linked_disbursements = cached.linked_disbursements;
+    }
+  }
+
+  return { merged, linksChanged };
 }
 
 /**
@@ -1645,15 +1755,58 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         }
       }
     }
+
+    if (
+      payloadObj.new &&
+      (options.table === 'disbursements' || options.table === 'invoices') &&
+      Boolean(
+        payloadObj.new.linked_invoice_id ||
+          payloadObj.new.linkedInvoiceId ||
+          payloadObj.new.linked_transmittal_id ||
+          payloadObj.new.linkedTransmittalId
+      )
+    ) {
+      if (detailKey) {
+        void queryClient.invalidateQueries({ queryKey: detailKey });
+      }
+      if (listRootKey) {
+        void queryClient.invalidateQueries({ queryKey: listRootKey });
+      }
+    }
   } else {
     // UPDATE
+    let anyLinksChanged = false;
+
+    if (
+      (options.table === 'disbursements' || options.table === 'invoices') &&
+      payloadObj.old &&
+      payloadObj.new
+    ) {
+      const oldCheck = mergeCdcRecordPreservingEnrichedLinks(
+        options.table,
+        payloadObj.old as Record<string, unknown>,
+        payloadObj.new
+      );
+      if (oldCheck.linksChanged) {
+        anyLinksChanged = true;
+      }
+    }
+
     // Patch detail cache
     if (detailKey && payloadObj.new) {
       queryClient.setQueryData(detailKey, (old: unknown) => {
         if (!old || typeof old !== 'object') {
+          const res = mergeCdcRecordPreservingEnrichedLinks(options.table, undefined, payloadObj.new!);
+          if (res.linksChanged) anyLinksChanged = true;
           return payloadObj.new;
         }
-        return { ...(old as Record<string, unknown>), ...payloadObj.new };
+        const res = mergeCdcRecordPreservingEnrichedLinks(
+          options.table,
+          old as Record<string, unknown>,
+          payloadObj.new!
+        );
+        if (res.linksChanged) anyLinksChanged = true;
+        return res.merged;
       });
     }
 
@@ -1680,7 +1833,16 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
           if (listData.some((item) => item?.id === id)) {
             queryClient.setQueryData(
               qKey,
-              listData.map((item) => (item?.id === id ? { ...item, ...payloadObj.new } : item))
+              listData.map((item) => {
+                if (item?.id !== id) return item;
+                const res = mergeCdcRecordPreservingEnrichedLinks(
+                  options.table,
+                  item as Record<string, unknown>,
+                  payloadObj.new!
+                );
+                if (res.linksChanged) anyLinksChanged = true;
+                return res.merged;
+              })
             );
           }
         } else if (Array.isArray(listData?.data)) {
@@ -1700,9 +1862,16 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
 
             queryClient.setQueryData(qKey, {
               ...listData,
-              data: listData.data.map((item) =>
-                item?.id === id ? { ...item, ...payloadObj.new } : item
-              ),
+              data: listData.data.map((item) => {
+                if (item?.id !== id) return item;
+                const res = mergeCdcRecordPreservingEnrichedLinks(
+                  options.table,
+                  item as Record<string, unknown>,
+                  payloadObj.new!
+                );
+                if (res.linksChanged) anyLinksChanged = true;
+                return res.merged;
+              }),
               meta:
                 listData.meta && isTransitionToRead
                   ? {
@@ -1810,6 +1979,15 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         if (wrData?.phases) {
           queryClient.setQueryData(wrDetailKey, patchTaskInPhases(wrData, id, payloadObj.new));
         }
+      }
+    }
+
+    if (anyLinksChanged) {
+      if (detailKey) {
+        void queryClient.invalidateQueries({ queryKey: detailKey });
+      }
+      if (listRootKey) {
+        void queryClient.invalidateQueries({ queryKey: listRootKey });
       }
     }
   }

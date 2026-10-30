@@ -734,7 +734,7 @@ export function DisbursementsTable({
 
         {/* Pagination Bar */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between px-4 py-2.5 border-t border-border bg-canvas/50 text-xs text-muted">
+          <div className="shrink-0 flex items-center justify-between px-4 py-2 border-t border-border bg-canvas/50 text-xs text-muted">
             <span>
               Page <span className="font-semibold text-ink">{page}</span> of{' '}
               <span className="font-semibold text-ink">{totalPages}</span>

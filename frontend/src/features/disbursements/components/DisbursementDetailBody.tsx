@@ -55,6 +55,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '@/lib/utils';
 import type { ApiError } from '@/lib/api';
 import type { Disbursement } from '../api/types';
+import { isBillingControlledDisbursement } from '../api/types';
 
 export const VALID_DETAIL_TABS = ['attachment', 'information', 'approval', 'payment', 'log'] as const;
 export type DisbursementDetailTab = (typeof VALID_DETAIL_TABS)[number];
@@ -97,6 +98,8 @@ export function DisbursementDetailBody({
   const isAdmin = user?.role === 'Admin';
   const canFund =
     isAdmin || user?.role === 'Accounting' || Boolean(user?.departments?.includes('Accounting'));
+  const isDocumentation =
+    user?.role === 'Documentation' || Boolean(user?.departments?.includes('Documentation'));
 
   const effectiveId = id || initialDisbursement?.id;
   const {
@@ -312,13 +315,62 @@ export function DisbursementDetailBody({
 
   const hasVersion = Number.isInteger(item?.version) && (item?.version ?? 0) > 0;
   const isV2 = item?.lifecycle_version === 2 && hasVersion;
+  const canEditLinksPostDraft =
+    isV2 &&
+    item?.status !== 'Rejected' &&
+    item?.status !== 'Cancelled' &&
+    (isAdmin || canFund || isDocumentation || isOwnRequest);
   const canEditVoucher =
     hasVersion &&
     !item?.archived &&
     (isAdmin ||
+      canEditLinksPostDraft ||
       (canFund && isV2 && item?.status === 'Draft') ||
       (isV2 && isOwnRequest && item?.status === 'Draft' && !item?.archived));
   const isNeedsCorrection = item?.status === 'Draft' && item?.review_ready === false;
+
+  const linkedInvNumber =
+    item?.linked_invoice_summary?.invoice_number ||
+    item?.linked_invoice_number ||
+    item?.linked_invoice?.invoice_number ||
+    null;
+  const linkedInvStatus =
+    item?.linked_invoice_summary?.status ||
+    item?.linked_invoice_status ||
+    item?.linked_invoice?.status ||
+    null;
+  const linkedInvBalance =
+    item?.linked_invoice_summary?.balance ??
+    item?.linked_invoice_balance ??
+    item?.linked_invoice?.balance ??
+    null;
+  const linkedTrNumber =
+    item?.linked_transmittal_summary?.tracking_number ||
+    item?.linked_transmittal_tracking_number ||
+    item?.linked_transmittal?.tracking_number ||
+    null;
+  const linkedTrStatus =
+    item?.linked_transmittal_summary?.status ||
+    item?.linked_transmittal_status ||
+    item?.linked_transmittal?.status ||
+    null;
+  const linkedTrRecipient =
+    item?.linked_transmittal_summary?.recipient_name ||
+    item?.linked_transmittal_recipient_name ||
+    item?.linked_transmittal?.recipient_name ||
+    null;
+
+  const isBillingControlled = isBillingControlledDisbursement(item);
+
+  const isClientFundVerified = linkedInvStatus === 'Paid';
+  const showSopClientFundWarning =
+    (item?.fund_source ||
+      item?.fundSource ||
+      item?.source_of_funds ||
+      item?.sourceOfFunds) === 'Client Fund' &&
+    item?.status !== 'Rejected' &&
+    item?.status !== 'Cancelled' &&
+    !isClientFundVerified;
 
   const disbNumber =
     item?.disbursement_number ||
@@ -506,6 +558,37 @@ export function DisbursementDetailBody({
                 </div>
               )}
 
+              {showSopClientFundWarning && (
+                <div
+                  className="p-3 bg-warning-surface border border-warning-border rounded-[6px] text-warning space-y-1"
+                  data-testid="sop-step-2-5-warning-banner"
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs text-warning">
+                    <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+                    <span>SOP Step 2.5 Control Point — Client Fund Verification</span>
+                  </div>
+                  <p className="text-xs text-warning pl-5">
+                    {linkedInvNumber || item.linked_invoice_id || item.linkedInvoiceId ? (
+                      <>
+                        Linked Invoice{' '}
+                        <span className="font-mono font-semibold">
+                          {linkedInvNumber || item.linked_invoice_id || item.linkedInvoiceId}
+                        </span>{' '}
+                        is currently &ldquo;{linkedInvStatus || 'Unpaid'}&rdquo;
+                        {linkedInvBalance !== null && linkedInvBalance !== undefined
+                          ? ` (Unpaid Balance: ₱${Number(linkedInvBalance).toLocaleString('en-PH', {
+                              minimumFractionDigits: 2,
+                            })})`
+                          : ''}
+                        . Verify client payment or standing arrangement before releasing funds.
+                      </>
+                    ) : (
+                      'This voucher uses Client Fund but has no Paid Client Invoice linked yet. Link the client invoice or verify standing arrangement before releasing funds.'
+                    )}
+                  </p>
+                </div>
+              )}
+
               {/* Eyeshare-Style Unified Tab Strip (TOKENS.md §4.3) */}
               <Tabs value={activeTab} onValueChange={handleTabChange} className={cn('w-full', isDocked && 'flex-1 min-h-0 flex flex-col')}>
                 <TabsList className="w-full justify-start rounded-none bg-table-header px-1 py-0.5 border-b border-border flex flex-nowrap overflow-x-auto scrollbar-none gap-0.5 h-7 shrink-0">
@@ -582,6 +665,40 @@ export function DisbursementDetailBody({
 
                 {/* Tab 2: Information */}
                 <TabsContent value="information" data-testid="tab-content-information" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
+                  {/* Billing-Controlled Lifecycle Callout Banner */}
+                  {isBillingControlled && (
+                    <div
+                      className="p-3 bg-primary/5 border border-primary/20 rounded-[6px] space-y-1.5 text-xs"
+                      data-testid="detail-billing-controlled-banner"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-primary flex items-center gap-1.5">
+                          <Receipt className="h-4 w-4 text-primary" />
+                          Billing-Controlled Lifecycle
+                        </span>
+                        <span className="font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary text-[11px]">
+                          {linkedInvNumber || 'Invoice'} {linkedInvStatus ? `(${linkedInvStatus})` : ''}
+                        </span>
+                      </div>
+                      <p className="text-ink text-[11px]">
+                        This voucher is backed by Client Funds and billed to the client via invoice{' '}
+                        <span className="font-mono font-semibold">{linkedInvNumber || 'Invoice'}</span>.
+                        {linkedInvBalance != null && (
+                          <> Remaining balance: <span className="font-mono font-bold">₱{Number(linkedInvBalance).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>.</>
+                        )}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted border-t border-primary/10">
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Issued → <span className="text-primary font-semibold">Funded</span>
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Paid → <span className="text-success font-semibold">Released</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Voucher Editing Entry Points */}
                   {canEditVoucher && (
                     <div className="space-y-3">
@@ -595,7 +712,11 @@ export function DisbursementDetailBody({
                         >
                           <Pencil className="w-4 h-4 text-primary" />
                           <span>
-                            {isV2 && item.status === 'Draft' ? 'Edit Voucher' : 'Edit Printed Details'}
+                            {isV2 && item.status === 'Draft'
+                              ? 'Edit Voucher'
+                              : isAdmin
+                                ? 'Edit Printed Details'
+                                : 'Edit Linked Records'}
                           </span>
                         </Button>
                         <Button
@@ -751,20 +872,77 @@ export function DisbursementDetailBody({
                       </div>
                       <div>
                         <dt className="text-muted text-[10px] uppercase font-medium">Linked Task</dt>
-                        <dd className="text-ink font-mono text-xs">
-                          {item.linked_task_id || item.linkedTaskId || 'None'}
+                        <dd className="text-ink font-mono text-xs" data-testid="drawer-linked-task">
+                          {item.linked_task_title || item.linked_task_id || item.linkedTaskId || 'None'}
                         </dd>
                       </div>
                       <div>
                         <dt className="text-muted text-[10px] uppercase font-medium">Linked Invoice</dt>
-                        <dd className="text-ink font-mono text-xs">
-                          {item.linked_invoice_id || item.linkedInvoiceId || 'None'}
+                        <dd
+                          className="text-ink font-mono text-xs flex items-center gap-1.5 flex-wrap"
+                          data-testid="drawer-linked-invoice"
+                        >
+                          {linkedInvNumber || item.linked_invoice_id || item.linkedInvoiceId ? (
+                            <>
+                              <span className="font-semibold">
+                                {linkedInvNumber || item.linked_invoice_id || item.linkedInvoiceId}
+                              </span>
+                              {linkedInvStatus && (
+                                <span
+                                  className={cn(
+                                    'px-1.5 py-0.5 rounded-[4px] text-[10px] font-sans font-semibold border',
+                                    linkedInvStatus === 'Paid' || linkedInvStatus === 'Partially Paid'
+                                      ? 'bg-success-surface text-success border-success-border'
+                                      : 'bg-warning-surface text-warning border-warning-border'
+                                  )}
+                                  data-testid="drawer-linked-invoice-status"
+                                >
+                                  {linkedInvStatus}
+                                </span>
+                              )}
+                              {linkedInvBalance !== null && linkedInvBalance !== undefined && (
+                                <span className="text-[11px] text-muted font-sans">
+                                  (Bal: ₱
+                                  {Number(linkedInvBalance).toLocaleString('en-PH', {
+                                    minimumFractionDigits: 2,
+                                  })}
+                                  )
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            'None'
+                          )}
                         </dd>
                       </div>
                       <div className="col-span-2">
                         <dt className="text-muted text-[10px] uppercase font-medium">Linked Transmittal</dt>
-                        <dd className="text-ink font-mono text-xs">
-                          {item.linked_transmittal_id || item.linkedTransmittalId || 'None'}
+                        <dd
+                          className="text-ink font-mono text-xs flex items-center gap-1.5 flex-wrap"
+                          data-testid="drawer-linked-transmittal"
+                        >
+                          {linkedTrNumber || item.linked_transmittal_id || item.linkedTransmittalId ? (
+                            <>
+                              <span className="font-semibold">
+                                {linkedTrNumber || item.linked_transmittal_id || item.linkedTransmittalId}
+                              </span>
+                              {linkedTrStatus && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded-[4px] text-[10px] font-sans font-semibold bg-canvas text-ink border border-border"
+                                  data-testid="drawer-linked-transmittal-status"
+                                >
+                                  {linkedTrStatus}
+                                </span>
+                              )}
+                              {linkedTrRecipient && (
+                                <span className="text-[11px] text-muted font-sans">
+                                  — {linkedTrRecipient}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            'None'
+                          )}
                         </dd>
                       </div>
                     </dl>
@@ -793,6 +971,40 @@ export function DisbursementDetailBody({
 
                 {/* Tab 3: Approval */}
                 <TabsContent value="approval" data-testid="tab-content-approval" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
+                  {/* Billing-Controlled Lifecycle Callout Banner */}
+                  {isBillingControlled && (
+                    <div
+                      className="p-3 bg-primary/5 border border-primary/20 rounded-[6px] space-y-1.5 text-xs"
+                      data-testid="detail-billing-controlled-banner"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-primary flex items-center gap-1.5">
+                          <Receipt className="h-4 w-4 text-primary" />
+                          Billing-Controlled Lifecycle
+                        </span>
+                        <span className="font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary text-[11px]">
+                          {linkedInvNumber || 'Invoice'} {linkedInvStatus ? `(${linkedInvStatus})` : ''}
+                        </span>
+                      </div>
+                      <p className="text-ink text-[11px]">
+                        This voucher is backed by Client Funds and billed to the client via invoice{' '}
+                        <span className="font-mono font-semibold">{linkedInvNumber || 'Invoice'}</span>.
+                        {linkedInvBalance != null && (
+                          <> Remaining balance: <span className="font-mono font-bold">₱{Number(linkedInvBalance).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>.</>
+                        )}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted border-t border-primary/10">
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Issued → <span className="text-primary font-semibold">Funded</span>
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Paid → <span className="text-success font-semibold">Released</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Approval Review Status Card */}
                   <div className="p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft">
                     <div className="flex items-center justify-between">
@@ -880,6 +1092,40 @@ export function DisbursementDetailBody({
 
                 {/* Tab 4: Payment */}
                 <TabsContent value="payment" data-testid="tab-content-payment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto space-y-1.5 p-2 text-[11px] data-[state=inactive]:hidden" : "mt-4 space-y-4 data-[state=inactive]:hidden")}>
+                  {/* Billing-Controlled Lifecycle Callout Banner */}
+                  {isBillingControlled && (
+                    <div
+                      className="p-3 bg-primary/5 border border-primary/20 rounded-[6px] space-y-1.5 text-xs"
+                      data-testid="detail-billing-controlled-banner"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-primary flex items-center gap-1.5">
+                          <Receipt className="h-4 w-4 text-primary" />
+                          Billing-Controlled Lifecycle
+                        </span>
+                        <span className="font-mono font-semibold px-2 py-0.5 rounded bg-primary/10 text-primary text-[11px]">
+                          {linkedInvNumber || 'Invoice'} {linkedInvStatus ? `(${linkedInvStatus})` : ''}
+                        </span>
+                      </div>
+                      <p className="text-ink text-[11px]">
+                        This voucher is backed by Client Funds and billed to the client via invoice{' '}
+                        <span className="font-mono font-semibold">{linkedInvNumber || 'Invoice'}</span>.
+                        {linkedInvBalance != null && (
+                          <> Remaining balance: <span className="font-mono font-bold">₱{Number(linkedInvBalance).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</span>.</>
+                        )}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted border-t border-primary/10">
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Issued → <span className="text-primary font-semibold">Funded</span>
+                        </span>
+                        <span>•</span>
+                        <span className="flex items-center gap-1 font-medium text-ink">
+                          Invoice Paid → <span className="text-success font-semibold">Released</span>
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="p-3.5 bg-surface rounded-md border border-border space-y-3 shadow-soft">
                     <div className="flex items-center justify-between">
                       <h4 className="font-semibold text-ink text-xs flex items-center gap-1.5">
@@ -1020,7 +1266,7 @@ export function DisbursementDetailBody({
                       )}
 
                       {/* Approved -> Prepare Payment (Accounting / Admin) */}
-                      {item.status === 'Approved' && canFund && (
+                      {item.status === 'Approved' && canFund && !isBillingControlled && (
                         <Button
                           type="button"
                           variant="default"
@@ -1035,7 +1281,7 @@ export function DisbursementDetailBody({
                       )}
 
                       {/* Funded -> Sanction Payment Release (Admin including preparer) */}
-                      {item.status === 'Funded' && isAdmin && (
+                      {item.status === 'Funded' && isAdmin && !isBillingControlled && (
                         <>
                           <Button
                             type="button"

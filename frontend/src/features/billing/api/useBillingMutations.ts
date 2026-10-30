@@ -3,6 +3,8 @@ import { runBlockingAction } from '@/features/operations/components/BlockingActi
 import { useSessionStore } from '@/lib/session';
 import { broadcastEntityChange } from '@/lib/tabSync';
 import { billingKeys } from './queryKeys';
+import { disbursementKeys } from '@/features/disbursements/api/queryKeys';
+import { transmittalKeys } from '@/features/transmittals/api/queryKeys';
 import type {
   Invoice,
   InvoiceListResponse,
@@ -68,6 +70,8 @@ export async function createInvoiceAction(
       billingKeys.invoices(),
       billingKeys.counts(activeEntity),
       billingKeys.aging(activeEntity),
+      disbursementKeys.all,
+      transmittalKeys.all,
     ],
   });
 }
@@ -111,6 +115,8 @@ export async function updateInvoiceAction(
     invalidateQueries: [
       billingKeys.counts(entity),
       billingKeys.aging(entity),
+      disbursementKeys.all,
+      transmittalKeys.all,
     ],
   });
 }
@@ -171,6 +177,8 @@ export async function deleteInvoiceAction(
       billingKeys.invoices(),
       billingKeys.counts(activeEntity),
       billingKeys.aging(activeEntity),
+      disbursementKeys.all,
+      transmittalKeys.all,
     ],
   });
 }

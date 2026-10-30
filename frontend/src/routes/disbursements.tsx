@@ -65,6 +65,8 @@ function useIsDesktop() {
 export default function DisbursementsPage() {
   // Realtime CDC Subscriptions (Parcel E) — kept active across all tabs
   useEntityRealtimeSync({ table: 'disbursements' });
+  useEntityRealtimeSync({ table: 'invoices' });
+  useEntityRealtimeSync({ table: 'transmittals' });
   const [searchParams, setSearchParams] = useSearchParams();
   const rawActiveTab = searchParams.get('tab') || 'all';
 
@@ -455,21 +457,33 @@ export default function DisbursementsPage() {
             />
           }
           grid={
-            <div className="h-full">
+            <div className="h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden">
               {isAllowedPendingApprovals && (
-                <TabsContent value="pending-approvals" className="mt-0 space-y-4">
-                  <AdminApprovalQueue onSelectDisbursement={(id) => setSelectedDisbursementId(id)} />
+                <TabsContent
+                  value="pending-approvals"
+                  className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+                >
+                  <AdminApprovalQueue
+                    selectedId={selectedDisbursementId}
+                    onSelectDisbursement={(id) => setSelectedDisbursementId(id)}
+                  />
                 </TabsContent>
               )}
 
-              <TabsContent value="all" className="mt-0 space-y-4">
+              <TabsContent
+                value="all"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   onSelectDisbursement={(id) => setSelectedDisbursementId(id)}
                 />
               </TabsContent>
 
-              <TabsContent value="drafts" className="mt-0 space-y-4">
+              <TabsContent
+                value="drafts"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   statusFilter="Draft"
@@ -477,7 +491,10 @@ export default function DisbursementsPage() {
                 />
               </TabsContent>
 
-              <TabsContent value="approved" className="mt-0 space-y-4">
+              <TabsContent
+                value="approved"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   statusFilter="Approved"
@@ -485,7 +502,10 @@ export default function DisbursementsPage() {
                 />
               </TabsContent>
 
-              <TabsContent value="funded" className="mt-0 space-y-4">
+              <TabsContent
+                value="funded"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   statusFilter="Funded"
@@ -493,7 +513,10 @@ export default function DisbursementsPage() {
                 />
               </TabsContent>
 
-              <TabsContent value="released" className="mt-0 space-y-4">
+              <TabsContent
+                value="released"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   statusFilter="Released"
@@ -501,7 +524,10 @@ export default function DisbursementsPage() {
                 />
               </TabsContent>
 
-              <TabsContent value="rejected" className="mt-0 space-y-4">
+              <TabsContent
+                value="rejected"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
                 <DisbursementsTable
                   selectedId={selectedDisbursementId}
                   statusFilter="Rejected"
@@ -509,8 +535,14 @@ export default function DisbursementsPage() {
                 />
               </TabsContent>
 
-              <TabsContent value="archive" className="mt-0 space-y-4">
-                <DisbursementArchiveTab onSelectDisbursement={(id) => setSelectedDisbursementId(id)} />
+              <TabsContent
+                value="archive"
+                className="mt-0 h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden data-[state=inactive]:hidden"
+              >
+                <DisbursementArchiveTab
+                  selectedId={selectedDisbursementId}
+                  onSelectDisbursement={(id) => setSelectedDisbursementId(id)}
+                />
               </TabsContent>
             </div>
           }

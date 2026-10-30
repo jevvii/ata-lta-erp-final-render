@@ -28,11 +28,11 @@ export function DisbursementWorkspace({
       data-testid="disbursement-workspace"
     >
       {/* 3-Pane Center Layout: Action Rail | Queue Grid | Detail Pane */}
-      <div className="flex flex-col lg:flex-row items-stretch min-h-[500px] lg:h-[calc(100vh-280px)] w-full overflow-hidden">
+      <div className="flex flex-col lg:flex-row items-stretch h-[calc(100dvh-220px)] sm:h-[calc(100dvh-240px)] lg:h-[calc(100vh-280px)] min-h-[440px] w-full overflow-hidden">
         {/* Left Action Rail Slot (Rendered only if rail content is passed) */}
         {rail ? (
           <aside
-            className="hidden lg:flex flex-col w-[var(--pane-rail-width,150px)] shrink-0 bg-surface border-r border-border overflow-y-auto overscroll-contain"
+            className="hidden lg:flex flex-col w-[var(--pane-rail-width,150px)] shrink-0 h-full min-h-0 bg-surface border-r border-border overflow-y-auto overscroll-contain"
             data-testid="disbursement-workspace-rail"
           >
             {rail}
@@ -41,7 +41,7 @@ export function DisbursementWorkspace({
 
         {/* Center Queue Grid */}
         <section
-          className="flex-1 min-w-0 bg-surface overflow-hidden flex flex-col"
+          className="flex-1 min-w-0 min-h-0 h-full bg-surface overflow-hidden flex flex-col"
           data-testid="disbursement-workspace-grid"
         >
           {grid}
@@ -51,7 +51,7 @@ export function DisbursementWorkspace({
         <aside
           id="disbursement-detail-pane"
           className={cn(
-            'hidden lg:flex flex-col shrink-0 bg-surface border-l border-border overflow-hidden transition-[width] duration-150 motion-safe:ease-out',
+            'hidden lg:flex flex-col shrink-0 h-full min-h-0 bg-surface border-l border-border overflow-hidden transition-[width] duration-150 motion-safe:ease-out',
             detailCollapsed
               ? 'w-[var(--pane-detail-collapsed)]'
               : 'w-[var(--pane-detail-width)]'

@@ -48,6 +48,7 @@ export function FundDisbursementModal({
   const [bank, setBank] = useState('');
   const [reference, setReference] = useState('');
   const [date, setDate] = useState(() => getLocalTodayDate());
+  const [sopVerified, setSopVerified] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const isSubmittingRef = useRef(false);
@@ -71,6 +72,7 @@ export function FundDisbursementModal({
       setBank(disbursement.payment_bank || disbursement.paymentBank || '');
       setReference(disbursement.payment_reference || disbursement.paymentReference || '');
       setDate(disbursement.payment_date || disbursement.paymentDate || getLocalTodayDate());
+      setSopVerified(false);
       setErrors({});
     }
   }, [isOpen, disbursement, contextKey]);
@@ -84,6 +86,18 @@ export function FundDisbursementModal({
 
   const isInvalidLifecycle = disbursement.lifecycle_version !== 2;
   const isMissingVersion = typeof disbursement.version !== 'number' || disbursement.version < 1;
+  const isClientFund =
+    (disbursement.fund_source ||
+      disbursement.fundSource ||
+      disbursement.source_of_funds ||
+      disbursement.sourceOfFunds) === 'Client Fund';
+  const linkedInvStatus =
+    disbursement.linked_invoice_summary?.status ||
+    disbursement.linked_invoice_status ||
+    disbursement.linked_invoice?.status ||
+    null;
+  const isClientFundPaid = linkedInvStatus === 'Paid';
+  const requiresSopVerification = isClientFund && !isClientFundPaid;
 
   const validate = (): boolean => {
     if (isInvalidLifecycle) {
@@ -318,6 +332,34 @@ export function FundDisbursementModal({
             )}
           </div>
 
+          {requiresSopVerification && (
+            <div
+              className="p-3 bg-warning-surface border border-warning-border rounded-[6px] space-y-2 text-xs text-warning"
+              data-testid="sop-client-fund-gate"
+            >
+              <div className="flex items-center gap-1.5 font-bold">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>SOP Step 2.5 — Client Fund Verification Required</span>
+              </div>
+              <p className="text-xs">
+                This Client Fund voucher does not have a Paid/Partially Paid client invoice linked.
+              </p>
+              <label className="flex items-start gap-2 cursor-pointer font-medium text-ink pt-1">
+                <input
+                  type="checkbox"
+                  checked={sopVerified}
+                  onChange={(e) => setSopVerified(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                  data-testid="sop-client-fund-confirm-checkbox"
+                />
+                <span>
+                  I confirm client payment has been verified or an approved standing arrangement
+                  applies (SOP Step 2.5 / Section 7.1).
+                </span>
+              </label>
+            </div>
+          )}
+
           <DialogFooter className="flex items-center justify-end gap-2 pt-2">
             <Button
               type="button"
@@ -333,7 +375,13 @@ export function FundDisbursementModal({
               type="submit"
               variant="default"
               size="sm"
-              disabled={isPending || isSubmitting || isInvalidLifecycle || isMissingVersion}
+              disabled={
+                isPending ||
+                isSubmitting ||
+                isInvalidLifecycle ||
+                isMissingVersion ||
+                (requiresSopVerification && !sopVerified)
+              }
               className="text-xs font-semibold bg-primary hover:bg-primary-hover text-inverse disabled:opacity-50 disabled:cursor-not-allowed"
               data-testid="btn-confirm-fund"
             >

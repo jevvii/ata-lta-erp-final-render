@@ -415,6 +415,27 @@ export function InvoiceDetailModal({
                   </span>
                 </p>
               )}
+              {(invoice.linked_transmittal_summary?.tracking_number ||
+                invoice.linked_transmittal?.tracking_number ||
+                invoice.linked_transmittal_tracking_number ||
+                invoice.linked_transmittal_id) && (
+                <p className="text-xs text-[#475569] mt-0.5" data-testid="invoice-linked-transmittal">
+                  Linked Transmittal:{' '}
+                  <span className="font-mono font-semibold text-[#1E293B]">
+                    {invoice.linked_transmittal_summary?.tracking_number ||
+                      invoice.linked_transmittal?.tracking_number ||
+                      invoice.linked_transmittal_tracking_number ||
+                      invoice.linked_transmittal_id}
+                  </span>
+                  {(invoice.linked_transmittal_summary?.status ||
+                    invoice.linked_transmittal?.status) && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded bg-slate-100 text-[#1E293B] text-[10px] font-semibold">
+                      {invoice.linked_transmittal_summary?.status ||
+                        invoice.linked_transmittal?.status}
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
 
             {/* Quick Actions Bar */}
@@ -744,6 +765,51 @@ export function InvoiceDetailModal({
             </div>
           )}
         </div>
+
+        {/* 4b. Linked Disbursements (SOP Step 2.5 / Reimbursable Vouchers) */}
+        {invoice.linked_disbursements && invoice.linked_disbursements.length > 0 && (
+          <div className="space-y-2" data-testid="invoice-linked-disbursements">
+            <h4 className="text-xs font-bold text-[#1E293B] tracking-normal">
+              Linked Disbursements ({invoice.linked_disbursements.length})
+            </h4>
+            <div className="border border-[#E2E8F0] rounded-[6px] overflow-hidden">
+              <Table>
+                <TableHeader className="bg-[#F8FAFC]">
+                  <TableRow>
+                    <TableHead className="text-xs font-semibold">Voucher #</TableHead>
+                    <TableHead className="text-xs font-semibold">Category</TableHead>
+                    <TableHead className="text-xs font-semibold">Description</TableHead>
+                    <TableHead className="text-xs font-semibold">Fund Source</TableHead>
+                    <TableHead className="text-xs font-semibold">Status</TableHead>
+                    <TableHead className="text-xs font-semibold text-right">Amount</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {invoice.linked_disbursements.map((d) => (
+                    <TableRow key={d.id} data-testid={`invoice-linked-disbursement-${d.id}`}>
+                      <TableCell className="text-xs font-mono font-semibold text-[#1E293B] py-2">
+                        {d.disbursement_number || `DISB-${d.id.slice(0, 8)}`}
+                      </TableCell>
+                      <TableCell className="text-xs text-[#475569] py-2">{d.category}</TableCell>
+                      <TableCell className="text-xs text-[#1E293B] py-2">
+                        {d.description}
+                      </TableCell>
+                      <TableCell className="text-xs text-[#475569] py-2">
+                        {d.fund_source}
+                      </TableCell>
+                      <TableCell className="text-xs font-medium text-[#1E293B] py-2">
+                        {d.status}
+                      </TableCell>
+                      <TableCell className="text-xs tabular-nums font-semibold text-[#1E293B] text-right py-2">
+                        {formatCurrency(d.amount)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
 
         {/* 5. Notes & Terms */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 border-t border-[#E2E8F0]">

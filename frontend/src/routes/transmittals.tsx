@@ -43,9 +43,13 @@ import {
   useTransmittalCounts,
   useUpdateTransmittal,
 } from '@/features/transmittals/api/useTransmittals';
+import { useEntityRealtimeSync } from '@/lib/realtime';
 import type { Transmittal, EntityCode } from '@/features/transmittals/api/types';
 
 export default function TransmittalsPage() {
+  useEntityRealtimeSync({ table: 'transmittals' });
+  useEntityRealtimeSync({ table: 'disbursements' });
+  useEntityRealtimeSync({ table: 'invoices' });
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'active';
   const viewMode = (searchParams.get('view') || 'kanban') as 'kanban' | 'table';

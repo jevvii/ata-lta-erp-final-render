@@ -15,6 +15,7 @@ import { useSessionStore } from '@/lib/session';
 import { isConcurrencyConflictError } from '@/components/common/ConflictResolutionModal';
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import type { Disbursement } from '../api/types';
+import { isBillingControlledDisbursement } from '../api/types';
 import { useLiveModalContext } from '../lib/useLiveModalContext';
 
 export interface ReleaseFundsModalProps {
@@ -36,6 +37,7 @@ export function ReleaseFundsModal({
   const currentUser = useSessionStore((state) => state.user);
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sopVerified, setSopVerified] = useState(false);
   const isSubmittingRef = useRef(false);
 
   const { captureContext, contextKey } = useLiveModalContext({
@@ -47,6 +49,7 @@ export function ReleaseFundsModal({
   useEffect(() => {
     isSubmittingRef.current = false;
     setIsSubmitting(false);
+    setSopVerified(false);
   }, [contextKey]);
 
   if (!isOpen || !disbursement) return null;
@@ -55,8 +58,25 @@ export function ReleaseFundsModal({
   const isMissingVersion = typeof disbursement.version !== 'number' || disbursement.version < 1;
 
   const isAdmin = currentUser?.role === 'Admin';
+  const isClientFund =
+    (disbursement.fund_source ||
+      disbursement.fundSource ||
+      disbursement.source_of_funds ||
+      disbursement.sourceOfFunds) === 'Client Fund';
+  const linkedInvStatus =
+    disbursement.linked_invoice_summary?.status ||
+    disbursement.linked_invoice_status ||
+    disbursement.linked_invoice?.status ||
+    null;
+  const isClientFundPaid = linkedInvStatus === 'Paid';
+  const requiresSopVerification = isClientFund && !isClientFundPaid;
 
-  const canSubmit = !isSubmitting && isAdmin && !isInvalidLifecycle && !isMissingVersion;
+  const canSubmit =
+    !isSubmitting &&
+    isAdmin &&
+    !isInvalidLifecycle &&
+    !isMissingVersion &&
+    (!requiresSopVerification || sopVerified);
 
   const validate = (): boolean => {
     if (isInvalidLifecycle) {
@@ -209,6 +229,34 @@ export function ReleaseFundsModal({
             </div>
           </div>
 
+          {requiresSopVerification && (
+            <div
+              className="p-3 bg-warning-surface border border-warning-border rounded-[6px] space-y-2 text-xs text-warning"
+              data-testid="sop-client-fund-gate"
+            >
+              <div className="flex items-center gap-1.5 font-bold">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>SOP Step 2.5 — Client Fund Verification Required</span>
+              </div>
+              <p className="text-xs">
+                This Client Fund voucher does not have a Paid/Partially Paid client invoice linked.
+              </p>
+              <label className="flex items-start gap-2 cursor-pointer font-medium text-ink pt-1">
+                <input
+                  type="checkbox"
+                  checked={sopVerified}
+                  onChange={(e) => setSopVerified(e.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                  data-testid="sop-client-fund-confirm-checkbox"
+                />
+                <span>
+                  I confirm client payment has been verified or an approved standing arrangement
+                  applies (SOP Step 2.5 / Section 7.1).
+                </span>
+              </label>
+            </div>
+          )}
+
           {error && (
             <div
               className="p-2.5 bg-danger-surface border border-danger-border rounded-[6px] text-xs text-danger flex items-center gap-1.5"
@@ -265,6 +313,25 @@ export function FundsReleaseActions({ disbursement, onSuccess }: FundsReleaseAct
   // Legacy records have no financial actions
   if (disbursement.lifecycle_version === 1) {
     return null;
+  }
+
+  if (isBillingControlledDisbursement(disbursement)) {
+    const linkedInvNumber =
+      disbursement.linked_invoice_number ||
+      disbursement.linkedInvoiceNumber ||
+      disbursement.linked_invoice?.invoice_number ||
+      (disbursement as { linked_invoice_summary?: { invoice_number?: string } }).linked_invoice_summary?.invoice_number ||
+      'Invoice';
+    return (
+      <div className="flex items-center gap-2" data-testid="funds-release-actions">
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-primary/10 text-primary border border-primary/20"
+          data-testid="billing-controlled-badge"
+        >
+          Billing Controlled ({linkedInvNumber})
+        </span>
+      </div>
+    );
   }
 
   const canShowFund = disbursement.status === 'Approved' && (isAdmin || isAccounting);

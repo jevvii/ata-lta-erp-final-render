@@ -83,10 +83,10 @@ export interface Disbursement {
   category: DisbursementCategory | string;
   description: string;
   amount: number;
-  fund_source: FundSource;
+  fund_source?: FundSource;
   fundSource?: FundSource;
   status: DisbursementStatus;
-  linked_work_request_id: string;
+  linked_work_request_id?: string;
   linkedWorkRequestId?: string;
   linked_invoice_id?: string | null;
   linkedInvoiceId?: string | null;
@@ -172,6 +172,61 @@ export interface Disbursement {
   lifecycleHistory?: DisbursementLifecycleEvent[];
   linked_work_request_name?: string | null;
   linked_work_request_order_number?: string | null;
+  linked_invoice_number?: string | null;
+  linkedInvoiceNumber?: string | null;
+  task_id?: string | null;
+  taskId?: string | null;
+  linked_invoice_status?: string | null;
+  linked_invoice_total?: number | null;
+  linked_invoice_amount_paid?: number | null;
+  linked_invoice_balance?: number | null;
+  is_billing_controlled?: boolean;
+  isBillingControlled?: boolean;
+  linked_invoice?: {
+    id: string;
+    invoice_number: string;
+    status: string;
+    total: number;
+    amount_paid: number;
+    balance: number;
+    due_date?: string | null;
+  } | null;
+  linked_transmittal_tracking_number?: string | null;
+  linked_transmittal_status?: string | null;
+  linked_transmittal_recipient_name?: string | null;
+  linked_transmittal?: {
+    id: string;
+    tracking_number: string;
+    status: string;
+    recipient_name?: string | null;
+    approved?: boolean;
+  } | null;
+  source_of_funds?: FundSource;
+  sourceOfFunds?: FundSource;
+  work_request_id?: string | null;
+  workRequestId?: string | null;
+  linked_task_summary?: {
+    id?: string;
+    task_number?: string | null;
+    title?: string | null;
+    status?: string | null;
+  } | null;
+  linked_invoice_summary?: {
+    id?: string;
+    invoice_number?: string;
+    status?: string;
+    total?: number;
+    total_amount?: number;
+    amount_paid?: number;
+    balance?: number;
+  } | null;
+  linked_transmittal_summary?: {
+    id?: string;
+    tracking_number?: string;
+    status?: string;
+    recipient_name?: string | null;
+  } | null;
+  linked_task_title?: string | null;
   employee_name?: string | null;
   employeeName?: string | null;
   requested_by_name?: string | null;
@@ -265,6 +320,10 @@ export interface DisbursementFilters {
   status?: DisbursementStatus;
   category?: string;
   fundSource?: FundSource;
+  clientId?: string;
+  workRequestId?: string;
+  linkedWorkRequestId?: string;
+  linkedInvoiceId?: string;
   linkedTaskId?: string;
   linkedTransmittalId?: string;
   search?: string;
@@ -500,4 +559,25 @@ export interface DisbursementTemplatesResponse {
 
 export interface DisbursementTemplateDetailResponse {
   data: DisbursementTemplate;
+}
+
+export function isBillingControlledDisbursement(item?: Disbursement | null): boolean {
+  if (!item) return false;
+  if (typeof item.is_billing_controlled === 'boolean') return item.is_billing_controlled;
+  if (typeof item.isBillingControlled === 'boolean') return item.isBillingControlled;
+  const fundSource =
+    item.fund_source ||
+    item.fundSource ||
+    (item as { source_of_funds?: string; sourceOfFunds?: string }).source_of_funds ||
+    (item as { source_of_funds?: string; sourceOfFunds?: string }).sourceOfFunds;
+  const linkedInvId = item.linked_invoice_id || item.linkedInvoiceId || item.linked_invoice?.id;
+  const linkedInvStatus =
+    item.linked_invoice_status ||
+    item.linked_invoice?.status ||
+    (item as { linked_invoice_summary?: { status?: string } }).linked_invoice_summary?.status;
+  return (
+    fundSource === 'Client Fund' &&
+    Boolean(linkedInvId) &&
+    linkedInvStatus !== 'Cancelled'
+  );
 }

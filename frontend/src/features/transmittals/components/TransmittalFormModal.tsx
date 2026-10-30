@@ -49,6 +49,10 @@ import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
+import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
+import type { Disbursement } from '@/features/disbursements/api/types';
+import { useInvoices } from '@/features/billing/api/useInvoices';
+import type { Invoice } from '@/features/billing/api/types';
 import { useCreateTransmittal, useUpdateTransmittal } from '../api/useTransmittals';
 import { DOCUMENT_CATEGORIES } from '../api/schemas';
 import type { Transmittal, CreateTransmittalItemInput } from '../api/types';
@@ -109,6 +113,48 @@ export function TransmittalFormModal({
   const [items, setItems] = useState<FormLineItem[]>([
     { id: 'item-1', description: '', documentType: 'Contract', quantity: 1 },
   ]);
+  const [linkedDisbursementIds, setLinkedDisbursementIds] = useState<string[]>([]);
+  const [linkedInvoiceIds, setLinkedInvoiceIds] = useState<string[]>([]);
+
+  // Fetch Work Request Disbursements & Invoices for 1-click OR / Billing Statement import
+  const { data: wrDisbursementsData } = useDisbursements(
+    { workRequestId: workRequestId || undefined, archived: false, limit: 100 },
+    { enabled: isOpen && Boolean(workRequestId) }
+  );
+  const availableDisbursements = React.useMemo(() => {
+    if (!workRequestId) return [];
+    const list = Array.isArray(wrDisbursementsData?.data) ? wrDisbursementsData.data : [];
+    const currentTransmittalId = transmittalToEdit?.id;
+    return list.filter(
+      (d) =>
+        !d.archived &&
+        d.status !== 'Rejected' &&
+        d.status !== 'Cancelled' &&
+        (d.work_request_id || d.workRequestId) === workRequestId &&
+        !linkedDisbursementIds.includes(d.id) &&
+        (!currentTransmittalId ||
+          (d.linked_transmittal_id ?? d.linkedTransmittalId ?? null) !== currentTransmittalId)
+    );
+  }, [wrDisbursementsData, workRequestId, linkedDisbursementIds, transmittalToEdit?.id]);
+
+  const { data: wrInvoicesData } = useInvoices(
+    { workRequestId: workRequestId || undefined, archived: false, limit: 100 },
+    { enabled: isOpen && Boolean(workRequestId) }
+  );
+  const availableInvoices = React.useMemo(() => {
+    if (!workRequestId) return [];
+    const list = Array.isArray(wrInvoicesData?.data) ? wrInvoicesData.data : [];
+    const currentTransmittalId = transmittalToEdit?.id;
+    return list.filter(
+      (inv) =>
+        !inv.archived &&
+        inv.status !== 'Cancelled' &&
+        inv.work_request_id === workRequestId &&
+        !linkedInvoiceIds.includes(inv.id) &&
+        (!currentTransmittalId ||
+          (inv.linked_transmittal_id ?? inv.linkedTransmittalId ?? null) !== currentTransmittalId)
+    );
+  }, [wrInvoicesData, workRequestId, linkedInvoiceIds, transmittalToEdit?.id]);
 
   // Filter available work requests by clientId when client is selected or prefilled (Contract Rule 3)
   const availableWorkRequests = React.useMemo(() => {
@@ -186,6 +232,8 @@ export function TransmittalFormModal({
         } else {
           setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
         }
+        setLinkedDisbursementIds([]);
+        setLinkedInvoiceIds([]);
       } else {
         // Create defaults
         setTrackingNumber('Auto-generated on Save');
@@ -196,6 +244,8 @@ export function TransmittalFormModal({
         setRecipientDetails('');
         setNotes('');
         setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
+        setLinkedDisbursementIds([]);
+        setLinkedInvoiceIds([]);
       }
     } else {
       // Modal closed: reset form state so reopening does not leak stale values
@@ -206,6 +256,8 @@ export function TransmittalFormModal({
       setRecipientDetails('');
       setNotes('');
       setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
+      setLinkedDisbursementIds([]);
+      setLinkedInvoiceIds([]);
     }
     setErrors({});
   }, [transmittalToEdit, isOpen, prefill]);
@@ -227,6 +279,8 @@ export function TransmittalFormModal({
       if (currentWr && (currentWr.client_id || currentWr.clientId) !== newClientId) {
         setWorkRequestId('');
         setSelectedTaskId('');
+        setLinkedDisbursementIds([]);
+        setLinkedInvoiceIds([]);
       }
     }
   };
@@ -234,6 +288,8 @@ export function TransmittalFormModal({
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
     setSelectedTaskId('');
+    setLinkedDisbursementIds([]);
+    setLinkedInvoiceIds([]);
     if (errors.workRequestId) {
       setErrors((prev) => {
         const copy = { ...prev };
@@ -292,6 +348,53 @@ export function TransmittalFormModal({
       })
     );
     // Clear items error
+    if (errors.items) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.items;
+        return next;
+      });
+    }
+  };
+
+  const handleImportDisbursementOr = (d: Disbursement) => {
+    const disbNum = d.disbursement_number || d.disbursementNumber || `DISB-${d.id.slice(0, 8)}`;
+    const newItem: FormLineItem = {
+      id: `item-disb-${d.id}`,
+      description: `Official Receipt — ${disbNum}: ${d.description}`,
+      documentType: 'Others',
+      quantity: 1,
+    };
+    setItems((prev) => {
+      if (prev.length === 1 && !prev[0]!.description.trim()) {
+        return [newItem];
+      }
+      return [...prev, newItem];
+    });
+    setLinkedDisbursementIds((prev) => (prev.includes(d.id) ? prev : [...prev, d.id]));
+    if (errors.items) {
+      setErrors((prev) => {
+        const next = { ...prev };
+        delete next.items;
+        return next;
+      });
+    }
+  };
+
+  const handleImportInvoice = (inv: Invoice) => {
+    const newItem: FormLineItem = {
+      id: `item-inv-${inv.id}`,
+      description: `Billing Statement — ${inv.invoice_number}`,
+      documentType: 'Others',
+      quantity: 1,
+    };
+    setItems((prev) => {
+      if (prev.length === 1 && !prev[0]!.description.trim()) {
+        return [newItem];
+      }
+      return [...prev, newItem];
+    });
+    setLinkedInvoiceIds((prev) => (prev.includes(inv.id) ? prev : [...prev, inv.id]));
     if (errors.items) {
       setErrors((prev) => {
         const next = { ...prev };
@@ -361,6 +464,8 @@ export function TransmittalFormModal({
             recipientDetails: recipientDetails.trim() || null,
             notes: notes.trim() || null,
             expectedVersion: transmittalToEdit.version,
+            ...(linkedDisbursementIds.length > 0 ? { linkedDisbursementIds } : {}),
+            ...(linkedInvoiceIds.length > 0 ? { linkedInvoiceIds } : {}),
           },
         });
       } else {
@@ -372,6 +477,8 @@ export function TransmittalFormModal({
           recipientName: recipientName.trim() || null,
           recipientDetails: recipientDetails.trim() || null,
           notes: notes.trim() || null,
+          ...(linkedDisbursementIds.length > 0 ? { linkedDisbursementIds } : {}),
+          ...(linkedInvoiceIds.length > 0 ? { linkedInvoiceIds } : {}),
         });
       }
       onClose();
@@ -634,6 +741,104 @@ export function TransmittalFormModal({
                 <span>{errors.items}</span>
               </div>
             )}
+
+            {/* 1-Click Import from Work Request (Official Receipts & Invoices) */}
+            {workRequestId &&
+              (availableDisbursements.length > 0 ||
+                availableInvoices.length > 0 ||
+                linkedDisbursementIds.length > 0 ||
+                linkedInvoiceIds.length > 0) && (
+                <div
+                  className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[8px] space-y-2"
+                  data-testid="transmittal-import-panel"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#1E293B]">
+                      Import from Work Request (Official Receipts &amp; Invoices)
+                    </span>
+                    {(linkedDisbursementIds.length > 0 || linkedInvoiceIds.length > 0) && (
+                      <span
+                        className="text-xs font-semibold text-emerald-700"
+                        data-testid="transmittal-imported-count"
+                      >
+                        {linkedDisbursementIds.length + linkedInvoiceIds.length} record(s) linked
+                      </span>
+                    )}
+                  </div>
+
+                  {availableDisbursements.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold text-[#475569] block">
+                        Disbursement Official Receipts ({availableDisbursements.length})
+                      </span>
+                      <div className="max-h-24 overflow-y-auto space-y-1">
+                        {availableDisbursements.map((d) => {
+                          const disbNum =
+                            d.disbursement_number || d.disbursementNumber || `DISB-${d.id.slice(0, 8)}`;
+                          return (
+                            <div
+                              key={d.id}
+                              className="flex items-center justify-between gap-2 text-xs bg-white px-2.5 py-1.5 rounded border border-[#E2E8F0]"
+                              data-testid={`transmittal-import-disb-row-${d.id}`}
+                            >
+                              <div className="min-w-0 flex-1 truncate">
+                                <span className="font-mono font-semibold text-[#1E293B] mr-1.5">
+                                  {disbNum}
+                                </span>
+                                <span className="text-[#475569]">{d.description}</span>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleImportDisbursementOr(d)}
+                                className="h-6 px-2 text-xs font-semibold text-[#1D4ED8] hover:bg-blue-50 shrink-0"
+                                data-testid={`btn-import-disb-or-${d.id}`}
+                              >
+                                + Import OR
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {availableInvoices.length > 0 && (
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold text-[#475569] block">
+                        Invoices / Billing Statements ({availableInvoices.length})
+                      </span>
+                      <div className="max-h-24 overflow-y-auto space-y-1">
+                        {availableInvoices.map((inv) => (
+                          <div
+                            key={inv.id}
+                            className="flex items-center justify-between gap-2 text-xs bg-white px-2.5 py-1.5 rounded border border-[#E2E8F0]"
+                            data-testid={`transmittal-import-invoice-row-${inv.id}`}
+                          >
+                            <div className="min-w-0 flex-1 truncate">
+                              <span className="font-mono font-semibold text-[#1E293B] mr-1.5">
+                                {inv.invoice_number}
+                              </span>
+                              <span className="text-[#475569]">{inv.status}</span>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleImportInvoice(inv)}
+                              className="h-6 px-2 text-xs font-semibold text-[#1D4ED8] hover:bg-blue-50 shrink-0"
+                              data-testid={`btn-import-invoice-${inv.id}`}
+                            >
+                              + Import Statement
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
             {/* Line Items Table */}
             <div className="space-y-2">
