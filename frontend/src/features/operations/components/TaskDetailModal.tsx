@@ -55,7 +55,6 @@ import {
   useWorkRequestTasks,
   useTaskDetail,
 } from '../api/useTasks';
-import { useCreateOperationsRequest, useOperationsRequests } from '../api/usePhaseTransitions';
 import { useTeam } from '../api/useTeam';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
@@ -66,8 +65,6 @@ import {
   canLinkInvoice,
   canLinkTransmittal,
   canLinkDisbursement,
-  canRequestInvoice,
-  canRequestTransmittal,
   isUserAdmin,
   isTaskAssignee,
   isChecklistEditor,
@@ -555,32 +552,6 @@ export function TaskDetailModal({
     ? `Task is locked because the Work Request is currently in the ${getPhaseBadgeInfo(workRequest?.phase).label} phase.`
     : undefined;
 
-  // Check pending operations requests for this task
-  const { data: rawPendingReqs } = useOperationsRequests(
-    {
-      linkedTaskId: task?.id,
-      status: 'pending',
-    },
-    { enabled: Boolean(task?.id && !isTaskDenied && !isScopeStale) }
-  );
-  const pendingReqs = useMemo(() => {
-    if (Array.isArray(rawPendingReqs)) return rawPendingReqs;
-    if (
-      rawPendingReqs &&
-      typeof rawPendingReqs === 'object' &&
-      'data' in rawPendingReqs &&
-      Array.isArray((rawPendingReqs as { data: unknown[] }).data)
-    ) {
-      return (rawPendingReqs as { data: Array<{ id: string; type: string }> }).data;
-    }
-    return [];
-  }, [rawPendingReqs]);
-
-  const hasPendingInvoiceReq = pendingReqs.some((r) => r.type === 'billing');
-  const hasPendingTransmittalReq = pendingReqs.some((r) => r.type === 'transmittal');
-
-  const createRequestMutation = useCreateOperationsRequest();
-
   // Financial creation modals state (UAT2-7)
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [isDisbursementModalOpen, setIsDisbursementModalOpen] = useState(false);
@@ -693,9 +664,6 @@ export function TaskDetailModal({
   const canLinkInv = !isCompletedWr && !isTaskRejectedState && canLinkInvoice(currentUser, task, workRequest, siblingTasks) && canCreateInvoice;
   const canLinkTrans = !isCompletedWr && !isTaskRejectedState && canLinkTransmittal(currentUser, task, workRequest, siblingTasks) && canCreateTransmittal;
   const canLinkDisb = !isCompletedWr && !isTaskRejectedState && canLinkDisbursement(currentUser, task, canCreateDisbursement);
-
-  const canReqInv = !isCompletedWr && !isTaskRejectedState && canRequestInvoice(currentUser, task, workRequest, siblingTasks);
-  const canReqTrans = !isCompletedWr && !isTaskRejectedState && canRequestTransmittal(currentUser, task, workRequest, siblingTasks);
 
   // Handle adding a co-assignee (UAT2-8 + multi-assignee)
   const handleAddCoAssignee = async (employeeId: string) => {
@@ -860,48 +828,6 @@ export function TaskDetailModal({
     } catch {
       // Gracefully handled by BlockingActionModal presentation
     }
-  };
-
-  // Handle requesting billing invoice from accounting
-  const handleRequestInvoice = async () => {
-    if (!task || !task.workRequestId) return;
-    await runBlockingAction({
-      title: 'Requesting Invoice',
-      message: `Submitting request to Accounting for task "${task.title}"...`,
-      apiCall: async () => {
-        return await createRequestMutation.mutateAsync({
-          type: 'billing',
-          workRequestId: task.workRequestId,
-          linkedTaskId: task.id,
-          clientId: workRequest?.clientId || undefined,
-          notes: `Invoice requested for task "${task.title}"`,
-        });
-      },
-      successTitle: 'Invoice Requested',
-      successMessage: 'Invoice request has been queued for Accounting review.',
-      invalidateQueries: [operationsKeys.requests()],
-    });
-  };
-
-  // Handle requesting transmittal from documentation
-  const handleRequestTransmittal = async () => {
-    if (!task || !task.workRequestId) return;
-    await runBlockingAction({
-      title: 'Requesting Transmittal',
-      message: `Submitting request to Documentation for task "${task.title}"...`,
-      apiCall: async () => {
-        return await createRequestMutation.mutateAsync({
-          type: 'transmittal',
-          workRequestId: task.workRequestId,
-          linkedTaskId: task.id,
-          clientId: workRequest?.clientId || undefined,
-          notes: `Transmittal requested for task "${task.title}"`,
-        });
-      },
-      successTitle: 'Transmittal Requested',
-      successMessage: 'Transmittal request has been queued for Documentation review.',
-      invalidateQueries: [operationsKeys.requests()],
-    });
   };
 
   // Calculate total minutes logged
@@ -1771,27 +1697,6 @@ export function TaskDetailModal({
                       <Receipt className="h-3 w-3" /> + Invoice
                     </Button>
                   )}
-                  {canReqInv && invoices.length === 0 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={handleRequestInvoice}
-                      disabled={hasPendingInvoiceReq || isInvoicePhaseBlocked || isPrereqBlocked}
-                      title={
-                        isInvoicePhaseBlocked
-                          ? invoicePhaseBlockedTooltip
-                          : isPrereqBlocked
-                            ? prereqBlockedTooltip
-                            : undefined
-                      }
-                      className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] hover:bg-[#E2E8F0] text-[#1E293B]"
-                      data-testid="request-invoice-btn"
-                    >
-                      <Receipt className="h-3 w-3" />
-                      {hasPendingInvoiceReq ? 'Invoice Requested' : 'Request Invoice'}
-                    </Button>
-                  )}
                   {canLinkDisb && (
                     <Button
                       type="button"
@@ -1830,27 +1735,6 @@ export function TaskDetailModal({
                       data-testid="link-transmittal-btn"
                     >
                       <Send className="h-3 w-3" /> + Transmittal
-                    </Button>
-                  )}
-                  {canReqTrans && transmittals.length === 0 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      onClick={handleRequestTransmittal}
-                      disabled={hasPendingTransmittalReq || isPhaseBlocked || isPrereqBlocked}
-                      title={
-                        isPhaseBlocked
-                          ? phaseBlockedTooltip
-                          : isPrereqBlocked
-                            ? prereqBlockedTooltip
-                            : undefined
-                      }
-                      className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] bg-[#F8FAFC] hover:bg-[#E2E8F0] text-[#1E293B]"
-                      data-testid="request-transmittal-btn"
-                    >
-                      <Send className="h-3 w-3" />
-                      {hasPendingTransmittalReq ? 'Transmittal Requested' : 'Request Transmittal'}
                     </Button>
                   )}
                 </div>

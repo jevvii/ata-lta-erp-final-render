@@ -397,8 +397,8 @@ describe('Adversarial Verification 3: Invoice Billing Action Triggers in TaskDet
     expect(canRequestInvoice(accountingUser, baseTask, baseWr, [baseTask])).toBe(false);
   });
 
-  it('permits Request Invoice button only for assigned non-Documentation staff', () => {
-    expect(canRequestInvoice(opsAssignedUser, baseTask, baseWr, [baseTask])).toBe(true);
+  it('suppresses Request Invoice button across all roles including assigned non-Documentation staff', () => {
+    expect(canRequestInvoice(opsAssignedUser, baseTask, baseWr, [baseTask])).toBe(false);
   });
 });
 
