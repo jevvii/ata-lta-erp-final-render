@@ -39,6 +39,7 @@ import type {
   CreateWorkRequestInput,
   UpdateWorkRequestInput,
   PhaseTaskInput,
+  TaskStatus,
 } from '../api/types';
 
 export interface WorkRequestModalProps {
@@ -149,6 +150,7 @@ export function WorkRequestModal({
             id: t.id,
             title: t.title,
             description: t.description || undefined,
+            status: t.status,
             phase: t.phase === 'processing' ? 'processing' : 'pre_processing',
             assigneeId: t.assigneeId || null,
             coAssignees:
@@ -494,12 +496,17 @@ export function WorkRequestModal({
               ).filter(Boolean);
 
               const initialPredecessors = resolvePredecessors(t.dependsOn);
+              const hasAssignee = Boolean(t.assigneeId || assignees.length > 0);
+              const resolvedStatus = (t.status && t.status !== 'Draft')
+                ? t.status
+                : (hasAssignee ? ('Assigned' as TaskStatus) : ('Draft' as TaskStatus));
 
               const createdTask = await createTask({
                 workRequestId: workRequest.id,
                 data: {
                   title: t.title.trim(),
                   description: t.description?.trim() || null,
+                  status: resolvedStatus,
                   phase: t.phase,
                   assigneeId: t.assigneeId || null,
                   assignees,
@@ -538,6 +545,10 @@ export function WorkRequestModal({
                   ...t.coAssignees,
                 ])
               ).filter(Boolean);
+              const hasAssignee = Boolean(t.assigneeId || assignees.length > 0);
+              const resolvedStatus = (t.status && t.status !== 'Draft')
+                ? t.status
+                : (hasAssignee ? ('Assigned' as TaskStatus) : t.status);
 
               await updateTask({
                 workRequestId: workRequest.id,
@@ -545,6 +556,7 @@ export function WorkRequestModal({
                 data: {
                   title: t.title.trim(),
                   description: t.description?.trim() || null,
+                  ...(resolvedStatus ? { status: resolvedStatus } : {}),
                   assigneeId: t.assigneeId || null,
                   assignees,
                   predecessors: resolvePredecessors(t.dependsOn),
@@ -593,10 +605,15 @@ export function WorkRequestModal({
               ...(t.assigneeId ? [t.assigneeId] : []),
               ...t.coAssignees,
             ];
+            const hasAssignee = Boolean(t.assigneeId || assignees.length > 0);
+            const resolvedStatus = (t.status && t.status !== 'Draft')
+              ? t.status
+              : (hasAssignee ? ('Assigned' as TaskStatus) : ('Draft' as TaskStatus));
 
             const taskInput: PhaseTaskInput = {
               title: t.title.trim(),
               description: t.description?.trim() || null,
+              status: resolvedStatus,
               local_id: t.localId,
               assignees,
               depends_on: t.dependsOn || undefined,
