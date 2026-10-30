@@ -32,10 +32,235 @@ const {
   validateRecordProjectLinkage,
   filterValidProjectRecords,
 } = require('../../lib/projectLinkage');
+const {
+  syncLinkedClientFundDisbursementsForInvoice,
+  unlinkAndRevertClientFundDisbursements,
+} = require('../disbursements/billingLifecycleSync');
 
 // ============================================================
 // Invoice CRUD
 // ============================================================
+
+/**
+ * Validate and link a set of disbursements to an invoice.
+ */
+const validateDisbursementsForInvoice = async ({
+  entityId,
+  workRequestId,
+  disbursementIds,
+  targetInvoiceId = null,
+}) => {
+  if (!Array.isArray(disbursementIds) || disbursementIds.length === 0) return [];
+  const uniqueIds = [...new Set(disbursementIds.filter(Boolean))];
+  if (uniqueIds.length === 0) return [];
+
+  const { data: rows, error } = await supabaseAdmin
+    .from('disbursements')
+    .select(
+      'id, entity_id, linked_work_request_id, linked_invoice_id, version, status, fund_source, deleted_at'
+    )
+    .in('id', uniqueIds);
+
+  if (error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to validate linked disbursements',
+    });
+  }
+
+  const foundMap = new Map((rows || []).map((r) => [r.id, r]));
+  for (const disbId of uniqueIds) {
+    const row = foundMap.get(disbId);
+    if (!row || row.deleted_at || (entityId && entityId !== 'ALL' && row.entity_id !== entityId)) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        code: 'INVALID_DISBURSEMENT_LINK',
+        detail: `Disbursement ${disbId} not found or does not belong to this entity.`,
+      });
+    }
+
+    const isEligibleStatus = ['Approved', 'Draft', 'Funded', 'Released'].includes(row.status);
+    if (!isEligibleStatus) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'DISBURSEMENT_MUST_BE_APPROVED_TO_LINK',
+        detail: 'Cannot link a cancelled or rejected disbursement to an invoice.',
+      });
+    }
+
+    const rowWrId = row.linked_work_request_id || row.work_request_id;
+    if (workRequestId && rowWrId && rowWrId !== workRequestId) {
+      throw new AppError({
+        statusCode: 400,
+        title: 'Validation Error',
+        code: 'REFERENCE_WR_MISMATCH',
+        detail: `Disbursement ${disbId} belongs to a different work request.`,
+      });
+    }
+    if (row.linked_invoice_id && (!targetInvoiceId || row.linked_invoice_id !== targetInvoiceId)) {
+      const { data: existingInv, error: invCheckErr } = await supabaseAdmin
+        .from('invoices')
+        .select('id, status, deleted_at')
+        .eq('id', row.linked_invoice_id)
+        .maybeSingle();
+
+      if (invCheckErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Failed to verify existing invoice link for disbursement',
+        });
+      }
+
+      if (existingInv && !existingInv.deleted_at && existingInv.status !== 'Cancelled') {
+        throw new AppError({
+          statusCode: 409,
+          title: 'Conflict',
+          code: 'DISBURSEMENT_ALREADY_BILLED',
+          detail: `Disbursement ${disbId} is already linked to another active invoice.`,
+        });
+      }
+    }
+  }
+  return uniqueIds;
+};
+
+const applyDisbursementInvoiceLinks = async ({
+  invoiceId,
+  disbursementIds,
+  userId,
+  isCreate = false,
+  invoice = null,
+}) => {
+  const now = new Date().toISOString();
+
+  const { data: previouslyLinkedRows, error: prevErr } = await supabaseAdmin
+    .from('disbursements')
+    .select('id, entity_id, status, fund_source, linked_invoice_id, version')
+    .eq('linked_invoice_id', invoiceId)
+    .is('deleted_at', null);
+
+  if (prevErr) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to fetch existing linked disbursements',
+    });
+  }
+
+  const desiredIds = Array.isArray(disbursementIds)
+    ? [...new Set(disbursementIds.filter(Boolean))]
+    : [];
+
+  const toUnlink = (previouslyLinkedRows || []).filter((r) => !desiredIds.includes(r.id));
+  if (toUnlink.length > 0) {
+    if (toUnlink.some((r) => r.status === 'Released') || invoice?.status === 'Paid') {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'BILLING_LINK_LOCKED_AFTER_PAID',
+        detail:
+          'Cannot unlink a Client Fund disbursement after its linked billing invoice has been paid and released.',
+      });
+    }
+
+    await unlinkAndRevertClientFundDisbursements({
+      entityId: invoice?.entity_id,
+      invoiceId,
+      invoiceNumber: invoice?.invoice_number,
+      disbursementIds: toUnlink.map((r) => r.id),
+      actorId: userId,
+      reason: 'billing_unlinked',
+      clearLink: true,
+    });
+  }
+
+  if (desiredIds.length === 0) return;
+
+  const { data: currentRows, error: fetchErr } = await supabaseAdmin
+    .from('disbursements')
+    .select(
+      'id, entity_id, client_id, linked_work_request_id, work_request_id, linked_invoice_id, status, fund_source, version, funded_by, funded_at, payment_method, payment_date, disbursement_number, description, requested_by, created_by'
+    )
+    .in('id', desiredIds);
+
+  if (fetchErr) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to fetch disbursements for invoice linking',
+    });
+  }
+
+  for (const row of currentRows || []) {
+    const isEligibleStatus = ['Approved', 'Draft', 'Funded', 'Released'].includes(row.status);
+    if (!isEligibleStatus) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: 'DISBURSEMENT_MUST_BE_APPROVED_TO_LINK',
+        detail: 'Cannot link a cancelled or rejected disbursement to an invoice.',
+      });
+    }
+  }
+
+  for (const row of currentRows || []) {
+    if (row.linked_invoice_id === invoiceId) continue;
+
+    const currentVersion = Number(row.version) || 1;
+    const nextVersion = currentVersion + 1;
+    const auditEntry = {
+      status: row.status,
+      by: userId,
+      at: now,
+      action: 'invoice_linked',
+      linked_invoice_id: invoiceId,
+    };
+
+    const { data: updatedRows, error: updateErr } = await supabaseAdmin
+      .from('disbursements')
+      .update({
+        linked_invoice_id: invoiceId,
+        version: nextVersion,
+        updated_by: userId,
+        updated_at: now,
+      })
+      .eq('id', row.id)
+      .eq('version', currentVersion)
+      .select('id');
+
+    if (updateErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to link disbursements to invoice',
+      });
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      throw new AppError({
+        statusCode: 409,
+        title: 'Conflict',
+        code: isCreate ? 'DISBURSEMENT_ALREADY_BILLED' : 'CONCURRENCY_CONFLICT',
+        detail: `Disbursement ${row.id} was modified concurrently while linking to invoice.`,
+      });
+    }
+
+    await supabaseAdmin.from('status_history').insert({
+      table_name: 'disbursements',
+      record_id: row.id,
+      old_status: row.status,
+      new_status: row.status,
+      actor_id: userId,
+      entity_id: row.entity_id,
+      details: auditEntry,
+      created_at: now,
+    });
+  }
+};
 
 /**
  * List invoices for the active entity.
@@ -59,7 +284,12 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     taskId,
     task_id,
     linkedTaskId,
+    workRequestId,
+    work_request_id,
+    linkedWorkRequestId,
+    linked_work_request_id,
     linkedTransmittalId,
+    linked_transmittal_id,
     search,
     archived,
     includeDeleted,
@@ -78,6 +308,9 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   }
 
   const effectiveFilterTaskId = taskId || task_id || linkedTaskId;
+  const effectiveFilterWrId =
+    workRequestId || work_request_id || linkedWorkRequestId || linked_work_request_id;
+  const effectiveLinkedTransmittalId = linkedTransmittalId || linked_transmittal_id;
 
   const makeQuery = () => {
     let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number)');
@@ -94,12 +327,15 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     }
     if (status) q = q.eq('status', status);
     if (clientId) q = q.eq('client_id', clientId);
+    if (effectiveFilterWrId) q = q.eq('work_request_id', effectiveFilterWrId);
     if (effectiveFilterTaskId) {
       q = q.or(
         `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
       );
     }
-    if (linkedTransmittalId) q = q.eq('linked_transmittal_id', linkedTransmittalId);
+    if (effectiveLinkedTransmittalId) {
+      q = q.eq('linked_transmittal_id', effectiveLinkedTransmittalId);
+    }
     if (search) {
       q = q.or(`invoice_number.ilike.%${search}%,notes.ilike.%${search}%`);
     }
@@ -127,8 +363,12 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
 
   // Batch resolve parent Work Request and creator (Task A.3)
   const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
+  const transmittalIds = [
+    ...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean)),
+  ];
   let wrMap = new Map();
   let userMap = new Map();
+  let transmittalMap = new Map();
 
   if (wrIds.length > 0) {
     const { data: wrData } = await supabaseAdmin
@@ -148,9 +388,20 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     wrMap = new Map(wrs.map((w) => [w.id, w]));
   }
 
+  if (transmittalIds.length > 0) {
+    const { data: trData } = await supabaseAdmin
+      .from('transmittals')
+      .select('id, tracking_number, status, recipient_name')
+      .in('id', transmittalIds);
+    transmittalMap = new Map((trData || []).map((t) => [t.id, t]));
+  }
+
   const mapped = rows.map((row) => {
     const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
     const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
+    const tr = row.linked_transmittal_id
+      ? transmittalMap.get(row.linked_transmittal_id)
+      : null;
     const clientNumber = row.clients?.client_number || row.client_number || null;
     const wrNumber = wr?.work_request_number || null;
     return {
@@ -169,6 +420,15 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
             workOrderNumber: wr.work_order_number || null,
             creatorName: creator?.name || null,
             creatorEmail: creator?.email || null,
+          }
+        : null,
+      linked_transmittal_tracking_number: tr?.tracking_number || null,
+      linked_transmittal: tr
+        ? {
+            id: tr.id,
+            tracking_number: tr.tracking_number,
+            status: tr.status,
+            recipient_name: tr.recipient_name || null,
           }
         : null,
     };
@@ -216,6 +476,20 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
   });
   const validatedWrId = authorized.effectiveWrId;
 
+  const validatedDisbursementIds = await validateDisbursementsForInvoice({
+    entityId,
+    workRequestId: validatedWrId,
+    disbursementIds: data.linkedDisbursementIds,
+    targetInvoiceId: null,
+  });
+
+  const normalizedLinkedTransmittalId =
+    data.linkedTransmittalId !== undefined
+      ? data.linkedTransmittalId || null
+      : data.linked_transmittal_id !== undefined
+        ? data.linked_transmittal_id || null
+        : null;
+
   // Atomic create (Spec 2.3 / R-11): the invoice row and its line items are
   // inserted by invoice_create_transactional() inside a single PostgreSQL
   // function transaction. The previous two-round-trip flow attempted a
@@ -250,7 +524,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
         linkedTaskId: effectiveTaskId || null,
         taskId: effectiveTaskId || null,
         task_id: effectiveTaskId || null,
-        linkedTransmittalId: data.linkedTransmittalId || null,
+        linkedTransmittalId: normalizedLinkedTransmittalId,
         invoiceNumber: invoiceNumber || null,
         issueDate: data.issueDate,
         dueDate: data.dueDate,
@@ -278,6 +552,31 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
       statusCode: 500,
       title: 'Database Error',
       detail: 'Failed to create invoice',
+    });
+  }
+
+  const createdInvoice = {
+    ...invoice,
+    entity_id: invoice.entity_id || entityId,
+    invoice_number: invoice.invoice_number || invoiceNumber,
+    status: invoice.status || requestedStatus,
+  };
+
+  if (validatedDisbursementIds.length > 0) {
+    await applyDisbursementInvoiceLinks({
+      invoiceId: invoice.id,
+      disbursementIds: validatedDisbursementIds,
+      userId,
+      isCreate: true,
+      invoice: createdInvoice,
+    });
+  }
+
+  if (data.linkedDisbursementIds?.length) {
+    await syncLinkedClientFundDisbursementsForInvoice({
+      invoice: createdInvoice,
+      actorId: userId,
+      disbursementIds: validatedDisbursementIds,
     });
   }
 
@@ -427,6 +726,34 @@ const getInvoiceById = async ({
     }
   }
 
+  // Fetch linked disbursements
+  const { data: linkedDisbursements } = await supabaseAdmin
+    .from('disbursements')
+    .select(
+      'id, disbursement_number, category, description, amount, fund_source, status, due_date, created_at, linked_transmittal_id, receipt_filename'
+    )
+    .eq('linked_invoice_id', id)
+    .is('deleted_at', null)
+    .order('created_at', { ascending: false });
+
+  // Fetch linked transmittal if present
+  let linkedTransmittal = null;
+  if (invoice.linked_transmittal_id) {
+    const { data: tr } = await supabaseAdmin
+      .from('transmittals')
+      .select('id, tracking_number, status, recipient_name')
+      .eq('id', invoice.linked_transmittal_id)
+      .maybeSingle();
+    if (tr) {
+      linkedTransmittal = {
+        id: tr.id,
+        tracking_number: tr.tracking_number,
+        status: tr.status,
+        recipient_name: tr.recipient_name || null,
+      };
+    }
+  }
+
   const clientNumber = invoice.clients?.client_number || invoice.client_number || null;
   const entityCode = await resolveEntityCode(invoice.entity_id);
   return {
@@ -441,6 +768,9 @@ const getInvoiceById = async ({
     work_request: workRequestInfo,
     work_request_title: workRequestInfo?.title || null,
     work_request_creator_name: workRequestInfo?.creatorName || null,
+    linked_disbursements: linkedDisbursements || [],
+    linked_transmittal: linkedTransmittal,
+    linked_transmittal_tracking_number: linkedTransmittal?.tracking_number || null,
   };
 };
 
@@ -609,6 +939,7 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     'linkedTaskId',
     'linked_task_id',
     'linkedTransmittalId',
+    'linked_transmittal_id',
     'invoiceNumber',
     'issueDate',
     'dueDate',
@@ -635,6 +966,16 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     });
   }
 
+  const validatedDisbursementIds =
+    data.linkedDisbursementIds !== undefined
+      ? await validateDisbursementsForInvoice({
+          entityId: existing.entity_id || entityId,
+          workRequestId: effectiveWrId,
+          disbursementIds: data.linkedDisbursementIds,
+          targetInvoiceId: id,
+        })
+      : [];
+
   // Atomic update (Spec 2.3 / R-11) with OCC guard (Spec 2.2 / R-10): field
   // updates, line-item replacement, total/balance recomputation, and the
   // version bump happen inside one PostgreSQL function transaction. When
@@ -656,6 +997,13 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
       detail: 'Total amount cannot be less than payments already recorded.',
     });
   }
+  const normalizedLinkedTransmittalId =
+    data.linkedTransmittalId !== undefined
+      ? data.linkedTransmittalId || null
+      : data.linked_transmittal_id !== undefined
+        ? data.linked_transmittal_id || null
+        : undefined;
+
   const rpcUpdates = {};
   if (data.printDetails !== undefined) rpcUpdates.print_details = data.printDetails;
   if (data.clientId !== undefined) rpcUpdates.client_id = data.clientId;
@@ -674,8 +1022,8 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     rpcUpdates.linked_task_id = effectiveTaskId;
     rpcUpdates.task_id = effectiveTaskId;
   }
-  if (data.linkedTransmittalId !== undefined)
-    rpcUpdates.linked_transmittal_id = data.linkedTransmittalId;
+  if (normalizedLinkedTransmittalId !== undefined)
+    rpcUpdates.linked_transmittal_id = normalizedLinkedTransmittalId;
   if (data.invoiceNumber !== undefined) rpcUpdates.invoice_number = data.invoiceNumber;
   if (data.issueDate !== undefined) rpcUpdates.issue_date = data.issueDate;
   if (data.dueDate !== undefined) rpcUpdates.due_date = data.dueDate;
@@ -806,6 +1154,32 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
   }
 
   const entityCode = await resolveEntityCode(updated.entity_id);
+  if (data.linkedDisbursementIds !== undefined) {
+    await applyDisbursementInvoiceLinks({
+      invoiceId: id,
+      disbursementIds: validatedDisbursementIds,
+      userId,
+      isCreate: false,
+      invoice: updated,
+    });
+  }
+
+  if (updated.status === 'Cancelled') {
+    await unlinkAndRevertClientFundDisbursements({
+      entityId: updated.entity_id || entityId,
+      invoiceId: updated.id,
+      invoiceNumber: updated.invoice_number,
+      actorId: userId,
+      reason: 'invoice_cancelled',
+      clearLink: true,
+    });
+  } else {
+    await syncLinkedClientFundDisbursementsForInvoice({
+      invoice: updated,
+      actorId: userId,
+    });
+  }
+
   return { ...updated, entity_code: entityCode };
 };
 
@@ -832,7 +1206,16 @@ const updateInvoiceStatus = async ({ entityId, id, userId, status, user }) => {
  * @returns {Promise<void>}
  */
 const deleteInvoice = async ({ entityId, id, userId }) => {
-  await getInvoiceById({ entityId, id, internal: true });
+  const existing = await getInvoiceById({ entityId, id, internal: true });
+
+  await unlinkAndRevertClientFundDisbursements({
+    entityId: existing.entity_id || entityId,
+    invoiceId: id,
+    invoiceNumber: existing.invoice_number,
+    actorId: userId,
+    reason: 'invoice_deleted',
+    clearLink: true,
+  });
 
   const { error } = await supabaseAdmin
     .from('invoices')
@@ -922,6 +1305,21 @@ const recordPayment = async ({ entityId, invoiceId, userId, user, data }) => {
     entity: entityId,
     userId,
     details: { invoiceId, amount: data.amount, method: data.method },
+  });
+
+  const updatedInvoice =
+    result?.invoice || (await getInvoiceById({ entityId, id: invoiceId, internal: true }));
+  const createdPayment = payment || {
+    amount: data.amount,
+    method: data.method,
+    reference: data.reference,
+    payment_date: data.date,
+  };
+
+  await syncLinkedClientFundDisbursementsForInvoice({
+    invoice: updatedInvoice,
+    payment: createdPayment,
+    actorId: userId,
   });
 
   return payment;

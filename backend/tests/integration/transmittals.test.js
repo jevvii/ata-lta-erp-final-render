@@ -668,4 +668,90 @@ describe('/v1/transmittals', () => {
       expect(sendRes.body.detail).toBe('You are not assigned to this task');
     });
   });
+
+  describe('Transmittal ↔ Disbursement & Invoice Connectivity', () => {
+    it('auto-links linkedDisbursementIds and linkedInvoiceIds on createTransmittal and returns them in getTransmittalById', async () => {
+      const adminToken = registerUser({
+        email: 'admin-tr-links@ata-lta.ph',
+        name: 'Admin TR Links',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const DISB_ID = '77777777-1111-4111-8111-111111111111';
+      const INV_ID = '77777777-2222-4222-8222-222222222222';
+
+      mockTables.disbursements.set(DISB_ID, {
+        id: DISB_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-0055',
+        category: 'Filing Fee',
+        description: 'BIR Registration Fee',
+        amount: 500,
+        fund_source: 'Client Fund',
+        status: 'Released',
+        receipt_filename: 'bir-receipt.pdf',
+        created_at: '2026-10-22T00:00:00Z',
+        deleted_at: null,
+      });
+
+      mockTables.invoices.set(INV_ID, {
+        id: INV_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: WORK_REQUEST_ID,
+        invoice_number: 'INV-ATA-2026-0055',
+        status: 'Sent',
+        total: 12000,
+        amount_paid: 12000,
+        balance: 0,
+        issue_date: '2026-10-15',
+        due_date: '2026-11-15',
+        created_at: '2026-10-22T00:00:00Z',
+        deleted_at: null,
+      });
+
+      const createRes = await request(app)
+        .post('/v1/transmittals')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          ...validTransmittal,
+          trackingNumber: 'TR-ATA-2026-LINKS',
+          linkedDisbursementIds: [DISB_ID],
+          linkedInvoiceIds: [INV_ID],
+        })
+        .expect(201);
+
+      const trId = createRes.body.data.id;
+      expect(mockTables.disbursements.get(DISB_ID).linked_transmittal_id).toBe(trId);
+      expect(mockTables.invoices.get(INV_ID).linked_transmittal_id).toBe(trId);
+
+      // Detail endpoint returns linked_disbursements and linked_invoices
+      const detailRes = await request(app)
+        .get(`/v1/transmittals/${trId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(detailRes.body.data.linked_disbursements).toHaveLength(1);
+      expect(detailRes.body.data.linked_disbursements[0].disbursement_number).toBe(
+        'DISB-ATA-2026-0055'
+      );
+      expect(detailRes.body.data.linked_invoices).toHaveLength(1);
+      expect(detailRes.body.data.linked_invoices[0].invoice_number).toBe('INV-ATA-2026-0055');
+
+      // Filter listTransmittals by workRequestId
+      const listRes = await request(app)
+        .get(`/v1/transmittals?workRequestId=${WORK_REQUEST_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(listRes.body.data).toHaveLength(1);
+      expect(listRes.body.data[0].id).toBe(trId);
+    });
+  });
 });

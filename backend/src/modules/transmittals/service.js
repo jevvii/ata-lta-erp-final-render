@@ -50,6 +50,234 @@ const isNonAdminDocumentationUser = (u) => {
 };
 
 /**
+ * Validate and link disbursements and invoices to a transmittal.
+ */
+const validateRecordsForTransmittal = async ({
+  entityId,
+  workRequestId,
+  linkedDisbursementIds,
+  linkedInvoiceIds,
+}) => {
+  const uniqueDisbIds = Array.isArray(linkedDisbursementIds)
+    ? [...new Set(linkedDisbursementIds.filter(Boolean))]
+    : [];
+  const uniqueInvIds = Array.isArray(linkedInvoiceIds)
+    ? [...new Set(linkedInvoiceIds.filter(Boolean))]
+    : [];
+
+  if (uniqueDisbIds.length > 0) {
+    const { data: rows, error } = await supabaseAdmin
+      .from('disbursements')
+      .select('id, entity_id, linked_work_request_id, deleted_at')
+      .in('id', uniqueDisbIds);
+
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to validate linked disbursements',
+      });
+    }
+
+    const foundMap = new Map((rows || []).map((r) => [r.id, r]));
+    for (const disbId of uniqueDisbIds) {
+      const row = foundMap.get(disbId);
+      if (
+        !row ||
+        row.deleted_at ||
+        (entityId && entityId !== 'ALL' && row.entity_id !== entityId)
+      ) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          code: 'INVALID_DISBURSEMENT_LINK',
+          detail: `Disbursement ${disbId} not found or does not belong to this entity.`,
+        });
+      }
+      const rowWrId = row.linked_work_request_id || row.work_request_id;
+      if (workRequestId && rowWrId && rowWrId !== workRequestId) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          code: 'REFERENCE_WR_MISMATCH',
+          detail: `Disbursement ${disbId} belongs to a different work request.`,
+        });
+      }
+    }
+  }
+
+  if (uniqueInvIds.length > 0) {
+    const { data: rows, error } = await supabaseAdmin
+      .from('invoices')
+      .select('id, entity_id, work_request_id, deleted_at')
+      .in('id', uniqueInvIds);
+
+    if (error) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to validate linked invoices',
+      });
+    }
+
+    const foundMap = new Map((rows || []).map((r) => [r.id, r]));
+    for (const invId of uniqueInvIds) {
+      const row = foundMap.get(invId);
+      if (
+        !row ||
+        row.deleted_at ||
+        (entityId && entityId !== 'ALL' && row.entity_id !== entityId)
+      ) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          code: 'INVALID_INVOICE_LINK',
+          detail: `Invoice ${invId} not found or does not belong to this entity.`,
+        });
+      }
+      if (workRequestId && row.work_request_id && row.work_request_id !== workRequestId) {
+        throw new AppError({
+          statusCode: 400,
+          title: 'Validation Error',
+          code: 'REFERENCE_WR_MISMATCH',
+          detail: `Invoice ${invId} belongs to a different work request.`,
+        });
+      }
+    }
+  }
+
+  return { uniqueDisbIds, uniqueInvIds };
+};
+
+const applyTransmittalRecordLinks = async ({
+  transmittalId,
+  disbursementIds,
+  invoiceIds,
+  userId,
+}) => {
+  const now = new Date().toISOString();
+  if (Array.isArray(disbursementIds) && disbursementIds.length > 0) {
+    const { data: currentDisbs, error: fetchDisbErr } = await supabaseAdmin
+      .from('disbursements')
+      .select('id, entity_id, version, status, linked_transmittal_id')
+      .in('id', disbursementIds);
+
+    if (fetchDisbErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to fetch disbursements for transmittal linking',
+      });
+    }
+
+    for (const row of currentDisbs || []) {
+      if (row.linked_transmittal_id === transmittalId) continue;
+
+      const currentVersion = Number(row.version) || 1;
+      const nextVersion = currentVersion + 1;
+      const auditEntry = {
+        status: row.status,
+        by: userId,
+        at: now,
+        action: 'transmittal_linked',
+        linked_transmittal_id: transmittalId,
+      };
+
+      const { data: updatedDisbRows, error: disbErr } = await supabaseAdmin
+        .from('disbursements')
+        .update({
+          linked_transmittal_id: transmittalId,
+          version: nextVersion,
+          updated_by: userId,
+          updated_at: now,
+        })
+        .eq('id', row.id)
+        .eq('version', currentVersion)
+        .select('id');
+
+      if (disbErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Failed to link disbursements to transmittal',
+        });
+      }
+
+      if (!updatedDisbRows || updatedDisbRows.length === 0) {
+        throw new AppError({
+          statusCode: 409,
+          title: 'Conflict',
+          code: 'CONCURRENCY_CONFLICT',
+          detail: `Disbursement ${row.id} was modified concurrently while linking to transmittal.`,
+        });
+      }
+
+      await supabaseAdmin.from('status_history').insert({
+        table_name: 'disbursements',
+        record_id: row.id,
+        old_status: row.status,
+        new_status: row.status,
+        actor_id: userId,
+        entity_id: row.entity_id,
+        details: auditEntry,
+        created_at: now,
+      });
+    }
+  }
+
+  if (Array.isArray(invoiceIds) && invoiceIds.length > 0) {
+    const { data: currentInvs, error: fetchInvErr } = await supabaseAdmin
+      .from('invoices')
+      .select('id, version, status, linked_transmittal_id')
+      .in('id', invoiceIds);
+
+    if (fetchInvErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Database Error',
+        detail: 'Failed to fetch invoices for transmittal linking',
+      });
+    }
+
+    for (const row of currentInvs || []) {
+      if (row.linked_transmittal_id === transmittalId) continue;
+
+      const currentVersion = Number(row.version) || 1;
+      const nextVersion = currentVersion + 1;
+
+      const { data: updatedInvRows, error: invErr } = await supabaseAdmin
+        .from('invoices')
+        .update({
+          linked_transmittal_id: transmittalId,
+          version: nextVersion,
+          updated_by: userId,
+          updated_at: now,
+        })
+        .eq('id', row.id)
+        .eq('version', currentVersion)
+        .select('id');
+
+      if (invErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Failed to link invoices to transmittal',
+        });
+      }
+
+      if (!updatedInvRows || updatedInvRows.length === 0) {
+        throw new AppError({
+          statusCode: 409,
+          title: 'Conflict',
+          code: 'CONCURRENCY_CONFLICT',
+          detail: `Invoice ${row.id} was modified concurrently while linking to transmittal.`,
+        });
+      }
+    }
+  }
+};
+
+/**
  * List transmittals for the active entity.
  * @param {object} params
  * @param {string} params.entityId
@@ -65,7 +293,19 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
     });
   }
 
-  const { status, clientId, search, archived, includeDeleted, page = 1, limit = 50 } = filters;
+  const {
+    status,
+    clientId,
+    workRequestId,
+    work_request_id,
+    linkedWorkRequestId,
+    linked_work_request_id,
+    search,
+    archived,
+    includeDeleted,
+    page = 1,
+    limit = 50,
+  } = filters;
   const isArchived = archived === true || archived === 'true';
 
   const isAdmin = user.role === 'Admin';
@@ -76,6 +316,9 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
       return { data: [], count: 0 };
     }
   }
+
+  const effectiveFilterWrId =
+    workRequestId || work_request_id || linkedWorkRequestId || linked_work_request_id;
 
   const makeQuery = () => {
     let q = supabaseAdmin.from('transmittals').select('*, clients(name, client_number)');
@@ -96,6 +339,7 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
     if (status) q = q.eq('status', status);
 
     if (clientId) q = q.eq('client_id', clientId);
+    if (effectiveFilterWrId) q = q.eq('work_request_id', effectiveFilterWrId);
     if (search) {
       q = q.or(
         `tracking_number.ilike.%${search}%,notes.ilike.%${search}%,recipient_name.ilike.%${search}%`
@@ -387,6 +631,13 @@ const createTransmittal = async ({ entityId, entityCode, userId, user, data }) =
     caller,
   });
 
+  const { uniqueDisbIds, uniqueInvIds } = await validateRecordsForTransmittal({
+    entityId,
+    workRequestId: data.workRequestId,
+    linkedDisbursementIds: data.linkedDisbursementIds,
+    linkedInvoiceIds: data.linkedInvoiceIds,
+  });
+
   let trackingNumber = data.trackingNumber;
   if (!trackingNumber) {
     const rawCode = entityCode || (await resolveEntityCode(entityId)) || 'ATA';
@@ -463,6 +714,15 @@ const createTransmittal = async ({ entityId, entityCode, userId, user, data }) =
     });
   }
 
+  if (uniqueDisbIds.length > 0 || uniqueInvIds.length > 0) {
+    await applyTransmittalRecordLinks({
+      transmittalId: transmittal.id,
+      disbursementIds: uniqueDisbIds,
+      invoiceIds: uniqueInvIds,
+      userId,
+    });
+  }
+
   await auditService.log({
     action: 'transmittal.create',
     table: 'transmittals',
@@ -520,17 +780,39 @@ const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
     });
   }
 
-  const { data: items } = await supabaseAdmin
-    .from('transmittal_items')
-    .select('*')
-    .eq('transmittal_id', id)
-    .order('sort_order', { ascending: true });
-
-  const { data: entity } = await supabaseAdmin
-    .from('entities')
-    .select('code')
-    .eq('id', transmittal.entity_id)
-    .maybeSingle();
+  const [
+    { data: items },
+    { data: entity },
+    { data: linkedDisbursements },
+    { data: linkedInvoices },
+  ] = await Promise.all([
+    supabaseAdmin
+      .from('transmittal_items')
+      .select('*')
+      .eq('transmittal_id', id)
+      .order('sort_order', { ascending: true }),
+    supabaseAdmin
+      .from('entities')
+      .select('code')
+      .eq('id', transmittal.entity_id)
+      .maybeSingle(),
+    supabaseAdmin
+      .from('disbursements')
+      .select(
+        'id, disbursement_number, category, description, amount, fund_source, status, receipt_filename, created_at'
+      )
+      .eq('linked_transmittal_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+    supabaseAdmin
+      .from('invoices')
+      .select(
+        'id, invoice_number, status, total, amount_paid, balance, issue_date, due_date'
+      )
+      .eq('linked_transmittal_id', id)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false }),
+  ]);
 
   let wrNumber = null;
   let wrTitle = null;
@@ -555,6 +837,8 @@ const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
     work_request_title: wrTitle,
     entity_code: entity?.code || transmittal.entity_code,
     items: items || [],
+    linked_disbursements: linkedDisbursements || [],
+    linked_invoices: linkedInvoices || [],
   };
 };
 
@@ -651,6 +935,13 @@ const updateTransmittal = async ({ entityId, id, userId, user, data, internal = 
     isNewOrChanged: isLinkageChanged,
   });
 
+  const { uniqueDisbIds, uniqueInvIds } = await validateRecordsForTransmittal({
+    entityId: existing.entity_id || entityId,
+    workRequestId: effectiveWorkRequestId,
+    linkedDisbursementIds: data.linkedDisbursementIds,
+    linkedInvoiceIds: data.linkedInvoiceIds,
+  });
+
   const updates = {
     updated_by: userId,
     updated_at: new Date().toISOString(),
@@ -713,6 +1004,15 @@ const updateTransmittal = async ({ entityId, id, userId, user, data, internal = 
     }));
 
     await supabaseAdmin.from('transmittal_items').insert(items);
+  }
+
+  if (uniqueDisbIds.length > 0 || uniqueInvIds.length > 0) {
+    await applyTransmittalRecordLinks({
+      transmittalId: id,
+      disbursementIds: uniqueDisbIds,
+      invoiceIds: uniqueInvIds,
+      userId,
+    });
   }
 
   return attachItems(updated);

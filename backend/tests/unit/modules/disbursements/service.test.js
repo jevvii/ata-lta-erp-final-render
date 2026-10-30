@@ -362,13 +362,13 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       expect(res.data.some((d) => d.id === 'disb-other-draft')).toBe(true);
     });
 
-    it('Accounting user sees all disbursements in the entity', async () => {
+    it('Accounting user sees approved/funded/released items but not others drafts', async () => {
       const resDept = await disbursementsService.listDisbursements({
         entityId: ENTITY_ID,
         filters: { page: 1, limit: 50 },
         user: accountingDeptUser,
       });
-      expect(resDept.data.some((d) => d.id === 'disb-c-draft')).toBe(true);
+      expect(resDept.data.some((d) => d.id === 'disb-c-draft')).toBe(false);
       expect(resDept.data.some((d) => d.id === 'disb-other-released')).toBe(true);
 
       const resRole = await disbursementsService.listDisbursements({
@@ -376,7 +376,7 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
         filters: { page: 1, limit: 50 },
         user: accountingRoleUser,
       });
-      expect(resRole.data.some((d) => d.id === 'disb-c-draft')).toBe(true);
+      expect(resRole.data.some((d) => d.id === 'disb-c-draft')).toBe(false);
       expect(resRole.data.some((d) => d.id === 'disb-other-released')).toBe(true);
     });
 
@@ -459,13 +459,21 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       expect(d.id).toBe('disb-c-draft');
     });
 
-    it('Accounting user can view any disbursement', async () => {
+    it('Accounting user can view approved/funded/released but forbidden on other users drafts', async () => {
+      await expect(
+        disbursementsService.getDisbursementById({
+          entityId: ENTITY_ID,
+          id: 'disb-c-draft',
+          user: accountingDeptUser,
+        })
+      ).rejects.toThrow('Accounting users can only view approved disbursements or their own drafts.');
+
       const d = await disbursementsService.getDisbursementById({
         entityId: ENTITY_ID,
-        id: 'disb-c-draft',
+        id: 'disb-c-approved',
         user: accountingDeptUser,
       });
-      expect(d.id).toBe('disb-c-draft');
+      expect(d.id).toBe('disb-c-approved');
     });
 
     it('Creator can view their own disbursement across all statuses', async () => {
@@ -603,13 +611,14 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       expect(counts.archived).toBe(1);
     });
 
-    it('Accounting user sees total counts across the entity', async () => {
+    it('Accounting user sees approved, funded, released counts across the entity and own drafts', async () => {
       const counts = await disbursementsService.getDisbursementCounts({
         entityId: ENTITY_ID,
         user: accountingDeptUser,
       });
-      expect(counts.active).toBeGreaterThanOrEqual(9);
-      expect(counts.archived).toBe(1);
+      // Accounting sees Approved, Funded, Released items (and their own drafts/requests)
+      expect(counts.active).toBeGreaterThanOrEqual(4);
+      expect(counts.archived).toBe(0); // creatorUser's draft is not visible to accounting
     });
 
     it('Non-Admin/non-Accounting counts only records where created_by === user.id', async () => {

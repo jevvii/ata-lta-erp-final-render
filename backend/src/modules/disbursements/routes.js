@@ -191,6 +191,13 @@ router.put(
   disbursementsController.updateDisbursement
 );
 
+router.patch(
+  '/:id',
+  requirePermission(['disbursement:create', 'disbursement:edit']),
+  audit('disbursement.update', { table: 'disbursements' }),
+  disbursementsController.updateDisbursement
+);
+
 // Admin-only archive / unarchive (Released v2 records)
 router.post(
   '/:id/archive',

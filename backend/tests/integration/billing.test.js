@@ -1214,5 +1214,102 @@ describe('/v1/invoices', () => {
         creatorEmail: 'maria.creator@example.ph',
       });
     });
+
+    it('auto-links linkedDisbursementIds on createInvoice and returns linked_disbursements and linked_transmittal on getInvoiceById', async () => {
+      const adminToken = registerUser({
+        email: 'admin-billing-links@ata-lta.ph',
+        name: 'Admin Billing Links',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      const DISB_1 = '88888888-1111-4111-8111-111111111111';
+      const DISB_2 = '88888888-2222-4222-8222-222222222222';
+      const TR_ID = '88888888-3333-4333-8333-333333333333';
+
+      mockTables.disbursements.set(DISB_1, {
+        id: DISB_1,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-0001',
+        category: 'Government Fee',
+        description: 'SEC Filing Fee',
+        amount: 2500,
+        fund_source: 'Client Fund',
+        status: 'Released',
+        created_at: '2026-10-20T00:00:00Z',
+        deleted_at: null,
+      });
+
+      mockTables.disbursements.set(DISB_2, {
+        id: DISB_2,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        linked_work_request_id: WORK_REQUEST_ID,
+        disbursement_number: 'DISB-ATA-2026-0002',
+        category: 'Transportation',
+        description: 'Courier to SEC',
+        amount: 450,
+        fund_source: 'Firm Fund',
+        status: 'Released',
+        created_at: '2026-10-21T00:00:00Z',
+        deleted_at: null,
+      });
+
+      mockTables.transmittals.set(TR_ID, {
+        id: TR_ID,
+        entity_id: 'ent-ata',
+        client_id: CLIENT_ID,
+        work_request_id: WORK_REQUEST_ID,
+        tracking_number: 'TR-ATA-2026-0099',
+        status: 'Sent',
+        recipient_name: 'Acme Finance Dept',
+        deleted_at: null,
+      });
+
+      const createRes = await request(app)
+        .post('/v1/invoices')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({
+          ...validInvoice,
+          invoiceNumber: 'ATA-SI-2026-LINKED-DISB',
+          linked_transmittal_id: TR_ID,
+          linkedDisbursementIds: [DISB_1, DISB_2],
+        })
+        .expect(201);
+
+      const invId = createRes.body.data.id;
+      expect(mockTables.disbursements.get(DISB_1).linked_invoice_id).toBe(invId);
+      expect(mockTables.disbursements.get(DISB_2).linked_invoice_id).toBe(invId);
+
+      // Detail endpoint returns linked_disbursements and linked_transmittal
+      const detailRes = await request(app)
+        .get(`/v1/invoices/${invId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(detailRes.body.data.linked_disbursements).toHaveLength(2);
+      expect(detailRes.body.data.linked_transmittal).toEqual({
+        id: TR_ID,
+        tracking_number: 'TR-ATA-2026-0099',
+        status: 'Sent',
+        recipient_name: 'Acme Finance Dept',
+      });
+      expect(detailRes.body.data.linked_transmittal_tracking_number).toBe('TR-ATA-2026-0099');
+
+      // List endpoint filters by workRequestId and enriches linked_transmittal
+      const listRes = await request(app)
+        .get(`/v1/invoices?workRequestId=${WORK_REQUEST_ID}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(listRes.body.data).toHaveLength(1);
+      expect(listRes.body.data[0].id).toBe(invId);
+      expect(listRes.body.data[0].linked_transmittal_tracking_number).toBe('TR-ATA-2026-0099');
+    });
   });
 });

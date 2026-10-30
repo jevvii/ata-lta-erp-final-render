@@ -30,6 +30,10 @@ const listTransmittals = async (req, res, next) => {
     const filters = {
       status: req.query.status,
       clientId: req.query.clientId,
+      workRequestId: req.query.workRequestId,
+      work_request_id: req.query.work_request_id,
+      linkedWorkRequestId: req.query.linkedWorkRequestId,
+      linked_work_request_id: req.query.linked_work_request_id,
       search: req.query.search,
       archived: req.query.archived,
       includeDeleted: req.query.includeDeleted,
