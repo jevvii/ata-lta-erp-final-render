@@ -68,6 +68,15 @@ describe('P0-A department x key matrix', () => {
       );
     });
   });
+
+  it('grants workflow:task_upload to ALL five departments', () => {
+    DEPARTMENTS.forEach((dept) => {
+      const role = dept === 'Management' ? 'Manager' : dept;
+      expect(buildPermissionSet({ role, departments: [dept] }).has('workflow:task_upload')).toBe(
+        true
+      );
+    });
+  });
 });
 
 describe('P0-A Admin resolution', () => {
