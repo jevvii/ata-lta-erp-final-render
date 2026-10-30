@@ -119,6 +119,10 @@ npm --prefix backend run migrate:check -- prod
 
 It must report `pending: []`. If a migration fails, keep the maintenance window open and the old deploy IDs available; inspect the failure before continuing. Earlier successful migrations may already have committed. Do not run automatic down migrations: lifecycle/backfill changes may not be safely reversible.
 
+## Follow-up: Assigned task status migration
+
+The assigned-task status integration introduces `000080_assigned_task_status_default.js`. If the earlier `000065`–`000079` migration run already succeeded, run the backup/migration workflow again using the new reviewed revision before deploying that revision. The migration retains the preceding review/entitlement/concurrency checks and changes the task status default to Assigned when there is an assignee. It has been rehearsed against a local production schema-only copy with real SQL regression tests.
+
 ## 5. Sync and verify deployments
 
 After migration succeeds, manually sync the prepared Blueprint from the reviewed main revision. Configuration changes may redeploy both services. The maintenance window must stay open until the API is ready and the SPA verification passes. If a service does not redeploy during sync, or if you need explicit ordering, use the following manual deploy steps:
@@ -127,6 +131,8 @@ After migration succeeds, manually sync the prepared Blueprint from the reviewed
 2. **SPA service → Manual Deploy → Deploy a specific commit**, select the same SHA. Use **Clear build cache & deploy** if Render is retaining legacy build settings.
 3. Open `https://ata-lta-erp-spa-main.onrender.com/deployment.json`. It must identify `enterprise-v2`, the main API URL ending in `/v1`, and the reviewed commit SHA. A staging URL here requires fixing the static site's environment and rebuilding.
 4. Refresh `/operations` directly. It should load the React login/application rather than a Render 404.
+
+The API and SPA are separate deployments. Logs that show Docker `COPY src`, Express startup, or `/readyz` requests belong to the API. They do not confirm that the SPA has deployed. The SPA deployment must show a Vite/TypeScript build in `frontend` and publish `dist`; its `/deployment.json` identifies the **frontend** commit only. If it still reports an older revision, open **ata-lta-erp-spa-main** and deploy the reviewed commit there. Do not manually edit `RENDER_GIT_COMMIT` or `deployment.json` to bypass verification.
 
 No custom-domain move is needed when replacing the frontend on the existing main static site. Existing CORS permits the main Render origin and `https://erp.ltabmcorp.com`. If using a different custom domain, add its exact origin to API configuration before testing it.
 

@@ -37,7 +37,6 @@ const EMPLOYEE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 describe('Assigned Task Status Default Integration Tests', () => {
   let adminUser;
-  let managerUser;
   let employeeUser;
 
   beforeEach(() => {
@@ -63,7 +62,6 @@ describe('Assigned Task Status Default Integration Tests', () => {
       entities: ['ALL'],
       is_active: true,
     });
-    managerUser = mockTables.users.get(MANAGER_ID);
 
     registerUser({
       id: EMPLOYEE_ID,

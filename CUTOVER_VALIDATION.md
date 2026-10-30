@@ -44,3 +44,13 @@ Final production-target build and typecheck passed after the lint corrections; t
 ## Deployment
 
 Follow [DEPLOYMENT.md](DEPLOYMENT.md) for the exact existing-service settings and ordered release steps. The first dashboard action is disabling auto-deploy on both main services before publishing the reviewed revision. Keep the maintenance window open until migrations, API, SPA, smoke and authenticated QA complete. See that guide for the potentially exposed old service credential and coordinated rotation procedure.
+
+## Follow-up: assigned task status defaults
+
+Integrated backend `b624c26a7ca0c0c3f07fff8d22b0d7e4db5a400c` and frontend `5d800a214d2a31b0df8be645c6231f65c1ab619f` on top of main `a59075781045883b289147a634fbb505e752089c`.
+
+Review corrected migration 000080 to preserve migration 000076's Manager entitlement checks, supported qaStatus alias, JSON object validation, and serialized write safeguards. Added a working rollback to the preceding RPC definitions and 12 real SQL checks in CI. Quick Add now rejects a selected assignee removed from the work-request team; its regression test failed before the fix and passed after it. Incoming lint errors were corrected without suppressions.
+
+Verification: full backend 2,226 passed; full frontend 2,779 passed; real PostgreSQL assigned-status checks 12 passed; cross-worktree checks 46 passed; production build passed; lint has zero errors. Migration 000080 passed both a schema-only production-copy rehearsal and the blank-database migration chain. A read-only production check found only migration 000080 pending. No production schema/data changes were applied.
+
+The live frontend metadata check reported commit 406e97e on both the main Render static-site URL and its custom domain, independently of the API Docker deploy. Deploy the reviewed revision to both services after its backup/migration workflow succeeds; verify uses the frontend's deployment.json commit.

@@ -51,9 +51,7 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
     ? team.filter((member) => memberIds.has(member.id))
     : getEligibleStaff(team);
   // Re-check scope on each render so a removed WR member cannot be submitted.
-  const assignee =
-    eligible.find((member) => member.id === assigneeId) ||
-    team.find((member) => member.id === assigneeId);
+  const assignee = eligible.find((member) => member.id === assigneeId);
   const selectedAssignee = assignee;
 
   useLayoutEffect(() => {
@@ -74,6 +72,10 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
       return;
     if (!canCreate) {
       setError('Task creation requires an assigned Manager lead on this work request.');
+      return;
+    }
+    if (assigneeId && !assignee) {
+      setError('The selected assignee is no longer in this work-request team. Choose an eligible assignee.');
       return;
     }
     submitting.current = true;

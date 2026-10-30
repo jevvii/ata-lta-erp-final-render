@@ -152,9 +152,8 @@ exports.up = (pgm) => {
         END;
       END IF;
 
-      -- Role policy & Pending derivation (Policy R7, R8)
+      -- Role-based creation policy: Employee requires active entitled Manager lead, derives pending. Admin/Manager creates approved.
       IF v_actor.role NOT IN ('Admin', 'Manager') THEN
-        -- Employee creation requires an assigned Manager lead on WR
         IF v_wr.assigned_to IS NULL THEN
           RAISE EXCEPTION 'TASK_REVIEW_REQUIRED: Work request has no assigned Manager lead' USING ERRCODE = '42501';
         END IF;
@@ -164,18 +163,15 @@ exports.up = (pgm) => {
         WHERE id = v_wr.assigned_to;
 
         IF NOT FOUND OR v_lead.is_active IS NOT TRUE OR v_lead.role <> 'Manager' THEN
-          RAISE EXCEPTION 'TASK_REVIEW_REQUIRED: Work request assigned lead is not an active Manager' USING ERRCODE = '42501';
+          RAISE EXCEPTION 'TASK_REVIEW_REQUIRED: Assigned lead is not an active Manager lead' USING ERRCODE = '42501';
         END IF;
 
-        IF NOT (
-          v_lead.entities IS NULL
-          OR cardinality(v_lead.entities) = 0
-          OR EXISTS (
-            SELECT 1 FROM unnest(v_lead.entities) le
-            WHERE upper(trim(le)) = 'ALL' OR upper(trim(le)) = v_entity_code
-          )
+        IF NOT EXISTS (
+          SELECT 1
+          FROM unnest(COALESCE(v_lead.entities, ARRAY[]::text[])) ue
+          WHERE upper(trim(ue)) = 'ALL' OR upper(trim(ue)) = v_entity_code
         ) THEN
-          RAISE EXCEPTION 'TASK_REVIEW_REQUIRED: Work request assigned lead is not entitled to entity' USING ERRCODE = '42501';
+          RAISE EXCEPTION 'TASK_REVIEW_REQUIRED: Assigned lead is not entitled to work request entity' USING ERRCODE = '42501';
         END IF;
 
         v_approval_status := 'pending';
@@ -183,17 +179,17 @@ exports.up = (pgm) => {
         v_approval_status := 'approved';
       END IF;
 
-      -- Whitelist validation of p_data keys
+      -- Whitelist validation of p_data keys & Reject unknown/privileged fields
       FOR v_key IN SELECT jsonb_object_keys(p_data)
       LOOP
         IF v_key IN ('approval_status', 'created_by', 'reviewed_by', 'reviewed_at', 'rejection_reason', 'version', 'work_request_id', 'deleted_at') THEN
-          RAISE EXCEPTION 'TASK_REVIEW_STATE: Cannot supply privileged field %', v_key USING ERRCODE = '22023';
+          RAISE EXCEPTION 'TASK_REVIEW_STATE: Unsupported or privileged field %', v_key USING ERRCODE = '22023';
         END IF;
 
         IF v_key NOT IN (
-          'id', 'title', 'description', 'status', 'phase', 'qa_status',
-          'due_date', 'dueDate', 'required_link_type', 'requiredLinkType',
-          'display_order', 'displayOrder', 'predecessors', 'assignee_id', 'assigneeId', 'assignees'
+          'id', 'title', 'description', 'status', 'phase', 'due_date', 'dueDate',
+          'required_link_type', 'requiredLinkType', 'display_order', 'displayOrder',
+          'qa_status', 'qaStatus', 'predecessors', 'assignee_id', 'assigneeId', 'assignees'
         ) THEN
           RAISE EXCEPTION 'TASK_REVIEW_STATE: Unsupported field %', v_key USING ERRCODE = '22023';
         END IF;
@@ -346,7 +342,7 @@ exports.up = (pgm) => {
         v_assignee_name := NULL;
       END IF;
 
-      -- Automatically promote initial status to Assigned if task has an assignee
+      -- Default assigned work to Assigned without changing explicit execution status.
       IF v_status = 'Draft' AND (v_assignee_id IS NOT NULL OR cardinality(v_assignees) > 0) THEN
         v_status := 'Assigned';
       END IF;
@@ -437,31 +433,31 @@ exports.up = (pgm) => {
     AS $$
     DECLARE
       v_wr public.work_requests%ROWTYPE;
+      v_task public.tasks%ROWTYPE;
       v_actor public.users%ROWTYPE;
       v_entity_code text;
-      v_task public.tasks%ROWTYPE;
+      v_key text;
+      v_patch jsonb;
 
       v_title text;
       v_description text;
       v_due_date timestamptz;
       v_required_link_type varchar(50);
       v_display_order integer;
+      v_assignee_id uuid;
+      v_assignee_name varchar(255);
       v_predecessors uuid[];
       v_assignees uuid[];
 
-      v_assignee_id uuid;
-      v_assignee_name varchar(255);
       v_assignee_user public.users%ROWTYPE;
       v_uid uuid;
       v_pred_id uuid;
-      v_key text;
-      v_patch jsonb := COALESCE(p_data, '{}'::jsonb);
 
-      v_is_material_change boolean := false;
       v_new_approval_status varchar(30);
       v_reviewed_by uuid;
       v_reviewed_at timestamptz;
       v_rejection_reason text;
+      v_is_material_change boolean := false;
       v_new_status varchar(50);
     BEGIN
       -- Validate required identifiers
@@ -469,8 +465,14 @@ exports.up = (pgm) => {
         RAISE EXCEPTION 'TASK_REVIEW_CONFLICT: Missing required parameters' USING ERRCODE = '22023';
       END IF;
 
+      -- Explicitly reject missing or non-positive expectedVersion
       IF p_expected_version IS NULL OR p_expected_version <= 0 THEN
         RAISE EXCEPTION 'TASK_REVIEW_CONFLICT: expectedVersion is required and must be a positive integer' USING ERRCODE = 'P0001';
+      END IF;
+
+      v_patch := COALESCE(p_data, '{}'::jsonb);
+      IF jsonb_typeof(v_patch) <> 'object' THEN
+        RAISE EXCEPTION 'TASK_REVIEW_STATE: p_data must be a jsonb object' USING ERRCODE = '22023';
       END IF;
 
       -- Parent-before-task lock order: lock work request first
@@ -526,7 +528,7 @@ exports.up = (pgm) => {
         RAISE EXCEPTION 'TASK_REVIEW_FORBIDDEN: Actor not entitled to entity' USING ERRCODE = '42501';
       END IF;
 
-      -- Current normal WR membership under lock
+      -- Current normal WR membership under lock (Admin allowed entitled; global Manager alone not membership)
       IF v_actor.role <> 'Admin' THEN
         DECLARE
           v_has_membership boolean := false;
@@ -561,16 +563,18 @@ exports.up = (pgm) => {
         END;
       END IF;
 
-      -- Lock task row
+      -- Lock task (parent-before-task lock order)
       SELECT * INTO v_task
       FROM public.tasks
       WHERE id = p_task_id
-        AND work_request_id = p_work_request_id
-        AND deleted_at IS NULL
       FOR UPDATE;
 
-      IF NOT FOUND THEN
-        RAISE EXCEPTION 'TASK_NOT_FOUND' USING ERRCODE = 'P0002';
+      IF NOT FOUND OR v_task.deleted_at IS NOT NULL THEN
+        RAISE EXCEPTION 'TASK_REVIEW_CONFLICT: Task not found' USING ERRCODE = 'P0002';
+      END IF;
+
+      IF v_task.work_request_id <> p_work_request_id THEN
+        RAISE EXCEPTION 'TASK_REVIEW_CONFLICT: Task does not belong to work request' USING ERRCODE = 'P0002';
       END IF;
 
       -- OCC version check
@@ -746,7 +750,6 @@ exports.up = (pgm) => {
         END IF;
       END IF;
 
-      -- Promote Draft to Assigned if task now has an assignee
       v_new_status := v_task.status;
       IF v_task.status = 'Draft' AND (v_assignee_id IS NOT NULL OR (v_assignees IS NOT NULL AND cardinality(v_assignees) > 0)) THEN
         v_new_status := 'Assigned';
@@ -827,5 +830,6 @@ exports.up = (pgm) => {
 };
 
 exports.down = (pgm) => {
-  // Safe rollback: Migration 76 versions can be reinstated if needed.
+  // Restore the preceding serialized-write RPCs without deleting task data.
+  require('./000076_task_review_write_serialization').up(pgm);
 };

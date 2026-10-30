@@ -7,6 +7,7 @@ import { QuickAddCard } from '../components/QuickAddCard';
 import { WorkRequestModal } from '../components/WorkRequestModal';
 import { useSessionStore } from '@/lib/session';
 import type { WorkRequest } from '../api/types';
+import type { TeamMember } from '../api/useTeam';
 
 vi.mock('../api/useTeam', () => ({
   useTeam: () => ({
@@ -31,7 +32,7 @@ vi.mock('../api/useTeam', () => ({
     isLoading: false,
     isError: false,
   }),
-  getEligibleStaff: (team: any[]) => team,
+  getEligibleStaff: (team: TeamMember[]) => team,
 }));
 
 vi.mock('../api/useClients', () => ({
@@ -165,6 +166,19 @@ describe('Assigned Task Status Default Frontend Tests', () => {
       );
     });
 
+    it('does not submit a selected assignee who was removed from the work-request team', async () => {
+      const { wrapper } = createHarness();
+      const onCreate = vi.fn().mockResolvedValue(undefined);
+      const props = { phase: 'pre_processing' as const, onCreate, onCancel: vi.fn() };
+      const { rerender } = render(<QuickAddCard {...props} workRequest={mockWr} />, { wrapper });
+      fireEvent.change(screen.getByTestId('quick-add-title-input-pre_processing'), { target: { value: 'Scoped assignment' } });
+      fireEvent.change(screen.getByTestId('quick-add-assignee-trigger-pre_processing'), { target: { value: 'u-emp-1' } });
+      rerender(<QuickAddCard {...props} workRequest={{ ...mockWr, coAssignees: [] }} />);
+      fireEvent.click(screen.getByTestId('quick-add-submit-btn-pre_processing'));
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/assignee.*work.request team/i));
+      expect(onCreate).not.toHaveBeenCalled();
+    });
+
     it('2. submits status: "Draft" when task has no assignee selected', async () => {
       const { wrapper } = createHarness();
       const handleCreate = vi.fn().mockResolvedValue(undefined);
@@ -205,13 +219,13 @@ describe('Assigned Task Status Default Frontend Tests', () => {
       const handleCreate = vi.fn().mockResolvedValue(undefined);
       const handleCancel = vi.fn();
 
-      const snakeWr: any = {
+      const snakeWr = {
         ...mockWr,
         assignedTo: undefined,
         coAssignees: undefined,
         assigned_to: 'u-lead-mgr',
         co_assignees: ['u-emp-1'],
-      };
+      } as unknown as WorkRequest;
 
       render(
         <QuickAddCard
