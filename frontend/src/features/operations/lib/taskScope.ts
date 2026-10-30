@@ -152,15 +152,12 @@ export function canLogTaskTime(user: UserProfile | null | undefined, task: Task 
 
 /**
  * Only the assigned employee (or Admin) can upload documents to this task.
- * Non-Admin Accounting users can only upload documents to 'billing' tasks assigned to them.
+ * All assigned users can upload documents to tasks assigned to them regardless of role or department.
  */
 export function canUploadTaskDocument(user: UserProfile | null | undefined, task: Task | null | undefined): boolean {
   if (!user || !task) return false;
   if (isTaskRejected(task)) return false;
   if (isUserAdmin(user)) return true;
-  if (isUserAccounting(user)) {
-    return isTaskAssignee(user, task) && isBillingTask(task);
-  }
   return isTaskAssignee(user, task);
 }
 
