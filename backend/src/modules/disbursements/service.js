@@ -55,24 +55,7 @@ const {
   unlinkAndRevertClientFundDisbursements,
 } = require('./billingLifecycleSync');
 
-const isAccountingOnlyUser = (user) => {
-  if (!user || user.role === 'Admin') return false;
-  return (
-    String(user.role || '').toLowerCase() === 'accounting' ||
-    (user.departments || []).some((d) => String(d).toLowerCase() === 'accounting')
-  );
-};
-
-const canAccountingViewDisbursement = (record, userId) => {
-  if (!record) return false;
-  if (['Approved', 'Funded', 'Released'].includes(record.status)) return true;
-  if (!userId) return false;
-  return (
-    record.created_by === userId ||
-    record.requested_by === userId ||
-    record.employee_id === userId
-  );
-};
+const { isAccountingOnlyUser, canAccountingViewDisbursement } = require('../../lib/disbursementVisibility');
 
 /** Canonical status transitions */
 const VALID_TRANSITIONS = {
@@ -2498,16 +2481,7 @@ const completeReceiptUpload = async ({ entityId, uploadId, userId, user: _user }
 };
 
 const getReceiptUrl = async ({ entityId, id, userId: _userId, user }) => {
-  let voucher;
-  try {
-    voucher = await getDisbursementById({ entityId, id, user });
-  } catch (err) {
-    if (err.statusCode === 404 && entityId && entityId !== 'ALL') {
-      voucher = await getDisbursementById({ entityId: 'ALL', id, user });
-    } else {
-      throw err;
-    }
-  }
+  const voucher = await getDisbursementById({ entityId, id, user });
 
   // Case 1: No supporting document attached
   if (!voucher.receipt_s3_key && !voucher.receipt_filename) {
@@ -2555,16 +2529,7 @@ const generateDisbursementPdf = async ({
   noLogo = false,
   includeCompanyDetails = true,
 }) => {
-  let voucher;
-  try {
-    voucher = await getDisbursementById({ entityId, id, user });
-  } catch (err) {
-    if (err.statusCode === 404 && entityId && entityId !== 'ALL') {
-      voucher = await getDisbursementById({ entityId: 'ALL', id, user });
-    } else {
-      throw err;
-    }
-  }
+  const voucher = await getDisbursementById({ entityId, id, user });
   const code = voucher.entity_code;
   let body = buildDisbursementDocument(voucher, { noLogo, includeCompanyDetails });
   if (includeCompanyDetails && !noLogo) {

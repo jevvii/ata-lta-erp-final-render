@@ -34,14 +34,14 @@ const TASK_ID_2 = '33333333-3333-3333-3333-333333333332';
 const TASK_ID_UNASSIGNED = '33333333-3333-3333-3333-333333333339';
 
 describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
-  let adminToken, adminUser;
+  let adminToken;
   let accountingToken, accountingUser;
   let managerToken, managerUser;
   let docToken, docUser;
   let opsToken, opsUser;
   let staffUser1Token, staffUser1;
-  let staffUser2Token, staffUser2;
-  let deptMgmtStaffToken, deptMgmtStaffUser;
+  let staffUser2;
+  let deptMgmtStaffToken;
 
   beforeEach(() => {
     resetMock();
@@ -57,7 +57,6 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Management'],
     });
-    adminUser = { id: adminId, role: 'Admin', departments: ['Management'] };
 
     // 2. Accounting
     const acctId = '88888888-8888-8888-8888-888888888888';
@@ -69,7 +68,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Accounting'],
     });
-    accountingUser = { id: acctId, role: 'Accounting', departments: ['Accounting'] };
+    accountingUser = { id: acctId, role: 'Accounting', departments: ['Accounting'], entities: ['ATA', 'LTA'] };
 
     // 3. Manager
     const mgrId = '77777777-7777-7777-7777-777777777777';
@@ -117,11 +116,11 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Operations'],
     });
-    staffUser1 = { id: staff1Id, role: 'Operations', departments: ['Operations'] };
+    staffUser1 = { id: staff1Id, role: 'Operations', departments: ['Operations'], entities: ['ATA', 'LTA'] };
 
     // 7. Generic Staff User 2
     const staff2Id = '66666666-6666-6666-6666-666666666662';
-    staffUser2Token = registerUser({
+    registerUser({
       id: staff2Id,
       email: 'staff2@ata-lta.ph',
       name: 'Staff Two',
@@ -141,7 +140,6 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Management'],
     });
-    deptMgmtStaffUser = { id: deptMgmtId, role: 'Staff', departments: ['Management'] };
 
     // Seed mock clients
     mockTables.clients.set(CLIENT_ID_1, {
@@ -229,9 +227,13 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
   // VECTOR 1: Disbursement list/detail/counts leaks
   // =========================================================================
   describe('Vector 1: Disbursement Authorization & Leakage Adversarial Probes', () => {
+    const STAFF1_WR = '22222222-2222-4222-8222-222222222223';
     let disbStaff2Draft, disbStaff2Released, disbStaff2Funded, disbStaff2Rejected, disbStaff2Approved;
 
     beforeEach(() => {
+      mockTables.work_requests.set(STAFF1_WR, { id: STAFF1_WR, entity_id: 'ent-ata', client_id: CLIENT_ID_1, assigned_to: staffUser1.id });
+      mockTables.work_requests.get(WR_ID_1).co_assignees = [accountingUser.id];
+      mockTables.work_requests.get(WR_ID_2).co_assignees = [accountingUser.id];
       // Seed Staff 2 disbursements across all statuses
       disbStaff2Draft = {
         id: '44444444-4444-4444-4444-444444444401',
@@ -302,7 +304,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
         created_by: staffUser2.id,
         employee_id: staffUser2.id,
         requested_by: staffUser2.id,
-        linked_work_request_id: null,
+        linked_work_request_id: WR_ID_2,
         archived: false,
         deleted_at: null,
         created_at: new Date().toISOString(),
@@ -321,7 +323,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
         created_by: staffUser2.id,
         employee_id: staffUser2.id,
         requested_by: staffUser2.id,
-        linked_work_request_id: null,
+        linked_work_request_id: WR_ID_2,
         archived: false,
         deleted_at: null,
         created_at: new Date().toISOString(),
@@ -341,7 +343,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
         created_by: staffUser1.id,
         employee_id: staffUser1.id,
         requested_by: staffUser1.id,
-        linked_work_request_id: WR_ID_1,
+        linked_work_request_id: STAFF1_WR,
         archived: false,
         deleted_at: null,
         created_at: new Date().toISOString(),
@@ -513,27 +515,30 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
       expect(acctCounts.body.data.active).toBeGreaterThan(1);
     });
 
-    test('1.11 Related disbursements scoping in operations service hides non-owned records from staff', async () => {
-      const relatedStaff1 = await operationsService.getWorkRequestRelated({
+    test('1.11 Related disbursements require project membership and preserve Accounting draft policy', async () => {
+      await expect(operationsService.getWorkRequestRelated({
         id: WR_ID_1,
         entityId: 'ent-ata',
         caller: staffUser1,
-      });
+      })).rejects.toMatchObject({ statusCode: 404 });
 
-      expect(Array.isArray(relatedStaff1.disbursements)).toBe(true);
-      relatedStaff1.disbursements.forEach((d) => {
-        expect(d.created_by).toBe(staffUser1.id);
-      });
-      expect(relatedStaff1.disbursements.some((d) => d.created_by === staffUser2.id)).toBe(false);
-
-      // Accounting caller sees all disbursements linked to the WR
       const relatedAcct = await operationsService.getWorkRequestRelated({
         id: WR_ID_1,
         entityId: 'ent-ata',
         caller: accountingUser,
       });
-      expect(relatedAcct.disbursements.some((d) => d.created_by === staffUser2.id)).toBe(true);
-      expect(relatedAcct.disbursements.some((d) => d.created_by === staffUser1.id)).toBe(true);
+      expect(relatedAcct.disbursements.some((d) => d.id === disbStaff2Released.id)).toBe(true);
+      expect(relatedAcct.disbursements.some((d) => d.id === disbStaff2Draft.id)).toBe(false);
+
+      mockTables.disbursements.get(disbStaff2Released.id).task_id = TASK_ID_1;
+      mockTables.disbursements.get(disbStaff2Draft.id).task_id = TASK_ID_1;
+      const taskRelatedAcct = await operationsService.getTaskRelated({
+        id: TASK_ID_1,
+        entityId: 'ent-ata',
+        caller: accountingUser,
+      });
+      expect(taskRelatedAcct.disbursements.some((d) => d.id === disbStaff2Released.id)).toBe(true);
+      expect(taskRelatedAcct.disbursements.some((d) => d.id === disbStaff2Draft.id)).toBe(false);
     });
   });
 
@@ -665,6 +670,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
     });
 
     test('2.6 Legitimate Operations-only user can create billing request (201 Created)', async () => {
+      mockTables.task_assignees.set(`${TASK_ID_1}:${opsUser.id}`, { task_id: TASK_ID_1, user_id: opsUser.id });
       const res = await request(app)
         .post('/v1/operations-requests')
         .set('Authorization', `Bearer ${opsToken}`)
@@ -769,6 +775,7 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
 
       expect(updateRes.status).toBe(403);
       expect(updateRes.body.detail).toBe('You are not assigned to this task');
+      expect(mockTables.transmittals.get(transmittalId).linked_task_id).toBe(TASK_ID_1);
     });
 
     test('3.5 Relinking attempting to clear linkedTaskId to null is rejected with 400 Bad Request', async () => {
@@ -828,7 +835,8 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
         .set('x-active-entity', 'ATA');
 
       expect(sendRes.status).toBe(403);
-      expect(sendRes.body.detail).toBe('You are not assigned to this task');
+      expect(sendRes.body.detail).toBe('You do not have permission to view this record.');
+      expect(mockTables.transmittals.get(transmittalId).status).toBe('Draft');
     });
 
     test('3.7 Unassignment race condition: user unassigned between creation and update is rejected with 403 Forbidden', async () => {
@@ -860,7 +868,8 @@ describe('Challenger 1: Backend RBAC Adversarial Verification Suite', () => {
         });
 
       expect(updateRes.status).toBe(403);
-      expect(updateRes.body.detail).toBe('You are not assigned to this task');
+      expect(updateRes.body.detail).toBe('You do not have permission to view this record.');
+      expect(mockTables.transmittals.get(transmittalId).notes).not.toBe('Updated notes after unassignment');
     });
 
     test('3.8 Admin creating transmittal with WR but without task selection is rejected with 400 TASK_REQUIRED', async () => {

@@ -46,6 +46,7 @@ const CLIENT_ATA = '11111111-aaaa-1111-aaaa-111111111111';
 const WR_ATA = '33333333-cccc-3333-cccc-333333333333';
 const WR_LTA = '44444444-dddd-4444-dddd-444444444444';
 
+const TASK_ATA = '66666666-6666-4666-8666-666666666666';
 const ADMIN_ID = '99999999-9999-4999-8999-999999999999';
 const STAFF_ALICE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const STAFF_BOB_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -75,9 +76,12 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
       entity_id: ENT_ATA,
       client_id: CLIENT_ATA,
       title: 'WR ATA Challenger',
+      assigned_to: STAFF_ALICE_ID,
+      co_assignees: [STAFF_BOB_ID],
       status: 'In Progress',
     });
 
+    mockTables.tasks.set(TASK_ATA, { id: TASK_ATA, work_request_id: WR_ATA, assignee_id: STAFF_ALICE_ID });
     mockTables.work_requests.set(WR_LTA, {
       id: WR_LTA,
       entity_id: ENT_LTA,
@@ -359,11 +363,15 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
         { departments: { name: 'Operations' } },
       ];
 
+      const charlieWr = '55555555-5555-4555-8555-555555555555';
+      mockTables.work_requests.set(charlieWr, { id: charlieWr, entity_id: ENT_ATA, assigned_to: STAFF_CHARLIE_ID, client_id: CLIENT_ATA });
+
       // Charlie has 1 rejected disbursement in ATA
       seedVoucher('disb-charlie-rej-ata', {
         status: 'Rejected',
         created_by: STAFF_CHARLIE_ID,
         requested_by: STAFF_CHARLIE_ID,
+        linked_work_request_id: charlieWr,
         entity_id: ENT_ATA,
       });
 
@@ -380,6 +388,7 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
         status: 'Draft',
         created_by: STAFF_CHARLIE_ID,
         requested_by: STAFF_CHARLIE_ID,
+        linked_work_request_id: charlieWr,
         entity_id: ENT_ATA,
       });
 
@@ -507,6 +516,7 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
           amount: 500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA,
+          taskId: TASK_ATA,
           receiptS3Key: resRecord.objectKey,
           receiptFilename: 'replay-receipt.pdf',
         })
@@ -631,6 +641,7 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
           amount: 500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA,
+          taskId: TASK_ATA,
           receiptFilename: 'hack.pdf',
         })
         .expect(400);
@@ -647,6 +658,7 @@ describe('Challenger M1-2: Independent Adversarial Verification (R1, R2, R5)', (
           amount: 500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA,
+          taskId: TASK_ATA,
           receiptS3Key: 'some-key.pdf',
         })
         .expect(400);

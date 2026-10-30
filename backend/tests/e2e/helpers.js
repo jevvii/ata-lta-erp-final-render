@@ -17,7 +17,7 @@ const PROTOTYPE_WORKFLOW_PATH = path.resolve(__dirname, '../../../erp_prototype/
 const PROTOTYPE_STYLES_PATH = path.resolve(__dirname, '../../../erp_prototype/css/styles.css');
 const DEFAULT_FRONTEND_PATH = path.resolve(
   __dirname,
-  '../../../../ata-lta-erp-final-enterprise-v2/frontend'
+  '../../../frontend'
 );
 
 function getEnterpriseFrontendPath() {

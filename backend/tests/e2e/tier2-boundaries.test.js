@@ -52,7 +52,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Documentation'],
     });
-    docUser = { id: docId, role: 'Documentation', departments: ['Documentation'] };
+    docUser = { entities: ['ATA', 'LTA'], id: docId, role: 'Documentation', departments: ['Documentation'] };
 
     const otherId = '55555555-5555-5555-5555-555555555552';
     otherToken = registerUser({
@@ -63,7 +63,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Operations'],
     });
-    otherUser = { id: otherId, role: 'Operations', departments: ['Operations'] };
+    otherUser = { entities: ['ATA', 'LTA'], id: otherId, role: 'Operations', departments: ['Operations'] };
 
     const managerId = '55555555-5555-5555-5555-555555555553';
     managerToken = registerUser({
@@ -110,9 +110,9 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
   });
 
   // ==========================================
-  // F01 Boundaries: Disbursement Read Creator-Only Filter
+  // F01 Boundaries: Disbursement Read Project Membership
   // ==========================================
-  describe('F01 Boundaries: Disbursement Read Creator-Only Filter', () => {
+  describe('F01 Boundaries: Disbursement Read Project Membership', () => {
     it('F01-B1: Unauthenticated request to GET /v1/disbursements returns 401 Unauthorized', async () => {
       const res = await request(app).get('/v1/disbursements').set('X-Active-Entity', 'ATA').expect(401);
       expect(res.body.title || res.body.message).toMatch(/unauthorized/i);
@@ -131,6 +131,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-deleted',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 200,
         status: 'Draft',
         deleted_at: '2026-10-19T00:00:00Z',
@@ -151,6 +152,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-1',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 300,
         status: 'Draft',
       });
@@ -169,6 +171,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-ata-only',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 400,
         status: 'Draft',
       });
@@ -198,6 +201,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
           id: `d-bulk-${i}`,
           entity_id: 'ent-ata',
           created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
           status: 'Draft',
         });
       }
@@ -216,6 +220,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-soft-del',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         status: 'Draft',
         deleted_at: '2026-10-19T00:00:00Z',
       });
@@ -234,6 +239,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-ata-cnt',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         status: 'Draft',
       });
 
@@ -257,6 +263,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-zero-amt',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 0,
         status: 'Draft',
       });
@@ -272,10 +279,10 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
   });
 
   // ==========================================
-  // F03 Boundaries: Own Records Outside WR Membership
+  // F03 Boundaries: Creator Identity Outside Project Membership
   // ==========================================
-  describe('F03 Boundaries: Own Records Outside WR Membership', () => {
-    it('F03-B1: Empty string linked_work_request_id handled safely as unlinked record', async () => {
+  describe('F03 Boundaries: Creator Identity Outside Project Membership', () => {
+    it('F03-B1: Empty string linked_work_request_id is excluded as an invalid unlinked record', async () => {
       mockTables.disbursements.set('d-empty-wr', {
         id: 'd-empty-wr',
         entity_id: 'ent-ata',
@@ -292,10 +299,10 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         .expect(200);
 
       const ids = (res.body.data || []).map((d) => d.id);
-      expect(ids).toContain('d-empty-wr');
+      expect(ids).not.toContain('d-empty-wr');
     });
 
-    it('F03-B2: Orphaned disbursement with non-existent WR ID returned to creator', async () => {
+    it('F03-B2: Orphaned disbursement with non-existent WR ID is hidden from creator', async () => {
       mockTables.disbursements.set('d-orphaned', {
         id: 'd-orphaned',
         entity_id: 'ent-ata',
@@ -312,10 +319,10 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         .expect(200);
 
       const ids = (res.body.data || []).map((d) => d.id);
-      expect(ids).toContain('d-orphaned');
+      expect(ids).not.toContain('d-orphaned');
     });
 
-    it('F03-B3: Creator with mixed linked and unlinked records retrieves all of them', async () => {
+    it('F03-B3: Creator with mixed records retrieves only authorized linked records', async () => {
       mockTables.disbursements.set('d-unlinked', {
         id: 'd-unlinked',
         entity_id: 'ent-ata',
@@ -340,11 +347,11 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         .expect(200);
 
       const ids = (res.body.data || []).map((d) => d.id);
-      expect(ids).toContain('d-unlinked');
+      expect(ids).not.toContain('d-unlinked');
       expect(ids).toContain('d-linked');
     });
 
-    it('F03-B4: Querying with explicit workRequestId filter does not leak creator record to non-creator', async () => {
+    it('F03-B4: A current teammate can read another author voucher through a workRequestId filter', async () => {
       mockTables.disbursements.set('d-secret-wr', {
         id: 'd-secret-wr',
         entity_id: 'ent-ata',
@@ -361,7 +368,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         .expect(200);
 
       const ids = (res.body.data || []).map((d) => d.id);
-      expect(ids).not.toContain('d-secret-wr');
+      expect(ids).toContain('d-secret-wr');
     });
 
     it('F03-B5: Unicode and special characters in description preserved for creator read', async () => {
@@ -369,6 +376,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'd-unicode',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         description: 'Transportación & Audit ✈️ <script>alert(1)</script>',
         amount: 500,
         status: 'Draft',
@@ -398,25 +406,27 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
       expect(related.disbursements).toEqual([]);
     });
 
-    it('F04-B3: Caller with empty departments array strictly restricted to own created disbursements', async () => {
+    it('F04-B3: Caller with empty departments but project assignment sees all related vouchers', async () => {
       mockTables.disbursements.set('d-t-1', {
         id: 'd-t-1',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_1,
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
       });
       mockTables.disbursements.set('d-t-2', {
         id: 'd-t-2',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_1,
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_1,
       });
 
-      const bareUser = { id: docUser.id, role: 'Staff', departments: [] };
+      const bareUser = { entities: ['ATA'], id: docUser.id, role: 'Staff', departments: [] };
       const related = await operationsService.getTaskRelated(TASK_ID_1, bareUser);
       const ids = (related.disbursements || []).map((d) => d.id);
       expect(ids).toContain('d-t-1');
-      expect(ids).not.toContain('d-t-2');
+      expect(ids).toContain('d-t-2');
     });
 
     it('F04-B4: Soft-deleted disbursements are excluded from getTaskRelated', async () => {
@@ -425,6 +435,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_1,
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         deleted_at: '2026-10-19T00:00:00Z',
       });
 
@@ -598,6 +609,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'tr-sent',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         linked_task_id: TASK_ID_1,
         status: 'Sent',
         approved: true,
@@ -618,6 +630,7 @@ describe('Tier 2: Boundary & Corner Cases (F01 - F17)', () => {
         id: 'tr-already-sent',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         linked_task_id: TASK_ID_1,
         status: 'Sent',
         approved: true,

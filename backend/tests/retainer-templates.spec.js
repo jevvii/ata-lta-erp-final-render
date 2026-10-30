@@ -4,7 +4,7 @@
  * Verifies:
  * - RBAC Permission Matrix (AC-1 / R1):
  *   - Managers can view templates and generate work requests (retainers:use)
- *   - Managers receive 403 on create/update/delete (retainers:edit)
+ *   - Managers can create/update/delete (role-specific retainers:edit grant)
  *   - Admins can create, update, delete, view, and generate (retainers:use + retainers:edit)
  *   - Operations/Accounting staff receive 403 on all template routes
  * - Template Generation Pipeline (AC-2 / R2):
@@ -58,7 +58,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       entities: ['ATA', 'LTA'],
     });
 
-    // 2. Manager (has retainers:use, lacks retainers:edit)
+    // 2. Manager (has retainers:use and role-specific retainers:edit)
     managerId = '22222222-2222-4222-8222-222222222222';
     managerToken = registerUser({
       id: managerId,
@@ -111,6 +111,23 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
   });
 
   describe('1. RBAC Permission Matrix (AC-1 / R1)', () => {
+    it('does not grant template editing from Management department membership alone', async () => {
+      const departmentOnlyToken = registerUser({
+        name: 'Management Staff',
+        email: 'management-staff@ata-lta.ph',
+        role: 'Staff',
+        departments: ['Management'],
+        entities: ['ATA'],
+      });
+      await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${departmentOnlyToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ name: 'Unauthorized template', clientId: testClient.id })
+        .expect(403);
+      expect(mockTables.retainer_templates.size).toBe(0);
+    });
+
     it('allows Admin to create a retainer template (201 Created)', async () => {
       const res = await request(app)
         .post('/v1/operations/templates')
@@ -138,7 +155,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.data.recurrence).toBe('annual');
     });
 
-    it('rejects Manager attempting to create a retainer template with 403 Forbidden', async () => {
+    it('allows Manager to create a retainer template with role-specific retainers:edit', async () => {
       const res = await request(app)
         .post('/v1/operations/templates')
         .set('Authorization', `Bearer ${managerToken}`)
@@ -148,11 +165,11 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           clientId: testClient.id,
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(201);
+      expect(res.body.data.name).toBe('Manager Created Retainer');
     });
 
-    it('rejects Manager attempting to create on /retainer-templates alias with 403 Forbidden', async () => {
+    it('allows Manager to create on /retainer-templates alias', async () => {
       const res = await request(app)
         .post('/v1/operations/retainer-templates')
         .set('Authorization', `Bearer ${managerToken}`)
@@ -162,8 +179,8 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           clientId: testClient.id,
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(201);
+      expect(res.body.data.name).toBe('Manager Created Retainer');
     });
 
     it('rejects Operations staff attempting to create a template with 403 Forbidden', async () => {
@@ -179,7 +196,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.title).toMatch(/forbidden/i);
     });
 
-    it('rejects Manager attempting to update a template with 403 Forbidden', async () => {
+    it('allows Manager to update a template', async () => {
       const templateId = 'tpl-update-test';
       mockTables.retainer_templates.set(templateId, {
         id: templateId,
@@ -196,11 +213,11 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           name: 'Manager Updated Name',
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('Manager Updated Name');
     });
 
-    it('rejects Manager attempting to delete a template with 403 Forbidden', async () => {
+    it('allows Manager to delete a template', async () => {
       const templateId = 'tpl-delete-test';
       mockTables.retainer_templates.set(templateId, {
         id: templateId,
@@ -214,8 +231,8 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA');
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(204);
+      expect(mockTables.retainer_templates.get(templateId).deleted_at).toBeTruthy();
     });
 
     it('allows Manager and Admin to list templates (200 OK)', async () => {

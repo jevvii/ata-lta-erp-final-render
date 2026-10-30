@@ -12,7 +12,7 @@ jest.mock('../../src/services/supabaseClient', () => {
 });
 
 // Runtime configuration tests must not depend on a developer's local credentials.
-process.env.SUPABASE_ANON_KEY = require('crypto').randomBytes(24).toString('hex');
+process.env.SUPABASE_ANON_KEY = 'sb_publishable_test_public_key';
 
 const request = require('supertest');
 const { app } = require('../helpers/testServer');

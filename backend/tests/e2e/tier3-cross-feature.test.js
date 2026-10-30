@@ -29,7 +29,7 @@ const TASK_ID_ASSIGNED = '33333333-3333-3333-3333-333333333331';
 const TASK_ID_UNASSIGNED = '33333333-3333-3333-3333-333333333332';
 
 describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
-  let adminToken, accountingToken, docToken, docUser, otherToken, otherUser, managerToken;
+  let adminToken, docToken, docUser, otherToken, otherUser, managerToken;
 
   beforeEach(() => {
     resetMock();
@@ -43,13 +43,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       departments: ['Management'],
     });
 
-    accountingToken = registerUser({
-      email: 'accounting@ata-lta.ph',
-      name: 'Accounting Staff',
-      role: 'Accounting',
-      entities: ['ATA', 'LTA'],
-      departments: ['Accounting'],
-    });
+
 
     const docId = '66666666-6666-6666-6666-666666666661';
     docToken = registerUser({
@@ -60,7 +54,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Documentation'],
     });
-    docUser = { id: docId, role: 'Documentation', departments: ['Documentation'] };
+    docUser = { entities: ['ATA', 'LTA'], id: docId, role: 'Documentation', departments: ['Documentation'] };
 
     const otherId = '66666666-6666-6666-6666-666666666662';
     otherToken = registerUser({
@@ -71,7 +65,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Operations'],
     });
-    otherUser = { id: otherId, role: 'Operations', departments: ['Operations'] };
+    otherUser = { entities: ['ATA', 'LTA'], id: otherId, role: 'Operations', departments: ['Operations'] };
 
     const managerId = '66666666-6666-6666-6666-666666666663';
     managerToken = registerUser({
@@ -100,6 +94,8 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       status: 'In Progress',
     });
 
+    mockTables.work_requests.set(WR_ID_EXTERNAL, { id: WR_ID_EXTERNAL, entity_id: 'ent-ata', client_id: CLIENT_ID, assigned_to: otherId });
+
     mockTables.tasks.set(TASK_ID_ASSIGNED, {
       id: TASK_ID_ASSIGNED,
       work_request_id: WR_ID_1,
@@ -123,6 +119,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       id: 'd-doc',
       entity_id: 'ent-ata',
       created_by: docUser.id,
+      linked_work_request_id: WR_ID_1,
       amount: 100,
       status: 'Draft',
     });
@@ -130,6 +127,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       id: 'd-other',
       entity_id: 'ent-ata',
       created_by: otherUser.id,
+      linked_work_request_id: WR_ID_EXTERNAL,
       amount: 200,
       status: 'Draft',
     });
@@ -166,7 +164,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
   });
 
   // Pair 2: F01 + F03
-  it('Pair 2 (F01 + F03): Creator reads unlinked disbursement and foreign-WR disbursement; peers read neither', async () => {
+  it('Pair 2 (F01 + F03): Creator cannot bypass missing or foreign parent membership; current project lead can read', async () => {
     mockTables.disbursements.set('d-unlinked', {
       id: 'd-unlinked',
       entity_id: 'ent-ata',
@@ -191,8 +189,8 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       .expect(200);
 
     const docIds = docRes.body.data.map((d) => d.id);
-    expect(docIds).toContain('d-unlinked');
-    expect(docIds).toContain('d-foreign');
+    expect(docIds).not.toContain('d-unlinked');
+    expect(docIds).not.toContain('d-foreign');
 
     const peerRes = await request(app)
       .get('/v1/disbursements')
@@ -202,16 +200,17 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
 
     const peerIds = (peerRes.body.data || []).map((d) => d.id);
     expect(peerIds).not.toContain('d-unlinked');
-    expect(peerIds).not.toContain('d-foreign');
+    expect(peerIds).toContain('d-foreign');
   });
 
   // Pair 3: F01 + F04
-  it('Pair 3 (F01 + F04): Task related disbursements and disbursements list adhere to same creator boundary', async () => {
+  it('Pair 3 (F01 + F04): Task related disbursements and disbursements list adhere to same project boundary', async () => {
     mockTables.disbursements.set('d-t-own', {
       id: 'd-t-own',
       entity_id: 'ent-ata',
       linked_task_id: TASK_ID_ASSIGNED,
       created_by: docUser.id,
+      linked_work_request_id: WR_ID_1,
       amount: 150,
       status: 'Draft',
     });
@@ -220,6 +219,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       entity_id: 'ent-ata',
       linked_task_id: TASK_ID_ASSIGNED,
       created_by: otherUser.id,
+      linked_work_request_id: WR_ID_1,
       amount: 250,
       status: 'Draft',
     });
@@ -234,9 +234,9 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       .expect(200);
 
     const listIds = listRes.body.data.map((d) => d.id);
-    expect(relatedIds).toEqual(['d-t-own']);
+    expect(relatedIds.sort()).toEqual(['d-t-other', 'd-t-own']);
     expect(listIds).toContain('d-t-own');
-    expect(listIds).not.toContain('d-t-other');
+    expect(listIds).toContain('d-t-other');
   });
 
   // Pair 4: F05 + F06
@@ -383,11 +383,12 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
   });
 
   // Pair 11: F01 + F14
-  it('Pair 11 (F01 + F14): Backend disbursement read scope and Prototype canViewDisbursement produce identical results', async () => {
+  it('Pair 11 (F01 + F14): Backend project scope and legacy prototype agree for this assigned-owner and unrelated-project example', async () => {
     mockTables.disbursements.set('d-parity-own', {
       id: 'd-parity-own',
       entity_id: 'ent-ata',
       created_by: docUser.id,
+      linked_work_request_id: WR_ID_1,
       amount: 100,
       status: 'Released',
     });
@@ -395,6 +396,7 @@ describe('Tier 3: Cross-Feature Combinations & Pairwise Interactions', () => {
       id: 'd-parity-other',
       entity_id: 'ent-ata',
       created_by: otherUser.id,
+      linked_work_request_id: WR_ID_EXTERNAL,
       amount: 200,
       status: 'Released',
     });

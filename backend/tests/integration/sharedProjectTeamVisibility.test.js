@@ -450,18 +450,19 @@ describe('360° Shared Project Team Visibility - Findings F01-F10 & Edge Cases',
   });
 
   describe('F06: Clients & Subrecords Scoped by Project', () => {
-    test('team member can view their project client but not unrelated client', async () => {
+    test('entity client directory is shared even when related projects remain private', async () => {
       const allowedClient = await get(`/v1/clients/${clientId}`, leadToken);
       expect(allowedClient.status).toBe(200);
       expect(allowedClient.body.data.id).toBe(clientId);
 
       const secretClient = await get(`/v1/clients/${unrelatedClientId}`, leadToken);
-      expect([403, 404]).toContain(secretClient.status);
+      expect(secretClient.status).toBe(200);
+      expect(secretClient.body.data.id).toBe(unrelatedClientId);
 
       const list = await get('/v1/clients', leadToken);
       expect(list.status).toBe(200);
       expect(list.body.data.map((c) => c.id)).toContain(clientId);
-      expect(list.body.data.map((c) => c.id)).not.toContain(unrelatedClientId);
+      expect(list.body.data.map((c) => c.id)).toContain(unrelatedClientId);
     });
   });
 
@@ -611,7 +612,7 @@ describe('360° Shared Project Team Visibility - Findings F01-F10 & Edge Cases',
       expect(mockTables.tasks.get(unrelatedTaskId).deleted_at).toBeNull();
     });
 
-    test('DMS metadata action respects project boundary: outsider denied, lead succeeds', async () => {
+    test('DMS metadata action denies outsiders and allows an assigned Documentation task worker', async () => {
       const docOutsiderToken = registerUser({
         id: uid(931),
         email: 'doc-outsider@fixture.invalid',
@@ -629,6 +630,7 @@ describe('360° Shared Project Team Visibility - Findings F01-F10 & Edge Cases',
         entities: ['ATA'],
       });
       mockTables.work_requests.get(wrId).assigned_to = uid(932);
+      mockTables.tasks.get(taskId).assignee_id = uid(932);
 
       const outsiderRes = await request(app)
         .put(`/v1/documents/${docId}`)

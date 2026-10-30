@@ -178,7 +178,7 @@ describe('SPEC-REALTIME-UAT-REMEDIATION-002: Backend Version Increment Empirical
       const wrUpdate = executedQueries.find((u) => u.table === 'work_requests' && u.action === 'update');
       expect(wrUpdate).toBeDefined();
       expect(wrUpdate.updatePayload.version).toBe(8); // 7 + 1
-      expect(wrUpdate.filters.version).toBeUndefined(); // no OCC filter when expectedVersion not sent
+      expect(wrUpdate.filters.version).toBe(7); // Server-side CAS protects the version read before mutation
     });
 
     it('increments version and enforces OCC filter when expectedVersion IS provided', async () => {
@@ -320,7 +320,7 @@ describe('SPEC-REALTIME-UAT-REMEDIATION-002: Backend Version Increment Empirical
       const taskUpdate = executedQueries.find((u) => u.table === 'tasks' && u.action === 'update');
       expect(taskUpdate).toBeDefined();
       expect(taskUpdate.updatePayload.version).toBe(5); // 4 + 1
-      expect(taskUpdate.filters.version).toBeUndefined();
+      expect(taskUpdate.filters.version).toBe(4); // Server-side CAS still protects callers omitting a client version
     });
 
     it('increments task version and enforces OCC filter when expectedVersion IS provided', async () => {

@@ -49,6 +49,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
     adminToken = admin;
 
     const accounting = registerUser({
+      id: '44444444-4444-4444-4444-444444444444',
       email: 'accounting@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
@@ -66,7 +67,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Documentation'],
     });
-    docUser = { id: docId, role: 'Documentation', departments: ['Documentation'], name: 'Doc Staff' };
+    docUser = { entities: ['ATA', 'LTA'], id: docId, role: 'Documentation', departments: ['Documentation'], name: 'Doc Staff' };
 
     const otherId = '44444444-4444-4444-4444-444444444442';
     otherToken = registerUser({
@@ -77,7 +78,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Operations'],
     });
-    otherUser = { id: otherId, role: 'Operations', departments: ['Operations'], name: 'Other Staff' };
+    otherUser = { entities: ['ATA', 'LTA'], id: otherId, role: 'Operations', departments: ['Operations'], name: 'Other Staff' };
 
     const managerId = '44444444-4444-4444-4444-444444444443';
     managerToken = registerUser({
@@ -105,6 +106,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       entity_id: 'ent-ata',
       client_id: CLIENT_ID,
       title: 'Audit WR 1',
+      co_assignees: ['44444444-4444-4444-4444-444444444444'],
       status: 'In Progress',
       created_by: admin,
     });
@@ -114,6 +116,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       entity_id: 'ent-ata',
       client_id: CLIENT_ID,
       title: 'External WR',
+      assigned_to: otherId,
       status: 'In Progress',
       created_by: otherId,
     });
@@ -151,14 +154,15 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
   });
 
   // ==========================================
-  // F01: Disbursement Read Creator-Only Filter
+  // F01: Disbursement Read Project Membership
   // ==========================================
-  describe('F01: Disbursement Read Creator-Only Filter', () => {
-    it('F01-1: listDisbursements returns only records where created_by === caller.id for non-Admin/non-Accounting', async () => {
+  describe('F01: Disbursement Read Project Membership', () => {
+    it('F01-1: listDisbursements includes a concerned project and excludes an unrelated project', async () => {
       mockTables.disbursements.set('d-1', {
         id: 'd-1',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 500,
         status: 'Draft',
         deleted_at: null,
@@ -167,6 +171,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         id: 'd-2',
         entity_id: 'ent-ata',
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL,
         amount: 1000,
         status: 'Draft',
         deleted_at: null,
@@ -184,11 +189,12 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(ids).not.toContain('d-2');
     });
 
-    it('F01-2: getDisbursementById allows read for own created record (200 OK)', async () => {
+    it('F01-2: getDisbursementById allows a current project member to read its linked voucher', async () => {
       mockTables.disbursements.set('d-own', {
         id: 'd-own',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 750,
         status: 'Draft',
         deleted_at: null,
@@ -204,11 +210,12 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.data.created_by).toBe(docUser.id);
     });
 
-    it('F01-3: getDisbursementById rejects read of another user record with 403 Forbidden', async () => {
+    it('F01-3: getDisbursementById rejects a voucher outside current project membership', async () => {
       mockTables.disbursements.set('d-other', {
         id: 'd-other',
         entity_id: 'ent-ata',
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL,
         amount: 800,
         status: 'Draft',
         deleted_at: null,
@@ -223,11 +230,12 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.title).toMatch(/forbidden/i);
     });
 
-    it('F01-4: status bypass is eliminated: Released/Funded/Rejected records of others are hidden from list', async () => {
+    it('F01-4: Released status does not bypass missing project membership', async () => {
       mockTables.disbursements.set('d-released', {
         id: 'd-released',
         entity_id: 'ent-ata',
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL,
         amount: 1200,
         status: 'Released',
         deleted_at: null,
@@ -243,11 +251,12 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(ids).not.toContain('d-released');
     });
 
-    it('F01-5: payee bypass is eliminated: user named as payee cannot read if not creator', async () => {
+    it('F01-5: payee status does not bypass missing project membership', async () => {
       mockTables.disbursements.set('d-payee', {
         id: 'd-payee',
         entity_id: 'ent-ata',
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL,
         employee_id: docUser.id, // caller is payee
         amount: 1500,
         status: 'Draft',
@@ -265,12 +274,13 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
   });
 
   // ==========================================
-  // F02: Disbursement Badge Counts Creator Scoping
+  // F02: Disbursement Badge Counts Project Scoping
   // ==========================================
-  describe('F02: Disbursement Badge Counts Creator Scoping', () => {
+  describe('F02: Disbursement Badge Counts Project Scoping', () => {
     it('F02-1: Admin receives full aggregate badge counts across all users', async () => {
-      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, status: 'Draft' });
-      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id, status: 'Draft' });
+      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, linked_work_request_id: WR_ID_1, status: 'Draft' });
+      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL, status: 'Draft' });
 
       const res = await request(app)
         .get('/v1/disbursements/counts')
@@ -281,9 +291,10 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.data.active).toBe(2);
     });
 
-    it('F02-2: Accounting receives full aggregate badge counts across all users', async () => {
-      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, status: 'Draft' });
-      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id, status: 'Draft' });
+    it('F02-2: Accounting does not receive other authors drafts merely from department membership', async () => {
+      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, linked_work_request_id: WR_ID_1, status: 'Draft' });
+      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL, status: 'Draft' });
 
       const res = await request(app)
         .get('/v1/disbursements/counts')
@@ -291,12 +302,13 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
 
-      expect(res.body.data.active).toBe(2);
+      expect(res.body.data.active).toBe(0);
     });
 
-    it('F02-3: Non-Admin creator counts reflect only records created by the caller', async () => {
-      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, status: 'Draft' });
-      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id, status: 'Draft' });
+    it('F02-3: Non-Admin counts include concerned projects and exclude unrelated projects', async () => {
+      mockTables.disbursements.set('d-1', { id: 'd-1', entity_id: 'ent-ata', created_by: docUser.id, linked_work_request_id: WR_ID_1, status: 'Draft' });
+      mockTables.disbursements.set('d-2', { id: 'd-2', entity_id: 'ent-ata', created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL, status: 'Draft' });
 
       const res = await request(app)
         .get('/v1/disbursements/counts')
@@ -307,8 +319,9 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.data.active).toBe(1);
     });
 
-    it('F02-4: Counts exclude other users records in all status buckets (archived, rejected)', async () => {
-      mockTables.disbursements.set('d-rej', { id: 'd-rej', entity_id: 'ent-ata', created_by: otherUser.id, status: 'Rejected' });
+    it('F02-4: Counts exclude an unrelated project voucher in rejected status', async () => {
+      mockTables.disbursements.set('d-rej', { id: 'd-rej', entity_id: 'ent-ata', created_by: otherUser.id,
+        linked_work_request_id: WR_ID_EXTERNAL, status: 'Rejected' });
 
       const res = await request(app)
         .get('/v1/disbursements/counts')
@@ -319,7 +332,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(res.body.data.rejected).toBe(0);
     });
 
-    it('F02-5: User with zero created disbursements receives 0 across all buckets', async () => {
+    it('F02-5: User with no visible vouchers receives zero across all buckets', async () => {
       const res = await request(app)
         .get('/v1/disbursements/counts')
         .set('Authorization', `Bearer ${docToken}`)
@@ -341,10 +354,10 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
   });
 
   // ==========================================
-  // F03: Disbursement Own Records Outside WR Membership
+  // F03: Disbursement Creator Identity Outside Project Membership
   // ==========================================
-  describe('F03: Disbursement Own Records Outside WR Membership', () => {
-    it('F03-1: Creator can read own disbursement without linked work request (null WR)', async () => {
+  describe('F03: Disbursement Creator Identity Outside Project Membership', () => {
+    it('F03-1: Creator cannot read an unlinked disbursement without a project', async () => {
       mockTables.disbursements.set('d-null-wr', {
         id: 'd-null-wr',
         entity_id: 'ent-ata',
@@ -362,10 +375,10 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .expect(200);
 
       const ids = res.body.data.map((d) => d.id);
-      expect(ids).toContain('d-null-wr');
+      expect(ids).not.toContain('d-null-wr');
     });
 
-    it('F03-2: Creator can read own disbursement linked to foreign WR where caller is not a member', async () => {
+    it('F03-2: Creator cannot read a disbursement after losing parent project membership', async () => {
       mockTables.disbursements.set('d-foreign-wr', {
         id: 'd-foreign-wr',
         entity_id: 'ent-ata',
@@ -383,10 +396,10 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .expect(200);
 
       const ids = res.body.data.map((d) => d.id);
-      expect(ids).toContain('d-foreign-wr');
+      expect(ids).not.toContain('d-foreign-wr');
     });
 
-    it('F03-3: Creator can fetch single record outside WR membership directly (200 OK)', async () => {
+    it('F03-3: Creator receives 403 outside parent project membership', async () => {
       mockTables.disbursements.set('d-foreign-detail', {
         id: 'd-foreign-detail',
         entity_id: 'ent-ata',
@@ -401,12 +414,12 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .get('/v1/disbursements/d-foreign-detail')
         .set('Authorization', `Bearer ${docToken}`)
         .set('X-Active-Entity', 'ATA')
-        .expect(200);
+        .expect(403);
 
-      expect(res.body.data.id).toBe('d-foreign-detail');
+      expect(res.body.code).toBe('FORBIDDEN');
     });
 
-    it('F03-4: Non-creator member of foreign WR cannot read creator disbursement', async () => {
+    it('F03-4: Current parent-project lead can read another author voucher', async () => {
       mockTables.disbursements.set('d-foreign-hidden', {
         id: 'd-foreign-hidden',
         entity_id: 'ent-ata',
@@ -421,16 +434,17 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .get('/v1/disbursements/d-foreign-hidden')
         .set('Authorization', `Bearer ${otherToken}`)
         .set('X-Active-Entity', 'ATA')
-        .expect(403);
+        .expect(200);
 
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.body.data.id).toBe('d-foreign-hidden');
     });
 
-    it('F03-5: Multi-entity creator reads own records scoped strictly to active entity header', async () => {
+    it('F03-5: Multi-entity project member reads vouchers scoped strictly to active entity header', async () => {
       mockTables.disbursements.set('d-ata', {
         id: 'd-ata',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 100,
         status: 'Draft',
       });
@@ -438,6 +452,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         id: 'd-lta',
         entity_id: 'ent-lta',
         created_by: docUser.id,
+        linked_work_request_id: null,
         amount: 200,
         status: 'Draft',
       });
@@ -458,7 +473,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
   // F04: Related Disbursements Scoping
   // ==========================================
   describe('F04: Related Disbursements Scoping', () => {
-    it('F04-1: getWorkRequestRelated filters linked disbursements to created_by === caller.id for non-Admin/non-Accounting', async () => {
+    it('F04-1: getWorkRequestRelated returns all valid linked vouchers to a current project member', async () => {
       mockTables.disbursements.set('d-rel-1', {
         id: 'd-rel-1',
         entity_id: 'ent-ata',
@@ -477,29 +492,33 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       const related = await operationsService.getWorkRequestRelated(WR_ID_1, docUser);
       const disbIds = (related.disbursements || []).map((d) => d.id);
       expect(disbIds).toContain('d-rel-1');
-      expect(disbIds).not.toContain('d-rel-2');
+      expect(disbIds).toContain('d-rel-2');
     });
 
-    it('F04-2: getTaskRelated filters linked disbursements to created_by === caller.id for non-Admin/non-Accounting', async () => {
+    it('F04-2: getTaskRelated returns all valid linked vouchers to a current project member', async () => {
       mockTables.disbursements.set('d-task-1', {
         id: 'd-task-1',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_ASSIGNED,
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 150,
+        status: 'Approved',
       });
       mockTables.disbursements.set('d-task-2', {
         id: 'd-task-2',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_ASSIGNED,
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_1,
         amount: 250,
+        status: 'Approved',
       });
 
       const related = await operationsService.getTaskRelated(TASK_ID_ASSIGNED, docUser);
       const disbIds = (related.disbursements || []).map((d) => d.id);
       expect(disbIds).toContain('d-task-1');
-      expect(disbIds).not.toContain('d-task-2');
+      expect(disbIds).toContain('d-task-2');
     });
 
     it('F04-3: Admin caller in getWorkRequestRelated receives all disbursements linked to the WR', async () => {
@@ -508,12 +527,14 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         entity_id: 'ent-ata',
         linked_work_request_id: WR_ID_1,
         created_by: docUser.id,
+        status: 'Approved',
       });
       mockTables.disbursements.set('d-rel-2', {
         id: 'd-rel-2',
         entity_id: 'ent-ata',
         linked_work_request_id: WR_ID_1,
         created_by: otherUser.id,
+        status: 'Approved',
       });
 
       const adminProfile = { id: 'admin-id', role: 'Admin', departments: ['Management'] };
@@ -523,37 +544,70 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
       expect(disbIds).toContain('d-rel-2');
     });
 
-    it('F04-4: Accounting caller in getTaskRelated receives all disbursements linked to the task', async () => {
+    it('F04-4: Accounting related vouchers include approved lifecycle states and own drafts while hiding foreign drafts', async () => {
       mockTables.disbursements.set('d-task-1', {
         id: 'd-task-1',
+        status: 'Approved',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_ASSIGNED,
         created_by: docUser.id,
+        linked_work_request_id: WR_ID_1,
       });
       mockTables.disbursements.set('d-task-2', {
         id: 'd-task-2',
+        status: 'Funded',
         entity_id: 'ent-ata',
         linked_task_id: TASK_ID_ASSIGNED,
         created_by: otherUser.id,
+        linked_work_request_id: WR_ID_1,
       });
 
-      const accountingProfile = { id: 'acc-id', role: 'Accounting', departments: ['Accounting'] };
+      const accountingProfile = { entities: ['ATA'], id: '44444444-4444-4444-4444-444444444444', role: 'Accounting', departments: ['Accounting'] };
+      mockTables.disbursements.set('d-task-released', {
+        id: 'd-task-released',
+        entity_id: 'ent-ata',
+        linked_task_id: TASK_ID_ASSIGNED,
+        linked_work_request_id: WR_ID_1,
+        created_by: otherUser.id,
+        status: 'Released',
+      });
+      mockTables.disbursements.set('d-task-own-draft', {
+        id: 'd-task-own-draft',
+        entity_id: 'ent-ata',
+        linked_task_id: TASK_ID_ASSIGNED,
+        linked_work_request_id: WR_ID_1,
+        created_by: accountingProfile.id,
+        status: 'Draft',
+      });
+      mockTables.disbursements.set('d-task-foreign-draft', {
+        id: 'd-task-foreign-draft',
+        entity_id: 'ent-ata',
+        linked_task_id: TASK_ID_ASSIGNED,
+        linked_work_request_id: WR_ID_1,
+        created_by: otherUser.id,
+        status: 'Draft',
+      });
+
       const related = await operationsService.getTaskRelated(TASK_ID_ASSIGNED, accountingProfile);
       const disbIds = (related.disbursements || []).map((d) => d.id);
       expect(disbIds).toContain('d-task-1');
       expect(disbIds).toContain('d-task-2');
+      expect(disbIds).toContain('d-task-released');
+      expect(disbIds).toContain('d-task-own-draft');
+      expect(disbIds).not.toContain('d-task-foreign-draft');
     });
 
-    it('F04-5: Non-creator staff member querying related records receives empty disbursements when none created', async () => {
+    it('F04-5: Project member sees valid related records even when authored by another staff member', async () => {
       mockTables.disbursements.set('d-rel-2', {
         id: 'd-rel-2',
         entity_id: 'ent-ata',
         linked_work_request_id: WR_ID_1,
         created_by: otherUser.id,
+        status: 'Approved',
       });
 
       const related = await operationsService.getWorkRequestRelated(WR_ID_1, docUser);
-      expect(related.disbursements || []).toEqual([]);
+      expect((related.disbursements || []).map((d) => d.id)).toEqual(['d-rel-2']);
     });
   });
 
@@ -625,7 +679,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         .post('/v1/operations-requests')
         .set('Authorization', `Bearer ${otherToken}`)
         .set('X-Active-Entity', 'ATA')
-        .send(billingPayload)
+        .send({ ...billingPayload, taskId: TASK_ID_UNASSIGNED })
         .expect(201);
 
       expect(res.body.data.type).toBe('billing');
@@ -697,6 +751,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         id: 'tr-edit-1',
         entity_id: 'ent-ata',
         created_by: docUser.id,
+        work_request_id: WR_ID_1,
         linked_task_id: TASK_ID_ASSIGNED,
         status: 'Draft',
         approved: true,
@@ -717,6 +772,7 @@ describe('Tier 1: Feature Coverage (F01 - F17)', () => {
         id: 'tr-send-1',
         entity_id: 'ent-ata',
         created_by: otherUser.id,
+        work_request_id: WR_ID_1,
         linked_task_id: TASK_ID_UNASSIGNED,
         status: 'Draft',
         approved: true,

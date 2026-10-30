@@ -69,6 +69,8 @@ describe('Empirical Adversarial Challenges: Milestone 1 (R1, R2, R5)', () => {
       id: WR_ATA,
       entity_id: ENT_ATA,
       title: 'WR ATA Challenger',
+      assigned_to: OPS_A_ID,
+      co_assignees: [ACCT_ID],
     });
     mockTables.work_requests.set(WR_LTA, {
       id: WR_LTA,
@@ -348,6 +350,8 @@ describe('Empirical Adversarial Challenges: Milestone 1 (R1, R2, R5)', () => {
 
   describe('Adversarial Challenge R2: Staff Pending Changes Counts and Column Security', () => {
     it('executes staff /counts with populated pending_changes without SQL column errors', async () => {
+      const bobWr = '77777777-7777-4777-8777-777777777777';
+      mockTables.work_requests.set(bobWr, { id: bobWr, entity_id: ENT_ATA, assigned_to: OPS_B_ID, co_assignees: [ACCT_ID] });
       // Seed rejected disbursements in disbursements table (v2 lifecycle)
       seedVoucher('disb-rej-ops-a-1', {
         status: 'Rejected',
@@ -365,6 +369,7 @@ describe('Empirical Adversarial Challenges: Milestone 1 (R1, R2, R5)', () => {
         status: 'Rejected',
         created_by: OPS_B_ID,
         requested_by: OPS_B_ID,
+        linked_work_request_id: bobWr,
         entity_id: ENT_ATA,
       });
 
@@ -468,7 +473,7 @@ describe('Empirical Adversarial Challenges: Milestone 1 (R1, R2, R5)', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
 
-      expect(resAcct.body.data.rejected).toBe(3);
+      expect(resAcct.body.data.rejected).toBe(0); // Accounting-only users cannot inspect third-party rejected drafts.
 
       // 7. Query /counts as Admin:
       // Sees all rejected disbursement pending changes in ATA -> 3

@@ -9,7 +9,7 @@
  *    - Concurrent racing disbursement approvals (anti-double-release, 409 conflict, version lock)
  *    - Direct structural verification of Migration 000066 PL/pgSQL locking order & exception codes
  * 2. Access Control & Visibility Boundary Breaking (D1 / V1–V4):
- *    - Cross-user voucher access denial across ALL 7 statuses even with shared Work Request association
+ *    - Cross-project voucher access denial across all statuses; task assignment controls access
  *    - Attribution forgery prevention (403 on foreign employeeId during creation & update)
  *    - ALL-entity leak prevention for restricted Admin & ordinary Staff
  *    - Listing & badge count isolation (zero foreign data in badges or query lists)
@@ -20,7 +20,7 @@
  *    - Cross-user receipt key hijacking on voucher creation (403)
  *    - Receipt preview URL authorization (403/404/legacy unavailable)
  * 4. Draft Safety (D3 / V5):
- *    - Complete rejection of financial/line-item mutations on non-Draft invoices (409 INVOICE_NOT_DRAFT)
+ *    - Rejection of non-Admin financial/line-item mutations on non-Draft invoices (409 INVOICE_NOT_DRAFT)
  *    - Preservation of non-financial mutations (notes, address) on non-Draft invoices
  *    - Safe full-payload updates on Draft invoices
  */
@@ -82,6 +82,8 @@ const seedBaseData = () => {
     entity_id: ENT_ATA_ID,
     client_id: CLIENT_ATA_ID,
     title: 'Shared Audit Work Request',
+    assigned_to: STAFF_ALICE_ID,
+    co_assignees: [ACCT_USER_ID],
     work_order_number: 'WO-ATA-2026-SHARED',
     status: 'In Progress',
   });
@@ -90,6 +92,7 @@ const seedBaseData = () => {
     id: TASK_SHARED_ID,
     work_request_id: SHARED_WR_ATA_ID,
     title: 'Shared Fieldwork Task',
+    assignee_id: STAFF_ALICE_ID,
     status: 'In Progress',
   });
 };
@@ -408,14 +411,14 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
     ];
 
     it.each(ALL_7_STATUSES)(
-      'VOUCHER-DENIAL-ACROSS-STATUSES: Non-owner Bob cannot read Alice voucher in status "%s" despite shared Work Request',
+      'VOUCHER-DENIAL-ACROSS-STATUSES: Non-owner Bob cannot read Alice voucher in status "%s" without project assignment',
       async (status) => {
         const voucherId = `disb-alice-${status.toLowerCase().replace(/\s+/g, '-')}`;
         mockTables.disbursements.set(voucherId, {
           id: voucherId,
           entity_id: ENT_ATA_ID,
           client_id: CLIENT_ATA_ID,
-          linked_work_request_id: SHARED_WR_ATA_ID, // Both Alice and Bob work on this WR!
+          linked_work_request_id: SHARED_WR_ATA_ID, // Alice is assigned; Bob is an outsider.
           disbursement_number: `DISB-ATA-${status.toUpperCase()}`,
           category: 'Meals',
           description: `Alice private voucher in status ${status}`,
@@ -450,8 +453,10 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       }
     );
 
-    it('LIST-AND-COUNT-LEAK-PREVENTION: Listing and counts never leak other users vouchers into non-owner datasets or badges', async () => {
-      // Seed 3 vouchers for Alice and 1 voucher for Bob
+    it('LIST-AND-COUNT-LEAK-PREVENTION: Listing and counts isolate unrelated projects regardless of voucher ownership', async () => {
+      const bobWrId = '66666666-6666-4666-8666-666666666666';
+      mockTables.work_requests.set(bobWrId, { id: bobWrId, entity_id: ENT_ATA_ID, assigned_to: STAFF_BOB_ID, client_id: CLIENT_ATA_ID });
+      // Seed vouchers on Alice and Bob's separate assigned projects
       mockTables.disbursements.set('alice-v1', {
         id: 'alice-v1',
         entity_id: ENT_ATA_ID,
@@ -492,7 +497,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
         id: 'bob-v1',
         entity_id: ENT_ATA_ID,
         client_id: CLIENT_ATA_ID,
-        linked_work_request_id: SHARED_WR_ATA_ID,
+        linked_work_request_id: bobWrId,
         disbursement_number: 'DISB-ATA-BOB-1',
         category: 'Supplies',
         description: 'Bob supplies 1',
@@ -557,6 +562,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
           amount: 2000,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: SHARED_WR_ATA_ID,
+          taskId: TASK_SHARED_ID,
           employeeId: STAFF_BOB_ID, // Foreign employeeId!
         });
 
@@ -577,6 +583,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
           amount: 1500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: SHARED_WR_ATA_ID,
+          taskId: TASK_SHARED_ID,
         });
 
       expect(validCreateRes.status).toBe(201);
@@ -592,7 +599,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
 
       const reassignUpdateRes = await request(app)
         .put(`/v1/disbursements/${createdId}`)
-        .set('Authorization', `Bearer ${acctToken}`)
+        .set('Authorization', `Bearer ${adminAllToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
           expectedVersion: 1,
@@ -610,6 +617,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       mockTables.disbursements.set('ata-voucher-1', {
         id: 'ata-voucher-1',
         entity_id: ENT_ATA_ID,
+        linked_work_request_id: SHARED_WR_ATA_ID,
         client_id: CLIENT_ATA_ID,
         disbursement_number: 'DISB-ATA-100',
         category: 'Travel',
@@ -801,6 +809,8 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
 
       expect(aliceCompleteRes.status).toBe(200);
 
+      const bobTaskId = '55555555-5555-4555-8555-555555555555';
+      mockTables.tasks.set(bobTaskId, { id: bobTaskId, work_request_id: SHARED_WR_ATA_ID, assignee_id: STAFF_BOB_ID });
       // 3. Bob attempts to bind Alice's completed receiptS3Key to his own voucher creation
       const bobCreateRes = await request(app)
         .post('/v1/disbursements')
@@ -812,6 +822,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
           amount: 500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: SHARED_WR_ATA_ID,
+          taskId: bobTaskId,
           receiptS3Key: objectKey, // Alice's key!
           receiptFilename: 'alice_official_receipt.pdf',
         });
@@ -830,6 +841,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
           amount: 500,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: SHARED_WR_ATA_ID,
+          taskId: TASK_SHARED_ID,
           receiptS3Key: objectKey,
           receiptFilename: 'alice_official_receipt.pdf',
         });
@@ -837,6 +849,8 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       expect(aliceCreateRes.status).toBe(201);
       const createdVoucherId = aliceCreateRes.body.data.id;
 
+      // Revoke Bob's temporary task assignment before checking project read revocation.
+      mockTables.tasks.delete(bobTaskId);
       // 5. Bob attempts unauthorized access to GET /:id/receipt-url
       const bobReceiptUrlRes = await request(app)
         .get(`/v1/disbursements/${createdVoucherId}/receipt-url`)
@@ -861,6 +875,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       mockTables.disbursements.set('disb-no-receipt', {
         id: 'disb-no-receipt',
         entity_id: ENT_ATA_ID,
+        linked_work_request_id: SHARED_WR_ATA_ID,
         client_id: CLIENT_ATA_ID,
         disbursement_number: 'DISB-ATA-NO-DOC',
         category: 'Supplies',
@@ -888,6 +903,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       mockTables.disbursements.set('disb-legacy-missing', {
         id: 'disb-legacy-missing',
         entity_id: ENT_ATA_ID,
+        linked_work_request_id: SHARED_WR_ATA_ID,
         client_id: CLIENT_ATA_ID,
         disbursement_number: 'DISB-ATA-LEGACY',
         category: 'Supplies',
@@ -946,7 +962,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
         // 1. Attempting to update line items
         const lineItemsRes = await request(app)
           .put(`/v1/invoices/${invoiceId}`)
-          .set('Authorization', `Bearer ${adminAllToken}`)
+          .set('Authorization', `Bearer ${acctToken}`)
           .set('X-Active-Entity', 'ATA')
           .send({
             lineItems: [{ description: 'New line item', amount: 60000, type: 'Professional Fee' }],
@@ -962,7 +978,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
         // 2. Attempting to update issueDate
         const issueDateRes = await request(app)
           .put(`/v1/invoices/${invoiceId}`)
-          .set('Authorization', `Bearer ${adminAllToken}`)
+          .set('Authorization', `Bearer ${acctToken}`)
           .set('X-Active-Entity', 'ATA')
           .send({
             issueDate: '2026-10-01',
@@ -975,7 +991,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
         // 3. Attempting to update terms
         const termsRes = await request(app)
           .put(`/v1/invoices/${invoiceId}`)
-          .set('Authorization', `Bearer ${adminAllToken}`)
+          .set('Authorization', `Bearer ${acctToken}`)
           .set('X-Active-Entity', 'ATA')
           .send({
             terms: 'Net 60 days',
@@ -1050,6 +1066,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       mockTables.disbursements.set('disb-submitted-pd', {
         id: 'disb-submitted-pd',
         entity_id: ENT_ATA_ID,
+        linked_work_request_id: SHARED_WR_ATA_ID,
         client_id: CLIENT_ATA_ID,
         disbursement_number: 'DISB-ATA-SUBMITTED',
         category: 'Travel',
@@ -1082,6 +1099,7 @@ describe('Adversarial Stress & Vulnerability Challenge Suite (Milestone M3)', ()
       mockTables.disbursements.set('disb-released-pd', {
         id: 'disb-released-pd',
         entity_id: ENT_ATA_ID,
+        linked_work_request_id: SHARED_WR_ATA_ID,
         client_id: CLIENT_ATA_ID,
         disbursement_number: 'DISB-ATA-RELEASED',
         category: 'Travel',

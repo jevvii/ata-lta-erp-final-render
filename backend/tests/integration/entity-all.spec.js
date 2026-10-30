@@ -63,11 +63,31 @@ describe('Server-Side Entity ALL Scoping and Listing Fix', () => {
       deleted_at: null,
     });
 
+    // Invoice reads also require a valid project relationship. Give this user a
+    // project in each entity so the omitted-header test isolates entity access,
+    // rather than accidentally exercising the orphan-record visibility guard.
+    const assignedStaffId = '33333333-aaaa-bbbb-cccc-000000000003';
+    const ataWorkRequestId = '44444444-4444-4444-8444-444444444444';
+    const ltaWorkRequestId = '55555555-5555-4555-8555-555555555555';
+    mockTables.work_requests.set(ataWorkRequestId, {
+      id: ataWorkRequestId,
+      entity_id: 'ent-ata',
+      assigned_to: assignedStaffId,
+      deleted_at: null,
+    });
+    mockTables.work_requests.set(ltaWorkRequestId, {
+      id: ltaWorkRequestId,
+      entity_id: 'ent-lta',
+      assigned_to: assignedStaffId,
+      deleted_at: null,
+    });
+
     // Seed Invoices in ATA and LTA
     mockTables.invoices.set('inv-ata-1', {
       id: 'inv-ata-1',
       entity_id: 'ent-ata',
       invoice_number: 'INV-ATA-001',
+      work_request_id: ataWorkRequestId,
       status: 'Sent',
       deleted_at: null,
       archived: false,
@@ -76,6 +96,7 @@ describe('Server-Side Entity ALL Scoping and Listing Fix', () => {
       id: 'inv-lta-1',
       entity_id: 'ent-lta',
       invoice_number: 'INV-LTA-001',
+      work_request_id: ltaWorkRequestId,
       status: 'Sent',
       deleted_at: null,
       archived: false,

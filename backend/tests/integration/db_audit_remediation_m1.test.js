@@ -1,11 +1,11 @@
 /**
  * Integration Test Suite for DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1.
  * Covers Parcels A1, A2, A3, A4 (D1, D2, D3, D4):
- * - V1: Ordinary creator visibility without WR assignment
- * - V2: Non-owner denial across shared WR & all statuses
+ * - V1: Assigned creator visibility with required task linkage
+ * - V2: Shared-project team read access across all statuses
  * - V3: Authorized entity scope and zero leaks in ALL mode and counts
  * - V4: Identity derivation and 403 on foreign employee ID
- * - V5: Draft invoice financial edits succeed; non-Draft financial edits return 409 INVOICE_NOT_DRAFT; notes/address permitted on non-Draft
+ * - V5: Draft invoice financial edits succeed; non-Admin non-Draft financial edits return 409 INVOICE_NOT_DRAFT; notes/address permitted on non-Draft
  * - V6: Concurrency / OCC conflict handling (ERR_CONCURRENCY_CONFLICT 409)
  * - V7: Direct Admin approval to Released + payment details; /payment-details patch on Released/Funded preserves attribution
  * - V8: Storage receipt reservation, upload verification (422 if missing), voucher binding, cross-user denial (403)
@@ -33,6 +33,7 @@ const CLIENT_LTA_ID = '22222222-bbbb-2222-bbbb-222222222222';
 const WR_ATA_ID = '33333333-cccc-3333-cccc-333333333333';
 const WR_LTA_ID = '44444444-dddd-4444-dddd-444444444444';
 
+const TASK_ATA_ID = '66666666-6666-4666-8666-666666666666';
 const ADMIN_ID = '99999999-9999-4999-8999-999999999999';
 const STAFF_A_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const STAFF_B_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -59,8 +60,10 @@ const seedBaseEntities = () => {
     entity_id: 'ent-ata',
     client_id: CLIENT_ATA_ID,
     title: 'ATA Audit WR',
+    assigned_to: STAFF_A_ID,
     status: 'In Progress',
   });
+  mockTables.tasks.set(TASK_ATA_ID, { id: TASK_ATA_ID, work_request_id: WR_ATA_ID, assignee_id: STAFF_A_ID, deleted_at: null });
   mockTables.work_requests.set(WR_LTA_ID, {
     id: WR_LTA_ID,
     entity_id: 'ent-lta',
@@ -111,9 +114,9 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     });
   });
 
-  describe('V1: Ordinary Creator Visibility Without WR Assignment', () => {
-    it('allows non-admin creator without WR assignment to view own voucher in list, counts, and detail', async () => {
-      // Alice creates a voucher on WR_ATA_ID (where Alice has no task assignments or WR ownership)
+  describe('V1: Assigned Creator Visibility', () => {
+    it('allows an assigned non-admin creator to view own voucher in list, counts, and detail', async () => {
+      // Alice creates a task-linked voucher on her assigned project.
       const createRes = await request(app)
         .post('/v1/disbursements')
         .set('Authorization', `Bearer ${staffA_Token}`)
@@ -124,6 +127,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
           amount: 600,
           fundSource: 'Firm Fund',
           linkedWorkRequestId: WR_ATA_ID,
+          taskId: TASK_ATA_ID,
         })
         .expect(201);
 
@@ -157,7 +161,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     });
   });
 
-  describe('V2: Non-Owner Denial Across Shared WR & All Statuses', () => {
+  describe('V2: Shared Project Team Read Access Across Statuses', () => {
     const statuses = [
       'Draft',
       'Submitted',
@@ -169,7 +173,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     ];
 
     statuses.forEach((status) => {
-      it(`denies non-owner staff direct access to a ${status} voucher on a shared WR (403)`, async () => {
+      it(`allows an assigned project teammate to read a ${status} voucher without changing ownership`, async () => {
         // Link task on shared WR to Staff B
         mockTables.tasks.set('task-shared-b', {
           id: 'task-shared-b',
@@ -195,20 +199,22 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
           version: 1,
         });
 
-        // Staff B attempts direct GET -> must return 403
+        // Staff B can read through project assignment; ownership stays with Alice.
         await request(app)
           .get(`/v1/disbursements/${voucherId}`)
           .set('Authorization', `Bearer ${staffB_Token}`)
           .set('X-Active-Entity', 'ATA')
-          .expect(403);
+          .expect(200);
 
-        // Staff B list must not include this voucher
+        expect(mockTables.disbursements.get(voucherId).created_by).toBe(staffA_Id);
+
+        // The same shared-project record is visible in Staff B list.
         const listRes = await request(app)
           .get(`/v1/disbursements?status=${encodeURIComponent(status)}`)
           .set('Authorization', `Bearer ${staffB_Token}`)
           .set('X-Active-Entity', 'ATA')
           .expect(200);
-        expect(listRes.body.data.some((d) => d.id === voucherId)).toBe(false);
+        expect(listRes.body.data.some((d) => d.id === voucherId)).toBe(true);
       });
     });
   });
@@ -219,6 +225,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set('disb-ata-1', {
         id: 'disb-ata-1',
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Supplies',
         description: 'ATA office supplies',
         amount: 800,
@@ -321,14 +328,6 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     });
 
     it('rejects reassigning employeeId on update with 403 DISBURSEMENT_REQUESTER_MISMATCH', async () => {
-      const acctToken = registerUser({
-        id: '44444444-4444-4444-8444-444444444444',
-        email: 'acct-editor@ata-lta.ph',
-        name: 'Accounting Editor',
-        role: 'Accounting',
-        entities: ['ATA'],
-      });
-
       const voucherId = 'voucher-reassign-test';
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
@@ -348,7 +347,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
 
       const res = await request(app)
         .put(`/v1/disbursements/${voucherId}`)
-        .set('Authorization', `Bearer ${acctToken}`)
+        .set('Authorization', `Bearer ${adminToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
           expectedVersion: 1,
@@ -403,11 +402,15 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
     });
 
     it('rejects financial edits on non-Draft (Issued) invoice with 409 INVOICE_NOT_DRAFT', async () => {
+      const accountingId = '55555555-5555-4555-8555-555555555555';
+      const accountingToken = registerUser({ id: accountingId, role: 'Accounting', name: 'Accounting reviewer', email: 'invoice-reviewer@test.example', entities: ['ATA'] });
+      mockTables.work_requests.get(WR_ATA_ID).co_assignees = [accountingId];
       const invoiceId = 'invoice-issued-locked';
       mockTables.invoices.set(invoiceId, {
         id: invoiceId,
         entity_id: 'ent-ata',
         client_id: CLIENT_ATA_ID,
+        work_request_id: WR_ATA_ID,
         invoice_number: 'INV-2026-0002',
         status: 'Issued',
         subtotal: 10000,
@@ -418,7 +421,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
 
       const res = await request(app)
         .put(`/v1/invoices/${invoiceId}`)
-        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Authorization', `Bearer ${accountingToken}`)
         .set('X-Active-Entity', 'ATA')
         .send({
           expectedVersion: 1,
@@ -540,6 +543,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
         entities: ['ATA'],
       });
 
+      mockTables.work_requests.get(WR_ATA_ID).co_assignees = ['22222222-2222-4222-8222-222222222222'];
       const fundRes = await request(app)
         .post(`/v1/disbursements/${voucherId}/fund`)
         .set('Authorization', `Bearer ${acctToken}`)
@@ -590,6 +594,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Dinner meeting',
         amount: 1500,
@@ -636,6 +641,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Supplies',
         description: 'Office stationery',
         amount: 2500,
@@ -686,6 +692,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Supplies',
         amount: 1000,
         fund_source: 'Firm Fund',
@@ -828,6 +835,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Dinner with client',
         amount: 2000,
@@ -863,6 +871,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Transportation',
         amount: 500,
         fund_source: 'Firm Fund',
@@ -888,6 +897,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Printing',
         amount: 300,
         fund_source: 'Firm Fund',
@@ -917,6 +927,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Empty approve test',
         amount: 250,
@@ -938,7 +949,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
         .expect(400);
 
       expect(res.body.title).toBe('Validation Error');
-      expect(res.body.detail).toContain('expectedVersion: Required');
+      expect(res.body.detail).toMatch(/expectedVersion:.*(?:Required|expected number)/);
 
       const stored = mockTables.disbursements.get(voucherId);
       expect(stored.status).toBe('Pending');
@@ -952,6 +963,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Empty release test',
         amount: 250,
@@ -1002,6 +1014,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Invalid version test',
         amount: 100,
@@ -1048,6 +1061,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set('disb-alice-rejected-1', {
         id: 'disb-alice-rejected-1',
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Alice meal 1',
         amount: 500,
@@ -1061,6 +1075,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set('disb-alice-rejected-2', {
         id: 'disb-alice-rejected-2',
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Alice meal 2',
         amount: 600,
@@ -1181,6 +1196,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Foreign key test',
         amount: 500,
@@ -1217,6 +1233,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Retain key test',
         amount: 500,
@@ -1251,6 +1268,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Transportation',
         description: 'New attachment test',
         amount: 300,
@@ -1310,6 +1328,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucher2Id, {
         id: voucher2Id,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Transportation',
         description: 'Replay target',
         amount: 150,
@@ -1340,6 +1359,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Clear attachment test',
         amount: 400,
@@ -1372,6 +1392,7 @@ describe('DB-AUDIT-REMEDIATION-2026-10-17 Milestone M1 Test Suite', () => {
       mockTables.disbursements.set(voucherId, {
         id: voucherId,
         entity_id: 'ent-ata',
+        linked_work_request_id: WR_ATA_ID,
         category: 'Meals',
         description: 'Contradictory test',
         amount: 400,

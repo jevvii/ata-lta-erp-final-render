@@ -15,6 +15,12 @@ const FALLBACK_ENTITIES = [
 
 const getPublicConfig = async (req, res, next) => {
   try {
+    if (!env.supabase.anonKey) {
+      return res.status(503).json({
+        code: 'PUBLIC_CONFIG_UNAVAILABLE',
+        message: 'Public Supabase configuration is unavailable.',
+      });
+    }
     let entities = FALLBACK_ENTITIES;
     try {
       const { data, error } = await supabaseAdmin
@@ -36,7 +42,7 @@ const getPublicConfig = async (req, res, next) => {
     }
 
     const supabaseUrl = env.supabase.url || 'https://tqtwkmozvhttvbdatrbc.supabase.co';
-    const supabaseAnonKey = env.supabase.anonKey || env.supabase.serviceKey || '';
+    const supabaseAnonKey = env.supabase.anonKey;
 
     res.status(200).json({
       data: {

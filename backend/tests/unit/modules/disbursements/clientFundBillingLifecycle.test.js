@@ -27,7 +27,6 @@ const {
   unlinkAndRevertClientFundDisbursements,
 } = require('../../../../src/modules/disbursements/billingLifecycleSync');
 const { resetMock, mockTables } = require('../../../fixtures/supabaseMock');
-const AppError = require('../../../../src/lib/AppError');
 
 describe('Client Fund Billing-Driven Lifecycle Synchronization', () => {
   const ENTITY_ID = 'ent-ata-uuid';

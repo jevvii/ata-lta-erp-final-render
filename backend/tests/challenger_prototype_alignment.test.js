@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const vm = require('vm');
 const { loadPrototypeAuth, getPrototypeStyles, getPrototypeWorkflow } = require('./e2e/helpers');
 
 describe('Challenger Adversarial Verification: Prototype Legacy UI Alignment', () => {
@@ -43,8 +42,7 @@ describe('Challenger Adversarial Verification: Prototype Legacy UI Alignment', (
     it('simulates the routing lifecycle of #operations?tab=templates with and without URL normalization', async () => {
       // Create simulation harness
       function runRoutingCycle(normalizeHash) {
-        let location = { hash: '#operations?tab=templates' };
-        let currentView = 'list';
+        const location = { hash: '#operations?tab=templates' };
         let routeCalls = 0;
         let renderCalls = 0;
 
@@ -125,7 +123,7 @@ describe('Challenger Adversarial Verification: Prototype Legacy UI Alignment', (
     it('verifies Prototype isTaskAssignee helper logic against various assignee shapes', () => {
       const code = getPrototypeWorkflow();
       // Extract isTaskAssignee logic and test it in VM
-      const isTaskAssigneeMatch = code.match(/const isTaskAssignee = \((?:t)?\)\s*=>\s*\{([\s\S]*?)\n    \};/);
+      const isTaskAssigneeMatch = code.match(/const isTaskAssignee = \((?:t)?\)\s*=>\s*\{([\s\S]*?)\n {4}\};/);
       expect(isTaskAssigneeMatch).not.toBeNull();
 
       const fnBody = isTaskAssigneeMatch[1];

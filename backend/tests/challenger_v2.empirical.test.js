@@ -463,6 +463,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
       const wrId = '018f45a2-8921-789a-bcde-0123456789bb';
 
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -903,6 +908,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
 
     it('throws 500 Database Error if predecessor verification query fails', async () => {
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -944,6 +954,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
 
     it('throws 400 TASK_PREDECESSORS_NOT_FOUND when one or more predecessors do not exist in DB', async () => {
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -992,6 +1007,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
       let capturedPredQuery = null;
 
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1037,6 +1057,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
 
     it('rejects completing task when predecessor is in non-Completed status', async () => {
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1088,6 +1113,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
     it('detects prerequisite reopened between initial check and write, blocking completion', async () => {
       let selectCount = 0;
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1136,6 +1166,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
     it('detects prerequisite deleted between initial check and write, blocking completion', async () => {
       let selectCount = 0;
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1184,6 +1219,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
     it('handles DB error on completion recheck gracefully with 500 Database Error', async () => {
       let selectCount = 0;
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1230,6 +1270,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
     it('applies .neq("status", "Completed") on task completion write and throws 409 CONCURRENT_MODIFICATION on 0 rows', async () => {
       let capturedTaskQuery = null;
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1280,6 +1325,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
 
     it('throws 500 Database Error when task_assignees delete returns delError', async () => {
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -1330,6 +1380,11 @@ describe('Challenger V2: Empirical Stress Test Suite (Parcel B1)', () => {
     it('safely skips task_assignees delete when task already had no assignee', async () => {
       let deleteCalled = false;
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {

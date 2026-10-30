@@ -18,9 +18,6 @@ jest.mock('../src/services/supabaseClient', () => {
   return { supabaseAdmin };
 });
 
-const fs = require('fs');
-const path = require('path');
-const vm = require('vm');
 
 const {
   request,
@@ -35,19 +32,16 @@ const {
 
 const transmittalsService = require('../src/modules/transmittals/service');
 const operationsService = require('../src/modules/operations/service');
-const disbursementsService = require('../src/modules/disbursements/service');
 
 const CLIENT_ID_1 = '11111111-1111-1111-1111-111111111111';
-const CLIENT_ID_2 = '11111111-1111-1111-1111-111111111112';
 const WR_ID_1 = '22222222-2222-2222-2222-222222222221';
 const TASK_ID_1 = '33333333-3333-3333-3333-333333333331';
-const TASK_ID_2 = '33333333-3333-3333-3333-333333333332';
 const TASK_ID_UNASSIGNED = '33333333-3333-3333-3333-333333333339';
 
 describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
-  let adminToken, adminUser;
-  let docLowerToken, docLowerUser;
-  let docMixedToken, docMixedUser;
+  let adminToken;
+  let docLowerToken;
+  let docMixedToken;
   let acctLowerToken, acctLowerUser;
   let opsStaffToken, opsStaffUser;
   let thirdPartyDisbursementId;
@@ -66,7 +60,6 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Management'],
     });
-    adminUser = { id: adminId, role: 'Admin', departments: ['Management'] };
 
     // 2. Staff with lowercase 'documentation'
     const docLowerId = '55555555-5555-5555-5555-555555555501';
@@ -78,7 +71,6 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['documentation'],
     });
-    docLowerUser = { id: docLowerId, role: 'Staff', departments: ['documentation'] };
 
     // 3. Staff with mixed lowercase departments ['operations', 'documentation']
     const docMixedId = '55555555-5555-5555-5555-555555555502';
@@ -90,7 +82,6 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['operations', 'documentation'],
     });
-    docMixedUser = { id: docMixedId, role: 'Staff', departments: ['operations', 'documentation'] };
 
     // 4. Staff with lowercase 'accounting'
     const acctLowerId = '88888888-8888-8888-8888-888888888801';
@@ -102,7 +93,7 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['accounting'],
     });
-    acctLowerUser = { id: acctLowerId, role: 'Staff', departments: ['accounting'] };
+    acctLowerUser = { entities: ['ATA'], id: acctLowerId, role: 'Staff', departments: ['accounting'] };
 
     // 5. Staff with pure 'operations'
     const opsStaffId = '66666666-6666-6666-6666-666666666601';
@@ -114,7 +105,7 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       entities: ['ATA', 'LTA'],
       departments: ['operations'],
     });
-    opsStaffUser = { id: opsStaffId, role: 'Staff', departments: ['operations'] };
+    opsStaffUser = { entities: ['ATA'], id: opsStaffId, role: 'Staff', departments: ['operations'] };
 
     // Seed mock client
     mockTables.clients.set(CLIENT_ID_1, {
@@ -135,6 +126,7 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       status: 'In Progress',
       phase: 'execution',
       team_members: [docLowerId, opsStaffId],
+      co_assignees: [acctLowerId],
       deleted_at: null,
     });
 
@@ -156,6 +148,9 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       status: 'Pending',
       deleted_at: null,
     });
+
+    // Assign Operations to the target task before testing its billing permission.
+    mockTables.task_assignees.set('ta-ops-billing', { task_id: TASK_ID_1, user_id: opsStaffId });
 
     // Seed Task Assignees join table
     mockTables.task_assignees.set(`${TASK_ID_1}:${docLowerId}`, {
@@ -430,7 +425,8 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
         expect(thirdPartyRecord.description).toBe('Office Supplies from Third Party');
       });
 
-      it('blocks user with "operations" department from seeing third-party disbursements', async () => {
+      it('blocks operations staff outside the project from seeing third-party disbursements', async () => {
+        mockTables.task_assignees.delete('ta-ops-billing');
         const res = await request(app)
           .get('/v1/disbursements')
           .set('Authorization', `Bearer ${opsStaffToken}`)
@@ -453,14 +449,15 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
         expect(res.body.data.amount).toBe(4500);
       });
 
-      it('strictly forbids user with "operations" department from fetching third-party disbursement detail', async () => {
+      it('strictly forbids operations staff outside the project from fetching third-party detail', async () => {
+        mockTables.task_assignees.delete('ta-ops-billing');
         const res = await request(app)
           .get(`/v1/disbursements/${thirdPartyDisbursementId}`)
           .set('Authorization', `Bearer ${opsStaffToken}`)
           .set('x-active-entity', 'ATA');
 
         expect(res.status).toBe(403);
-        expect(res.body.detail).toBe('You do not have permission to view this disbursement.');
+        expect(res.body.detail).toBe('You do not have permission to view this record.');
       });
 
       it('returns accurate total counts for lowercase "accounting" matching Admin counts', async () => {
@@ -488,10 +485,8 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
       });
 
       it('hides related disbursements in operationsService for caller with "operations" department', async () => {
-        const wrRelated = await operationsService.getWorkRequestRelated(WR_ID_1, opsStaffUser);
-        expect(wrRelated.disbursements).toBeDefined();
-        const found = wrRelated.disbursements.find((d) => d.id === thirdPartyDisbursementId);
-        expect(found).toBeUndefined();
+        mockTables.task_assignees.delete('ta-ops-billing');
+        await expect(operationsService.getWorkRequestRelated(WR_ID_1, opsStaffUser)).rejects.toMatchObject({ statusCode: 404 });
       });
 
       it('probes prototype Auth for disbursement:view and effectiveDepartments with lowercase "accounting"', () => {
@@ -513,14 +508,12 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
   // PROBE 2: Prototype Direct Navigation & Recursion Prevention
   // =========================================================================
   describe('Probe 2: Prototype Direct Navigation & Recursion Prevention', () => {
-    // Simulator harness reading actual app.js and workflow.js logic
+    // Simulator harness for navigation states; source fallback rules are checked below.
     function createPrototypeNavigationHarness(initialHash, user) {
-      let location = { hash: initialHash };
+      const location = { hash: initialHash };
       let routeCalls = 0;
-      let toastMessages = [];
+      const toastMessages = [];
 
-      const appCode = fs.readFileSync(path.resolve(__dirname, '../../erp_prototype/js/app.js'), 'utf8');
-      const workflowCode = getPrototypeWorkflow();
 
       // Extract routing logic from app.js
       const Auth = {
@@ -548,7 +541,7 @@ describe('Challenger Iteration 2: Empirical Adversarial Probe Suite', () => {
         templateEditingId: null,
         taskTemplateEditingId: null,
         addTaskWrId: null,
-        async render(routeId) {
+        async render(_routeId) {
           if (this.view === 'templates') {
             if (Auth.user?.role !== 'Admin' && Auth.user?.role !== 'Manager') {
               this.view = 'list';

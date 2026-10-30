@@ -353,14 +353,14 @@ describe('Empirical Challenger M4: Backend Visibility & Bandwidth Conservation S
       expect(canViewWorkRequest(wr, externalUser, null)).toBe(false);
     });
 
-    it('preserves legacy visibility paths for non-admin users', () => {
+    it('uses UUID assignments and rejects submitter, display-name, and checklist-only access', () => {
       // Submitter
-      expect(canViewWorkRequest({ submitted_by: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(true);
-      expect(canViewWorkRequest({ submittedBy: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(true);
+      expect(canViewWorkRequest({ submitted_by: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(false);
+      expect(canViewWorkRequest({ submittedBy: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(false);
 
       // Requester
-      expect(canViewWorkRequest({ requested_by: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(true);
-      expect(canViewWorkRequest({ requestedBy: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(true);
+      expect(canViewWorkRequest({ requested_by: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(false);
+      expect(canViewWorkRequest({ requestedBy: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(false);
 
       // Assigned to
       expect(canViewWorkRequest({ assigned_to: opsUser1.id, tasks: [] }, opsUser1, null)).toBe(true);
@@ -368,7 +368,7 @@ describe('Empirical Challenger M4: Backend Visibility & Bandwidth Conservation S
 
       // Co-assignee on WR (by ID or Name)
       expect(canViewWorkRequest({ co_assignees: [opsUser1.id], tasks: [] }, opsUser1, null)).toBe(true);
-      expect(canViewWorkRequest({ coAssignees: [opsUser1.name], tasks: [] }, opsUser1, null)).toBe(true);
+      expect(canViewWorkRequest({ coAssignees: [opsUser1.name], tasks: [] }, opsUser1, null)).toBe(false);
 
       // Direct task assignee (by ID or Name)
       expect(
@@ -384,7 +384,7 @@ describe('Empirical Challenger M4: Backend Visibility & Bandwidth Conservation S
           opsUser1,
           null
         )
-      ).toBe(true);
+      ).toBe(false);
 
       // Task co-assignee
       expect(
@@ -393,7 +393,7 @@ describe('Empirical Challenger M4: Backend Visibility & Bandwidth Conservation S
           opsUser1,
           null
         )
-      ).toBe(true);
+      ).toBe(false);
 
       // Checklist item assignee
       expect(
@@ -402,36 +402,37 @@ describe('Empirical Challenger M4: Backend Visibility & Bandwidth Conservation S
           opsUser1,
           null
         )
-      ).toBe(true);
+      ).toBe(false);
     });
 
-    describe('Empirical Proof of Discovered Edge-Case Vulnerabilities', () => {
-      it('PROOF [BUG-WR-01]: empty user object {} incorrectly granted access due to undefined === undefined match on wr.submittedBy', () => {
+    describe('Regression guards for malformed identity and task payloads', () => {
+      it('denies an empty user object even when submitter aliases are absent', () => {
         const wr = { id: 'wr-1', submitted_by: opsUser1.id, tasks: [] };
-        // wr.submittedBy is undefined, {}.id is undefined -> undefined === undefined is true!
+        // Missing identities must never match missing record fields.
         const leakResult = canViewWorkRequest(wr, {}, null);
-        expect(leakResult).toBe(true);
+        expect(leakResult).toBe(false);
       });
 
-      it('PROOF [BUG-WR-02]: user object without name incorrectly granted access due to undefined === undefined match on task.assigneeName', () => {
+      it('denies unrelated users whose display name is absent', () => {
         const wr = {
           id: 'wr-1',
           submitted_by: opsUser1.id,
           tasks: [{ id: 't1', assignee_id: opsUser1.id }], // no assigneeName
         };
         const userWithoutName = { id: 'unrelated-stranger', role: 'Operations' }; // no name
-        // t.assigneeName is undefined, userWithoutName.name is undefined -> undefined === undefined is true!
+        // Display names do not confer project membership.
         const leakResult = canViewWorkRequest(wr, userWithoutName, null);
-        expect(leakResult).toBe(true);
+        expect(leakResult).toBe(false);
       });
 
-      it('PROOF [BUG-WR-03]: tasks array with null element crashes with uncaught TypeError', () => {
+      it('ignores null task entries and preserves legitimate relational assignee access', () => {
         const wr = {
           id: 'wr-1',
           submitted_by: 'other',
           tasks: [null, { id: 't1', relational_assignees: [opsUser2.id] }],
         };
-        expect(() => canViewWorkRequest(wr, opsUser2, null)).toThrow(TypeError);
+        expect(() => canViewWorkRequest(wr, opsUser2, null)).not.toThrow();
+        expect(canViewWorkRequest(wr, opsUser2, null)).toBe(true);
       });
     });
   });

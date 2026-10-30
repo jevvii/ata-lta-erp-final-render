@@ -169,6 +169,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
       let taskUpdatePayload = null;
 
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -344,6 +349,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
       const wrId = '018f45a2-8921-789a-bcde-012345678922';
 
       tableMockHandlers = {
+        // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+        work_requests: (qs) => ({
+          data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+          error: null,
+        }),
         tasks: (qs, method) => {
           if (qs.action === 'select' && method === 'maybeSingle') {
             return {
@@ -648,6 +658,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
         const wrId = '018f45a2-8921-789a-bcde-0123456789c2';
 
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {
@@ -693,6 +708,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
         const wrId = '018f45a2-8921-789a-bcde-0123456789c4';
 
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {
@@ -739,6 +759,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
         let scopedWrFilter = null;
 
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {
@@ -791,6 +816,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
 
         let selectCount = 0;
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {
@@ -850,6 +880,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
         let updateQuery = null;
 
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {
@@ -901,6 +936,11 @@ describe('Operations Module Remediation Suite (Parcel B1)', () => {
         const wrId = '018f45a2-8921-789a-bcde-0123456789e2';
 
         tableMockHandlers = {
+          // Explicit active parent fixture: task mutation guards must not rely on test-only orphan bypasses.
+          work_requests: (qs) => ({
+            data: qs.filters.id === wrId ? { id: wrId, entity_id: 'ent-ata', status: 'In Progress', phase: 'processing', creation_approval_status: 'approved' } : null,
+            error: null,
+          }),
           tasks: (qs, method) => {
             if (qs.action === 'select' && method === 'maybeSingle') {
               return {

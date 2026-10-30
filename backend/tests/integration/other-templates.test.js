@@ -287,7 +287,7 @@ describe('Other Templates API & Engine Integration Tests', () => {
       expect(res.status).toBe(200);
     });
 
-    it('blocks Manager lacking retainers:edit from creating an Other Template', async () => {
+    it('allows Manager with the role-specific retainers:edit grant to create an Other Template', async () => {
       const res = await request(app)
         .post('/v1/operations/templates')
         .set('Authorization', `Bearer ${managerToken}`)
@@ -298,7 +298,8 @@ describe('Other Templates API & Engine Integration Tests', () => {
           tasks: [{ title: 'Task 1' }],
         });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(201);
+      expect(res.body.data.template_type).toBe('other');
     });
 
     it('blocks non-authorized staff without retainers:use from listing or creating templates', async () => {

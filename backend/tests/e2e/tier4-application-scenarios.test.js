@@ -26,7 +26,7 @@ const TASK_ID_A = '33333333-3333-3333-3333-333333333331';
 const TASK_ID_B = '33333333-3333-3333-3333-333333333332';
 
 describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
-  let adminToken, accountingToken, docTokenA, docUserA, docTokenB, docUserB, opsToken, opsUser, managerToken, managerUser;
+  let adminToken, accountingToken, docTokenA, docUserA, docTokenB, opsToken, opsUser, managerToken;
 
   beforeEach(() => {
     resetMock();
@@ -41,6 +41,7 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
     });
 
     accountingToken = registerUser({
+      id: '77777777-7777-7777-7777-777777777775',
       email: 'rachel@ata-lta.ph',
       name: 'Rachel Accounting',
       role: 'Accounting',
@@ -68,7 +69,6 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Documentation'],
     });
-    docUserB = { id: docBId, role: 'Documentation', departments: ['Documentation'] };
 
     const opsId = '77777777-7777-7777-7777-777777777773';
     opsToken = registerUser({
@@ -90,7 +90,6 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
       entities: ['ATA', 'LTA'],
       departments: ['Management'],
     });
-    managerUser = { id: mgrId, role: 'Manager', departments: ['Management'] };
 
     mockTables.clients.set(CLIENT_ID, {
       id: CLIENT_ID,
@@ -107,6 +106,8 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
       client_id: CLIENT_ID,
       title: 'Annual Statutory Audit 2026',
       status: 'In Progress',
+      assigned_to: opsId,
+      co_assignees: [mgrId, '77777777-7777-7777-7777-777777777775'],
     });
 
     mockTables.tasks.set(TASK_ID_A, {
@@ -193,6 +194,8 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
       id: 'd-sc1-courier',
       entity_id: 'ent-ata',
       created_by: docUserA.id,
+      linked_work_request_id: WR_ID_1,
+      task_id: TASK_ID_A,
       amount: 350,
       description: 'Courier delivery fee for BIR filing',
       status: 'Draft',
@@ -207,14 +210,14 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
     const twinkleDisbIds = twinkleList.body.data.map((d) => d.id);
     expect(twinkleDisbIds).toContain('d-sc1-courier');
 
-    // Step 9: Mary Docs views disbursements list -> Cannot see Twinkle courier fee
+    // Step 9: Mary is assigned to the same parent project and sees the shared courier fee
     const maryList = await request(app)
       .get('/v1/disbursements')
       .set('Authorization', `Bearer ${docTokenB}`)
       .set('X-Active-Entity', 'ATA')
       .expect(200);
     const maryDisbIds = (maryList.body.data || []).map((d) => d.id);
-    expect(maryDisbIds).not.toContain('d-sc1-courier');
+    expect(maryDisbIds).toContain('d-sc1-courier');
   });
 
   // Scenario 2: Multi-Department Operations & Approvals Governance
@@ -237,7 +240,8 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
     expect(hybridReq.status).toBe(403);
     expect(hybridReq.body.detail).toMatch(/documentation users cannot request invoice billing/i);
 
-    // Pure Operations user Ann submits billing request -> Succeeded
+    // Current task co-assignee Ann submits billing request -> Succeeded
+    mockTables.task_assignees.set('ta-ann-billing', { task_id: TASK_ID_A, user_id: opsUser.id });
     const annReq = await request(app)
       .post('/v1/operations-requests')
       .set('Authorization', `Bearer ${opsToken}`)
@@ -354,11 +358,14 @@ describe('Tier 4: Real-World Multi-Step Application Scenarios', () => {
 
   // Scenario 5: Disbursement Financial Audit & Payee Confidentiality
   it('Scenario 5: Disbursement Financial Audit & Payee Confidentiality', async () => {
-    // Ann Operations creates reimbursement disbursement, naming Twinkle as payee
+    const privateWrId = '22222222-2222-2222-2222-222222222229';
+    mockTables.work_requests.set(privateWrId, { id: privateWrId, entity_id: 'ent-ata', assigned_to: opsUser.id, co_assignees: ['77777777-7777-7777-7777-777777777775'] });
+    // Ann creates a reimbursement in a project where the payee and manager are not members
     mockTables.disbursements.set('d-sc5', {
       id: 'd-sc5',
       entity_id: 'ent-ata',
       created_by: opsUser.id,
+      linked_work_request_id: privateWrId,
       employee_id: docUserA.id, // Twinkle is payee
       amount: 4500,
       description: 'Travel expense reimbursement',

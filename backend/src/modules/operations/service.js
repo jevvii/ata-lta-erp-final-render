@@ -18,6 +18,7 @@ const {
   fetchInPages,
 } = require('../../lib/userScope');
 const { filterValidProjectRecords } = require('../../lib/projectLinkage');
+const { isAccountingOnlyUser, canAccountingViewDisbursement } = require('../../lib/disbursementVisibility');
 
 const PHASE_SEQUENCE = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
 
@@ -694,6 +695,7 @@ const canViewWorkRequest = (wr, user, taskMap) => {
   }
   const tasks = taskMap?.get ? (taskMap.get(wr.id) || []) : (wr.tasks || []);
   return tasks.some((t) => {
+    if (!t || typeof t !== 'object') return false;
     if (t.assignee_id === user.id || t.assigneeId === user.id) return true;
     const relationalCo = Array.isArray(t.relational_assignees)
       ? t.relational_assignees
@@ -716,8 +718,8 @@ const canViewWorkRequest = (wr, user, taskMap) => {
       Array.isArray(t.task_assignees) &&
       t.task_assignees.some(
         (ta) =>
-          (ta.user_id && isValidUUID(ta.user_id) && ta.user_id.toLowerCase() === user.id.toLowerCase()) ||
-          (ta.userId && isValidUUID(ta.userId) && ta.userId.toLowerCase() === user.id.toLowerCase())
+          (ta?.user_id && isValidUUID(ta.user_id) && ta.user_id.toLowerCase() === user.id.toLowerCase()) ||
+          (ta?.userId && isValidUUID(ta.userId) && ta.userId.toLowerCase() === user.id.toLowerCase())
       )
     ) {
       return true;
@@ -2287,7 +2289,7 @@ const getTaskById = async ({
     if (wr) {
       if (wr.creation_approval_status && wr.creation_approval_status !== 'approved') return null;
       parentWr = wr;
-    } else if (process.env.NODE_ENV !== 'test') {
+    } else {
       return null; // Parent deleted or entity mismatch
     }
   }
@@ -3445,7 +3447,10 @@ const getWorkRequestRelated = async (arg1, arg2) => {
     invoiceNumber: inv.invoice_number || inv.invoiceNumber || null,
     invoice_number: inv.invoice_number || inv.invoiceNumber || null,
   }));
-  const mappedDisbursements = (validDisbursements || []).map((disb) => ({
+  const visibleDisbursements = isAccountingOnlyUser(effectiveCaller)
+    ? validDisbursements.filter((record) => canAccountingViewDisbursement(record, effectiveCaller.id))
+    : validDisbursements;
+  const mappedDisbursements = visibleDisbursements.map((disb) => ({
     ...disb,
     disbursementNumber: disb.disbursement_number || disb.disbursementNumber || null,
     disbursement_number: disb.disbursement_number || disb.disbursementNumber || null,
@@ -3577,7 +3582,10 @@ const getTaskRelated = async (arg1, arg2) => {
     invoiceNumber: inv.invoice_number || inv.invoiceNumber || null,
     invoice_number: inv.invoice_number || inv.invoiceNumber || null,
   }));
-  const mappedDisbursements = (validDisbursements || []).map((disb) => ({
+  const visibleDisbursements = isAccountingOnlyUser(effectiveCaller)
+    ? validDisbursements.filter((record) => canAccountingViewDisbursement(record, effectiveCaller.id))
+    : validDisbursements;
+  const mappedDisbursements = visibleDisbursements.map((disb) => ({
     ...disb,
     disbursementNumber: disb.disbursement_number || disb.disbursementNumber || null,
     disbursement_number: disb.disbursement_number || disb.disbursementNumber || null,

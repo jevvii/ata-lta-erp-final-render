@@ -446,10 +446,15 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
   });
 
   describe('4. Disbursement Scoping without ___NONE___', () => {
-    const WR_ID = 'wr-disb-scoping-1';
+    const WR_ID = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+    const OTHER_WR_ID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+    const RELEASED_WR_ID = 'cccccccc-3333-4333-8333-cccccccccccc';
 
     beforeEach(() => {
-      // Set concerned tasks for WR_ID
+      mockTables.work_requests.set(WR_ID, { id: WR_ID, entity_id: 'ent-ata', client_id: client.id, assigned_to: staffId });
+      mockTables.work_requests.set(OTHER_WR_ID, { id: OTHER_WR_ID, entity_id: 'ent-ata', client_id: client.id, assigned_to: otherStaffId });
+      mockTables.work_requests.set(RELEASED_WR_ID, { id: RELEASED_WR_ID, entity_id: 'ent-ata', client_id: client.id });
+      // Assign projects explicitly; creator/payee identity alone is not a read grant.
       mockTables.tasks.set('task-disb-staff', {
         id: 'task-disb-staff',
         work_request_id: WR_ID,
@@ -458,7 +463,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
       });
       mockTables.tasks.set('task-disb-other', {
         id: 'task-disb-other',
-        work_request_id: WR_ID,
+        work_request_id: OTHER_WR_ID,
         assignee_id: otherStaffId,
         deleted_at: null,
       });
@@ -490,7 +495,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         created_by: 'someone-else',
         requested_by: otherStaffId,
         employee_id: otherStaffId,
-        linked_work_request_id: WR_ID,
+        linked_work_request_id: OTHER_WR_ID,
         archived: false,
       });
 
@@ -505,12 +510,12 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
         status: 'Released',
         created_by: 'third-party',
         employee_id: null,
-        linked_work_request_id: WR_ID,
+        linked_work_request_id: RELEASED_WR_ID,
         archived: false,
       });
     });
 
-    test('4.1: Creator querying status=Draft receives their draft disbursement', async () => {
+    test('4.1: Assigned creator querying status=Draft receives their draft disbursement', async () => {
       const res = await request(app)
         .get('/v1/disbursements?status=Draft')
         .set('Authorization', `Bearer ${staffToken}`)
@@ -521,7 +526,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
       expect(res.body.data.some((d) => d.id === 'disb-pending-other')).toBe(false);
     });
 
-    test('4.2: Creator querying without status filter receives their draft, but not third-party released or other employee pending', async () => {
+    test('4.2: Assigned creator querying without status filter receives their draft, but not third-party released or other employee pending', async () => {
       const res = await request(app)
         .get('/v1/disbursements')
         .set('Authorization', `Bearer ${staffToken}`)
@@ -533,7 +538,7 @@ describe('Adversarial Challenger Suite: Backend UAT Remediation', () => {
       expect(res.body.data.some((d) => d.id === 'disb-pending-other')).toBe(false);
     });
 
-    test('4.3: Employee querying status=Pending receives disbursement where they are employee_id', async () => {
+    test('4.3: Assigned employee querying status=Pending receives disbursement where they are employee_id', async () => {
       const res = await request(app)
         .get('/v1/disbursements?status=Pending')
         .set('Authorization', `Bearer ${otherStaffToken}`)

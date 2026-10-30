@@ -680,13 +680,21 @@ describe('Disbursements Service - Strict Creator-Only Authorization & Scoping', 
       expect(otherRelated.disbursements.some((d) => d.id === 'disb-other-released')).toBe(true);
     });
 
-    it('Accounting caller receives all disbursements linked to the work request', async () => {
+    it('Accounting caller receives released vouchers and own drafts while third-party drafts stay private', async () => {
+      mockTables.disbursements.set('accounting-own-draft', {
+        ...mockTables.disbursements.get('disb-c-draft'),
+        id: 'accounting-own-draft',
+        created_by: accountingDeptUser.id,
+        requested_by: accountingDeptUser.id,
+        employee_id: accountingDeptUser.id,
+      });
       const related = await operationsService.getWorkRequestRelated({
         id: WR_ID,
         entityId: ENTITY_ID,
         caller: accountingDeptUser,
       });
-      expect(related.disbursements.some((d) => d.id === 'disb-c-draft')).toBe(true);
+      expect(related.disbursements.some((d) => d.id === 'disb-c-draft')).toBe(false);
+      expect(related.disbursements.some((d) => d.id === 'accounting-own-draft')).toBe(true);
 
       const otherRelated = await operationsService.getWorkRequestRelated({
         id: OTHER_WR_ID,

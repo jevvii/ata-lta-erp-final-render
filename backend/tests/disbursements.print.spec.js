@@ -178,6 +178,24 @@ it('enforces PDF ownership and entity scope', async () => {
   await request(app).get(`/v1/disbursements/${voucher.id}/pdf`).expect(401);
   expect(generatePdf).not.toHaveBeenCalled();
 });
+it('preserves the selected entity for receipt downloads without signing cross-entity storage URLs', async () => {
+  const objectKey = `entities/ATA/disbursements/${voucher.id}/receipt.pdf`;
+  Object.assign(mockTables.disbursements.get(voucher.id), {
+    receipt_s3_key: objectKey,
+    receipt_filename: 'receipt.pdf',
+  });
+  const signDownload = jest.spyOn(require('../src/services/storageService'), 'getSignedDownloadUrl');
+  try {
+    await api('get', `/v1/disbursements/${voucher.id}/receipt-url`, admin, 'LTA').expect(404);
+    expect(signDownload).not.toHaveBeenCalled();
+    const allowed = await api('get', `/v1/disbursements/${voucher.id}/receipt-url`, admin, 'ATA').expect(200);
+    expect(allowed.body.data.filename).toBe('receipt.pdf');
+    expect(allowed.body.data.url).toMatch(/^https:\/\//);
+    expect(signDownload).toHaveBeenCalledWith({ path: objectKey, expiresInSeconds: 300 });
+  } finally {
+    signDownload.mockRestore();
+  }
+});
 it('allows admin corrections with version checks and preserves approval/requester identities', async () => {
   const original = { ...mockTables.disbursements.get(voucher.id) };
   const printDetails = {
