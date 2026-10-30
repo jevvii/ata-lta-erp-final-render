@@ -81,7 +81,7 @@ The system enforces Role-Based Access Control (RBAC) via concrete permission key
 | `workflow:qa_review` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `workflow:task_add` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `workflow:task_approve` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| `workflow:task_upload` | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ |
+| `workflow:task_upload` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `workflow:transition_request` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `workflow:view` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 <!-- END GENERATED PERMISSION MATRIX -->
