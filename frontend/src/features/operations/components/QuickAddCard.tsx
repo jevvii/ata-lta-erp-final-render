@@ -42,13 +42,18 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const { data: team = [], isLoading: teamLoading, isError: teamError } = useTeam();
   const memberIds = new Set(
-    [workRequest.assignedTo, ...(workRequest.coAssignees ?? [])].filter(Boolean)
+    [
+      workRequest.assignedTo || (workRequest as { assigned_to?: string | null }).assigned_to,
+      ...((workRequest.coAssignees || (workRequest as { co_assignees?: string[] | null }).co_assignees) ?? []),
+    ].filter(Boolean)
   );
   const eligible = memberIds.size
     ? team.filter((member) => memberIds.has(member.id))
     : getEligibleStaff(team);
   // Re-check scope on each render so a removed WR member cannot be submitted.
-  const assignee = eligible.find((member) => member.id === assigneeId);
+  const assignee =
+    eligible.find((member) => member.id === assigneeId) ||
+    team.find((member) => member.id === assigneeId);
   const selectedAssignee = assignee;
 
   useLayoutEffect(() => {
@@ -74,16 +79,19 @@ export function QuickAddCard({ phase, workRequest, onCreate, onCancel }: QuickAd
     submitting.current = true;
     setPending(true);
     setError('');
+    const hasAssignee = Boolean(assignee || assigneeId);
+    const resolvedAssigneeId = assignee?.id || (assigneeId ? assigneeId : null);
+    const resolvedAssigneeName = assignee?.name || null;
     try {
       await onCreate({
         title: title.trim(),
         phase,
-        status: assignee ? 'Assigned' : 'Draft',
+        status: hasAssignee ? 'Assigned' : 'Draft',
         requiredLinkType: requiredLinkType || null,
         dueDate: dueDate || null,
-        assigneeId: assignee?.id ?? null,
-        assigneeName: assignee?.name ?? null,
-        assignees: assignee ? [assignee.id] : [],
+        assigneeId: resolvedAssigneeId,
+        assigneeName: resolvedAssigneeName,
+        assignees: hasAssignee && resolvedAssigneeId ? [resolvedAssigneeId] : [],
       });
       if (mounted.current) {
         setRequiredLinkType('');
