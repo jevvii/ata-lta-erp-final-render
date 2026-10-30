@@ -114,6 +114,15 @@ const userDocTeam: UserProfile = {
   entities: ['ATA', 'LTA'],
 };
 
+const userHrTeam: UserProfile = {
+  id: 'emp-hr-1',
+  email: 'hr@ata-lta.ph',
+  name: 'HR Staff',
+  role: 'Staff',
+  departments: ['HR'],
+  entities: ['ATA', 'LTA'],
+};
+
 describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
   it('correctly determines task assignee membership', () => {
     expect(isTaskAssignee(userAssignedStaff, mockTask)).toBe(true);
@@ -160,24 +169,99 @@ describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
     expect(canLogTaskTime(userAccountingTeam, mockTask)).toBe(false);
   });
 
-  it('enforces document upload permissions (only assigned employee or Admin; Accounting only on assigned billing tasks)', () => {
+  it('enforces document upload permissions (any assigned employee or Admin; strictly rejects unassigned non-Admin)', () => {
     expect(canUploadTaskDocument(userAssignedStaff, mockTask)).toBe(true);
     expect(canUploadTaskDocument(userAdmin, mockTask)).toBe(true);
     expect(canUploadTaskDocument(userUnassignedManager, mockTask)).toBe(false);
     expect(canUploadTaskDocument(userDocTeam, mockTask)).toBe(false);
 
-    // Accounting user assigned to non-billing task -> denied
+    // Accounting user assigned to any task type -> allowed
     const userAcctAssigned: UserProfile = {
       ...userAccountingTeam,
       id: 'emp-assigned-1',
     };
-    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: null })).toBe(false);
-    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'documents' })).toBe(false);
+    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: null })).toBe(true);
+    expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'documents' })).toBe(true);
 
     // Accounting user assigned to billing task -> allowed
     expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'billing' })).toBe(true);
     // Unassigned Accounting user on billing task -> denied
     expect(canUploadTaskDocument(userAccountingTeam, { ...mockTask, requiredLinkType: 'billing' })).toBe(false);
+  });
+
+  describe('canUploadTaskDocument explicit scoping verification', () => {
+    const userAcctAssigned: UserProfile = {
+      ...userAccountingTeam,
+      id: 'emp-assigned-1',
+    };
+    const userOpsAssigned: UserProfile = {
+      ...userAssignedStaff,
+      id: 'emp-assigned-1',
+    };
+    const userDocAssigned: UserProfile = {
+      ...userDocTeam,
+      id: 'emp-assigned-1',
+    };
+    const userHrAssigned: UserProfile = {
+      ...userHrTeam,
+      id: 'emp-assigned-1',
+    };
+
+    it('Accounting user assigned to a task with requiredLinkType: null can upload documents', () => {
+      expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: null })).toBe(true);
+    });
+
+    it('Accounting user assigned to a task with requiredLinkType: documents can upload documents', () => {
+      expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'documents' })).toBe(true);
+    });
+
+    it('Accounting user assigned to a task with requiredLinkType: billing can upload documents', () => {
+      expect(canUploadTaskDocument(userAcctAssigned, { ...mockTask, requiredLinkType: 'billing' })).toBe(true);
+    });
+
+    it('Unassigned Accounting user cannot upload documents', () => {
+      expect(canUploadTaskDocument(userAccountingTeam, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(userAccountingTeam, { ...mockTask, requiredLinkType: 'billing' })).toBe(false);
+      expect(canUploadTaskDocument(userAccountingTeam, { ...mockTask, requiredLinkType: 'documents' })).toBe(false);
+    });
+
+    it('Operations, Documentation, HR users assigned to a task can upload documents', () => {
+      expect(canUploadTaskDocument(userOpsAssigned, mockTask)).toBe(true);
+      expect(canUploadTaskDocument(userDocAssigned, mockTask)).toBe(true);
+      expect(canUploadTaskDocument(userHrAssigned, mockTask)).toBe(true);
+    });
+
+    it('Unassigned users across all non-admin roles cannot upload documents', () => {
+      const unassignedOps: UserProfile = { ...userAssignedStaff, id: 'unassigned-ops' };
+      const unassignedDoc: UserProfile = { ...userDocTeam, id: 'unassigned-doc' };
+      const unassignedHr: UserProfile = { ...userHrTeam, id: 'unassigned-hr' };
+      const unassignedAcct: UserProfile = { ...userAccountingTeam, id: 'unassigned-acct' };
+
+      expect(canUploadTaskDocument(unassignedOps, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(unassignedDoc, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(unassignedHr, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(unassignedAcct, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(userUnassignedManager, mockTask)).toBe(false);
+    });
+
+    it('Rejected task returns false even for assigned user', () => {
+      const rejectedTask: Task = {
+        ...mockTask,
+        approvalStatus: 'rejected',
+      };
+      expect(canUploadTaskDocument(userOpsAssigned, rejectedTask)).toBe(false);
+      expect(canUploadTaskDocument(userAcctAssigned, rejectedTask)).toBe(false);
+      expect(canUploadTaskDocument(userDocAssigned, rejectedTask)).toBe(false);
+      expect(canUploadTaskDocument(userHrAssigned, rejectedTask)).toBe(false);
+      expect(canUploadTaskDocument(userAdmin, rejectedTask)).toBe(false);
+    });
+
+    it('Admin returns true even if not assigned', () => {
+      expect(isTaskAssignee(userAdmin, mockTask)).toBe(false);
+      expect(canUploadTaskDocument(userAdmin, mockTask)).toBe(true);
+      expect(canUploadTaskDocument(userAdmin, { ...mockTask, requiredLinkType: 'billing' })).toBe(true);
+      expect(canUploadTaskDocument(userAdmin, { ...mockTask, requiredLinkType: 'documents' })).toBe(true);
+    });
   });
 
   it('enforces billing invoice permissions (Admin direct; Accounting only on assigned billing tasks; non-Admin Doc denied; others request)', () => {
