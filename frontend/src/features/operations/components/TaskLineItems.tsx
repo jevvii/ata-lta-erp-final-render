@@ -26,7 +26,7 @@ import { parseTaskDelimiterInput } from '../hooks/useTokenizer';
 import { validateDependencies } from '../utils/dependencyValidator';
 import { TaskTypeSelect } from '../lib/taskTypes';
 import type { TeamMember } from '../api/useTeam';
-import type { CreatablePhase } from '../api/types';
+import type { CreatablePhase, TaskStatus } from '../api/types';
 
 export interface ChecklistItemData {
   id: string;
@@ -44,6 +44,7 @@ export interface TaskItemData {
   id?: string;
   title: string;
   description?: string;
+  status?: TaskStatus;
   phase: CreatablePhase;
   assigneeId?: string | null;
   coAssignees: string[];
@@ -351,7 +352,11 @@ export function TaskLineItems({
                     }}
                     disabled={disabled}
                   >
-                    <SelectTrigger className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] px-2 [&>span]:truncate text-[#1E293B]" aria-label="Primary assignee">
+                    <SelectTrigger
+                      className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] px-2 [&>span]:truncate text-[#1E293B]"
+                      aria-label="Primary assignee"
+                      data-testid={`task-assignee-trigger-${task.localId || index}`}
+                    >
                       <SelectValue placeholder="Assignee" />
                     </SelectTrigger>
                     <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
