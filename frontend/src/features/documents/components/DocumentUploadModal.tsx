@@ -92,7 +92,8 @@ export function DocumentUploadModal({
   const isAllowedUser = Boolean(
     allowTaskLinking ??
       (currentUser &&
-        (isUserAdmin(currentUser) ||
+        (Boolean(defaultTaskId) ||
+          isUserAdmin(currentUser) ||
           hasPermission(permissions, 'workflow:view') ||
           hasPermission(permissions, 'workflow:task_upload') ||
           hasPermission(permissions, 'workflow:edit')))

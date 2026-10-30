@@ -2292,6 +2292,7 @@ export function TaskDetailModal({
           defaultWorkRequestId={task.workRequestId || workRequest?.id}
           defaultClientId={workRequest?.clientId || undefined}
           defaultTaskId={task.id}
+          allowTaskLinking={true}
           onSuccess={() => {
             setIsUploadDocModalOpen(false);
             refetchDocs();
