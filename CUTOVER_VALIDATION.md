@@ -54,3 +54,10 @@ Review corrected migration 000080 to preserve migration 000076's Manager entitle
 Verification: full backend 2,226 passed; full frontend 2,779 passed; real PostgreSQL assigned-status checks 12 passed; cross-worktree checks 46 passed; production build passed; lint has zero errors. Migration 000080 passed both a schema-only production-copy rehearsal and the blank-database migration chain. A read-only production check found only migration 000080 pending. No production schema/data changes were applied.
 
 The live frontend metadata check reported commit 406e97e on both the main Render static-site URL and its custom domain, independently of the API Docker deploy. Deploy the reviewed revision to both services after its backup/migration workflow succeeds; verify uses the frontend's deployment.json commit.
+
+
+## Follow-up: direct task financial creation
+
+Integrated staging `2b7062da34f70ab5be9a3ed114d0b8acd6a25e8e` and enterprise-v2 `7a603976a326b7f88ce0ba2777d9b4084ca5d000` on top of main `45809f6e8dd5bf21c2aa553673202a79e4024ae3`. The frontend removes task-level invoice/transmittal request actions and their pending-request query; direct creation retains the existing task-assignment and permission guards. Staging updates the corresponding cross-worktree expectation. No backend runtime, migration, dependency, secret, workflow or Render blueprint changes are included.
+
+Verification: operations frontend suite 55 files / 900 tests passed; cross-worktree harness 46 passed; production-target TypeScript/Vite build passed; frontend lint zero errors with 16 existing warnings. Temporarily re-enabling invoice requests caused the new regression test to fail as expected, and the source was restored byte-for-byte. Existing bundle-size warnings remain. The full backend suite and real SQL tests were not repeated because their runtime code and migrations are unchanged. Deploy the reviewed revision to both main Render services and run production verification against that same revision; this integration adds no migration beyond 000080.
