@@ -1360,13 +1360,17 @@ const createWorkRequestGraph = async ({ entityId, data, user }) => {
       const primaryUser = primaryAssigneeId ? usersMap.get(primaryAssigneeId) : null;
       const assigneeName = primaryUser?.name || primaryAssigneeId || null;
       const assigneeId = primaryUser?.id || primaryAssigneeId || null;
+      const hasAssignee = Boolean(assigneeId || (Array.isArray(t.assignees) && t.assignees.length > 0));
+      const resolvedTaskStatus = (t.status && t.status !== 'Draft')
+        ? t.status
+        : (hasAssignee ? 'Assigned' : (t.status || 'Draft'));
 
       taskRecords.push({
         id: t.id,
         work_request_id: wrId,
         title: t.title,
         description: t.description,
-        status: t.status,
+        status: resolvedTaskStatus,
         phase: t.phase,
         qa_status: 'none',
         approval_status: 'approved',
@@ -2500,13 +2504,18 @@ const createTask = async ({ workRequestId, entityId, data, user: _user, caller }
     )
   );
 
+  const hasAssignee = Boolean(primaryAssigneeId || allAssigneeIds.length > 0);
+  const resolvedStatus = (data.status && data.status !== 'Draft')
+    ? data.status
+    : (hasAssignee ? 'Assigned' : (data.status || 'Draft'));
+
   // Normalized snake_case payload for RPC. Privileged review identity/state/version/creator fields
   // are strictly derived server-side in SQL and must be omitted from p_data.
   const taskPatch = {
     id,
     title: data.title,
     description: data.description || null,
-    status: data.status || 'Draft',
+    status: resolvedStatus,
     phase,
     qa_status: data.qaStatus || data.qa_status || 'none',
     assignee_id: primaryAssigneeId,
@@ -3006,10 +3015,16 @@ const updateTask = async ({ workRequestId, taskId, entityId, data, user: _user, 
     assigneeName = await resolveAssigneeName(assigneeId, assigneeName);
   }
 
+  const hasAssignee = Boolean(assigneeId || (Array.isArray(data.assignees) && data.assignees.length > 0));
+  let resolvedStatus = data.status ?? existing.status;
+  if (existing.status === 'Draft' && hasAssignee && (!data.status || data.status === 'Draft')) {
+    resolvedStatus = 'Assigned';
+  }
+
   const updates = {
     title: data.title ?? existing.title,
     description: data.description ?? existing.description,
-    status: data.status ?? existing.status,
+    status: resolvedStatus,
     assignee_id: assigneeId,
     assignee_name: assigneeName,
     predecessors:

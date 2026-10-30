@@ -962,12 +962,17 @@ const rpcImpl = {
       primaryAssigneeName = u?.name || primaryAssigneeName;
     }
 
+    const hasAssignee = Boolean(primaryAssigneeId || assigneeList.length > 0);
+    const resolvedStatus = (taskData.status && taskData.status !== 'Draft')
+      ? taskData.status
+      : (hasAssignee ? 'Assigned' : (taskData.status || 'Draft'));
+
     const newTask = {
       id: taskId,
       work_request_id: wrId,
       title: String(taskData.title || '').trim(),
       description: taskData.description || null,
-      status: taskData.status || 'Draft',
+      status: resolvedStatus,
       phase: taskData.phase || wr.phase || 'pre_processing',
       qa_status: taskData.qa_status || taskData.qaStatus || 'none',
       due_date: taskData.due_date || taskData.dueDate || null,
@@ -1153,6 +1158,10 @@ const rpcImpl = {
         metadata: { changes: patch },
         created_at: now,
       });
+    }
+
+    if (task.status === 'Draft' && (task.assignee_id || (assigneeList && assigneeList.length > 0))) {
+      task.status = 'Assigned';
     }
 
     task.version = nextVersion;
