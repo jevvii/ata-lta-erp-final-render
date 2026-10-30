@@ -50,8 +50,9 @@ jobs:
             | gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_KEY" \
             > "$FILE"
           echo "Encrypted backup written: $FILE ($(du -h "$FILE" | cut -f1))"
-          curl -fsS -X POST \
+          curl --silent --show-error --fail-with-body -X POST \
             "${SUPABASE_URL}/storage/v1/object/${BACKUP_BUCKET}/${FILE}" \
+            -H "apikey: ${SUPABASE_SERVICE_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
             -H "x-upsert: false" \
             -H "Content-Type: application/octet-stream" \

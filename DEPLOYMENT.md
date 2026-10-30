@@ -107,6 +107,8 @@ In GitHub **Actions → Deploy Production → Run workflow**:
 3. Set `revision` to the full reviewed commit SHA.
 4. Run and wait for both **backup-before-migrate** and **migrate-prod** to pass. Confirm the encrypted backup upload succeeded.
 
+If a previous backup run failed with HTTP 400 during the upload after printing “Encrypted backup written,” start a new workflow run from the fixed main revision. The upload requires both `apikey` and `Authorization` headers; the fixed workflow sends both and preserves Storage error responses. Re-running an older failed workflow retains its older workflow definition and can repeat the missing-header failure. A failed backup blocks `migrate-prod`.
+
 The migration command is `node scripts/migrate-remote.js prod` from `backend`, using Node 22 and the production secrets. It applies mixed SQL/JS migrations through `remote_migrations`, preserving already-applied entries. Do not substitute `node-pg-migrate up`, reset the database, or edit the ledger to mark a failed migration complete.
 
 For a read-only post-migration inventory from a configured checkout:
