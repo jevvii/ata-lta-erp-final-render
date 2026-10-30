@@ -31,6 +31,25 @@ import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { billingKeys } from '@/features/billing/api/queryKeys';
 import { disbursementKeys } from '@/features/disbursements/api/queryKeys';
 
+interface CacheRow {
+  [field: string]: unknown;
+  id: string;
+  title: string;
+  status: string;
+  version: number;
+  phases: { phase_intake: { tasks: CacheRow[] }; phase_execution: { tasks: CacheRow[] } };
+}
+interface CachePage {
+  data: CacheRow[];
+  meta: { total: number };
+  customField?: string;
+}
+function readCached<T>(client: QueryClient, key: readonly unknown[]): T {
+  const value = client.getQueryData<T>(key);
+  expect(value).toBeDefined();
+  return value!;
+}
+
 describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchronous Teardown', () => {
   let queryClient: QueryClient;
 
@@ -78,7 +97,7 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
   // Section 1: Cache Shape Reconciliation ({ data: [...] } and [...])
   // =========================================================================
   describe('Section 1: Cache Shape Reconciliation Across List Shapes and Detail', () => {
-    it('simultaneously updates wrapped { data: [...] }, raw [...], and detail query on UPDATE', () => {
+    it('invalidates protected wrapped, raw, and detail queries without applying raw CDC fields', () => {
       const wrappedKey1 = ['operations', 'workRequests', 'list', { status: 'PENDING' }];
       const wrappedKey2 = ['operations', 'workRequests', 'list', { status: 'ALL' }];
       const rawListKey = ['operations', 'workRequests', 'active'];
@@ -135,34 +154,37 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       expect(accepted).toBe(true);
 
       // Verify Wrapped list 1
-      const q1 = queryClient.getQueryData<any>(wrappedKey1);
+      const q1 = readCached<CachePage>(queryClient, wrappedKey1);
       expect(q1.data).toHaveLength(2);
-      expect(q1.data[0].id).toBe('wr-shape-100');
-      expect(q1.data[0].title).toBe('Updated 100');
-      expect(q1.data[0].status).toBe('IN_PROGRESS');
-      expect(q1.data[0].version).toBe(2);
-      expect(q1.data[1].title).toBe('Original 101');
+      expect(q1.data[0]!.id).toBe('wr-shape-100');
+      expect(q1.data[0]!.title).toBe('Original 100');
+      expect(q1.data[0]!.status).toBe('PENDING');
+      expect(q1.data[0]!.version).toBe(1);
+      expect(q1.data[1]!.title).toBe('Original 101');
       expect(q1.meta.total).toBe(2);
 
       // Verify Wrapped list 2
-      const q2 = queryClient.getQueryData<any>(wrappedKey2);
-      expect(q2.data[0].title).toBe('Updated 100');
-      expect(q2.data[0].status).toBe('IN_PROGRESS');
+      const q2 = readCached<CachePage>(queryClient, wrappedKey2);
+      expect(q2.data[0]!.title).toBe('Original 100');
+      expect(q2.data[0]!.status).toBe('PENDING');
       expect(q2.customField).toBe('preserved_value');
 
       // Verify Raw array
-      const raw = queryClient.getQueryData<any[]>(rawListKey);
+      const raw = readCached<CacheRow[]>(queryClient, rawListKey);
       expect(raw).toHaveLength(2);
-      expect(raw?.[0].title).toBe('Updated 100');
-      expect(raw?.[0].status).toBe('IN_PROGRESS');
-      expect(raw?.[1].title).toBe('Original 102');
+      expect(raw?.[0]?.title).toBe('Original 100');
+      expect(raw?.[0]?.status).toBe('PENDING');
+      expect(raw?.[1]?.title).toBe('Original 102');
 
       // Verify Detail cache (partial merge retains notes)
-      const detail = queryClient.getQueryData<any>(detailKey);
-      expect(detail.title).toBe('Updated 100');
-      expect(detail.status).toBe('IN_PROGRESS');
+      const detail = readCached<CacheRow>(queryClient, detailKey);
+      expect(detail.title).toBe('Original 100');
+      expect(detail.status).toBe('PENDING');
       expect(detail.notes).toBe('Important notes');
-      expect(detail.version).toBe(2);
+      for (const key of [wrappedKey1, wrappedKey2, rawListKey, detailKey]) {
+        expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+      }
+      expect(detail.version).toBe(1);
     });
 
     it('handles INSERT across { data: [...] } and raw [...] with deduplication', () => {
@@ -187,19 +209,19 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       expect(res1).toBe(true);
 
       // Detail cache created
-      const detail = queryClient.getQueryData<any>(billingKeys.invoiceDetail('inv-fresh'));
+      const detail = readCached<CacheRow>(queryClient, billingKeys.invoiceDetail('inv-fresh'));
       expect(detail.invoiceNumber).toBe('INV-FRESH');
 
       // Wrapped list prepended
-      const wrapped = queryClient.getQueryData<any>(wrappedKey);
+      const wrapped = readCached<CachePage>(queryClient, wrappedKey);
       expect(wrapped.data).toHaveLength(2);
-      expect(wrapped.data[0].id).toBe('inv-fresh');
+      expect(wrapped.data[0]!.id).toBe('inv-fresh');
       expect(wrapped.meta.total).toBe(2);
 
       // Raw array prepended
-      const raw = queryClient.getQueryData<any[]>(rawKey);
+      const raw = readCached<CacheRow[]>(queryClient, rawKey);
       expect(raw).toHaveLength(2);
-      expect(raw?.[0].id).toBe('inv-fresh');
+      expect(raw?.[0]?.id).toBe('inv-fresh');
 
       // Duplicate unversioned INSERT: should NOT duplicate item in list
       const duplicateInsertPayload = {
@@ -209,10 +231,10 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       const res2 = handleRealtimePayload(queryClient, { table: 'invoices' }, duplicateInsertPayload);
       expect(res2).toBe(true);
 
-      const wrappedAfterDup = queryClient.getQueryData<any>(wrappedKey);
+      const wrappedAfterDup = readCached<CachePage>(queryClient, wrappedKey);
       expect(wrappedAfterDup.data).toHaveLength(2);
 
-      const rawAfterDup = queryClient.getQueryData<any[]>(rawKey);
+      const rawAfterDup = readCached<CacheRow[]>(queryClient, rawKey);
       expect(rawAfterDup).toHaveLength(2);
     });
 
@@ -249,12 +271,12 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       expect(queryClient.getQueryData(detailKey)).toBeUndefined();
 
       // Wrapped list empty, total clamped to 0
-      const wrapped = queryClient.getQueryData<any>(wrappedKey);
+      const wrapped = readCached<CachePage>(queryClient, wrappedKey);
       expect(wrapped.data).toHaveLength(0);
       expect(wrapped.meta.total).toBe(0);
 
       // Raw array empty
-      const raw = queryClient.getQueryData<any[]>(rawKey);
+      const raw = readCached<CacheRow[]>(queryClient, rawKey);
       expect(raw).toHaveLength(0);
     });
 
@@ -292,19 +314,21 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
 
       // Verify all 25 wrapped queries updated correctly
       for (let i = 0; i < 25; i++) {
-        const q = queryClient.getQueryData<any>(['operations', 'workRequests', 'filter', i]);
-        expect(q.data[0].version).toBe(6);
-        expect(q.data[0].title).toBe('Stress Target V6');
-        expect(q.data[1].id).toBe(`wr-other-${i}`);
+        const q = readCached<CachePage>(queryClient, ['operations', 'workRequests', 'filter', i]);
+        expect(q.data[0]!.version).toBe(1);
+        expect(q.data[0]!.title).toBe('Stress Target');
+        expect(queryClient.getQueryState(['operations', 'workRequests', 'filter', i])?.isInvalidated).toBe(true);
+        expect(q.data[1]!.id).toBe(`wr-other-${i}`);
         expect(q.meta.total).toBe(2);
       }
 
       // Verify all 25 raw queries updated correctly
       for (let i = 25; i < 50; i++) {
-        const raw = queryClient.getQueryData<any[]>(['operations', 'workRequests', 'raw', i]);
-        expect(raw?.[0].version).toBe(6);
-        expect(raw?.[0].title).toBe('Stress Target V6');
-        expect(raw?.[1].id).toBe(`wr-other-${i}`);
+        const raw = readCached<CacheRow[]>(queryClient, ['operations', 'workRequests', 'raw', i]);
+        expect(raw?.[0]?.version).toBe(1);
+        expect(raw?.[0]?.title).toBe('Stress Target');
+        expect(queryClient.getQueryState(['operations', 'workRequests', 'raw', i])?.isInvalidated).toBe(true);
+        expect(raw?.[1]?.id).toBe(`wr-other-${i}`);
       }
     });
   });
@@ -523,8 +547,8 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       await expect(mockClient.removeChannel('does-not-exist')).resolves.toBe('ok');
 
       // Removal with null/undefined: must not throw
-      await expect(mockClient.removeChannel(null as any)).resolves.toBe('ok');
-      await expect(mockClient.removeChannel(undefined as any)).resolves.toBe('ok');
+      await expect(mockClient.removeChannel(null as unknown as MockRealtimeChannel)).resolves.toBe('ok');
+      await expect(mockClient.removeChannel(undefined as unknown as MockRealtimeChannel)).resolves.toBe('ok');
     });
 
     it('resolves channel unsubscribe status to CLOSED and resets listeners', async () => {
@@ -598,6 +622,7 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
 
     it('ref-counted hook lifecycle: multi-mount on same table keeps channel open until last unmount', () => {
       const channelSpy = vi.spyOn(supabase, 'channel');
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const removeChannelSpy = vi.spyOn(supabase, 'removeChannel');
 
       const hook1 = renderHook(() => useEntityRealtimeSync({ table: 'work_requests' }), {
@@ -622,8 +647,9 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
         });
       });
 
-      const cached = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-refcount'));
-      expect(cached?.title).toBe('Hook2 Still Listens');
+      const cached = queryClient.getQueryData<CacheRow>(operationsKeys.workRequestDetail('wr-refcount'));
+      expect(cached).toBeUndefined();
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-refcount') });
 
       // Unmount hook2: now channel is removed
       hook2.unmount();
@@ -704,7 +730,7 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       };
       expect(handleRealtimePayload(queryClient, { table: 'work_requests' }, updateNonExistent)).toBe(true);
 
-      const wrappedAfterUpd = queryClient.getQueryData<any>(emptyWrappedKey);
+      const wrappedAfterUpd = readCached<CachePage>(queryClient, emptyWrappedKey);
       expect(wrappedAfterUpd.data).toHaveLength(0);
       expect(wrappedAfterUpd.meta.total).toBe(0);
 
@@ -715,7 +741,7 @@ describe('Empirical Challenger: Cache Shapes, 10s TTL Loop Prevention & Synchron
       };
       expect(handleRealtimePayload(queryClient, { table: 'work_requests' }, deleteNonExistent)).toBe(true);
 
-      const wrappedAfterDel = queryClient.getQueryData<any>(emptyWrappedKey);
+      const wrappedAfterDel = readCached<CachePage>(queryClient, emptyWrappedKey);
       expect(wrappedAfterDel.data).toHaveLength(0);
       expect(wrappedAfterDel.meta.total).toBe(0); // Clamped, not -1!
     });

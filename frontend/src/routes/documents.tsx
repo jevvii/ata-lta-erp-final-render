@@ -194,24 +194,8 @@ export default function DocumentsPage() {
     }
   };
 
-  // Feature Flag Guard
-  if (!isModuleEnabled('Documents')) {
-    return (
-      <ModulePlaceholder
-        name="Documents"
-        description="Document Management System (DMS), client files, and secure digital records."
-      />
-    );
-  }
-
-  // Permission Guard
-  if (!canView) {
-    return <Forbidden requiredPermission="dms:view" />;
-  }
-
-  const rawDocuments = listResponse?.data ?? [];
   const documents = useMemo(() => {
-    return rawDocuments.filter((doc) => {
+    return (listResponse?.data ?? []).filter((doc) => {
       if (workRequest !== 'all') {
         const wrId = doc.work_request_id || doc.workRequestId;
         if (wrId !== workRequest) return false;
@@ -233,8 +217,23 @@ export default function DocumentsPage() {
       }
       return true;
     });
-  }, [rawDocuments, workRequest, client, employee, dueDate]);
+  }, [listResponse?.data, workRequest, client, employee, dueDate]);
   const total = listResponse?.meta?.total ?? 0;
+
+  // Feature Flag Guard
+  if (!isModuleEnabled('Documents')) {
+    return (
+      <ModulePlaceholder
+        name="Documents"
+        description="Document Management System (DMS), client files, and secure digital records."
+      />
+    );
+  }
+
+  // Permission Guard
+  if (!canView) {
+    return <Forbidden requiredPermission="dms:view" />;
+  }
 
   return (
     <div className="w-full space-y-6" data-testid="documents-page">

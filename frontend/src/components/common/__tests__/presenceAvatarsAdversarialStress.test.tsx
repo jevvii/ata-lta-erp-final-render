@@ -36,7 +36,7 @@ const sampleColleague2: ViewerPresence = {
 };
 
 describe('Adversarial Stress Harness: Ephemeral Presence Avatars & Cross-Surface Protocol', () => {
-  let fetchSpy: any;
+  let fetchSpy: import('vitest').MockInstance<typeof fetch>;
 
   beforeEach(() => {
     localStorage.clear();

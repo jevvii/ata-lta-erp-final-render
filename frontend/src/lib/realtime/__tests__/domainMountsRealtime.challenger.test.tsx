@@ -352,7 +352,7 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       unmount();
     });
 
-    it('empirically updates UI and query cache when cdc_work_requests emits an UPDATE event', async () => {
+    it('refetches authorized UI and cache data when cdc_work_requests emits an UPDATE event', async () => {
       const { queryClient, wrapper } = createTestHarness();
       render(<WorkRequestList />, { wrapper });
 
@@ -373,10 +373,12 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
         version: 2,
       };
 
+      // The API response is authoritative; raw CDC titles must never appear in the UI.
+      global.fetch = setupGlobalFetchMock([updatedWr, initialWorkRequests[1]!]);
       act(() => {
         wrChannel.emit('postgres_changes', {
           eventType: 'UPDATE',
-          new: updatedWr,
+          new: { ...updatedWr, title: 'Unverified CDC title' },
           old: initialWorkRequests[0],
         });
       });
@@ -384,9 +386,10 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       // Verify UI reflects the updated title
       await waitFor(() => {
         expect(screen.getByText('SEC GIS 2026 Filing (Updated by Peer)')).toBeInTheDocument();
+        expect(screen.queryByText('Unverified CDC title')).not.toBeInTheDocument();
       });
 
-      // Verify TanStack cache was patched
+      // Verify TanStack cache contains the authorized refetch result.
       const cachedList = queryClient.getQueriesData<CachedList>({
         queryKey: operationsKeys.workRequests(),
       });
@@ -437,10 +440,11 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
         tasks: [],
       };
 
+      global.fetch = setupGlobalFetchMock([newWr, ...initialWorkRequests]);
       act(() => {
         wrChannel.emit('postgres_changes', {
           eventType: 'INSERT',
-          new: newWr,
+          new: { ...newWr, title: 'Unverified inserted CDC title' },
           old: null,
         });
       });
@@ -449,6 +453,7 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       await waitFor(() => {
         expect(screen.getByText('Urgent Court Appearance Work Request')).toBeInTheDocument();
         expect(screen.getByTestId('wr-row-wr-live-999')).toBeInTheDocument();
+        expect(screen.queryByText('Unverified inserted CDC title')).not.toBeInTheDocument();
       });
 
       // Verify TanStack cache contains the new item prepended
@@ -496,7 +501,7 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       }
     });
 
-    it('updates embedded tasks and invalidates operation counts when cdc_tasks emits an event', async () => {
+    it('refetches authorized embedded tasks and invalidates operation counts on task events', async () => {
       const { queryClient, wrapper } = createTestHarness();
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
@@ -511,6 +516,12 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
       ) as MockRealtimeChannel;
       expect(taskChannel).toBeDefined();
 
+      const authorizedTask = { ...mockInitialTask, title: 'Gather Articles of Inc (Amended)', version: 2 };
+      const authorizedWr: WorkRequest = {
+        ...initialWorkRequests[0]!,
+        phases: { pre_processing: { tasks: [authorizedTask] }, processing: { tasks: [] } },
+      };
+      global.fetch = setupGlobalFetchMock([authorizedWr, initialWorkRequests[1]!]);
       act(() => {
         taskChannel.emit('postgres_changes', {
           eventType: 'UPDATE',
@@ -536,18 +547,20 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
         queryKey: ['operations', 'counts'],
       });
 
-      // Assert embedded phase task was patched in the work request cache
-      const cachedList = queryClient.getQueriesData<CachedList>({
-        queryKey: operationsKeys.workRequests(),
+      await waitFor(() => {
+        // The mounted query refetches the authorized task rather than patching the CDC payload.
+        const cachedList = queryClient.getQueriesData<CachedList>({
+          queryKey: operationsKeys.workRequests(),
+        });
+        const wrWithPatchedTask = cachedList.some(([, data]) => {
+          const items = Array.isArray(data) ? data : data?.data;
+          const wr = items?.find((item: CachedItem) => item.id === 'wr-101');
+          return wr?.phases?.pre_processing?.tasks?.some(
+            (t: { id: string; title?: string }) => t.id === 't-101' && t.title === 'Gather Articles of Inc (Amended)'
+          );
+        });
+        expect(wrWithPatchedTask).toBe(true);
       });
-      const wrWithPatchedTask = cachedList.some(([, data]) => {
-        const items = Array.isArray(data) ? data : data?.data;
-        const wr = items?.find((item: CachedItem) => item.id === 'wr-101');
-        return wr?.phases?.pre_processing?.tasks?.some(
-          (t: { id: string; title?: string }) => t.id === 't-101' && t.title === 'Gather Articles of Inc (Amended)'
-        );
-      });
-      expect(wrWithPatchedTask).toBe(true);
     });
 
     it('cleanly unsubscribes and removes channels when WorkRequestList unmounts', async () => {
@@ -978,10 +991,12 @@ describe('Challenger M2-1: Domain Component Mounts & Supabase CDC Realtime Sync'
         'cdc_work_requests'
       ) as MockRealtimeChannel;
 
+      const authorizedWr = { ...initialWorkRequests[0]!, title: 'Dual Mount Verification Title', version: 3 };
+      global.fetch = setupGlobalFetchMock([authorizedWr, initialWorkRequests[1]!]);
       act(() => {
         wrChannel.emit('postgres_changes', {
           eventType: 'UPDATE',
-          new: { ...initialWorkRequests[0], title: 'Dual Mount Verification Title', version: 3 },
+          new: { ...authorizedWr, title: 'Unverified dual mount CDC title' },
           old: initialWorkRequests[0],
         });
       });

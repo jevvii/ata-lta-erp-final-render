@@ -4,17 +4,15 @@
  * registers tenant mappings, and dynamically configures the Supabase Realtime client.
  */
 
-import { configureSupabase, STAGING_FALLBACK_URL } from '@/lib/supabase';
+import { configureSupabase, isPublicSupabaseKey } from '@/lib/supabase';
+import { API_BASE_URL } from '@/lib/api';
 import { registerEntityMapping } from '@/lib/realtime/tenantResolver';
 
 export async function bootstrapRuntimeConfig(): Promise<void> {
   if (typeof window === 'undefined') return;
 
   try {
-    const apiBase =
-      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) ||
-      (typeof import.meta !== 'undefined' && import.meta.env?.ERP_API_BASE_URL) ||
-      'https://ata-lta-erp-api-staging.onrender.com/v1';
+    const apiBase = API_BASE_URL;
 
     const cleanBase = apiBase.replace(/\/+$/, '');
     const endpoint = cleanBase.endsWith('/v1') ? `${cleanBase}/config/public` : `${cleanBase}/v1/config/public`;
@@ -33,11 +31,11 @@ export async function bootstrapRuntimeConfig(): Promise<void> {
       const body = await res.json();
       const config = body?.data;
 
-      if (config?.supabaseAnonKey) {
+      if (config?.supabaseUrl && isPublicSupabaseKey(config?.supabaseAnonKey)) {
         sessionStorage.setItem('erp_supabase_anon_key', config.supabaseAnonKey);
         localStorage.setItem('erp_supabase_anon_key', config.supabaseAnonKey);
 
-        const targetUrl = config.supabaseUrl || STAGING_FALLBACK_URL;
+        const targetUrl = config.supabaseUrl;
         configureSupabase(targetUrl, config.supabaseAnonKey);
       }
 

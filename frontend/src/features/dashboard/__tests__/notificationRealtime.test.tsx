@@ -29,7 +29,7 @@ import type { RawNotificationItemApi, NotificationListResponse } from '../api/ty
 // Authoritative Realtime Notification Hook Contract (SPEC-REALTIME-SYNC-001 §4 Parcel 3)
 // ============================================================================
 
-export function referenceUseNotificationRealtimeSync() {
+export function useReferenceNotificationRealtimeSync() {
   const user = useSessionStore((state) => state.user);
 
   useEntityRealtimeSync<RawNotificationItemApi>({
@@ -44,8 +44,8 @@ export function referenceUseNotificationRealtimeSync() {
 const mod = notificationsModule as Record<string, unknown>;
 const useNotificationRealtimeSync =
   typeof mod.useNotificationRealtimeSync === 'function'
-    ? (mod.useNotificationRealtimeSync as typeof referenceUseNotificationRealtimeSync)
-    : referenceUseNotificationRealtimeSync;
+    ? (mod.useNotificationRealtimeSync as typeof useReferenceNotificationRealtimeSync)
+    : useReferenceNotificationRealtimeSync;
 
 // Wrapper component to mount realtime hook alongside bell panel
 function NotificationPanelWithSync() {

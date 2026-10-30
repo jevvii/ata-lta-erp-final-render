@@ -450,7 +450,7 @@ describe('Adversarial Challenger: Normalization & Soft-Delete Stress Harness', (
       expect(queryClient.getQueryData(operationsKeys.taskDetail(wrId, taskId))).toBeUndefined();
     });
 
-    it('2.5 does NOT treat UPDATE with deleted_at: null as a delete', () => {
+    it('2.5 preserves an active task and invalidates it for authorized refetch when deleted_at is null', () => {
       const taskId = 'task-active-update';
       const wrId = 'wr-active';
 
@@ -487,7 +487,9 @@ describe('Adversarial Challenger: Normalization & Soft-Delete Stress Harness', (
         operationsKeys.taskDetail(wrId, taskId)
       );
       expect(updated).toBeDefined();
-      expect(updated?.title).toBe('Active Task After');
+      expect(updated?.title).toBe('Active Task Before');
+      expect(updated?.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.taskDetail(wrId, taskId))?.isInvalidated).toBe(true);
     });
   });
 

@@ -357,7 +357,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       }).not.toThrow();
 
       const deletedList = queryClient.getQueryData<{ data: Array<unknown> }>(weirdListKey);
-      expect(deletedList?.data.some((i: any) => i?.id === 'target-item')).toBe(false);
+      expect(deletedList?.data.some((i) => i && typeof i === 'object' && 'id' in i && i.id === 'target-item')).toBe(false);
     });
 
     it('safely handles prototype pollution attempts in entityData', () => {
@@ -378,7 +378,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       });
 
       // Verify global Object prototype was NOT polluted
-      expect(({} as any).polluted).toBeUndefined();
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     });
   });
 
@@ -455,9 +455,9 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       // Tab 0 is the primary module tab under test
       resetTabIdForTesting(tabIds[0]!);
       const qc0 = queryClients[0]!;
-      vi.spyOn(qc0 as any, 'setQueryData').mockImplementation(() => {
+      vi.spyOn(qc0, 'setQueryData').mockImplementation(() => {
         receivedCounts[0] = (receivedCounts[0] ?? 0) + 1;
-        return qc0;
+        return undefined;
       });
       vi.spyOn(qc0, 'invalidateQueries').mockImplementation(async () => { receivedCounts[0] = (receivedCounts[0] ?? 0) + 1; });
       const cleanup0 = setupTabSyncListener(qc0);
@@ -471,9 +471,9 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         const tabIndex = i;
         const peerTabId = tabIds[i]!;
 
-        vi.spyOn(peerQc as any, 'setQueryData').mockImplementation(() => {
+        vi.spyOn(peerQc, 'setQueryData').mockImplementation(() => {
           receivedCounts[tabIndex] = (receivedCounts[tabIndex] ?? 0) + 1;
-          return peerQc;
+          return undefined;
         });
 
         vi.spyOn(peerQc, 'invalidateQueries').mockImplementation(async () => { receivedCounts[tabIndex] = (receivedCounts[tabIndex] ?? 0) + 1; });
@@ -554,8 +554,8 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
       await new Promise((resolve) => setTimeout(resolve, 60));
 
       // Tab 0 must have ignored the reflected message with its own originTabId
-      const allQc0Calls = (qc0.setQueryData as any).mock.calls;
-      const reflectedProcessed = allQc0Calls.some((call: any) => {
+      const allQc0Calls = vi.mocked(qc0.setQueryData).mock.calls;
+      const reflectedProcessed = allQc0Calls.some((call) => {
         const key = call[0];
         return Array.isArray(key) && key.includes('wr-reflected-self');
       });
@@ -631,12 +631,12 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         timestamp: Date.now(),
       });
 
-      const updatedList = queryClient.getQueryData<any>(listKey);
+      const updatedList = queryClient.getQueryData<{ data: Array<{ status: string }>; pagination: unknown; summary: unknown }>(listKey)!;
       expect(updatedList.pagination).toEqual({ page: 1, limit: 20, total: 2 });
       expect(updatedList.summary).toEqual({ totalAmount: 12500 });
-      expect(updatedList.data[1].status).toBe('Pending');
+      expect(updatedList.data[1]!.status).toBe('Pending');
       expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
-      expect(updatedList.data[0].status).toBe('Pending');
+      expect(updatedList.data[0]!.status).toBe('Pending');
     });
 
     it('invalidates only affected domain queries and lists when entityData is omitted', () => {
@@ -656,19 +656,20 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
 
       // Extract predicate and test matching logic
       const predicateCall = invalidateSpy.mock.calls.find((c) => c[0] && typeof c[0] === 'object' && 'predicate' in c[0]);
-      const predicate = (predicateCall?.[0] as any)?.predicate;
+      const predicate = predicateCall?.[0]?.predicate;
       expect(predicate).toBeDefined();
+      if (!predicate) throw new Error('Expected invalidation predicate');
 
       // Should match matching entity detail
-      expect(predicate({ queryKey: ['operations', 'workRequests', 'detail', 'wr-target'] })).toBe(true);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['operations', 'workRequests', 'detail', 'wr-target'] }))).toBe(true);
       // Should match operations list
-      expect(predicate({ queryKey: ['operations', 'workRequests', 'list'] })).toBe(true);
-      expect(predicate({ queryKey: ['operations', 'lists'] })).toBe(true);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['operations', 'workRequests', 'list'] }))).toBe(true);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['operations', 'lists'] }))).toBe(true);
       // Should NOT match other entity in operations
-      expect(predicate({ queryKey: ['operations', 'workRequests', 'detail', 'wr-other'] })).toBe(false);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['operations', 'workRequests', 'detail', 'wr-other'] }))).toBe(false);
       // Should NOT match different domain
-      expect(predicate({ queryKey: ['billing', 'invoices', 'detail', 'wr-target'] })).toBe(false);
-      expect(predicate({ queryKey: ['billing', 'list'] })).toBe(false);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['billing', 'invoices', 'detail', 'wr-target'] }))).toBe(false);
+      expect(predicate(queryClient.getQueryCache().build<unknown, Error, unknown, readonly unknown[]>(queryClient, { queryKey: ['billing', 'list'] }))).toBe(false);
     });
   });
 
@@ -680,7 +681,7 @@ describe('Adversarial & Stress Test: Parcel A Tab Sync & Feature Flags', () => {
         constructor() {
           throw new Error('BroadcastChannel is disabled in this context');
         }
-      } as any;
+      } as unknown as typeof BroadcastChannel;
 
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

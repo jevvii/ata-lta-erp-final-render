@@ -59,6 +59,7 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
       activeEntity: 'ATA',
     });
     vi.restoreAllMocks();
+    vi.spyOn(queryClient, 'invalidateQueries');
   });
 
   afterEach(async () => {
@@ -74,7 +75,7 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
   // Challenge 1: Out-of-Order Versions, Monotonic Progression & Duplicate Bursts
   // =========================================================================
   describe('Challenge 1: Out-of-Order Versions, Monotonic Progression & Duplicate Bursts', () => {
-    it('empirical oracle: verifies strict monotonic progression under 100 randomly permuted versions', () => {
+    it('empirical oracle: verifies strict monotonic progression under 100 randomly permuted versions', async () => {
       const entityId = 'wr-monotonic-100';
 
       // Seed initial cache at version 0
@@ -118,6 +119,12 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
         };
 
         const result = handleRealtimePayload(queryClient, { table: 'work_requests' }, payload);
+        if (result) {
+          const key = operationsKeys.workRequestDetail(String(payload.new.id));
+          expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+          // The API, not the CDC event, supplies the authorized row and its version.
+          await queryClient.fetchQuery({ queryKey: key, queryFn: async () => payload.new });
+        }
 
         if (ver > runningMaxVersion) {
           expect(result).toBe(true);
@@ -140,7 +147,7 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
       expect(totalRejected).toBeGreaterThan(0);
     });
 
-    it('interleaved multi-record stress: maintains independent monotonic version state across 10 records concurrently', () => {
+    it('interleaved multi-record stress: maintains independent monotonic version state across 10 records concurrently', async () => {
       const recordCount = 10;
       const records = Array.from({ length: recordCount }, (_, i) => ({
         id: `wr-concurrent-${i}`,
@@ -182,6 +189,12 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
         };
 
         const result = handleRealtimePayload(queryClient, { table: 'work_requests' }, payload);
+        if (result) {
+          const key = operationsKeys.workRequestDetail(String(payload.new.id));
+          expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+          // The API, not the CDC event, supplies the authorized row and its version.
+          await queryClient.fetchQuery({ queryKey: key, queryFn: async () => payload.new });
+        }
 
         const rec = records.find((r) => r.id === evt.id)!;
         if (evt.version >= rec.currentVersion) {
@@ -197,7 +210,7 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
       }
     });
 
-    it('handles zero and negative versions properly', () => {
+    it('handles zero and negative versions properly', async () => {
       const entityId = 'wr-negative-ver';
 
       // Seed with version -1
@@ -215,6 +228,8 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
       };
       const resV0 = handleRealtimePayload(queryClient, { table: 'work_requests' }, v0Payload);
       expect(resV0).toBe(true);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail(entityId))?.isInvalidated).toBe(true);
+      await queryClient.fetchQuery({ queryKey: operationsKeys.workRequestDetail(entityId), queryFn: async () => v0Payload.new });
 
       // Version 0 arrives again as duplicate INSERT -> equal version, rejected
       const v0InsertDup = {
@@ -297,9 +312,9 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
           new: { id: 'wr-triplet', title: 'Triple Mounted', version: 1, entity: 'ATA' },
         });
       });
-      expect(
-        queryClient.getQueryData<TestEntity>(operationsKeys.workRequestDetail('wr-triplet'))?.title
-      ).toBe('Triple Mounted');
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-triplet'))).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-triplet') });
+      vi.mocked(queryClient.invalidateQueries).mockClear();
 
       // 2. Unmount Hook A only
       hookA.unmount();
@@ -315,9 +330,9 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
           new: { id: 'wr-triplet', title: 'After Hook A Unmount', version: 2, entity: 'ATA' },
         });
       });
-      expect(
-        queryClient.getQueryData<TestEntity>(operationsKeys.workRequestDetail('wr-triplet'))?.title
-      ).toBe('After Hook A Unmount');
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-triplet'))).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-triplet') });
+      vi.mocked(queryClient.invalidateQueries).mockClear();
 
       // 3. Unmount Hook B only
       hookB.unmount();
@@ -333,9 +348,9 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
           new: { id: 'wr-triplet', title: 'After Hook B Unmount', version: 3, entity: 'ATA' },
         });
       });
-      expect(
-        queryClient.getQueryData<TestEntity>(operationsKeys.workRequestDetail('wr-triplet'))?.title
-      ).toBe('After Hook B Unmount');
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-triplet'))).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-triplet') });
+      vi.mocked(queryClient.invalidateQueries).mockClear();
 
       // 4. Finally unmount Hook C (all subscribers now gone)
       hookC.unmount();
@@ -360,9 +375,9 @@ describe('Empirical Adversarial Challenge Suite: useEntityRealtimeSync & Supabas
           new: { id: 'wr-triplet', title: 'Hook D Resurrected', version: 4, entity: 'ATA' },
         });
       });
-      expect(
-        queryClient.getQueryData<TestEntity>(operationsKeys.workRequestDetail('wr-triplet'))?.title
-      ).toBe('Hook D Resurrected');
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-triplet'))).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-triplet') });
+      vi.mocked(queryClient.invalidateQueries).mockClear();
 
       hookD.unmount();
     });

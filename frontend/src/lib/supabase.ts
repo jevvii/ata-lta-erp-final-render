@@ -291,6 +291,20 @@ export class MockSupabaseClient {
  * Used in browser/staging environments when build-time environment variables are omitted.
  * Zero hardcoded secrets in source code to adhere to GitHub push protection.
  */
+export function isPublicSupabaseKey(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (/^sb_publishable_[A-Za-z0-9_-]+$/.test(value)) return true;
+  try {
+    const parts = value.split('.');
+    const encodedPayload = parts[1];
+    if (parts.length !== 3 || !encodedPayload) return false;
+    const payload = JSON.parse(atob(encodedPayload.replace(/-/g, '+').replace(/_/g, '/')));
+    return payload.role === 'anon';
+  } catch {
+    return false;
+  }
+}
+
 export function getStoredAnonKey(): string {
   if (typeof window === 'undefined') return '';
   const stored =
@@ -298,7 +312,7 @@ export function getStoredAnonKey(): string {
     sessionStorage.getItem('erp_supabase_anon_key') ||
     localStorage.getItem('erp_supabase_anon_key') ||
     '';
-  if (stored && stored.startsWith('sb_secret_')) {
+  if (stored && !isPublicSupabaseKey(stored)) {
     sessionStorage.removeItem('erp_supabase_anon_key');
     localStorage.removeItem('erp_supabase_anon_key');
     return '';
@@ -339,7 +353,7 @@ export const isSupabaseConfigured = (): boolean => {
       typeof rawUrl === 'string' &&
       typeof rawKey === 'string' &&
       rawUrl.trim() !== '' &&
-      rawKey.trim() !== '' &&
+      isPublicSupabaseKey(rawKey) &&
       !rawUrl.includes('placeholder')
     );
   }
@@ -353,7 +367,7 @@ export const isSupabaseConfigured = (): boolean => {
     typeof url === 'string' &&
     typeof key === 'string' &&
     url.trim() !== '' &&
-    key.trim() !== '' &&
+    isPublicSupabaseKey(key) &&
     !url.includes('placeholder')
   );
 };
@@ -373,7 +387,7 @@ export function getSupabaseClient(): SupabaseClient {
       env?.VITE_SUPABASE_ANON_KEY ??
       (typeof process !== 'undefined' ? (process.env?.VITE_SUPABASE_ANON_KEY as string | undefined) : undefined);
 
-    if (rawUrl && rawKey && typeof rawUrl === 'string' && typeof rawKey === 'string' && !rawUrl.includes('placeholder')) {
+    if (rawUrl && isPublicSupabaseKey(rawKey) && typeof rawUrl === 'string' && !rawUrl.includes('placeholder')) {
       return createClient(rawUrl, rawKey, {
         realtime: { params: { eventsPerSecond: 10 } },
       });
@@ -396,7 +410,7 @@ export function getSupabaseClient(): SupabaseClient {
     (typeof window !== 'undefined' ? getStoredAnonKey() : undefined) ??
     STAGING_FALLBACK_KEY;
 
-  if (url && key && typeof url === 'string' && typeof key === 'string' && !url.includes('placeholder')) {
+  if (url && isPublicSupabaseKey(key) && typeof url === 'string' && !url.includes('placeholder')) {
     configuredUrl = url;
     configuredKey = key;
     const client = createClient(url, key, {
@@ -450,7 +464,7 @@ export function syncSupabaseRealtimeAuth(accessToken?: string | null): void {
 }
 
 export function configureSupabase(url: string, key: string): SupabaseClient {
-  if (url && key && typeof url === 'string' && typeof key === 'string' && !url.includes('placeholder')) {
+  if (url && isPublicSupabaseKey(key) && typeof url === 'string' && !url.includes('placeholder')) {
     // If client is already initialized with identical credentials, reuse it to prevent
     // duplicate GoTrue clients and abrupt WebSocket socket closed: 1001 resets.
     if (

@@ -40,7 +40,7 @@ describe('work request clients follow the operating entity', () => {
     vi.clearAllMocks();
     useSessionStore.setState({
       activeEntity: 'ALL',
-      user: { id: 'admin-1', name: 'Admin', role: 'Admin', email: 'admin@example.com' } as any,
+      user: { id: 'admin-1', name: 'Admin', role: 'Admin', email: 'admin@example.com', departments: ['Management'], entities: ['ATA', 'LTA'] },
     });
     // Return both entities deliberately to verify the UI also filters stale or
     // mixed responses instead of relying only on the scoped request.

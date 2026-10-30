@@ -276,7 +276,7 @@ describe('ReportsPage Redesigned Shell Integration', () => {
     useSessionStore.setState({
       activeEntity: 'ATA',
       permissions: new Set(['reports:view', 'billing:view', 'workflow:view']),
-      user: { id: 'u-1', email: 'admin@atalta.com', role: 'Admin' } as any,
+      user: { id: 'u-1', email: 'admin@atalta.com', name: 'Admin', role: 'Admin', departments: ['Management'], entities: ['ATA', 'LTA'] },
     });
   });
 
@@ -341,7 +341,7 @@ describe('ReportsPage Redesigned Shell Integration', () => {
     useSessionStore.setState({
       activeEntity: 'ALL',
       permissions: new Set(['reports:view', 'billing:view', 'users:manage']),
-      user: { id: 'u-1', email: 'admin@atalta.com', role: 'Admin' } as any,
+      user: { id: 'u-1', email: 'admin@atalta.com', name: 'Admin', role: 'Admin', departments: ['Management'], entities: ['ATA', 'LTA'] },
     });
 
     const { wrapper } = createHarness(['/reports?tab=daily']);
@@ -371,7 +371,7 @@ describe('ReportsPage Redesigned Shell Integration', () => {
     useSessionStore.setState({
       activeEntity: 'ALL',
       permissions: new Set(['reports:view', 'billing:view', 'users:manage']),
-      user: { id: 'u-1', email: 'admin@atalta.com', role: 'Admin' } as any,
+      user: { id: 'u-1', email: 'admin@atalta.com', name: 'Admin', role: 'Admin', departments: ['Management'], entities: ['ATA', 'LTA'] },
     });
 
     const { wrapper } = createHarness(['/reports?tab=aging']);

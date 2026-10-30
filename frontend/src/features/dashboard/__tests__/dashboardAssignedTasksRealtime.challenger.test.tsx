@@ -4,14 +4,14 @@
  * Specification: SPEC-DASHBOARD-ASSIGNED-TASKS-REALTIME-001 §R3
  * Verification Scope:
  * 1. Initial Load & URL Contract: verifies &includeTasks=true in API request.
- * 2. Strict Scoping Preventing Admin Contamination: admin user sees strictly tasks assigned
- *    to themselves in PendingTasksCard with zero leaks from other users.
+ * 2. Strict Scoping: task picker choices remain user-scoped unless Admin explicitly
+ *    requests all tasks; non-Admin permissions cannot activate that override.
  * 3. Real-Time Reflection on Task Assignment: incoming CDC event assigning task to current
- *    user triggers cache invalidation and live UI reflection.
- * 4. Real-Time Eviction on Task Reassignment or Completion: CDC event reassigning task away
- *    or completing it evicts task from PendingTasksCard.
- * 5. Cross-User CDC Event Discard: CDC event for another user's task or assignment is discarded
- *    with zero invalidations to dashboardKeys.assignedTasks.all.
+ *    user triggers cache invalidation and refreshes actual task picker data.
+ * 4. Real-Time Task Changes: reassignment removes unavailable task-picker choices,
+ *    while completion refreshes the authorized status of historical choices.
+ * 5. Cross-User Isolation: another user's raw CDC task never enters picker data;
+ *    the targeted assignment helper avoids refreshing unrelated pickers.
  * 6. Relational Assignees via task_assignees join table: CDC events on task_assignees strictly scope
  *    invalidations to current user.
  * 7. Work Request Lifecycle Transitions: status changes, archive toggles, and deletes trigger
@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act, cleanup } from '@testing-library/react';
+import { render, renderHook, screen, waitFor, act, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import React from 'react';
@@ -35,7 +35,7 @@ import {
 } from '@/lib/realtime/useEntityRealtimeSync';
 import * as api from '@/lib/api';
 import DashboardPage from '@/routes/dashboard';
-import { PendingTasksCard } from '../components/PendingTasksCard';
+import { useAssignedTasks } from '../api/useAssignedTasks';
 import { LogTimeWidget } from '../components/LogTimeWidget';
 import { dashboardKeys } from '../api/queryKeys';
 
@@ -115,7 +115,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
   // ==========================================================================
   // Test 1: Initial Load & URL Contract
   // ==========================================================================
-  it('1. Initial Load: requests work requests with &includeTasks=true and displays user tasks', async () => {
+  it('1. Initial Load: requests includeTasks=true and exposes only the current user task picker options', async () => {
     const apiSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
         return {
@@ -155,22 +155,21 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       return { data: [] } as never;
     });
 
-    render(<PendingTasksCard />, { wrapper: createWrapper() });
+    const { result } = renderHook(() => useAssignedTasks(), { wrapper: createWrapper() });
 
-    await waitFor(() => {
-      expect(screen.getByText('Prepare BIR 1702-RT Form')).toBeInTheDocument();
-    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.tasks.map((task) => task.taskTitle)).toEqual(['Prepare BIR 1702-RT Form']);
 
     expect(apiSpy).toHaveBeenCalledWith(
       '/operations/work-requests?archived=false&limit=100&includeTasks=true&page=1'
     );
-    expect(screen.queryByText('Reconcile General Ledger')).not.toBeInTheDocument();
+    expect(result.current.tasks.some((task) => task.taskTitle === 'Reconcile General Ledger')).toBe(false);
   });
 
   // ==========================================================================
   // Test 2: Admin Visibility vs Non-Admin Strict Scoping
   // ==========================================================================
-  it('2. Admin Visibility & Non-Admin Strict Scoping: Admin sees all work requests/tasks in PendingTasksCard while non-admin with timelog:edit_all strictly sees only their own', async () => {
+  it('2. Admin task-picker override sees all tasks while non-admin with timelog:edit_all still sees only their own', async () => {
     useSessionStore.getState().setSession({
       user: sampleAdminUser,
       permissions: ['workflow:view', 'timelog:create', 'timelog:edit_all', 'workflow:edit'],
@@ -217,17 +216,13 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       return { data: [] } as never;
     });
 
-    const { unmount } = render(<PendingTasksCard />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
-      expect(screen.getByText('Junior Voucher Verification')).toBeInTheDocument();
-    });
-
-    const badge = screen.getByTestId('pending-tasks-count-badge');
-    expect(badge).toHaveTextContent('2 Tasks Incomplete');
-
-    unmount();
+    const adminPicker = renderHook(() => useAssignedTasks({ allTasksForAdmin: true }), { wrapper: createWrapper() });
+    await waitFor(() => expect(adminPicker.result.current.isSuccess).toBe(true));
+    expect(adminPicker.result.current.tasks.map((task) => task.taskTitle)).toEqual([
+      'Executive Review of Audited Statements',
+      'Junior Voucher Verification',
+    ]);
+    adminPicker.unmount();
 
     // Verify non-Admin (e.g. Manager/Staff even with timelog:edit_all) strictly sees ONLY their own tasks
     useSessionStore.getState().setSession({
@@ -237,12 +232,9 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       unreadCount: 0,
     });
 
-    render(<PendingTasksCard />, { wrapper: createWrapper() });
-
-    await waitFor(() => {
-      expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
-    });
-    expect(screen.queryByText('Junior Voucher Verification')).not.toBeInTheDocument();
+    const managerPicker = renderHook(() => useAssignedTasks({ allTasksForAdmin: true }), { wrapper: createWrapper() });
+    await waitFor(() => expect(managerPicker.result.current.isSuccess).toBe(true));
+    expect(managerPicker.result.current.tasks.map((task) => task.taskTitle)).toEqual(['Executive Review of Audited Statements']);
   });
 
   // ==========================================================================
@@ -311,11 +303,10 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
   // Test 3: Real-Time Reflection on Task Assignment
   // ==========================================================================
   it('3. Real-Time Assignment: CDC task assignment to current user triggers cache invalidation and updates UI', async () => {
-    let callCount = 0;
+    let hasAssignment = false;
     vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
-        callCount++;
-        if (callCount === 1) {
+        if (!hasAssignment) {
           return { data: [] } as never; // Initial: no tasks assigned
         }
         return {
@@ -347,9 +338,11 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     render(<DashboardPage />, { wrapper: createWrapper() });
+    const { result } = renderHook(() => useAssignedTasks(), { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('All caught up!')).toBeInTheDocument();
+      expect(result.current.isSuccess).toBe(true);
+      expect(result.current.tasks).toEqual([]);
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -358,6 +351,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
 
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
+    hasAssignment = true;
     // Simulate Supabase Realtime broadcast of task assignment to current user
     act(() => {
       tasksChannel?.emit('postgres_changes', {
@@ -378,17 +372,17 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       queryKey: dashboardKeys.assignedTasks.all,
     });
 
-    // UI reactively updates with newly assigned task
+    // The actual task picker hook refetches its authorized assignment.
     await waitFor(() => {
-      expect(screen.getByText('Draft Client Engagement Letter')).toBeInTheDocument();
+      expect(result.current.tasks.map((task) => task.taskTitle)).toEqual(['Draft Client Engagement Letter']);
     });
-    expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
+    expect(result.current.tasks).toHaveLength(1);
   });
 
   // ==========================================================================
-  // Test 4: Real-Time Eviction on Reassignment or Completion
+  // Test 4: Real-Time Reassignment and Completion Data
   // ==========================================================================
-  it('4. Real-Time Eviction: CDC task reassignment away from current user or completion evicts task', async () => {
+  it('4. Real-Time Reassignment: a task reassigned away disappears from authorized picker choices', async () => {
     let isReassigned = false;
     vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
@@ -424,9 +418,10 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     render(<DashboardPage />, { wrapper: createWrapper() });
+    const { result } = renderHook(() => useAssignedTasks(), { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Asset Depreciation Schedule')).toBeInTheDocument();
+      expect(result.current.tasks.map((task) => task.taskTitle)).toEqual(['Asset Depreciation Schedule']);
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -458,12 +453,12 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     await waitFor(() => {
-      expect(screen.getByText('All caught up!')).toBeInTheDocument();
+      expect(result.current.tasks).toEqual([]);
     });
-    expect(screen.queryByText('Asset Depreciation Schedule')).not.toBeInTheDocument();
+    expect(result.current.tasks.some((task) => task.taskTitle === 'Asset Depreciation Schedule')).toBe(false);
   });
 
-  it('4b. Real-Time Eviction: CDC task completion triggers invalidation and eviction', async () => {
+  it('4b. Real-Time Completion: CDC completion refreshes the task picker with the authorized completed status', async () => {
     let isCompleted = false;
     vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
@@ -496,9 +491,11 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     render(<DashboardPage />, { wrapper: createWrapper() });
+    const { result } = renderHook(() => useAssignedTasks(), { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('VAT Summary Preparation')).toBeInTheDocument();
+      expect(result.current.tasks[0]?.taskTitle).toBe('VAT Summary Preparation');
+      expect(result.current.tasks[0]?.status).toBe('In Progress');
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -532,14 +529,15 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     await waitFor(() => {
-      expect(screen.getByText('All caught up!')).toBeInTheDocument();
+      expect(result.current.tasks[0]?.taskTitle).toBe('VAT Summary Preparation');
+      expect(result.current.tasks[0]?.status).toBe('Completed');
     });
   });
 
   // ==========================================================================
   // Test 5: Cross-User Discard
   // ==========================================================================
-  it('5. Cross-User Discard: CDC event for another user task is discarded with zero invalidations to assignedTasks.all', async () => {
+  it('5. Cross-User Isolation: another user task cannot appear in authorized task-picker results', async () => {
     vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
         return {
@@ -571,9 +569,10 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     });
 
     render(<DashboardPage />, { wrapper: createWrapper() });
+    const { result } = renderHook(() => useAssignedTasks(), { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Keep Assigned Task Active')).toBeInTheDocument();
+      expect(result.current.tasks.map((task) => task.taskTitle)).toEqual(['Keep Assigned Task Active']);
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -595,16 +594,18 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       });
     });
 
-    // Zero invalidations to dashboardKeys.assignedTasks.all
-    const assignedTasksInvalidation = invalidateSpy.mock.calls.find((call) => {
-      const qk = call[0]?.queryKey;
-      return Array.isArray(qk) && qk[0] === 'assigned-tasks';
-    });
-    expect(assignedTasksInvalidation).toBeUndefined();
+    // An assignment change may conservatively refetch project scopes. The raw foreign
+    // task must not be injected, and the backend-authorized picker stays user-scoped.
+    await waitFor(() => expect(result.current.isFetching).toBe(false));
+    expect(result.current.tasks.map((task) => task.taskTitle)).toEqual(['Keep Assigned Task Active']);
+    expect(result.current.tasks.some((task) => task.taskId === 'task-foreign-user')).toBe(false);
 
-    // UI remains stable and unaffected
-    expect(screen.getByText('Keep Assigned Task Active')).toBeInTheDocument();
-    expect(screen.queryByText('Foreign User Task')).not.toBeInTheDocument();
+    // The targeted assignment helper still avoids refreshing unrelated user pickers.
+    invalidateSpy.mockClear();
+    triggerAssignedTasksCoInvalidation(queryClient, 'tasks', {
+      id: 'task-foreign-user', assignee_id: 'usr-other-worker',
+    }, null);
+    expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
   // ==========================================================================

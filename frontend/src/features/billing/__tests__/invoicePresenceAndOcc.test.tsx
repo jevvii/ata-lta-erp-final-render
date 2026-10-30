@@ -201,7 +201,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
     it('passes expectedVersion in updateInvoiceAction when strict_occ is enabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'true');
 
-      let capturedBody: any = null;
+      let capturedBody: unknown = null;
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
         capturedBody = JSON.parse(String(opts?.body || '{}'));
         return Promise.resolve({
@@ -241,7 +241,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
     it('unconditionally passes expectedVersion in updateInvoiceAction even when strict_occ is disabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
 
-      let capturedBody: any = null;
+      let capturedBody: unknown = null;
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
         capturedBody = JSON.parse(String(opts?.body || '{}'));
         return Promise.resolve({
@@ -262,13 +262,13 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
         notes: 'Updated notes',
         expectedVersion: 3,
       });
-      expect(capturedBody.expectedVersion).toBe(3);
+      expect(capturedBody).toHaveProperty('expectedVersion', 3);
     });
 
     it('passes expectedVersion in updateClientAddressAction when strict_occ is enabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'true');
 
-      let capturedBody: any = null;
+      let capturedBody: unknown = null;
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
         capturedBody = JSON.parse(String(opts?.body || '{}'));
         return Promise.resolve({
@@ -294,7 +294,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
     it('unconditionally passes expectedVersion in updateClientAddressAction even when strict_occ is disabled', async () => {
       localStorage.setItem('erp_feature_override_strict_occ', 'false');
 
-      let capturedBody: any = null;
+      let capturedBody: unknown = null;
       global.fetch = vi.fn().mockImplementation((_url: string, opts?: RequestInit) => {
         capturedBody = JSON.parse(String(opts?.body || '{}'));
         return Promise.resolve({
@@ -315,7 +315,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
         address: '200 BGC Taguig City',
         expectedVersion: 3,
       });
-      expect(capturedBody.expectedVersion).toBe(3);
+      expect(capturedBody).toHaveProperty('expectedVersion', 3);
     });
   });
 

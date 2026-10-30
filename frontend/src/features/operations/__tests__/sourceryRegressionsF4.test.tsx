@@ -8,7 +8,7 @@ import { TaskDetailModal } from '../components/TaskDetailModal';
 import { PhaseKanbanBoard } from '../components/PhaseKanbanBoard';
 import { useSessionStore } from '@/lib/session';
 import { useBlockingModalStore } from '../components/BlockingActionModal';
-import type { WorkRequest, Task } from '../api/types';
+import type { WorkRequest, Task, CreateWorkRequestInput, CreateTaskInput, UpdateTaskInput } from '../api/types';
 
 function createTestHarness() {
   const queryClient = new QueryClient({
@@ -123,7 +123,7 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
     localStorage.setItem('erp_wr_draft_new', JSON.stringify({
       title: 'Checklist request', entity: 'ATA', assignedTo: 'user-lead-1', dueDate: '2026-12-31', tasks,
     }));
-    const writes: Array<{ method: string; body: any }> = [];
+    const writes: Array<{ method: string; body: CreateWorkRequestInput }> = [];
     vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const method = init?.method || 'GET';
@@ -150,11 +150,11 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
     expect(writes).toHaveLength(1);
     expect(writes[0]?.method).toBe('POST');
     const phases = writes[0]?.body.phases;
-    expect(phases.pre_processing.tasks[0].checklist).toEqual([
+    expect(phases?.pre_processing?.tasks?.[0]?.checklist).toEqual([
       { id: firstId, text: 'Collect', completed: false, category: 'subtask' },
       { id: secondId, text: 'Certificate', completed: false, category: 'document', periodYear: '2026', dependsOn: firstId },
     ]);
-    expect(phases.processing.tasks[0].checklist[0].text).toBe('Submit');
+    expect(phases?.processing?.tasks?.[0]?.checklist?.[0]?.text).toBe('Submit');
   });
 
   // ==========================================================================
@@ -170,8 +170,8 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
         tasks: [],
       };
 
-      const capturedPostBodies: any[] = [];
-      const capturedPutBodies: any[] = [];
+      const capturedPostBodies: CreateTaskInput[] = [];
+      const capturedPutBodies: UpdateTaskInput[] = [];
 
       vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
         const url = String(input);
@@ -283,8 +283,8 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
         tasks: [existingTaskInWr],
       };
 
-      const capturedPostBodies: any[] = [];
-      const capturedPutBodies: any[] = [];
+      const capturedPostBodies: CreateTaskInput[] = [];
+      const capturedPutBodies: UpdateTaskInput[] = [];
 
       vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
         const url = String(input);
@@ -364,8 +364,8 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
       });
 
       // Assert that the existing task's updateTask received the server-assigned UUID, not tmp-
-      expect(capturedPutBodies[0].predecessors).toContain('new-server-task-uuid-1');
-      expect(capturedPutBodies[0].predecessors.some((p: string) => p.startsWith('tmp-'))).toBe(false);
+      expect(capturedPutBodies[0]?.predecessors).toContain('new-server-task-uuid-1');
+      expect(capturedPutBodies[0]?.predecessors?.some((p: string) => p.startsWith('tmp-'))).toBe(false);
     });
   });
 
@@ -376,16 +376,16 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
     it('generates a valid RFC 4122 UUID (not cl- timestamp) when adding a checklist item', async () => {
       const { wrapper } = createTestHarness();
 
-      let capturedUpdateData: any = null;
+      const capturedUpdate = { data: null as UpdateTaskInput | null };
 
       vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
         const url = String(input);
         const method = init?.method || 'GET';
 
         if (url.includes('/operations/work-requests/wr-f4-test/tasks/task-f4-101') && method === 'PUT') {
-          capturedUpdateData = JSON.parse(String(init?.body));
+          capturedUpdate.data = JSON.parse(String(init?.body));
           return new Response(
-            JSON.stringify({ data: { ...baseTask, ...capturedUpdateData } }),
+            JSON.stringify({ data: { ...baseTask, ...capturedUpdate.data } }),
             { status: 200 }
           );
         }
@@ -425,20 +425,20 @@ describe('Parcel F4: Frontend State & ID Resolution (Sourcery Regressions)', () 
       fireEvent.click(addBtn);
 
       await waitFor(() => {
-        expect(capturedUpdateData).not.toBeNull();
+        expect(capturedUpdate.data).not.toBeNull();
       });
 
-      const checklistItems = capturedUpdateData.checklist;
+      const checklistItems = capturedUpdate.data?.checklist;
       expect(checklistItems).toBeDefined();
-      expect(checklistItems.length).toBe(1);
+      expect(checklistItems).toHaveLength(1);
 
-      const addedItem = checklistItems[0];
-      expect(addedItem.text).toBe('Verify BIR 2307 Withholding Tax Certificates');
+      const addedItem = checklistItems?.[0];
+      expect(addedItem?.text).toBe('Verify BIR 2307 Withholding Tax Certificates');
 
       // UUID verification
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      expect(addedItem.id).toMatch(uuidRegex);
-      expect(addedItem.id).not.toMatch(/^cl-/);
+      expect(addedItem?.id).toMatch(uuidRegex);
+      expect(addedItem?.id).not.toMatch(/^cl-/);
     });
   });
 

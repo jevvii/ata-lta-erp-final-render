@@ -509,7 +509,8 @@ describe('Challenger 2 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestEntity>(operationsKeys.workRequestDetail('wr-guard-3'));
-      expect(cached?.title).toBe('Live Update at Equal Version V3');
+      expect(cached?.title).toBe('Initial Title V3');
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-guard-3'))?.isInvalidated).toBe(true);
     });
   });
 });

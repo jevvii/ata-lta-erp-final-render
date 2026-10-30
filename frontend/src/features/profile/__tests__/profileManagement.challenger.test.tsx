@@ -146,7 +146,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
 
       let currentMockProfile = { ...mockUserProfile };
 
-      const apiRequestSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: any) => {
+      const apiRequestSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: api.RequestOptions) => {
         if (path === '/v1/me' && (!options || options.method === 'GET')) {
           return { data: currentMockProfile };
         }
@@ -161,7 +161,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
           };
         }
         if (path === '/v1/me' && options?.method === 'PATCH') {
-          const body = JSON.parse(options.body);
+          const body = JSON.parse(String(options.body));
           currentMockProfile = {
             ...currentMockProfile,
             ...body,
@@ -173,10 +173,10 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
         return { data: {} };
       });
 
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any, init?: any) => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
         if (url === signedUrl) {
           expect(init?.method).toBe('PUT');
-          expect(init?.headers?.['Content-Type']).toBe('image/png');
+          expect(new Headers(init?.headers).get('Content-Type')).toBe('image/png');
           return new Response(null, { status: 200 });
         }
         return new Response(JSON.stringify({}), { status: 200 });
@@ -235,7 +235,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
     });
 
     it('gracefully handles upload failure and displays friendly inline error', async () => {
-      vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: any) => {
+      vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: api.RequestOptions) => {
         if (path === '/v1/me' && (!options || options.method === 'GET')) {
           return { data: mockUserProfile };
         }
@@ -383,7 +383,7 @@ describe('Profile Management Challenger Suite (SPEC-PROFILE-MIGRATION-001)', () 
     });
 
     it('submits valid password change via PATCH /v1/me/password', async () => {
-      const apiRequestSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: any) => {
+      const apiRequestSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string, options?: api.RequestOptions) => {
         if (path === '/v1/me') return { data: mockUserProfile };
         if (path === '/v1/me/password' && options?.method === 'PATCH') {
           return null;

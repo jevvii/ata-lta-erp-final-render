@@ -281,8 +281,8 @@ export function RetainerGenerateModal({
                 {templates.map((tpl) => {
                   const entityCode =
                     (tpl.entity && tpl.entity.length <= 4 ? tpl.entity : undefined) ||
-                    ((tpl as any).entities?.code && (tpl as any).entities.code.length <= 4
-                      ? (tpl as any).entities.code
+                    (tpl.entities?.code && tpl.entities.code.length <= 4
+                      ? tpl.entities.code
                       : undefined) ||
                     resolveEntityCodeFromUUID(tpl.entity_id);
                   const metaParts: string[] = [];

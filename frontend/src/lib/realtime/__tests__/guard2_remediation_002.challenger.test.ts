@@ -141,11 +141,12 @@ describe('Challenger 1 Empirical Verification: SPEC-REALTIME-UAT-REMEDIATION-002
       // "In Guard 2: Discard duplicate INSERTs when incomingVersion <= localCachedVersion,
       //  but for UPDATE only discard when incomingVersion < localCachedVersion (strictly older)."
       // Therefore, for UPDATE with incomingVersion === localCachedVersion, it MUST be processed (true),
-      // and local cache must reflect the updated record.
+      // and protected data must be invalidated for an authorized backend refetch.
       expect(processed).toBe(true);
 
       const cached = queryClient.getQueryData<TestWorkRequest>(detailKey);
-      expect(cached?.title).toBe('Modified Title at V5');
+      expect(cached?.title).toBe('Original Title at V5');
+      expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     });
 
     it('Guard 2 strictly discards UPDATE event when incomingVersion < localCachedVersion (strictly older)', () => {

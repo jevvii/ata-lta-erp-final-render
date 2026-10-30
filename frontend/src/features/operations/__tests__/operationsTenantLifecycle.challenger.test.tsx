@@ -313,10 +313,11 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
         });
       });
 
-      // Accepted by Guard 1 and prepended into cache
+      // Accepted events request backend authorization rather than injecting raw CDC rows.
       const requestsCache = queryClient.getQueryData<OperationsRequest[]>(operationsKeys.requests());
-      expect(requestsCache).toHaveLength(2);
-      expect(requestsCache?.[0]?.id).toBe('req-ata-valid-new');
+      expect(requestsCache).toHaveLength(1);
+      expect(requestsCache?.[0]?.id).toBe('req-ata-1');
+      expect(queryClient.getQueryState(operationsKeys.requests())?.isInvalidated).toBe(true);
 
       // Co-invalidations triggered for ATA queries
       expect(invalidateSpy).toHaveBeenCalledWith({
@@ -331,6 +332,7 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
     });
 
     it('1.4 enforces RFC 4122 case-insensitive UUID matching: rejects uppercase LTA UUID, accepts uppercase ATA UUID', async () => {
+      const eventInvalidationSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const mockClient = supabase as unknown as MockSupabaseClient;
 
       queryClient.setQueryData<OperationsRequest[]>(operationsKeys.requests(), [initialAtaRequest]);
@@ -374,7 +376,9 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
       });
 
       requestsCache = queryClient.getQueryData<OperationsRequest[]>(operationsKeys.requests());
-      expect(requestsCache?.find((r) => r.id === 'req-ata-upper-uuid')).toBeDefined();
+      expect(requestsCache?.find((r) => r.id === 'req-ata-upper-uuid')).toBeUndefined();
+      expect(eventInvalidationSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.requestDetail('req-ata-upper-uuid') });
+      expect(queryClient.getQueryState(operationsKeys.requests())?.isInvalidated).toBe(true);
     });
 
     it('1.5 strictly discards payloads with explicit null entity identifiers or unassigned session', async () => {
@@ -418,6 +422,7 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
     });
 
     it('1.6 accepts both ATA and LTA events when activeEntity is ALL', async () => {
+      const eventInvalidationSpy = vi.spyOn(queryClient, 'invalidateQueries');
       useSessionStore.setState({ activeEntity: 'ALL' });
       const mockClient = supabase as unknown as MockSupabaseClient;
 
@@ -448,9 +453,10 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
       });
 
       const requestsCache = queryClient.getQueryData<OperationsRequest[]>(operationsKeys.requests());
-      expect(requestsCache).toHaveLength(2);
-      expect(requestsCache?.find((r) => r.id === 'req-all-ata')).toBeDefined();
-      expect(requestsCache?.find((r) => r.id === 'req-all-lta')).toBeDefined();
+      expect(requestsCache).toHaveLength(0);
+      expect(eventInvalidationSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.requestDetail('req-all-ata') });
+      expect(eventInvalidationSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.requestDetail('req-all-lta') });
+      expect(queryClient.getQueryState(operationsKeys.requests())?.isInvalidated).toBe(true);
     });
 
     it('1.7 strictly discards cross-tenant UPDATE and soft-DELETE CDC events for LTA while activeEntity is ATA', async () => {
@@ -501,6 +507,7 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
     });
 
     it('1.8 accepts padded entity codes and UUIDs with surrounding whitespace (RFC 4122 compliance)', async () => {
+      const eventInvalidationSpy = vi.spyOn(queryClient, 'invalidateQueries');
       const mockClient = supabase as unknown as MockSupabaseClient;
 
       queryClient.setQueryData<OperationsRequest[]>(operationsKeys.requests(), [initialAtaRequest]);
@@ -524,7 +531,9 @@ describe('M4 Challenger 2: Multi-Tenant Scoping & Teardown Lifecycle', () => {
       });
 
       const requestsCache = queryClient.getQueryData<OperationsRequest[]>(operationsKeys.requests());
-      expect(requestsCache?.find((r) => r.id === 'req-ata-padded')).toBeDefined();
+      expect(requestsCache?.find((r) => r.id === 'req-ata-padded')).toBeUndefined();
+      expect(eventInvalidationSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.requestDetail('req-ata-padded') });
+      expect(queryClient.getQueryState(operationsKeys.requests())?.isInvalidated).toBe(true);
     });
   });
 

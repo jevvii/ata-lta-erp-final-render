@@ -122,7 +122,7 @@ describe('Adversarial Challenge: CDC Query Scoping & Isolation (Mission 1)', () 
   // 1.2 Multi-WR Query Isolation Under handleRealtimePayload
   // =========================================================================
   describe('1.2 Multi-WR Cache Isolation Under handleRealtimePayload', () => {
-    it('inserts task strictly into wr-A query cache without polluting wr-B, wr-C, or wr-D', () => {
+    it('invalidates task caches for authorized refetch without injecting CDC rows into any work request', () => {
       const wrAKey = operationsKeys.tasks('wr-A');
       const wrBKey = operationsKeys.tasks('wr-B');
       const wrCKey = operationsKeys.tasks('wr-C');
@@ -173,16 +173,17 @@ describe('Adversarial Challenge: CDC Query Scoping & Isolation (Mission 1)', () 
 
       expect(handled).toBe(true);
 
-      // Verify wr-A queries received the new task
+      // Protected operations caches wait for a backend-authorized refetch.
       const wrAData = queryClient.getQueryData<Array<{ id: string }>>(wrAKey);
-      expect(wrAData).toHaveLength(2);
-      expect(wrAData?.[0]?.id).toBe('task-a2-new');
-      expect(wrAData?.[1]?.id).toBe('task-a1');
+      expect(wrAData).toHaveLength(1);
+      expect(wrAData?.[0]?.id).toBe('task-a1');
+      expect(queryClient.getQueryState(wrAKey)?.isInvalidated).toBe(true);
 
       const wrAPagedData = queryClient.getQueryData<{ data: Array<{ id: string }>; meta: { total: number } }>(wrAListKey);
-      expect(wrAPagedData?.data).toHaveLength(2);
-      expect(wrAPagedData?.data[0]?.id).toBe('task-a2-new');
-      expect(wrAPagedData?.meta.total).toBe(2);
+      expect(wrAPagedData?.data).toHaveLength(1);
+      expect(wrAPagedData?.data[0]?.id).toBe('task-a1');
+      expect(wrAPagedData?.meta.total).toBe(1);
+      expect(queryClient.getQueryState(wrAListKey)?.isInvalidated).toBe(true);
 
       // Verify wr-B queries were NOT touched
       const wrBData = queryClient.getQueryData<Array<{ id: string }>>(wrBKey);
@@ -229,10 +230,11 @@ describe('Adversarial Challenge: CDC Query Scoping & Isolation (Mission 1)', () 
         }
       );
 
-      // wr-beta MUST have received the task
+      // The target query is stale, but raw CDC rows must never bypass backend authorization.
       const bData = queryClient.getQueryData<Array<{ id: string }>>(wrBKey);
-      expect(bData).toHaveLength(2);
-      expect(bData?.[0]?.id).toBe('t-camel-new');
+      expect(bData).toHaveLength(1);
+      expect(bData?.[0]?.id).toBe('t-2');
+      expect(queryClient.getQueryState(wrBKey)?.isInvalidated).toBe(true);
 
       // wr-alpha MUST NOT have received the task
       const aData = queryClient.getQueryData<Array<{ id: string }>>(wrAKey);
@@ -957,7 +959,8 @@ describe('Adversarial Stress: Mounted Hook & Interleaved Stream (Mission 1-4)', 
     vi.restoreAllMocks();
   });
 
-  it('verifies live mounted hook with MockRealtimeChannel performs strict scoped insertion', async () => {
+  it('verifies a live mounted hook invalidates target queries without injecting raw task rows', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const wrAKey = operationsKeys.tasks('wr-live-A');
     const wrBKey = operationsKeys.tasks('wr-live-B');
 
@@ -993,8 +996,10 @@ describe('Adversarial Stress: Mounted Hook & Interleaved Stream (Mission 1-4)', 
 
     // Check wr-live-A
     const wrA = queryClient.getQueryData<Array<{ id: string }>>(wrAKey);
-    expect(wrA).toHaveLength(2);
-    expect(wrA?.[0]?.id).toBe('t-a-live-new');
+    expect(wrA).toHaveLength(1);
+    expect(wrA?.[0]?.id).toBe('t-a-init');
+    expect(queryClient.getQueryState(wrAKey)?.isInvalidated).toBe(true);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.taskDetail('wr-live-A', 't-a-live-new') });
 
     // Check wr-live-B is completely untouched
     const wrB = queryClient.getQueryData<Array<{ id: string }>>(wrBKey);
@@ -1035,12 +1040,13 @@ describe('Adversarial Stress: Mounted Hook & Interleaved Stream (Mission 1-4)', 
       }
     }
 
-    // Assert each work request has exactly 11 tasks and ONLY tasks belonging to that work request
+    // Bursts must mark authorized data stale without injecting any unverified CDC rows.
     for (const wrId of workRequestIds) {
       const tasks = queryClient.getQueryData<Array<{ id: string; workRequestId?: string; work_request_id?: string }>>(
         operationsKeys.tasks(wrId)
       );
-      expect(tasks).toHaveLength(11);
+      expect(tasks).toHaveLength(1);
+      expect(queryClient.getQueryState(operationsKeys.tasks(wrId))?.isInvalidated).toBe(true);
 
       // Verify no task from another WR contaminated this list
       for (const task of tasks!) {

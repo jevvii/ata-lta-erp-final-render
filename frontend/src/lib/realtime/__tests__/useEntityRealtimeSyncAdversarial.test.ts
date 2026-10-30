@@ -15,6 +15,25 @@ import {
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { billingKeys } from '@/features/billing/api/queryKeys';
 
+interface CacheRow {
+  [field: string]: unknown;
+  id: string;
+  title: string;
+  status: string;
+  version: number;
+  phases: { phase_intake: { tasks: CacheRow[] }; phase_execution: { tasks: CacheRow[] } };
+}
+interface CachePage {
+  data: CacheRow[];
+  meta: { total: number };
+  customField?: string;
+}
+function readCached<T>(client: QueryClient, key: readonly unknown[]): T {
+  const value = client.getQueryData<T>(key);
+  expect(value).toBeDefined();
+  return value!;
+}
+
 describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () => {
   let queryClient: QueryClient;
 
@@ -59,7 +78,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
   // Dimension 1: Multi-Query List Caches & Heterogeneous Cache Shapes
   // =========================================================================
   describe('Dimension 1: Multi-Query List Caches & Heterogeneous Cache Shapes', () => {
-    it('correctly updates matching queries and preserves unrelated queries under listRootKey on UPDATE', () => {
+    it('invalidates protected work request queries without applying unverified CDC fields', () => {
       const page1Key = ['operations', 'workRequests', 'list', { page: 1 }];
       const page2Key = ['operations', 'workRequests', 'list', { page: 2 }];
       const rawListKey = ['operations', 'workRequests', 'recent'];
@@ -120,33 +139,36 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const result = handleRealtimePayload(queryClient, { table: 'work_requests' }, updatePayload);
       expect(result).toBe(true);
 
-      // Verify Page 1: wr-1 updated, wr-2 untouched, meta preserved
-      const page1 = queryClient.getQueryData<any>(page1Key);
-      expect(page1.data[0].title).toBe('WR 1 Mutated');
-      expect(page1.data[0].status).toBe('APPROVED');
-      expect(page1.data[0].version).toBe(2);
-      expect(page1.data[1].title).toBe('WR 2 Initial');
+      // Protected rows retain their authorized values until refetch; metadata is preserved.
+      const page1 = readCached<CachePage>(queryClient, page1Key);
+      expect(page1.data[0]!.title).toBe('WR 1 Initial');
+      expect(page1.data[0]!.status).toBe('DRAFT');
+      expect(page1.data[0]!.version).toBe(1);
+      expect(queryClient.getQueryState(page1Key)?.isInvalidated).toBe(true);
+      expect(page1.data[1]!.title).toBe('WR 2 Initial');
       expect(page1.meta.total).toBe(2);
 
       // Verify Page 2: completely untouched
-      const page2 = queryClient.getQueryData<any>(page2Key);
+      const page2 = readCached<CachePage>(queryClient, page2Key);
       expect(page2.data).toHaveLength(1);
-      expect(page2.data[0].id).toBe('wr-3');
+      expect(page2.data[0]!.id).toBe('wr-3');
 
-      // Verify Raw array: wr-1 updated, wr-9 untouched
-      const rawList = queryClient.getQueryData<any[]>(rawListKey);
-      expect(rawList?.[0].title).toBe('WR 1 Mutated');
-      expect(rawList?.[1].title).toBe('WR 9 Initial');
+      // Raw arrays also retain authorized data rather than applying the CDC payload.
+      const rawList = readCached<CacheRow[]>(queryClient, rawListKey);
+      expect(rawList?.[0]?.title).toBe('WR 1 Initial');
+      expect(queryClient.getQueryState(rawListKey)?.isInvalidated).toBe(true);
+      expect(rawList?.[1]?.title).toBe('WR 9 Initial');
 
       // Verify Unrelated list: untouched
-      const unrelated = queryClient.getQueryData<any>(unrelatedListKey);
-      expect(unrelated.data[0].id).toBe('wr-99');
+      const unrelated = readCached<CachePage>(queryClient, unrelatedListKey);
+      expect(unrelated.data[0]!.id).toBe('wr-99');
 
-      // Verify Detail cache updated
-      const detail = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-1'));
-      expect(detail.title).toBe('WR 1 Mutated');
-      expect(detail.status).toBe('APPROVED');
-      expect(detail.version).toBe(2);
+      // Detail queries must be stale without accepting unverified fields.
+      const detail = readCached<CacheRow>(queryClient, operationsKeys.workRequestDetail('wr-1'));
+      expect(detail.title).toBe('WR 1 Initial');
+      expect(detail.status).toBe('DRAFT');
+      expect(detail.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-1'))?.isInvalidated).toBe(true);
     });
 
     it('prepends on INSERT across multiple list formats and does not create duplicate items', () => {
@@ -170,21 +192,21 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const res1 = handleRealtimePayload(queryClient, { table: 'invoices' }, insertPayload);
       expect(res1).toBe(true);
 
-      const pageAfterInsert = queryClient.getQueryData<any>(pageKey);
+      const pageAfterInsert = readCached<CachePage>(queryClient, pageKey);
       expect(pageAfterInsert.data).toHaveLength(2);
-      expect(pageAfterInsert.data[0].id).toBe('inv-new');
+      expect(pageAfterInsert.data[0]!.id).toBe('inv-new');
       expect(pageAfterInsert.meta.total).toBe(2);
 
-      const rawAfterInsert = queryClient.getQueryData<any[]>(rawKey);
+      const rawAfterInsert = readCached<CacheRow[]>(queryClient, rawKey);
       expect(rawAfterInsert).toHaveLength(2);
-      expect(rawAfterInsert?.[0].id).toBe('inv-new');
+      expect(rawAfterInsert?.[0]?.id).toBe('inv-new');
 
       // 1. Fire duplicate INSERT with same version (1) -> Guard 2 drops it
       const res2 = handleRealtimePayload(queryClient, { table: 'invoices' }, insertPayload);
       expect(res2).toBe(false); // Discarded by Guard 2 (equal version)
 
       // Verify list remains length 2 (no duplicate items)
-      const pageAfterDuplicate = queryClient.getQueryData<any>(pageKey);
+      const pageAfterDuplicate = readCached<CachePage>(queryClient, pageKey);
       expect(pageAfterDuplicate.data).toHaveLength(2);
 
       // 2. Fire duplicate INSERT without version (bypassing Guard 2) -> list reconciliation prevents duplicate
@@ -196,9 +218,9 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       expect(res3).toBe(true);
 
       // Verify list STILL remains length 2 (deduplication check prevented duplicate entry)
-      const pageAfterUnversionedDuplicate = queryClient.getQueryData<any>(pageKey);
+      const pageAfterUnversionedDuplicate = readCached<CachePage>(queryClient, pageKey);
       expect(pageAfterUnversionedDuplicate.data).toHaveLength(2);
-      const rawAfterUnversionedDuplicate = queryClient.getQueryData<any[]>(rawKey);
+      const rawAfterUnversionedDuplicate = readCached<CacheRow[]>(queryClient, rawKey);
       expect(rawAfterUnversionedDuplicate).toHaveLength(2);
     });
 
@@ -224,13 +246,13 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const processed = handleRealtimePayload(queryClient, { table: 'disbursements' }, deletePayload);
       expect(processed).toBe(true);
 
-      const pageAfterDelete = queryClient.getQueryData<any>(pageKey);
+      const pageAfterDelete = readCached<CachePage>(queryClient, pageKey);
       expect(pageAfterDelete.data).toHaveLength(0);
       expect(pageAfterDelete.meta.total).toBe(0);
 
-      const rawAfterDelete = queryClient.getQueryData<any[]>(rawKey);
+      const rawAfterDelete = readCached<CacheRow[]>(queryClient, rawKey);
       expect(rawAfterDelete).toHaveLength(1);
-      expect(rawAfterDelete?.[0].id).toBe('disb-other');
+      expect(rawAfterDelete?.[0]?.id).toBe('disb-other');
     });
   });
 
@@ -272,20 +294,22 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       expect(processed).toBe(true);
 
       // Detail cache must retain title, description, priority, and estimatedHours!
-      const updatedDetail = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-partial-1'));
+      const updatedDetail = readCached<CacheRow>(queryClient, operationsKeys.workRequestDetail('wr-partial-1'));
       expect(updatedDetail.id).toBe('wr-partial-1');
       expect(updatedDetail.title).toBe('Full Request Title');
       expect(updatedDetail.description).toBe('Detailed description of work');
       expect(updatedDetail.priority).toBe('HIGH');
       expect(updatedDetail.estimatedHours).toBe(40);
-      expect(updatedDetail.status).toBe('IN_PROGRESS');
-      expect(updatedDetail.version).toBe(2);
+      expect(updatedDetail.status).toBeUndefined();
+      expect(updatedDetail.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-partial-1'))?.isInvalidated).toBe(true);
 
-      // List cache must also retain all merged properties
-      const updatedList = queryClient.getQueryData<any>(operationsKeys.workRequestsList('ATA'));
-      expect(updatedList.data[0].title).toBe('Full Request Title');
-      expect(updatedList.data[0].status).toBe('IN_PROGRESS');
-      expect(updatedList.data[0].version).toBe(2);
+      // List cache retains all authorized fields and is marked stale.
+      const updatedList = readCached<CachePage>(queryClient, operationsKeys.workRequestsList('ATA'));
+      expect(updatedList.data[0]!.title).toBe('Full Request Title');
+      expect(updatedList.data[0]!.status).toBeUndefined();
+      expect(updatedList.data[0]!.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestsList('ATA'))?.isInvalidated).toBe(true);
     });
 
     it('does not corrupt list cache when UPDATE or DELETE arrives for non-existent item', () => {
@@ -307,9 +331,9 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const resUpdate = handleRealtimePayload(queryClient, { table: 'work_requests' }, nonExistentUpdate);
       expect(resUpdate).toBe(true);
 
-      const listAfterUpdate = queryClient.getQueryData<any>(operationsKeys.workRequestsList('ATA'));
+      const listAfterUpdate = readCached<CachePage>(queryClient, operationsKeys.workRequestsList('ATA'));
       expect(listAfterUpdate.data).toHaveLength(2);
-      expect(listAfterUpdate.data.some((i: any) => i.id === 'wr-ghost-99')).toBe(false);
+      expect(listAfterUpdate.data.some((i: CacheRow) => i.id === 'wr-ghost-99')).toBe(false);
 
       // DELETE for item not in list
       const nonExistentDelete = {
@@ -320,7 +344,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const resDelete = handleRealtimePayload(queryClient, { table: 'work_requests' }, nonExistentDelete);
       expect(resDelete).toBe(true);
 
-      const listAfterDelete = queryClient.getQueryData<any>(operationsKeys.workRequestsList('ATA'));
+      const listAfterDelete = readCached<CachePage>(queryClient, operationsKeys.workRequestsList('ATA'));
       expect(listAfterDelete.data).toHaveLength(2);
       expect(listAfterDelete.meta.total).toBe(2); // total should NOT be decremented!
     });
@@ -359,15 +383,17 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       }).not.toThrow();
 
       // Check sparse raw
-      const raw = queryClient.getQueryData<any[]>(['operations', 'workRequests', 'sparse-raw']);
+      const raw = readCached<CacheRow[]>(queryClient, ['operations', 'workRequests', 'sparse-raw']);
       expect(raw?.[0]).toBeNull();
       expect(raw?.[1]).toBeUndefined();
-      expect(raw?.[2].title).toBe('Survivor Updated');
+      expect(raw?.[2]?.title).toBe('Survivor');
+      expect(queryClient.getQueryState(['operations', 'workRequests', 'sparse-raw'])?.isInvalidated).toBe(true);
 
       // Check sparse wrapped
-      const wrapped = queryClient.getQueryData<any>(['operations', 'workRequests', 'sparse-wrapped']);
+      const wrapped = readCached<CachePage>(queryClient, ['operations', 'workRequests', 'sparse-wrapped']);
       expect(wrapped.data[0]).toBeNull();
-      expect(wrapped.data[2].title).toBe('Survivor Updated');
+      expect(wrapped.data[2]!.title).toBe('Survivor');
+      expect(queryClient.getQueryState(['operations', 'workRequests', 'sparse-wrapped'])?.isInvalidated).toBe(true);
 
       // Check primitive unaffected
       expect(queryClient.getQueryData(['operations', 'workRequests', 'count-query'])).toBe(42);
@@ -400,7 +426,8 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
   // Dimension 3: Loop Prevention Registry, TTL & Tab Origin Tracking
   // =========================================================================
   describe('Dimension 3: Loop Prevention Registry, TTL & Tab Origin', () => {
-    it('suppresses local echo within TTL window, but allows subsequent external updates', () => {
+    it('suppresses local echo within TTL window, but refetches subsequent external updates', () => {
+      const invalidationSpy = vi.spyOn(queryClient, 'invalidateQueries');
       // 1. Local mutation dispatched by current tab (pinned to version 2)
       trackLocalMutation('work_requests', 'wr-echo-test', 2);
 
@@ -414,6 +441,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       };
       const processedEcho = handleRealtimePayload(queryClient, { table: 'work_requests' }, localEchoPayload);
       expect(processedEcho).toBe(false);
+      expect(invalidationSpy).not.toHaveBeenCalled();
 
       // 2. An external update from peer tab arrives with version 3 (within same TTL window)
       expect(isLocalMutation('work_requests', 'wr-echo-test', 3)).toBe(false);
@@ -426,10 +454,9 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const processedExternal = handleRealtimePayload(queryClient, { table: 'work_requests' }, externalPayload);
       expect(processedExternal).toBe(true);
 
-      // Verify cache updated with version 3
-      const detail = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-echo-test'));
-      expect(detail.title).toBe('External Update');
-      expect(detail.version).toBe(3);
+      // External events request backend authorization; they cannot create a detail cache directly.
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-echo-test'))).toBeUndefined();
+      expect(invalidationSpy).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-echo-test') });
     });
 
     it('cleans up local mutation registry entries after 10-second TTL expires', () => {
@@ -519,7 +546,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const channelSpy = vi.spyOn(supabase, 'channel');
 
       const { rerender } = renderHook(
-        (props: { table: any }) => useEntityRealtimeSync(props),
+        (props: { table: Parameters<typeof useEntityRealtimeSync>[0]['table'] }) => useEntityRealtimeSync(props),
         {
           initialProps: { table: 'work_requests' },
           wrapper: createWrapper(),
@@ -556,7 +583,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
   // Dimension 5: Work Request Phase Embedded Tasks Reconciliation
   // =========================================================================
   describe('Dimension 5: Work Request Phases Embedded Tasks Patching', () => {
-    it('patches task embedded deep inside work request phases container on UPDATE', () => {
+    it('invalidates embedded task queries for authorized refetch on UPDATE', () => {
       const wrWithPhases = {
         id: 'wr-with-tasks',
         entity: 'ATA',
@@ -598,17 +625,18 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const processed = handleRealtimePayload(queryClient, { table: 'tasks' }, taskUpdatePayload);
       expect(processed).toBe(true);
 
-      const updatedList = queryClient.getQueryData<any>(operationsKeys.workRequestsList('ATA'));
-      const wr = updatedList.data[0];
+      const updatedList = readCached<CachePage>(queryClient, operationsKeys.workRequestsList('ATA'));
+      const wr = updatedList.data[0]!;
 
-      // Task 11 updated in phase_intake
-      expect(wr.phases.phase_intake.tasks[1].title).toBe('Task 11 Completed');
-      expect(wr.phases.phase_intake.tasks[1].status).toBe('COMPLETED');
-      expect(wr.phases.phase_intake.tasks[1].version).toBe(2);
+      // Embedded task data must wait for an authorized refetch.
+      expect(wr.phases.phase_intake.tasks[1]!.title).toBe('Task 11 Initial');
+      expect(wr.phases.phase_intake.tasks[1]!.status).toBe('TODO');
+      expect(wr.phases.phase_intake.tasks[1]!.version).toBe(1);
+      expect(queryClient.getQueryState(operationsKeys.workRequestsList('ATA'))?.isInvalidated).toBe(true);
 
       // Task 10 and Task 20 unchanged
-      expect(wr.phases.phase_intake.tasks[0].title).toBe('Task 10 Initial');
-      expect(wr.phases.phase_execution.tasks[0].title).toBe('Task 20 Initial');
+      expect(wr.phases.phase_intake.tasks[0]!.title).toBe('Task 10 Initial');
+      expect(wr.phases.phase_execution.tasks[0]!.title).toBe('Task 20 Initial');
     });
 
     it('removes task embedded inside work request phases container on DELETE', () => {
@@ -638,10 +666,10 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const processed = handleRealtimePayload(queryClient, { table: 'tasks' }, taskDeletePayload);
       expect(processed).toBe(true);
 
-      const updatedList = queryClient.getQueryData<any>(operationsKeys.workRequestsList('ATA'));
-      const tasksInIntake = updatedList.data[0].phases.phase_intake.tasks;
+      const updatedList = readCached<CachePage>(queryClient, operationsKeys.workRequestsList('ATA'));
+      const tasksInIntake = updatedList.data[0]!.phases.phase_intake.tasks;
       expect(tasksInIntake).toHaveLength(1);
-      expect(tasksInIntake[0].id).toBe('task-keep');
+      expect(tasksInIntake[0]!.id).toBe('task-keep');
     });
   });
 
@@ -687,7 +715,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
         });
       });
 
-      const updatedInvoice = queryClient.getQueryData<any>(billingKeys.invoiceDetail('inv-live-1'));
+      const updatedInvoice = readCached<CacheRow>(queryClient, billingKeys.invoiceDetail('inv-live-1'));
       expect(updatedInvoice.status).toBe('PAID');
       expect(updatedInvoice.version).toBe(2);
     });
@@ -697,7 +725,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
   // Dimension 7: Out-of-Order Packet Arrival & Race Defense
   // =========================================================================
   describe('Dimension 7: Out-of-Order Packet Arrival & Race Defense', () => {
-    it('rejects an out-of-order older packet that arrives after a newer packet has been processed', () => {
+    it('rejects an older packet after an authorized refetch has supplied the newer version', async () => {
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-race-1'), {
         id: 'wr-race-1',
         title: 'Initial V1',
@@ -714,7 +742,12 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       const resV3 = handleRealtimePayload(queryClient, { table: 'work_requests' }, packetV3);
       expect(resV3).toBe(true);
 
-      const detailV3 = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-race-1'));
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-race-1'))?.isInvalidated).toBe(true);
+      expect(readCached<CacheRow>(queryClient, operationsKeys.workRequestDetail('wr-race-1')).version).toBe(1);
+      const detailV3 = await queryClient.fetchQuery({
+        queryKey: operationsKeys.workRequestDetail('wr-race-1'),
+        queryFn: async () => packetV3.new,
+      });
       expect(detailV3.title).toBe('Newer V3');
       expect(detailV3.version).toBe(3);
 
@@ -728,7 +761,7 @@ describe('Adversarial & Stress Tests: CDC Realtime Hook & Loop Prevention', () =
       expect(resV2).toBe(false); // MUST be dropped by Guard 2!
 
       // Cache remains strictly at V3
-      const detailFinal = queryClient.getQueryData<any>(operationsKeys.workRequestDetail('wr-race-1'));
+      const detailFinal = readCached<CacheRow>(queryClient, operationsKeys.workRequestDetail('wr-race-1'));
       expect(detailFinal.title).toBe('Newer V3');
       expect(detailFinal.version).toBe(3);
     });

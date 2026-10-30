@@ -53,6 +53,7 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
       activeEntity: 'ATA',
     });
     vi.restoreAllMocks();
+    vi.spyOn(queryClient, 'invalidateQueries');
   });
 
   afterEach(async () => {
@@ -68,7 +69,7 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
   // Harness 1: Rapid Out-of-Order Version Events & Stale Rejection Oracle
   // =========================================================================
   describe('Harness 1: Out-of-Order Version Events & Stale Rejection Oracle', () => {
-    it('properly drops inverted version sequence (V3 arriving before V2)', () => {
+    it('drops delayed versions after the newer version has been refetched through the backend', async () => {
       // Seed detail cache with version 1
       queryClient.setQueryData(operationsKeys.workRequestDetail('wr-inv-1'), {
         id: 'wr-inv-1',
@@ -85,6 +86,8 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
       };
       const processedV3 = handleRealtimePayload(queryClient, { table: 'work_requests' }, v3Payload);
       expect(processedV3).toBe(true);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-inv-1'))?.isInvalidated).toBe(true);
+      await queryClient.fetchQuery({ queryKey: operationsKeys.workRequestDetail('wr-inv-1'), queryFn: async () => v3Payload.new });
 
       const cachedAfterV3 = queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-inv-1'));
       expect(cachedAfterV3?.version).toBe(3);
@@ -112,13 +115,15 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
       };
       const processedV4 = handleRealtimePayload(queryClient, { table: 'work_requests' }, v4Payload);
       expect(processedV4).toBe(true);
+      expect(queryClient.getQueryState(operationsKeys.workRequestDetail('wr-inv-1'))?.isInvalidated).toBe(true);
+      await queryClient.fetchQuery({ queryKey: operationsKeys.workRequestDetail('wr-inv-1'), queryFn: async () => v4Payload.new });
 
       const cachedAfterV4 = queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-inv-1'));
       expect(cachedAfterV4?.version).toBe(4);
       expect(cachedAfterV4?.title).toBe('Latest V4');
     });
 
-    it('stress oracle: evaluates 25 randomized out-of-order version updates and guarantees monotonic cache progression', () => {
+    it('stress oracle: guarantees monotonic versions across authorized refetches and delayed events', async () => {
       const entityId = 'wr-oracle-test';
 
       // Seed initial record at version 0
@@ -151,6 +156,10 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
         };
 
         const result = handleRealtimePayload(queryClient, { table: 'work_requests' }, payload);
+        if (result) {
+          expect(queryClient.getQueryState(operationsKeys.workRequestDetail(entityId))?.isInvalidated).toBe(true);
+          await queryClient.fetchQuery({ queryKey: operationsKeys.workRequestDetail(entityId), queryFn: async () => payload.new });
+        }
 
         if (ver > runningMaxVersion) {
           // Monotonic invariant: newer version MUST be accepted
@@ -490,7 +499,8 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
 
       // Work request detail query updated
       const wrCached = queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-multiplex-1'));
-      expect(wrCached?.title).toBe('WR Event');
+      expect(wrCached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-multiplex-1') });
 
       act(() => {
         invChannel.emit('postgres_changes', {
@@ -549,7 +559,8 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
       });
 
       const cached = queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-isolated-ch'));
-      expect(cached?.title).toBe('Channel B Still Alive');
+      expect(cached).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-isolated-ch') });
 
       hookB.unmount();
     });
@@ -576,7 +587,8 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
           new: { id: 'wr-shared-1', entity: 'ATA', title: 'Both Mounted', version: 1 },
         });
       });
-      expect(queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-shared-1'))?.title).toBe('Both Mounted');
+      expect(queryClient.getQueryData(operationsKeys.workRequestDetail('wr-shared-1'))).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-shared-1') });
 
       // Unmount Component A
       hookA.unmount();
@@ -594,7 +606,8 @@ describe('Challenger Stress Harness: useEntityRealtimeSync & Supabase Realtime',
 
       // Remediated: Hook B continues to receive events because activeChannelRegistry ref-counts subscribers
       const cachedAfterAUnmount = queryClient.getQueryData<MockEntity>(operationsKeys.workRequestDetail('wr-shared-2'));
-      expect(cachedAfterAUnmount?.title).toBe('After Hook A Unmount');
+      expect(cachedAfterAUnmount).toBeUndefined();
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: operationsKeys.workRequestDetail('wr-shared-2') });
 
       hookB.unmount();
     });
