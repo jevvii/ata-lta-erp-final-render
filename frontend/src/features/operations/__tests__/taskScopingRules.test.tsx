@@ -304,8 +304,8 @@ describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
     };
     expect(canRequestInvoice(userDocAndOps, mockTask, mockWr, [mockTask])).toBe(false);
 
-    // Assigned staff without Documentation CAN request invoice
-    expect(canRequestInvoice(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true);
+    // Task-level invoice requests are discontinued entirely for all users
+    expect(canRequestInvoice(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(false);
   });
 
   it('enforces transmittal permissions (Admin and assigned can link; Doc requires task assignee, no WR fallback)', () => {
@@ -323,10 +323,10 @@ describe('Task Scoping Utility Unit Tests (taskScope.ts)', () => {
     };
     expect(canLinkTransmittal(userDocAssigned, mockTask, mockWr, [mockTask])).toBe(true);
 
-    // Request from documentation
+    // Request from documentation (discontinued entirely)
     expect(canRequestTransmittal(userDocTeam, mockTask, mockWr, [mockTask])).toBe(false); // Doc links directly
     expect(canRequestTransmittal(userAdmin, mockTask, mockWr, [mockTask])).toBe(false); // Admin links directly
-    expect(canRequestTransmittal(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(true); // Assigned staff can request transmittal
+    expect(canRequestTransmittal(userAssignedStaff, mockTask, mockWr, [mockTask])).toBe(false); // Task transmittal requests discontinued entirely
   });
 
   it('enforces disbursement permissions (Admin or assigned employee with permission)', () => {
@@ -549,6 +549,8 @@ describe('TaskDetailModal UI Scoping Integration', () => {
     expect(screen.getByTestId('link-invoice-btn')).toBeInTheDocument();
     expect(screen.getByTestId('link-disbursement-btn')).toBeInTheDocument();
     expect(screen.getByTestId('link-transmittal-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('request-invoice-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('request-transmittal-btn')).not.toBeInTheDocument();
 
     // Trigger Admin status change after the authoritative checklist read.
     await waitFor(() => expect(screen.getByTestId('task-toggle-status-btn')).toBeEnabled());
