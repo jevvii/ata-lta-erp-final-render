@@ -1,67 +1,52 @@
-# ATA & LTA ERP — Render Blueprint (Free Tier UAT Only)
-# Deploys the UAT backend and SPA into the existing "My project".
-#
-# PREREQUISITE: Create the "erp-uat-secrets" environment group manually in the
-# Render dashboard under My project -> uat -> Environment Groups, using these
-# exact key names:
-#   SUPABASE_URL
-#   SUPABASE_SERVICE_KEY
-#   SUPABASE_STORAGE_BUCKET
-#   DATABASE_URL
-#
-# If an "erp-uat-secrets" group already exists anywhere else (including the
-# default Production environment), delete it first to avoid the
-# "same environment" linking error.
-#
-# Do NOT store secret values in this file.
-
-projects:
-  - name: My project
-    environments:
-      - name: uat
-        services:
-          # ─── Backend ────────────────────────────────────────────────
-          - type: web
-            name: ata-lta-erp-api-staging # Replace "staging" with "uat" for uat
-            runtime: docker
-            region: singapore
-            # Maintained on free tier per configuration preference.
-            # Low-memory Chromium flags and concurrency mutex in pdfService.js
-            # protect the 512 MB memory limit during PDF generation.
-            plan: free
-            repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-            branch: staging # Change to uat for uat
-            rootDir: backend
-            dockerfilePath: Dockerfile
-            healthCheckPath: /health
-            envVars:
-              - key: NODE_ENV
-                value: production
-              - key: LOG_LEVEL
-                value: info
-              - key: RESERVATION_STORE_DRIVER
-                value: database
-              - key: FRONTEND_URL
-                value: https://ata-lta-erp-spa-staging.onrender.com # Replace "staging" with "uat" for uat
-              - fromGroup: erp-staging-secrets
-
-          # ─── Frontend Static Site ──────────────────────────────────
-          # Static sites on Render are free by default; do not set `plan`.
-          - type: web
-            name: ata-lta-erp-spa-staging # Replace "staging" with "uat" for uat
-            runtime: static
-            repo: https://github.com/jevvii/ata-lta-erp-final-render.git
-            branch: staging # Change to uat for uat
-            rootDir: frontend
-            buildCommand: npm run build
-            staticPublishPath: dist
-            routes:
-              - type: rewrite
-                source: /*
-                destination: /index.html
-            envVars:
-              - key: ERP_API_BASE_URL
-                value: https://ata-lta-erp-api-staging.onrender.com/v1 # Replace "staging" with "uat" for uat
-              - key: VITE_SUPABASE_URL
-                value: https://tqtwkmozvhttvbdatrbc.supabase.co
-              - fromGroup: erp-staging-secrets
+# Main production services. Top-level declarations preserve existing project/environment placement.
+# Backend-only erp-main-secrets must already exist in the API service's environment:
+# SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_STORAGE_BUCKET, DATABASE_URL.
+# Set the two public-key variables manually before syncing existing services.
+# sync: false never stores their values in Git and does not prompt on subsequent syncs.
+# Apply pending production migrations before a sync that redeploys these services.
+services:
+  - type: web
+    name: ata-lta-erp-api-main
+    runtime: docker
+    region: singapore
+    plan: free
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: main
+    autoDeployTrigger: "off"
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /readyz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: RESERVATION_STORE_DRIVER
+        value: database
+      - key: FRONTEND_URL
+        value: https://ata-lta-erp-spa-main.onrender.com
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - fromGroup: erp-main-secrets
+  - type: web
+    name: ata-lta-erp-spa-main
+    runtime: static
+    repo: https://github.com/jevvii/ata-lta-erp-final-render.git
+    branch: main
+    autoDeployTrigger: "off"
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: ERP_API_BASE_URL
+        value: https://ata-lta-erp-api-main.onrender.com/v1
+      - key: VITE_SUPABASE_URL
+        value: https://nohelmujoswmmqedgern.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false

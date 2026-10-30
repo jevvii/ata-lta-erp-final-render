@@ -22,9 +22,9 @@ Provides reusable templates for recurring client service retainers. Manages temp
 | Endpoint | Action | Allowed Roles | Guard Key |
 | :--- | :--- | :--- | :--- |
 | `GET /templates` | List active templates | Manager, Admin | `retainers:use` |
-| `POST /templates` | Create template | Admin only | `retainers:edit` |
-| `PUT /templates/:id` | Update template | Admin only | `retainers:edit` |
-| `DELETE /templates/:id` | Delete template | Admin only | `retainers:edit` |
+| `POST /templates` | Create template | Admin, Manager | `retainers:edit` |
+| `PUT /templates/:id` | Update template | Admin, Manager | `retainers:edit` |
+| `DELETE /templates/:id` | Delete template | Admin, Manager | `retainers:edit` |
 | `POST /templates/:id/generate` | Generate work request | Manager, Admin | `retainers:use` |
 
 ---
@@ -43,7 +43,7 @@ Lists active (non-deleted) retainer templates for the current entity.
 ### 2.2 `POST /v1/operations/templates`
 Creates a new retainer template.
 
-- **Guards:** Authenticated, `retainers:edit` (Admin only).
+- **Guards:** Authenticated, `retainers:edit` (Admin, Manager).
 - **Since-version:** `2.0.0` (P0-E `recurrence` column support).
 - **Events Emitted:** None.
 
@@ -63,14 +63,14 @@ Creates a new retainer template.
 | Status | Code | Trigger Condition |
 | :--- | :--- | :--- |
 | `400 Bad Request` | `VALIDATION_ERROR` | Missing title/name or invalid recurrence enum value |
-| `403 Forbidden` | `FORBIDDEN` | Missing `retainers:edit` (Manager gets 403) |
+| `403 Forbidden` | `FORBIDDEN` | Missing `retainers:edit` (other roles get 403) |
 
 ---
 
 ### 2.3 `PUT /v1/operations/templates/:templateId`
 Updates an existing retainer template.
 
-- **Guards:** Authenticated, `retainers:edit` (Admin only).
+- **Guards:** Authenticated, `retainers:edit` (Admin, Manager).
 - **Since-version:** `1.0.0`.
 - **Events Emitted:** None.
 
@@ -79,7 +79,7 @@ Updates an existing retainer template.
 ### 2.4 `DELETE /v1/operations/templates/:templateId`
 Soft-deletes a retainer template (`deleted_at = now()`).
 
-- **Guards:** Authenticated, `retainers:edit` (Admin only).
+- **Guards:** Authenticated, `retainers:edit` (Admin, Manager).
 - **Since-version:** `1.0.0`.
 - **Events Emitted:** None.
 

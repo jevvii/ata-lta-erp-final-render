@@ -37,13 +37,49 @@ jobs:
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm test -- --maxWorkers=2 --workerIdleMemoryLimit=512MB --silent
       - run: npm run lint
       # The project applies mixed .js/.sql migrations via the custom runner
       # (scripts/migrate-remote.js), which builds the full schema from scratch
       # on a blank database — node-pg-migrate up alone cannot, since several
       # core tables are created by legacy .sql files.
+      - name: Initialize Supabase role names on disposable PostgreSQL
+        run: psql -h 127.0.0.1 -U test_user -d erp_test_db -v ON_ERROR_STOP=1 -f tests/fixtures/supabaseRoles.sql
+        env:
+          PGPASSWORD: test_password
       - name: Run Schema Migrations Against Ephemeral Test DB
         run: node scripts/migrate-remote.js local
         env:
           DATABASE_URL: postgres://test_user:test_password@localhost:5432/erp_test_db
+
+      - name: Run isolated PostgreSQL acceptance suites
+        run: |
+          psql -h 127.0.0.1 -U test_user -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE erp_receipts_test;' -c 'CREATE DATABASE erp_disbursements_test;' -c 'CREATE DATABASE erp_billing_test;'
+          npm test -- --runInBand --silent --runTestsByPath tests/integration/disbursements.lifecycle.database.spec.js tests/integration/receipt_reservation_postgres.spec.js tests/integration/invoice-address-migration.test.js
+        env:
+          PGPASSWORD: test_password
+          RECEIPT_TEST_DATABASE_URL: postgres://test_user:test_password@127.0.0.1:5432/erp_receipts_test
+          DISBURSEMENT_TEST_DATABASE_URL: postgres://test_user:test_password@127.0.0.1:5432/erp_disbursements_test
+          BILLING_MIGRATION_TEST_DATABASE_URL: postgres://test_user:test_password@127.0.0.1:5432/erp_billing_test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+        env:
+          ERP_API_BASE_URL: https://ata-lta-erp-api-main.onrender.com/v1
+      - name: Verify deployment tooling
+        run: node --test scripts/tests/*.test.js
+        working-directory: .

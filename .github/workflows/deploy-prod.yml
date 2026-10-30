@@ -1,8 +1,22 @@
 name: Deploy Production
 
+# Release is explicit: backup/migrate first, dashboard API then SPA deploy, verify last.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Production maintenance step
+        required: true
+        type: choice
+        options: [migrate, verify]
+      revision:
+        description: Reviewed commit SHA to migrate or verify
+        required: true
+        type: string
+
+concurrency:
+  group: production-maintenance
+  cancel-in-progress: false
 
 # Required repository secrets (production environment):
 #   PROD_DATABASE_URL        - live database connection string
@@ -15,10 +29,13 @@ on:
 
 jobs:
   backup-before-migrate:
+    if: inputs.action == 'migrate'
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
       - name: Install PostgreSQL 17 Client
         run: |
           sudo apt-get update
@@ -54,33 +71,37 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
         working-directory: backend
-      - run: npm run migrate:up
+      - run: node scripts/migrate-remote.js prod
+        working-directory: backend
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.PROD_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.PROD_SUPABASE_SERVICE_KEY }}
 
   smoke-prod:
-    needs: migrate-prod
+    if: inputs.action == 'verify'
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision }}
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: erp_prototype/package-lock.json
-      - run: npm ci
-        working-directory: erp_prototype
-      # Read-only probes only. The old smoke-test.js created mock clients and
-      # recorded real payments on the production ledger on every deploy.
-      - run: node smoke-test-readonly.js
-        working-directory: erp_prototype
+          node-version: 22
+      - name: Verify reviewed React deployment without writes
+        run: |
+          export EXPECTED_COMMIT="$(git rev-parse HEAD)"
+          node scripts/smoke-react.js main
         env:
           BASE_URL: ${{ secrets.PROD_SPA_URL }}
+          EXPECTED_SUPABASE_URL: https://nohelmujoswmmqedgern.supabase.co

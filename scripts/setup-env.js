@@ -15,7 +15,7 @@ const files = [
   { src: 'backend/.env.example', dest: 'backend/.env' },
   { src: 'backend/.env.development.example', dest: 'backend/.env.development' },
   { src: 'backend/.env.production.example', dest: 'backend/.env.production' },
-  { src: 'erp_prototype/.env.example', dest: 'erp_prototype/.env' },
+  { src: 'frontend/.env.local.example', dest: 'frontend/.env.local' },
 ];
 
 for (const { src, dest } of files) {
@@ -33,6 +33,6 @@ for (const { src, dest } of files) {
 
 console.log('\nNext steps:');
 console.log('  1. Edit backend/.env.development with your local/dev Supabase credentials.');
-console.log('  2. Edit backend/.env.uat with UAT credentials (or leave placeholders — Render injects them in UAT).');
-console.log('  3. Edit erp_prototype/.env to point ERP_API_BASE_URL at the backend you want to test.');
+console.log('  2. Edit backend/.env.production with production credentials only when needed.');
+console.log('  3. Edit frontend/.env.local to point ERP_API_BASE_URL at the backend you want to test.');
 console.log('  4. Run "npm run dev" from the project root to start the local stack.');

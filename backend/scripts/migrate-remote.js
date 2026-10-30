@@ -24,58 +24,62 @@ const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
 
-const envArg = process.argv[2] || 'local';
-const envName = envArg.toLowerCase();
+function loadDatabaseUrl() {
+  const envArg = process.argv[2] || 'local';
+  const envName = envArg.toLowerCase();
 
-const envFiles = {
-  local: '.env.development',
-  dev: '.env.development',
-  development: '.env.development',
-  staging: '.env.staging',
-  prod: '.env.production',
-  production: '.env.production',
-  main: '.env.production',
-};
+  const envFiles = {
+    local: '.env.development',
+    dev: '.env.development',
+    development: '.env.development',
+    staging: '.env.staging',
+    prod: '.env.production',
+    production: '.env.production',
+    main: '.env.production',
+  };
 
-if (envName === 'uat') {
-  console.error('❌ The UAT environment connection has been disabled because it was converted to the Main Render deployment.');
-  console.error('   To run migrations against the main deployment, use "prod" or "main".');
-  process.exit(1);
-}
-
-const envFile = envFiles[envName];
-if (!envFile) {
-  console.error(`Unknown environment "${envArg}". Use one of: local, staging, prod`);
-  process.exit(1);
-}
-
-const envPath = path.join(__dirname, '..', envFile);
-if (fs.existsSync(envPath)) {
-  const content = fs.readFileSync(envPath, 'utf8');
-  const lines = content.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[key] === undefined) {
-      process.env[key] = value;
-    }
+  if (envName === 'uat') {
+    console.error('❌ The UAT environment connection has been disabled because it was converted to the Main Render deployment.');
+    console.error('   To run migrations against the main deployment, use "prod" or "main".');
+    throw new Error('Migration environment configuration is invalid');
   }
-  console.log(`Loaded environment config: ${envFile}`);
-} else {
-  console.warn(`Environment file not found: ${envFile}. Relying on process environment.`);
-}
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  console.error('DATABASE_URL is required');
-  process.exit(1);
+  const envFile = envFiles[envName];
+  if (!envFile) {
+    console.error(`Unknown environment "${envArg}". Use one of: local, staging, prod`);
+    throw new Error('Migration environment configuration is invalid');
+  }
+
+  const envPath = path.join(__dirname, '..', envFile);
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf8');
+    const lines = content.split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq === -1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+    console.log(`Loaded environment config: ${envFile}`);
+  } else {
+    console.warn(`Environment file not found: ${envFile}. Relying on process environment.`);
+  }
+
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error('DATABASE_URL is required');
+    throw new Error('Migration environment configuration is invalid');
+  }
+
+  return databaseUrl;
 }
 
 const rootDir = path.join(__dirname, '..');
@@ -238,7 +242,7 @@ async function applyJsMigration(client, filePath) {
   const queries = [];
   const pgm = buildPgm(queries);
   if (typeof migration.up === 'function') {
-    migration.up(pgm);
+    await migration.up(pgm);
   }
   for (const sql of queries) {
     await client.query(sql);
@@ -246,6 +250,7 @@ async function applyJsMigration(client, filePath) {
 }
 
 async function run() {
+  const databaseUrl = loadDatabaseUrl();
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 
@@ -316,7 +321,7 @@ async function run() {
         } catch (err) {
           await client.query('ROLLBACK');
           console.error(`❌ ${file} failed:`, err.message);
-          console.log('   Continuing with remaining seeds...');
+          throw err;
         }
       }
     }
@@ -335,7 +340,11 @@ async function run() {
   }
 }
 
-run().catch((err) => {
-  console.error('\nMigration failed:', err.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  run().catch((err) => {
+    console.error('\nMigration failed:', err.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { applyJsMigration };

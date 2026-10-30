@@ -38,7 +38,8 @@
     "clear-data-all-users:remote": "node scripts/clear-remote-data-preserve-users.js",
     "purge-and-provision:staging": "node scripts/purge-and-provision-staging.js",
     "verify:auth": "node scripts/verify-supabase-auth.js",
-    "setup:env": "cp .env.example .env"
+    "setup:env": "cp .env.example .env",
+    "migrate:check": "node scripts/check-migrations.js"
   },
   "engines": {
     "node": ">=22.0.0"

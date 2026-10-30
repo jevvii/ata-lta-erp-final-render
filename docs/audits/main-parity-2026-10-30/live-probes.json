@@ -1,0 +1,66 @@
+[
+  {
+    "url": "https://ata-lta-erp-spa-main.onrender.com/",
+    "status": 200,
+    "react_root": false,
+    "legacy_shell": true,
+    "scripts": [
+      "js/utils.js?v=2.3.20",
+      "env.js?v=2.3.20",
+      "js/apiClient.js?v=2.3.20",
+      "js/auth.js?v=2.3.20",
+      "js/dataTable.js?v=2.3.20",
+      "js/kanban.js?v=2.3.20",
+      "js/datepicker.js?v=2.3.20",
+      "js/timepicker.js?v=2.3.20",
+      "js/dashboard.js?v=2.3.20",
+      "js/clients.js?v=2.3.20",
+      "js/workflow.js?v=2.3.20",
+      "js/pendingChanges.js?v=2.3.20",
+      "js/commandPalette.js?v=2.3.20",
+      "js/app.js?v=2.3.20"
+    ],
+    "health": null
+  },
+  {
+    "url": "https://ata-lta-erp-spa-staging.onrender.com/",
+    "status": 200,
+    "react_root": false,
+    "legacy_shell": true,
+    "scripts": [
+      "js/utils.js?v=2.3.20",
+      "env.js?v=2.3.20",
+      "js/apiClient.js?v=2.3.20",
+      "js/auth.js?v=2.3.20",
+      "js/dataTable.js?v=2.3.20",
+      "js/kanban.js?v=2.3.20",
+      "js/datepicker.js?v=2.3.20",
+      "js/timepicker.js?v=2.3.20",
+      "js/dashboard.js?v=2.3.20",
+      "js/clients.js?v=2.3.20",
+      "js/workflow.js?v=2.3.20",
+      "js/pendingChanges.js?v=2.3.20",
+      "js/commandPalette.js?v=2.3.20",
+      "js/app.js?v=2.3.20"
+    ],
+    "health": null
+  },
+  {
+    "url": "https://ata-lta-erp-spa-v2.onrender.com/",
+    "status": 200,
+    "react_root": true,
+    "legacy_shell": false,
+    "scripts": [
+      "/assets/index-DZR5R0Y2.js"
+    ],
+    "health": null
+  },
+  {
+    "url": "https://ata-lta-erp-api-main.onrender.com/health",
+    "error": "The read operation timed out"
+  },
+  {
+    "url": "https://ata-lta-erp-api-staging.onrender.com/health",
+    "error": "The read operation timed out"
+  }
+]

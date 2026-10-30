@@ -2,29 +2,23 @@
 
 Monorepo for the ATA & LTA accounting firm ERP.
 
-- `backend/` — Node.js / Express API (Supabase + PostgreSQL + Supabase Storage)
-- `erp_prototype/` — Plain HTML/JS single-page application frontend
-- `render.yaml` — Render Blueprint for the UAT environment
+- `backend/` — Express API, Supabase/PostgreSQL, and Supabase Storage.
+- `frontend/` — enterprise-v2 React application, served by Vite locally and as static assets in production.
+- `erp_prototype/` — retained legacy frontend.
+- `render.yaml` — main production API and React static-site configuration.
 
-## Quick start
+## Development
 
-```bash
-# Install all dependencies
+```sh
 npm run install:all
-
-# Bootstrap environment files from templates
 npm run setup
-
-# Start the full local stack
 npm run dev
 ```
 
-See [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md) for the complete
-toggleable development environment guide, including UAT/prod spot-checks,
-Docker stack, and non-Playwright smoke testing.
+Edit `backend/.env.development` and `frontend/.env.local` after setup. The React UI runs on port 8081. `npm run dev:staging` runs a local API using staging configuration. `npm run dev:main` and `dev:prod` run only the React development server against the remote production API. Those commands use real production data.
+
+Build with an explicit API target using `npm run build:spa:main` or `npm run build:spa:staging`. Direct frontend builds require `ERP_API_BASE_URL` (including `/v1`).
 
 ## Deployment
 
-UAT is deployed automatically via Render using `render.yaml` on the `uat`
-branch. Production uses the same blueprint on the `main` branch with the
-appropriate environment group.
+Follow [DEPLOYMENT.md](DEPLOYMENT.md). Releases use an explicit backup/migration step, manual Render API and SPA deployments, and a read-only verification step. Pushes do not run production migrations. Main and staging configurations remain separate.

@@ -1,0 +1,41 @@
+{
+  "worktree_count": 37,
+  "node_version": "v26.8.1",
+  "application_changes_made": false,
+  "frontend_build": "passed",
+  "backend_focused": {
+    "passed": 39,
+    "failed": 0
+  },
+  "cross_worktree_explicit_frontend_path": {
+    "passed": 46,
+    "failed": 0
+  },
+  "backend_policy_contract_checks": {
+    "passed": 45,
+    "failed": 8,
+    "failures": [
+      "Parcel P0-E: Retainer Templates & Recurrence \u203a 1. RBAC Permission Matrix (AC-1 / R1) \u203a rejects Manager attempting to create a retainer template with 403 Forbidden",
+      "Parcel P0-E: Retainer Templates & Recurrence \u203a 1. RBAC Permission Matrix (AC-1 / R1) \u203a rejects Manager attempting to create on /retainer-templates alias with 403 Forbidden",
+      "Parcel P0-E: Retainer Templates & Recurrence \u203a 1. RBAC Permission Matrix (AC-1 / R1) \u203a rejects Manager attempting to update a template with 403 Forbidden",
+      "Parcel P0-E: Retainer Templates & Recurrence \u203a 1. RBAC Permission Matrix (AC-1 / R1) \u203a rejects Manager attempting to delete a template with 403 Forbidden",
+      "/v1/operations-requests \u203a fulfills a pending request",
+      "/v1/operations-requests \u203a hides awaitingFulfillment count from users who cannot fulfill",
+      "/v1/operations-requests \u203a creates operations_requests record when a manager creates a work request (UAT2-4-server)",
+      "enforces PDF ownership and entity scope"
+    ],
+    "same_failures_on_staging": true
+  },
+  "frontend_focused": {
+    "passed": 52,
+    "failed": 1
+  },
+  "enterprise_v2_realtime_baseline": {
+    "passed": 25,
+    "failed": 1,
+    "failure": "UPDATE with deleted_at:null preserves old title in task detail cache"
+  },
+  "synthetic_service_key_fallback_confirmed": true,
+  "full_backend": "incomplete; heap exhaustion after observed failures",
+  "full_frontend": "incomplete; stopped after observed realtime failures"
+}

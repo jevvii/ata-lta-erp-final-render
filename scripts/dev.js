@@ -1,135 +1,77 @@
-/**
- * Local development orchestrator.
- *
- * Starts the backend and SPA frontend as sibling processes, routes their
- * stdout/stderr through prefixed lines, and cleanly shuts both down on Ctrl+C.
- *
- * Usage:
- *   node scripts/dev.js [local|uat|prod]
- *
- * Defaults to "local", which runs:
- *   - backend with .env.development
- *   - frontend dev server pointing at the backend's actual port
- *
- * The backend port is read from backend/.env.development (or the PORT env var),
- * and the SPA dev server is automatically configured to call that port via
- * ERP_API_BASE_URL. This avoids the common mismatch where the backend starts on
- * 3001 while the SPA still points at 3000.
- *
- * "uat" runs:
- *   - backend with .env.uat (values should be exported in shell or set in .env.uat)
- *   - frontend dev server pointing at the Render UAT backend
- */
+/** Starts the React UI and, for local/staging profiles, its local API. */
+const fs = require("node:fs");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
 
-const fs = require('fs');
-const path = require('path');
-const { spawn } = require('child_process');
-
-const envArg = process.argv[2] || 'local';
-const isUat = envArg.toLowerCase() === 'uat';
-const isProd = envArg.toLowerCase() === 'prod';
-const isStaging = envArg.toLowerCase() === 'staging';
-
-const ROOT = path.join(__dirname, '..');
-
-function loadEnvFile(filePath) {
-  if (!fs.existsSync(filePath)) return {};
-  const content = fs.readFileSync(filePath, 'utf8');
-  const env = {};
-  for (const line of content.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (env[key] === undefined) env[key] = value;
-  }
-  return env;
-}
-
-function resolveBackendPort() {
-  if (process.env.PORT) return Number(process.env.PORT);
-
-  if (isUat || isProd || isStaging) {
-    const envFile = isUat ? 'backend/.env.uat' : (isStaging ? 'backend/.env.staging' : 'backend/.env.production');
-    const env = loadEnvFile(path.join(ROOT, envFile));
-    if (env.PORT) return Number(env.PORT);
-  }
-
-  const localEnv = loadEnvFile(path.join(ROOT, 'backend', '.env.development'));
-  return localEnv.PORT ? Number(localEnv.PORT) : 3000;
-}
-
-function run(label, cmd, args, options) {
-  const child = spawn(cmd, args, {
-    cwd: ROOT,
-    stdio: 'pipe',
-    shell: process.platform === 'win32',
-    ...options,
-  });
-
-  const prefix = `[${label}]`;
-  child.stdout.on('data', (data) => {
-    data.toString().split(/\r?\n/).forEach((line) => {
-      if (line.trim()) console.log(`${prefix} ${line}`);
-    });
-  });
-  child.stderr.on('data', (data) => {
-    data.toString().split(/\r?\n/).forEach((line) => {
-      if (line.trim()) console.error(`${prefix} ${line}`);
-    });
-  });
-
-  child.on('exit', (code) => {
-    console.log(`${prefix} exited with code ${code}`);
-  });
-
-  return child;
-}
-
-let backend;
-let frontend;
-
-function shutdown(signal) {
-  console.log(`\n${signal} received. Shutting down dev stack...`);
-  if (backend) backend.kill('SIGTERM');
-  if (frontend) frontend.kill('SIGTERM');
-  setTimeout(() => {
-    if (backend && !backend.killed) backend.kill('SIGKILL');
-    if (frontend && !frontend.killed) frontend.kill('SIGKILL');
-  }, 3000).unref();
-}
-
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-if (isUat) {
-  console.error('[dev] ❌ The UAT environment connection has been disabled because it was converted to the Main Render deployment.');
-  console.error('[dev] Use "npm run dev" (local), "npm run dev:staging", or "npm run dev:prod" instead.');
+const ROOT = path.join(__dirname, "..");
+const profile = (process.argv[2] || "local").toLowerCase();
+if (!["local", "staging", "main", "prod"].includes(profile)) {
+  console.error("Use local, staging, main, or prod.");
   process.exit(1);
 }
+const remote = profile === "main" || profile === "prod";
+const children = [];
+let stopping = false;
 
-if (isProd) {
-  console.log(`Starting full-stack dev against ${envArg.toUpperCase()} backend...`);
-  const apiUrl = 'https://ata-lta-erp-api-main.onrender.com';
-  backend = run('backend', 'npm', ['--prefix', 'backend', 'run', `start:${envArg}`], { env: process.env });
-  frontend = run('spa', 'npm', ['--prefix', 'erp_prototype', 'run', 'dev'], {
-    env: { ...process.env, ERP_API_BASE_URL: apiUrl },
+function stop(code) {
+  if (stopping) return;
+  stopping = true;
+  process.exitCode = code;
+  for (const child of children) {
+    if (child.exitCode !== null) continue;
+    if (process.platform === "win32") child.kill("SIGTERM");
+    else {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch (err) {
+        if (err.code !== "ESRCH") throw err;
+      }
+    }
+  }
+}
+
+function run(directory, script, extraEnv = {}) {
+  const child = spawn(
+    process.platform === "win32" ? "npm.cmd" : "npm",
+    ["run", script],
+    {
+      cwd: path.join(ROOT, directory),
+      env: { ...process.env, ...extraEnv },
+      stdio: "inherit",
+      detached: process.platform !== "win32",
+    },
+  );
+  children.push(child);
+  child.on("error", (err) => {
+    console.error(err.message);
+    stop(1);
   });
-} else {
-  const backendPort = resolveBackendPort();
-  const apiBaseUrl = `http://127.0.0.1:${backendPort}/v1`;
-  console.log(`Starting full-stack ${envArg.toUpperCase()} dev stack...`);
-  console.log(`Backend will be available at http://127.0.0.1:${backendPort}`);
-  console.log(`SPA will call API at ${apiBaseUrl}`);
-
-  const backendScript = isStaging ? 'start:staging' : 'dev:local';
-  backend = run('backend', 'npm', ['--prefix', 'backend', 'run', backendScript], { env: process.env });
-  frontend = run('spa', 'npm', ['--prefix', 'erp_prototype', 'run', 'dev'], {
-    env: { ...process.env, ERP_API_BASE_URL: apiBaseUrl },
+  child.on("exit", (code) => {
+    if (!stopping) stop(code ?? 1);
   });
 }
+
+process.on("SIGINT", () => stop(130));
+process.on("SIGTERM", () => stop(143));
+
+let apiBase = process.env.ERP_API_BASE_URL;
+if (!remote) {
+  const envFile = path.join(
+    ROOT,
+    "backend",
+    profile === "staging" ? ".env.staging" : ".env.development",
+  );
+  const content = fs.existsSync(envFile)
+    ? fs.readFileSync(envFile, "utf8")
+    : "";
+  const filePort = content.match(/^PORT\s*=\s*["']?(\d+)/m)?.[1];
+  const port = process.env.PORT || filePort || "3000";
+  apiBase ||= `http://127.0.0.1:${port}/v1`;
+  run("backend", profile === "staging" ? "start:staging" : "dev:local", {
+    PORT: port,
+  });
+} else {
+  apiBase ||= "https://ata-lta-erp-api-main.onrender.com/v1";
+}
+console.log(`React UI: http://localhost:8081; API: ${apiBase}`);
+run("frontend", "dev", { ERP_API_BASE_URL: apiBase });
