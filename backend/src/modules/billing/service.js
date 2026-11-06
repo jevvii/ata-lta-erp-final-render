@@ -313,7 +313,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const effectiveLinkedTransmittalId = linkedTransmittalId || linked_transmittal_id;
 
   const makeQuery = () => {
-    let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number)');
+    let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number, tin, trade_name)');
     if (includeDeleted !== true && includeDeleted !== 'true') {
       q = q.is('deleted_at', null);
     }
@@ -403,11 +403,20 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
       ? transmittalMap.get(row.linked_transmittal_id)
       : null;
     const clientNumber = row.clients?.client_number || row.client_number || null;
+    const clientName = row.clients?.name || row.client_name || null;
+    const clientTin = row.clients?.tin || row.client_tin || null;
+    const clientTradeName = row.clients?.trade_name || row.client_trade_name || null;
     const wrNumber = wr?.work_request_number || null;
     return {
       ...row,
+      clientName,
+      client_name: clientName,
       clientNumber,
       client_number: clientNumber,
+      clientTin,
+      client_tin: clientTin,
+      clientTradeName,
+      client_trade_name: clientTradeName,
       workRequestNumber: wrNumber,
       work_request_number: wrNumber,
       entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
@@ -616,7 +625,7 @@ const getInvoiceById = async ({
 }) => {
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients(name, tin, address, client_number)')
+    .select('*, clients(name, tin, address, client_number, trade_name)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -629,7 +638,7 @@ const getInvoiceById = async ({
   if ((error || !invoice) && entityId && entityId !== 'ALL' && allowFallback) {
     const { data: fallbackInvoice } = await supabaseAdmin
       .from('invoices')
-      .select('*, clients(name, tin, address, client_number)')
+      .select('*, clients(name, tin, address, client_number, trade_name)')
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
@@ -755,11 +764,20 @@ const getInvoiceById = async ({
   }
 
   const clientNumber = invoice.clients?.client_number || invoice.client_number || null;
+  const clientName = invoice.clients?.name || invoice.client_name || null;
+  const clientTin = invoice.clients?.tin || invoice.client_tin || null;
+  const clientTradeName = invoice.clients?.trade_name || invoice.client_trade_name || null;
   const entityCode = await resolveEntityCode(invoice.entity_id);
   return {
     ...invoice,
+    clientName,
+    client_name: clientName,
     clientNumber,
     client_number: clientNumber,
+    clientTin,
+    client_tin: clientTin,
+    clientTradeName,
+    client_trade_name: clientTradeName,
     workRequestNumber: wrNumber,
     work_request_number: wrNumber,
     entity_code: entityCode,

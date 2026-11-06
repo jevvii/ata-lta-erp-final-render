@@ -180,7 +180,14 @@ const toApiWorkRequest = (row, entityCode, user = null, hasManagerLead = false) 
     description: row.description || null,
     clientId: row.client_id,
     clientName: row.client_name || row.clients?.name || null,
+    client_name: row.client_name || row.clients?.name || null,
     clientNumber: row.client_number || row.clients?.client_number || null,
+    client_number: row.client_number || row.clients?.client_number || null,
+    clientTin: row.clients?.tin || row.client_tin || null,
+    client_tin: row.clients?.tin || row.client_tin || null,
+    clientTradeName: row.clients?.trade_name || row.client_trade_name || null,
+    client_trade_name: row.clients?.trade_name || row.client_trade_name || null,
+    clients: row.clients || null,
     status: row.status,
     phase: row.phase || null,
     onHold: row.on_hold ?? false,
@@ -760,7 +767,7 @@ const listWorkRequests = async ({
 
   let query = supabaseAdmin
     .from('work_requests')
-    .select('*, clients(name, client_number)')
+    .select('*, clients(name, client_number, tin, trade_name)')
     .is('deleted_at', null)
     .or('creation_approval_status.is.null,creation_approval_status.eq.approved')
     .order(sortField, { ascending: sortAsc });
@@ -1761,7 +1768,7 @@ const getWorkRequestById = async ({
 }) => {
   let query = supabaseAdmin
     .from('work_requests')
-    .select('*, clients(name, client_number)')
+    .select('*, clients(name, client_number, tin, trade_name)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -1785,7 +1792,7 @@ const getWorkRequestById = async ({
   if (!data && entityId && entityId !== 'ALL' && allowCrossEntity) {
     const fallbackRes = await supabaseAdmin
       .from('work_requests')
-      .select('*, clients(name, client_number)')
+      .select('*, clients(name, client_number, tin, trade_name)')
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
@@ -4915,7 +4922,7 @@ const listCreationApprovals = async ({ entityId, user, status = 'pending', scope
 
   let query = supabaseAdmin
     .from('work_requests')
-    .select('*, clients(name)')
+    .select('*, clients(name, client_number, tin, trade_name)')
     .is('deleted_at', null)
     .eq('creation_approval_status', validStatus)
     .order('created_at', { ascending: false });
