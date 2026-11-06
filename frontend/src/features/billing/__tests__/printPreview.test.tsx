@@ -132,7 +132,7 @@ describe('PrintPreviewModal Component (Decoupled Print & Address Security)', () 
 
     expect(screen.getByTestId('print-preview-modal')).toBeInTheDocument();
     expect(screen.getByTestId('a4-document-sheet')).toBeInTheDocument();
-    expect(screen.getAllByText(/A.T.A. BUSINESS CONSULTANCY/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/ATA Business Consultancy/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('ATA-SI-2026-0088').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Acme Corporation')).toBeInTheDocument();
 
@@ -279,7 +279,7 @@ describe('Company details controls', () => {
       fireEvent.click(screen.getByTestId('company-details-checkbox'));
       expect(screen.queryByAltText('ATA Logo')).not.toBeInTheDocument();
       expect(screen.getByTestId('a4-document-sheet')).not.toHaveTextContent(
-        'A.T.A. BUSINESS CONSULTANCY'
+        'ATA Business Consultancy'
       );
       fireEvent.click(screen.getByTestId('print-document-button'));
       expect(write.mock.calls[0]![0]).not.toContain('<img');

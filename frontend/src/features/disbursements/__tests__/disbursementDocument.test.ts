@@ -36,9 +36,12 @@ describe('Canonical expense document', () => {
     );
     expect(branded).toContain(`${entity}-LOGO.jpg`);
     expect(generic).not.toContain('<img');
-    expect(generic).toContain(`${entity} Accounting Services Firm`);
+    expect(generic).toContain(
+      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+    );
     expect(blank).not.toContain('<img');
-    expect(blank).not.toContain('Accounting Services Firm');
+    expect(blank).not.toContain('ATA Business Consultancy');
+    expect(blank).not.toContain('LTA Business Management Corp.');
     for (const html of [branded, generic, blank]) {
       expect(html).not.toContain('THANK YOU');
       expect(html).not.toContain('Official Internal Payment Authorization');
