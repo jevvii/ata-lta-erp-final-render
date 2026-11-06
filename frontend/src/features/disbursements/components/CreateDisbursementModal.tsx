@@ -157,6 +157,9 @@ export function CreateDisbursementModal({
     prefill?.workRequestId || defaultWorkRequestId || ''
   );
   const [clientId, setClientId] = useState(prefill?.clientId || defaultClientId || '');
+  const [clientFilterId, setClientFilterId] = useState<string>(
+    prefill?.clientId || defaultClientId || ''
+  );
   const [selectedTaskId, setSelectedTaskId] = useState(prefill?.taskId || defaultTaskId || '');
   const [linkedInvoiceId, setLinkedInvoiceId] = useState(
     prefill?.linkedInvoiceId || defaultInvoiceId || ''
@@ -390,11 +393,16 @@ export function CreateDisbursementModal({
   // Filter available work requests by clientId when client is locked or prefilled (Contract Rule 3)
   // and scope by activeEntity when not ALL, while preserving the explicitly requested/default WR
   const availableWorkRequests = React.useMemo(() => {
-    const lockedClientId = prefill?.clientId || defaultClientId;
-    const preservedWrId = prefill?.workRequestId || defaultWorkRequestId || linkedWorkRequestId;
+    const activeFilterClientId = prefill?.clientId || defaultClientId || clientFilterId;
+    const lockedWrId = prefill?.workRequestId || defaultWorkRequestId;
+    const preservedWrId = lockedWrId || linkedWorkRequestId;
     let list = workRequests;
-    if (lockedClientId) {
-      list = list.filter((wr) => (wr.client_id || wr.clientId) === lockedClientId || wr.id === preservedWrId);
+    if (activeFilterClientId) {
+      list = list.filter(
+        (wr) =>
+          (wr.client_id || wr.clientId) === activeFilterClientId ||
+          (Boolean(lockedWrId) && wr.id === lockedWrId)
+      );
     }
     if (activeEntity && activeEntity !== 'ALL') {
       list = list.filter((wr) => {
@@ -414,6 +422,7 @@ export function CreateDisbursementModal({
     workRequests,
     prefill?.clientId,
     defaultClientId,
+    clientFilterId,
     prefill?.workRequestId,
     defaultWorkRequestId,
     linkedWorkRequestId,
@@ -431,6 +440,7 @@ export function CreateDisbursementModal({
       setDescription(prefill?.defaultDescription || defaultDescription || '');
       setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
       setClientId(prefill?.clientId || defaultClientId || '');
+      setClientFilterId(prefill?.clientId || defaultClientId || '');
       setSelectedTaskId(prefill?.taskId || defaultTaskId || '');
       setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
       setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
@@ -448,6 +458,7 @@ export function CreateDisbursementModal({
       setFundSource('Firm Fund');
       setLinkedWorkRequestId('');
       setClientId('');
+      setClientFilterId('');
       setSelectedTaskId('');
       setLinkedInvoiceId('');
       setLinkedTransmittalId('');
@@ -467,6 +478,7 @@ export function CreateDisbursementModal({
       }
       if (prefill?.clientId && prefill.clientId !== clientId) {
         setClientId(prefill.clientId);
+        setClientFilterId(prefill.clientId);
       }
       if (prefill?.taskId && prefill.taskId !== selectedTaskId) {
         setSelectedTaskId(prefill.taskId);
@@ -515,6 +527,9 @@ export function CreateDisbursementModal({
     return undefined;
   }, [activeEntity, selectedWr?.entity]);
 
+  const isClientLocked = Boolean(
+    prefill?.clientId || defaultClientId || prefill?.workRequestId || defaultWorkRequestId
+  );
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId || defaultTaskId);
   const isInvoiceLocked = Boolean(prefill?.linkedInvoiceId || defaultInvoiceId);
@@ -641,6 +656,22 @@ export function CreateDisbursementModal({
     return '';
   }, [selectedWr, clientId, clients]);
 
+  const handleSelectClient = (newClientId: string) => {
+    setClientId(newClientId);
+    setClientFilterId(newClientId);
+    if (linkedWorkRequestId) {
+      const currentWr = workRequests.find((w) => w.id === linkedWorkRequestId);
+      const currentWrClientId = currentWr?.clientId || currentWr?.client_id;
+      if (!newClientId || (currentWr && currentWrClientId !== newClientId)) {
+        setLinkedWorkRequestId('');
+        setSelectedTaskId('');
+        if (!isInvoiceLocked) setLinkedInvoiceId('');
+        if (!isTransmittalLocked) setLinkedTransmittalId('');
+        setUploadedReceipt(null);
+      }
+    }
+  };
+
   const handleSelectWorkRequest = (wrId: string) => {
     setLinkedWorkRequestId(wrId);
     setSelectedTaskId('');
@@ -672,7 +703,11 @@ export function CreateDisbursementModal({
         setClientId(wrClientId);
       }
     } else if (!isClientLockedByPrefill) {
-      setClientId('');
+      if (!clientFilterId) {
+        setClientId('');
+      } else {
+        setClientId(clientFilterId);
+      }
     }
   };
 
@@ -746,6 +781,7 @@ export function CreateDisbursementModal({
     setFundSource('Firm Fund');
     setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
     setClientId(prefill?.clientId || defaultClientId || '');
+    setClientFilterId(prefill?.clientId || defaultClientId || '');
     setSelectedTaskId(prefill?.taskId || '');
     setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
     setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
@@ -1156,24 +1192,37 @@ export function CreateDisbursementModal({
             )}
           </div>
 
-          {/* Associated Client (Auto-Detected, Read-Only) & Linked Task */}
+          {/* Associated Client Dropdown & Linked Task */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-ink">
-                Associated Client (Auto-Detected)
+                Associated Client <span className="text-red-500">*</span>
               </label>
-              <Input
-                type="text"
-                readOnly
-                disabled
-                value={
-                  clientDisplayName ||
-                  (clientId ? `Client Associated (${clientId.slice(0, 8)})` : '')
-                }
-                placeholder="Auto-detected from Work Request"
-                className="bg-canvas text-ink cursor-not-allowed text-xs disabled:opacity-80"
-                data-testid="display-client-name"
-              />
+              <select
+                value={clientId}
+                onChange={(e) => handleSelectClient(e.target.value)}
+                disabled={isClientLocked}
+                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
+                data-testid="select-client"
+              >
+                <option value="">All Clients (Auto-detect from Work Request)</option>
+                {clients.map((c) => {
+                  const clientNum =
+                    (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                    (c as { client_number?: string | null })?.client_number;
+                  const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {label}
+                    </option>
+                  );
+                })}
+                {clientId && !clients.some((c) => c.id === clientId) && (
+                  <option value={clientId}>
+                    {clientDisplayName || `Client (${clientId})`}
+                  </option>
+                )}
+              </select>
             </div>
 
             <div className="space-y-1">

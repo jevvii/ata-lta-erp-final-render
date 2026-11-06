@@ -86,6 +86,7 @@ export function InvoiceCreateModal({
 
   // Form Fields
   const [clientId, setClientId] = useState('');
+  const [clientFilterId, setClientFilterId] = useState('');
   const [workRequestId, setWorkRequestId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [linkedTransmittalId, setLinkedTransmittalId] = useState('');
@@ -126,18 +127,18 @@ export function InvoiceCreateModal({
   }, [workRequestsData]);
 
   const availableWorkRequests = useMemo(() => {
-    const lockedClientId = prefill?.clientId;
+    const activeFilterClientId = prefill?.clientId || clientFilterId;
     const preservedWrId = prefill?.workRequestId || workRequestId;
     let list = workRequests;
-    if (lockedClientId) {
+    if (activeFilterClientId) {
       list = list.filter(
         (wr) =>
-          (wr.client_id || (wr as { clientId?: string }).clientId) === lockedClientId ||
-          wr.id === preservedWrId
+          (wr.client_id || (wr as { clientId?: string }).clientId) === activeFilterClientId ||
+          (Boolean(prefill?.workRequestId) && wr.id === preservedWrId)
       );
     }
     return list;
-  }, [workRequests, prefill?.clientId, prefill?.workRequestId, workRequestId]);
+  }, [workRequests, prefill?.clientId, prefill?.workRequestId, clientFilterId, workRequestId]);
 
   const queryClient = useQueryClient();
   const currentUser = useSessionStore((state) => state.user);
@@ -169,6 +170,7 @@ export function InvoiceCreateModal({
         lastPrefillKeyRef.current = currentPrefillKey;
         setWorkRequestId(prefill?.workRequestId || '');
         setClientId(prefill?.clientId || '');
+        setClientFilterId(prefill?.clientId || '');
         setSelectedTaskId(prefill?.taskId || '');
         setLinkedTransmittalId(prefill?.linkedTransmittalId || '');
         if (prefill?.attachedDisbursement) {
@@ -197,6 +199,7 @@ export function InvoiceCreateModal({
       lastPrefillKeyRef.current = '';
       setWorkRequestId('');
       setClientId('');
+      setClientFilterId('');
       setSelectedTaskId('');
       setLinkedTransmittalId('');
       setLinkedDisbursementIds([]);
@@ -219,6 +222,24 @@ export function InvoiceCreateModal({
     }
   }, [isOpen, workRequestId, workRequests, prefill?.clientId, clientId]);
 
+  const handleClientChange = (newClientId: string) => {
+    const actualClientId = newClientId === '__all__' ? '' : newClientId;
+    setClientId(actualClientId);
+    setClientFilterId(actualClientId);
+    setFormError(null);
+    if (workRequestId) {
+      const currentWr = workRequests.find((w) => w.id === workRequestId);
+      const currentWrClientId =
+        currentWr?.client_id || (currentWr as { clientId?: string })?.clientId;
+      if (!actualClientId || (currentWr && currentWrClientId !== actualClientId)) {
+        setWorkRequestId('');
+        setSelectedTaskId('');
+        setLinkedTransmittalId('');
+        setLinkedDisbursementIds([]);
+      }
+    }
+  };
+
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
     setSelectedTaskId('');
@@ -230,13 +251,16 @@ export function InvoiceCreateModal({
         const matchedWr = workRequests.find((w) => w.id === newWrId);
         const wrClientId =
           matchedWr?.client_id || (matchedWr as { clientId?: string })?.clientId;
-        setClientId(wrClientId || '');
-      } else {
+        if (wrClientId) {
+          setClientId(wrClientId);
+        }
+      } else if (!clientFilterId) {
         setClientId('');
       }
     }
   };
 
+  const isClientLocked = Boolean(prefill?.clientId || prefill?.workRequestId);
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId && !prefill?.attachedDisbursement);
 
@@ -667,6 +691,47 @@ export function InvoiceCreateModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label
+                htmlFor="create-invoice-client"
+                className="text-xs font-semibold text-[#1E293B] block mb-1"
+              >
+                Client*
+              </label>
+              <Select
+                value={clientId}
+                onValueChange={handleClientChange}
+                disabled={isClientLocked}
+              >
+                <SelectTrigger
+                  id="create-invoice-client"
+                  className="h-9 text-xs"
+                  data-testid="select-client"
+                >
+                  <SelectValue placeholder="Select client..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">All Clients (Auto-detect from Work Request)</SelectItem>
+                  {clients.map((c) => {
+                    const clientNum =
+                      (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                      (c as { client_number?: string | null })?.client_number;
+                    const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        {label}
+                      </SelectItem>
+                    );
+                  })}
+                  {clientId && !clients.some((c) => c.id === clientId) && (
+                    <SelectItem key={clientId} value={clientId}>
+                      {clientDisplayName || clientId}
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label
                 htmlFor="create-invoice-wr"
                 className="text-xs font-semibold text-[#1E293B] block mb-1"
               >
@@ -724,28 +789,6 @@ export function InvoiceCreateModal({
                   })}
                 </SelectContent>
               </Select>
-            </div>
-
-            <div>
-              <label
-                htmlFor="create-invoice-client"
-                className="text-xs font-semibold text-[#1E293B] block mb-1"
-              >
-                Associated Client (Auto-Detected)
-              </label>
-              <Input
-                id="create-invoice-client"
-                type="text"
-                readOnly
-                disabled
-                value={
-                  clientDisplayName ||
-                  (clientId ? `Client Associated (${clientId.slice(0, 8)})` : '')
-                }
-                placeholder="Auto-detected from Work Request"
-                className="h-9 bg-slate-50 text-[#1E293B] cursor-not-allowed text-xs disabled:opacity-80"
-                data-testid="display-client-name"
-              />
             </div>
 
             <div>

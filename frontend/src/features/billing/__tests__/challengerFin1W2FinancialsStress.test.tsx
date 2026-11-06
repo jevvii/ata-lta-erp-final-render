@@ -353,13 +353,15 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
             wrapper,
           });
 
-          const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
+          const clientTrigger = screen.getByTestId('select-client');
           const wrTrigger = screen.getByTestId('select-work-request');
           const taskTrigger = screen.getByTestId('select-work-request-task');
 
-          // Client display is ALWAYS read-only & disabled per UAT2-12 (matching Suite 3)
-          expect(clientDisplay).toBeDisabled();
-          expect(clientDisplay.readOnly).toBe(true);
+          if (expectClientLocked) {
+            expect(clientTrigger).toBeDisabled();
+          } else {
+            expect(clientTrigger).not.toBeDisabled();
+          }
 
           if (expectWrLocked) {
             expect(wrTrigger).toBeDisabled();
@@ -386,12 +388,12 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         { wrapper }
       );
 
-      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
+      const clientTrigger = screen.getByTestId('select-client');
       const wrTrigger = screen.getByTestId('select-work-request');
       expect(wrTrigger).toBeDisabled();
-      expect(clientDisplay).toBeDisabled();
+      expect(clientTrigger).toBeDisabled();
       await waitFor(() => {
-        expect(clientDisplay.value).toContain('Alpha');
+        expect(clientTrigger).toHaveTextContent('Alpha');
       });
     });
   });
@@ -468,12 +470,14 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
           });
 
           const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
-          const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
+          const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
           const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
 
-          // Client display is ALWAYS read-only & disabled per UAT2-12
-          expect(clientInput.disabled).toBe(true);
-          expect(clientInput.readOnly).toBe(true);
+          if (expectWrLocked || Boolean(prefill.clientId)) {
+            expect(clientSelect.disabled).toBe(true);
+          } else {
+            expect(clientSelect.disabled).toBe(false);
+          }
 
           if (expectWrLocked) {
             expect(wrSelect.disabled).toBe(true);
@@ -492,7 +496,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       }
     );
 
-    it('Permutation 2: auto-displays client name from prefilled work request in read-only input', async () => {
+    it('Permutation 2: auto-displays client name from prefilled work request in select', async () => {
       const { wrapper } = createHarness();
       render(
         <CreateDisbursementModal
@@ -504,8 +508,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       );
 
       await waitFor(() => {
-        const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(clientInput.value).toBe(CLIENT_1.name);
+        const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(clientSelect.disabled).toBe(true);
+        expect(clientSelect.value).toBe(CLIENT_1.id);
       });
     });
   });
@@ -683,19 +688,18 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       );
 
       // Verify triggers are disabled and inert
-      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
+      const clientTrigger = screen.getByTestId('select-client');
       const wrTrigger = screen.getByTestId('select-work-request');
       const taskTrigger = screen.getByTestId('select-work-request-task');
-      expect(clientDisplay).toBeDisabled();
-      expect(clientDisplay.readOnly).toBe(true);
+      expect(clientTrigger).toBeDisabled();
       await waitFor(() => {
-        expect(clientDisplay.value).toContain('Alpha');
+        expect(clientTrigger).toHaveTextContent('Alpha');
       });
       expect(wrTrigger).toBeDisabled();
       expect(taskTrigger).toBeDisabled();
 
       // Clicking disabled controls must not open any select content / options
-      fireEvent.click(clientDisplay);
+      fireEvent.click(clientTrigger);
       fireEvent.click(wrTrigger);
       fireEvent.click(taskTrigger);
       expect(screen.queryByRole('listbox')).toBeNull();
@@ -772,17 +776,16 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       );
 
       const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
-      const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
+      const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
       const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
 
       expect(wrSelect.disabled).toBe(true);
-      expect(clientInput.disabled).toBe(true);
-      expect(clientInput.readOnly).toBe(true);
+      expect(clientSelect.disabled).toBe(true);
       expect(taskSelect.disabled).toBe(true);
 
       // Attempt interaction on locked controls
       fireEvent.click(wrSelect);
-      fireEvent.click(clientInput);
+      fireEvent.click(clientSelect);
       fireEvent.click(taskSelect);
 
       // Fill required fields
@@ -906,12 +909,13 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       });
 
       const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
-      const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
+      const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+      expect(clientSelect.disabled).toBe(false);
 
       // 1. Select WR 1
       fireEvent.change(wrSelect, { target: { value: WR_1.id } });
       await waitFor(() => {
-        expect(clientInput.value).toBe(CLIENT_1.name);
+        expect(clientSelect.value).toBe(CLIENT_1.id);
       });
 
       // Wait for tasks of WR 1 to load
@@ -926,7 +930,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       // 2. Switch to WR 2
       fireEvent.change(wrSelect, { target: { value: WR_2.id } });
       await waitFor(() => {
-        expect(clientInput.value).toBe(CLIENT_2.name);
+        expect(clientSelect.value).toBe(CLIENT_2.id);
       });
       // Selected task from WR 1 must be cleared (and not retained across WR switch)
       expect(taskSelect.value).not.toBe(TASK_1_ID);
@@ -934,7 +938,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       // 3. Clear WR (select empty option)
       fireEvent.change(wrSelect, { target: { value: '' } });
       await waitFor(() => {
-        expect(clientInput.value).toBe('');
+        expect(clientSelect.value).toBe('');
       });
       // Task dropdown must now be disabled
       expect(taskSelect.disabled).toBe(true);
@@ -952,8 +956,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       fireEvent.change(wrSelect, { target: { value: WR_ORPHAN.id } });
 
       await waitFor(() => {
-        const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(clientInput.value).toBe('Ghost Client External');
+        const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(clientSelect.value).toBe(WR_ORPHAN.client_id);
+        expect(clientSelect.options[clientSelect.selectedIndex]?.text).toBe('Ghost Client External');
       });
     });
   });
@@ -1115,7 +1120,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       render(<InvoiceCreateModal isOpen={true} onClose={vi.fn()} />, { wrapper });
 
       await waitFor(() => {
-        expect(screen.getByTestId('display-client-name')).toBeDisabled();
+        expect(screen.getByTestId('select-client')).not.toBeDisabled();
       });
 
       // Initially task trigger is disabled because WR is not selected
@@ -1283,9 +1288,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       // Verify WR_1 and Client 1 auto-detected
       await waitFor(() => {
-        const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(clientDisplay).toBeDisabled();
-        expect(clientDisplay.value).toContain('Alpha');
+        const clientTrigger = screen.getByTestId('select-client');
+        expect(clientTrigger).toBeDisabled();
+        expect(clientTrigger).toHaveTextContent('Alpha');
       });
 
       // Cycle 2: Close modal
@@ -1316,9 +1321,8 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       rerender(<InvoiceCreateModal isOpen={true} onClose={vi.fn()} />);
 
-      const clientDisplayFresh = screen.getByTestId('display-client-name') as HTMLInputElement;
-      expect(clientDisplayFresh).toBeDisabled();
-      expect(clientDisplayFresh.value).toBe('');
+      const clientTriggerFresh = screen.getByTestId('select-client');
+      expect(clientTriggerFresh).not.toBeDisabled();
       const wrTriggerFresh = screen.getByTestId('select-work-request');
       expect(wrTriggerFresh).not.toBeDisabled();
     });
@@ -1374,9 +1378,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         { wrapper }
       );
 
-      const clientInput = screen.getByTestId('display-client-name') as HTMLInputElement;
+      const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
       await waitFor(() => {
-        expect(clientInput.value).toBe(CLIENT_1.name);
+        expect(clientSelect.value).toBe(CLIENT_1.id);
       });
 
       // Cycle 2: Close modal
@@ -1392,8 +1396,8 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       );
 
       await waitFor(() => {
-        const currentInput = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(currentInput.value).toBe(CLIENT_2.name);
+        const currentSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(currentSelect.value).toBe(CLIENT_2.id);
       });
 
       fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '500' } });
@@ -1417,8 +1421,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       rerender(<CreateDisbursementModal isOpen={true} onClose={vi.fn()} />);
 
       await waitFor(() => {
-        const freshInput = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(freshInput.value).toBe('');
+        const freshSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(freshSelect.value).toBe('');
+        expect(freshSelect.disabled).toBe(false);
       });
       const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
       expect(wrSelect.value).toBe('');

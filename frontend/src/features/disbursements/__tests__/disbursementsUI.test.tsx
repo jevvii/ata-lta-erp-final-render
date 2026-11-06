@@ -195,11 +195,11 @@ describe('Disbursements UI Components & Integration', () => {
 
       // Check required inputs (UAT2-12: dropdowns & auto-detected client display, manual inputs removed)
       expect(screen.getByTestId('select-work-request')).toBeInTheDocument();
-      expect(screen.getByTestId('display-client-name')).toBeInTheDocument();
+      expect(screen.getByTestId('select-client')).toBeInTheDocument();
       expect(screen.getByTestId('select-work-request-task')).toBeInTheDocument();
       expect(screen.queryByTestId('input-work-request-id')).not.toBeInTheDocument();
       expect(screen.queryByTestId('input-client-id')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('select-client')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('display-client-name')).not.toBeInTheDocument();
       expect(screen.getByTestId('select-category')).toBeInTheDocument();
       expect(screen.getByTestId('select-fund-source')).toBeInTheDocument();
       expect(screen.getByTestId('input-amount')).toBeInTheDocument();
@@ -316,7 +316,7 @@ describe('Disbursements UI Components & Integration', () => {
       );
 
       expect(screen.getByTestId('select-work-request')).toBeDisabled();
-      expect(screen.getByTestId('display-client-name')).toBeDisabled();
+      expect(screen.getByTestId('select-client')).toBeDisabled();
       expect(screen.getByTestId('select-work-request-task')).toBeDisabled();
     });
 
