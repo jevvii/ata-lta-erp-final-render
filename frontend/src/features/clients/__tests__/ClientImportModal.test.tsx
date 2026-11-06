@@ -224,6 +224,136 @@ describe('ClientImportModal Component', () => {
     expect(screen.getByTestId('start-import-btn')).toHaveTextContent('Import 1 Client');
   });
 
+  it('correctly parses retainer fee of 4,000.00, displays ₱4,000.00/mo in preview, and sends 4000 in payload', async () => {
+    let capturedPayload: Record<string, unknown> | null = null;
+
+    global.fetch = vi.fn().mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes('/clients') && options?.method === 'POST') {
+        capturedPayload = JSON.parse((options.body as string) || '{}');
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'c-created-retainer',
+              entity: 'ATA',
+              name: capturedPayload?.name,
+              tin: capturedPayload?.tin,
+              retainer: true,
+              retainerFee: capturedPayload?.retainerFee,
+              status: 'Active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              version: 1,
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
+    });
+
+    const { wrapper } = createWrapper();
+    render(<ClientImportModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+
+    const csvContent = [
+      'Name,TIN,Entity,On Retainer,Retainer\'s Fee,RDO Code,Trade Name,Business Address,Point of Contact',
+      'Acme Retainer Corp,123-456-789-00001,ATA,yes,"4,000.00",034A,Acme DBA,123 Makati Ave,John Doe',
+    ].join('\n');
+
+    const file = new File([csvContent], 'retainer_clients.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByTestId('csv-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('validated-records-preview')).toBeInTheDocument();
+    });
+
+    const preview = screen.getByTestId('validated-records-preview');
+    expect(preview).toHaveTextContent('Acme Retainer Corp');
+    expect(preview).toHaveTextContent('ATA');
+    expect(preview).toHaveTextContent('₱4,000.00/mo');
+
+    // Click Import
+    fireEvent.click(screen.getByTestId('start-import-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Import Results/i)).toBeInTheDocument();
+    });
+
+    expect(capturedPayload).not.toBeNull();
+    expect(capturedPayload).toMatchObject({
+      name: 'Acme Retainer Corp',
+      tin: '123-456-789-00001',
+      entity: 'ATA',
+      retainer: true,
+      retainerFee: 4000,
+    });
+  });
+
+  it('correctly handles unquoted comma 4,000.00 fee in ClientImportModal', async () => {
+    let capturedPayload: Record<string, unknown> | null = null;
+
+    global.fetch = vi.fn().mockImplementation(async (url: string, options?: RequestInit) => {
+      if (url.includes('/clients') && options?.method === 'POST') {
+        capturedPayload = JSON.parse((options.body as string) || '{}');
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 'c-created-unquoted',
+              entity: 'ATA',
+              name: capturedPayload?.name,
+              tin: capturedPayload?.tin,
+              retainer: true,
+              retainerFee: capturedPayload?.retainerFee,
+              status: 'Active',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              version: 1,
+            },
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+      });
+    });
+
+    const { wrapper } = createWrapper();
+    render(<ClientImportModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+
+    // Unquoted comma in Retainer's Fee
+    const csvContent = [
+      'Name,TIN,Entity,On Retainer,Retainer\'s Fee,RDO Code,Trade Name,Business Address,Point of Contact',
+      'Unquoted Fee Corp,123-456-789-00001,ATA,yes,4,000.00,034A,Unquoted DBA,123 Makati Ave,John Doe',
+    ].join('\n');
+
+    const file = new File([csvContent], 'unquoted_fee.csv', { type: 'text/csv' });
+    fireEvent.change(screen.getByTestId('csv-file-input'), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('validated-records-preview')).toBeInTheDocument();
+    });
+
+    const preview = screen.getByTestId('validated-records-preview');
+    expect(preview).toHaveTextContent('Unquoted Fee Corp');
+    expect(preview).toHaveTextContent('₱4,000.00/mo');
+
+    fireEvent.click(screen.getByTestId('start-import-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Import Results/i)).toBeInTheDocument();
+    });
+
+    expect(capturedPayload).toMatchObject({
+      name: 'Unquoted Fee Corp',
+      retainerFee: 4000,
+      rdoCode: '034A',
+    });
+  });
+
   it('executes sequential import, reports progress, and surfaces successes and server errors', async () => {
     const validClientResponse = {
       id: 'c-created-1',

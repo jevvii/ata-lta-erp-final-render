@@ -387,6 +387,46 @@ export function ClientImportModal({ isOpen, onClose }: ClientImportModalProps) {
               </div>
             )}
 
+            {/* Validated Records Preview */}
+            {validatedRecords.length > 0 && (
+              <div className="space-y-1.5">
+                <span className="text-xs font-semibold text-[#1E293B] block">
+                  Records to Import Preview:
+                </span>
+                <div
+                  className="max-h-44 overflow-y-auto border border-[#E2E8F0] rounded-[8px] p-2 bg-[#FFFFFF] divide-y divide-[#F1F5F9]"
+                  data-testid="validated-records-preview"
+                >
+                  {validatedRecords.map((item) => (
+                    <div
+                      key={item.rowNum}
+                      className="flex items-center justify-between py-1.5 px-2 text-xs"
+                    >
+                      <div className="flex items-center gap-2 truncate max-w-[340px]">
+                        <span className="truncate text-[#1E293B]">
+                          <strong className="text-[#475569]">Row {item.rowNum}:</strong> {item.record.name}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 font-medium shrink-0 bg-[#F1F5F9] text-[#475569] border-[#CBD5E1]"
+                        >
+                          {item.record.entity}
+                        </Badge>
+                      </div>
+                      <span className="text-xs font-medium text-[#1E293B] shrink-0">
+                        {item.record.retainer
+                          ? `₱${(item.record.retainerFee ?? 0).toLocaleString('en-US', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}/mo`
+                          : 'Standard'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {validationErrors.length > 0 && (
               <div className="space-y-1.5">
                 <span className="text-xs font-semibold text-[#DC2626] block">
