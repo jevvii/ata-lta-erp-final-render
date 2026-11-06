@@ -138,7 +138,7 @@ export function parseRetainerFee(raw: string): number {
 
   const cleaned = trimmed.replace(/[ ,]/g, '');
   const val = Number(cleaned);
-  if (isNaN(val)) {
+  if (!Number.isFinite(val)) {
     return NaN;
   }
 
@@ -146,7 +146,8 @@ export function parseRetainerFee(raw: string): number {
   if (result === 0) {
     return 0;
   }
-  return Math.round(result * 100) / 100;
+  const rounded = Math.round(result * 100) / 100;
+  return Number.isFinite(rounded) ? rounded : NaN;
 }
 
 /**
@@ -284,6 +285,15 @@ export function validateCsvData(
       } else {
         break;
       }
+    }
+
+    if (normalizedRow.length > headerRow.length) {
+      errors.push({
+        rowNum,
+        name: normalizedRow[nameIdx]?.trim() || `Row ${rowNum}`,
+        messages: ['Too many CSV columns. Quote fields containing commas and check the retainer fee.'],
+      });
+      return;
     }
 
     const name = normalizedRow[nameIdx]?.trim() || '';

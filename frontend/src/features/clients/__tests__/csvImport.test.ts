@@ -139,6 +139,11 @@ describe('csvImport lib: pure parsing, validation, and template utilities', () =
       expect(parseRetainerFee('-0')).toBe(0);
     });
 
+    it('rejects fees that overflow a finite amount during parsing or rounding', () => {
+      expect(parseRetainerFee('9'.repeat(400))).toBeNaN();
+      expect(parseRetainerFee('9'.repeat(308))).toBeNaN();
+    });
+
     it('rejects invalid or malformed number strings with NaN', () => {
       expect(parseRetainerFee('')).toBeNaN();
       expect(parseRetainerFee('   ')).toBeNaN();
@@ -371,6 +376,18 @@ describe('csvImport lib: pure parsing, validation, and template utilities', () =
       expect(res5.errors).toHaveLength(0);
       expect(res5.records).toHaveLength(1);
       expect(res5.records[0]!.record.retainerFee).toBe(4000);
+    });
+
+    it('rejects extra columns left over after repairing an unquoted grouped fee', () => {
+      const rows = parseCSV(
+        "Name,TIN,Entity,On Retainer,Retainer's Fee,RDO Code,Trade Name,Business Address,Point of Contact\n" +
+        'Acme Corp,123-456-789-00001,ATA,yes,4,000,00,034A,Acme DBA,123 Makati Ave,John Doe'
+      );
+      const result = validateCsvData(rows);
+      expect(result.records).toHaveLength(0);
+      expect(result.errors[0]?.messages).toContain(
+        'Too many CSV columns. Quote fields containing commas and check the retainer fee.'
+      );
     });
 
     it('rejects invalid or negative retainer fee strings with clear validation error', () => {
