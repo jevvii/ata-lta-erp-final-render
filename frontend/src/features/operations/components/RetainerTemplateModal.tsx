@@ -30,6 +30,8 @@ import { useRetainerMutations } from '@/features/operations/api/useRetainers';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { useClients } from '@/features/operations/api/useClients';
+import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { TaskTypeSelect } from '@/features/operations/lib/taskTypes';
 import { useUsersList } from '@/features/admin/api/useUsers';
 import { usePermission } from '@/lib/permissions';
@@ -68,6 +70,8 @@ export function RetainerTemplateModal({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [clientId, setClientId] = useState<string>('');
+  const [clientSearch, setClientSearch] = useState<string>('');
+  const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(clients), [clients]);
   const [schedule, setSchedule] = useState<string>('monthly');
   const [priority, setPriority] = useState<Priority>('Normal');
   const [pfAmount, setPfAmount] = useState<string | number>('');
@@ -117,10 +121,12 @@ export function RetainerTemplateModal({
         }))
       );
       setErrors({});
+      setClientSearch('');
     } else {
       setName('');
       setDescription('');
       setClientId('');
+      setClientSearch('');
       setSchedule('monthly');
       setPriority('Normal');
       setPfAmount('');
@@ -390,12 +396,40 @@ export function RetainerTemplateModal({
                   <SelectValue placeholder="All Clients / Unassigned" />
                 </SelectTrigger>
                 <SelectContent>
+                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                   <SelectItem value="none">None (Select upon generation)</SelectItem>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs">
-                      {c.name} ({c.entity})
-                    </SelectItem>
-                  ))}
+                  {(() => {
+                    const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
+                    const selectedClient = clients.find((c) => c.id === clientId);
+                    const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
+
+                    return (
+                      <>
+                        {selectedIsFilteredOut && (
+                          <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                            <ClientSelectOptionContent
+                              client={selectedClient}
+                              isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                            />
+                          </SelectItem>
+                        )}
+                        {filtered.length === 0 ? (
+                          <div className="py-3 px-2 text-center text-xs text-[#64748B]">
+                            No matching clients found
+                          </div>
+                        ) : (
+                          filtered.map((c) => (
+                            <SelectItem key={c.id} value={c.id} className="text-xs">
+                              <ClientSelectOptionContent
+                                client={c}
+                                isDuplicate={duplicateClientIds.has(c.id)}
+                              />
+                            </SelectItem>
+                          ))
+                        )}
+                      </>
+                    );
+                  })()}
                 </SelectContent>
               </Select>
             </div>

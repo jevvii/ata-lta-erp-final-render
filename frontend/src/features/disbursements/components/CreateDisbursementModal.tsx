@@ -39,6 +39,7 @@ import {
 import { useTeam } from '@/features/operations/api/useTeam';
 import { useInvoices } from '@/features/billing/api/useInvoices';
 import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
+import { formatAutoDetectedClientDisplay } from '@/features/clients/lib/clientSelectUtils';
 import type { ClientSummary } from '@/features/operations/api/useClients';
 import type { WorkRequest, Task } from '@/features/operations/api/types';
 import type { CreateDisbursementInput, FundSource } from '../api/types';
@@ -648,17 +649,28 @@ export function CreateDisbursementModal({
 
   const clientDisplayName = React.useMemo(() => {
     if (selectedWr) {
-      return (
+      const wrClientId = selectedWr.clientId || selectedWr.client_id;
+      const matchedClient = wrClientId ? clients.find((c) => c.id === wrClientId) : undefined;
+      const wrClientTin =
+        (selectedWr as { clientTin?: string | null; client_tin?: string | null })?.clientTin ||
+        (selectedWr as { client_tin?: string | null })?.client_tin;
+      const fallbackName =
         selectedWr.clientName ||
         selectedWr.client_name ||
-        clients.find((c) => c.id === (selectedWr.clientId || selectedWr.client_id))?.name ||
-        ((selectedWr.clientId || selectedWr.client_id)
-          ? `Client (${selectedWr.clientId || selectedWr.client_id})`
-          : '')
-      );
+        selectedWr.client?.name ||
+        matchedClient?.name ||
+        (wrClientId ? `Client (${wrClientId})` : '');
+      const clientWithTin = matchedClient
+        ? { ...matchedClient, tin: matchedClient.tin || wrClientTin || null }
+        : wrClientTin
+          ? { id: wrClientId || '', name: fallbackName, tin: wrClientTin }
+          : matchedClient;
+      return formatAutoDetectedClientDisplay(clientWithTin, fallbackName);
     }
     if (clientId) {
-      return clients.find((c) => c.id === clientId)?.name || `Client (${clientId})`;
+      const matchedClient = clients.find((c) => c.id === clientId);
+      const fallbackName = matchedClient?.name || `Client (${clientId})`;
+      return formatAutoDetectedClientDisplay(matchedClient, fallbackName);
     }
     return '';
   }, [selectedWr, clientId, clients]);

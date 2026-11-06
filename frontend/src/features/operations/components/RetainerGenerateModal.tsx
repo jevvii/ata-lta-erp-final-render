@@ -21,6 +21,8 @@ import {
 import { AlertTriangle, Layers, Calendar } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
+import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import { AssignerSelect } from './AssignerSelect';
 import { TaskTypeBadge } from '../lib/taskTypes';
@@ -64,6 +66,7 @@ export function RetainerGenerateModal({
     String(new Date().getFullYear())
   );
   const [clientId, setClientId] = useState<string>('');
+  const [clientSearch, setClientSearch] = useState<string>('');
   const [dueDate, setDueDate] = useState<string>('');
   const [priority, setPriority] = useState<Priority>('Normal');
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
@@ -75,6 +78,7 @@ export function RetainerGenerateModal({
   const { data: templates = [], isLoading: isTemplatesLoading } =
     useRetainerTemplates({ enabled: isOpen });
   const { data: clients = [] } = useClients(undefined, { enabled: isOpen });
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
   const { data: team = [] } = useTeam();
   const { generateFromTemplate } = useRetainerMutations();
   const activeEntity = useSessionStore((state) => state.activeEntity);
@@ -342,12 +346,40 @@ export function RetainerGenerateModal({
                   <SelectValue placeholder="All retainer clients" />
                 </SelectTrigger>
                 <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                   <SelectItem value="all" className="text-xs">— All Retainer Clients —</SelectItem>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs">
-                      {c.name} ({c.entity})
-                    </SelectItem>
-                  ))}
+                  {(() => {
+                    const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
+                    const selectedClient = clients.find((c) => c.id === clientId);
+                    const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
+
+                    return (
+                      <>
+                        {selectedIsFilteredOut && (
+                          <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                            <ClientSelectOptionContent
+                              client={selectedClient}
+                              isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                            />
+                          </SelectItem>
+                        )}
+                        {filtered.length === 0 ? (
+                          <div className="py-3 px-2 text-center text-xs text-[#64748B]">
+                            No matching clients found
+                          </div>
+                        ) : (
+                          filtered.map((c) => (
+                            <SelectItem key={c.id} value={c.id} className="text-xs">
+                              <ClientSelectOptionContent
+                                client={c}
+                                isDuplicate={duplicateClientIds.has(c.id)}
+                              />
+                            </SelectItem>
+                          ))
+                        )}
+                      </>
+                    );
+                  })()}
                 </SelectContent>
               </Select>
             </div>

@@ -31,6 +31,8 @@ import {
   getContactPlaceholder,
   getContactMaxLength,
 } from '../lib/formatters';
+import { getDuplicateClientIds, matchesClientSearch } from '../lib/clientSelectUtils';
+import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import type { Client, ContactDetailType } from '../api/types';
 
 export interface ClientModalProps {
@@ -67,7 +69,13 @@ export function ClientModal({
   const { data: registeredUsers = [] } = useRegisteredUsers();
   const { data: clientsData } = useClientsList({ limit: 100 });
   const allClients = clientsData?.data || [];
-  const availableClients = allClients.filter((c) => c.id !== client?.id);
+  const [relatedSearch, setRelatedSearch] = useState('');
+  const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(allClients), [allClients]);
+  const availableClients = React.useMemo(() => {
+    return allClients
+      .filter((c) => c.id !== client?.id)
+      .filter((c) => matchesClientSearch(c, relatedSearch));
+  }, [allClients, client?.id, relatedSearch]);
 
   const isEditing = Boolean(client);
 
@@ -133,6 +141,7 @@ export function ClientModal({
       setContactDetails([]);
       setRelatedCompanies([]);
     }
+    setRelatedSearch('');
     setErrors({});
   }, [client, isOpen, defaultEntity]);
 
@@ -802,10 +811,15 @@ export function ClientModal({
                         >
                           <SelectValue placeholder="— Select Client —" />
                         </SelectTrigger>
-                        <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                        <SelectContent data-radix-select-viewport="" className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                          <ClientSelectSearchHeader
+                            value={relatedSearch}
+                            onChange={setRelatedSearch}
+                            placeholder="Search affiliate name or TIN..."
+                          />
                           {availableClients.length === 0 ? (
                             <SelectItem value="none" disabled className="text-xs">
-                              No other clients available
+                              {relatedSearch ? 'No matching clients found' : 'No other clients available'}
                             </SelectItem>
                           ) : (
                             availableClients.map((c) => (
@@ -816,20 +830,42 @@ export function ClientModal({
                                 className="text-xs"
                                 data-testid={`related-client-option-${c.id}`}
                               >
-                                {c.name} {c.entity ? `(${c.entity})` : ''}
+                                <ClientSelectOptionContent
+                                  client={c}
+                                  isDuplicate={duplicateClientIds.has(c.id)}
+                                  showEntity
+                                />
                               </SelectItem>
                             ))
                           )}
                           {/* If rc.relatedClientId is set but not in availableClients, keep it visible */}
                           {rc.relatedClientId &&
                             !availableClients.some((c) => c.id === rc.relatedClientId) && (
-                              <SelectItem
-                                key={rc.relatedClientId}
-                                value={rc.relatedClientId}
-                                className="text-xs"
-                              >
-                                Client ID: {rc.relatedClientId}
-                              </SelectItem>
+                              (() => {
+                                const matched = allClients.find((c) => c.id === rc.relatedClientId);
+                                return matched ? (
+                                  <SelectItem
+                                    key={rc.relatedClientId}
+                                    value={rc.relatedClientId}
+                                    className="hidden"
+                                    data-testid={`related-client-option-${rc.relatedClientId}`}
+                                  >
+                                    <ClientSelectOptionContent
+                                      client={matched}
+                                      isDuplicate={duplicateClientIds.has(matched.id)}
+                                      showEntity
+                                    />
+                                  </SelectItem>
+                                ) : (
+                                  <SelectItem
+                                    key={rc.relatedClientId}
+                                    value={rc.relatedClientId}
+                                    className="text-xs"
+                                  >
+                                    Client ID: {rc.relatedClientId}
+                                  </SelectItem>
+                                );
+                              })()
                             )}
                         </SelectContent>
                       </Select>

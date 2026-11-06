@@ -45,6 +45,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
@@ -73,6 +81,17 @@ export interface TransmittalFormModalProps {
   onClose: () => void;
   transmittalToEdit?: Transmittal | null;
   prefill?: FinancialPrefill;
+  clients?: Array<{
+    id: string;
+    name: string;
+    address?: string;
+    tin?: string;
+    tradeName?: string;
+    trade_name?: string;
+    clientNumber?: string;
+    client_number?: string;
+    entity?: string;
+  }>;
 }
 
 interface FormLineItem {
@@ -87,6 +106,7 @@ export function TransmittalFormModal({
   onClose,
   transmittalToEdit,
   prefill,
+  clients: clientsProp,
 }: TransmittalFormModalProps) {
   const isEditMode = Boolean(transmittalToEdit);
 
@@ -94,7 +114,10 @@ export function TransmittalFormModal({
   const updateMutation = useUpdateTransmittal();
 
   // Load clients and work requests for selection
-  const { data: clients = [] } = useClients();
+  const { data: clientsData = [] } = useClients();
+  const clients = clientsProp ?? clientsData;
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(clients), [clients]);
   const { data: workRequestsData } = useWorkRequests({ archived: false });
   const workRequests = React.useMemo(() => {
     if (!workRequestsData) return [];
@@ -255,6 +278,7 @@ export function TransmittalFormModal({
       setRecipientName('');
       setRecipientDetails('');
       setNotes('');
+      setClientSearch('');
       setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
       setLinkedDisbursementIds([]);
       setLinkedInvoiceIds([]);
@@ -554,11 +578,16 @@ export function TransmittalFormModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
+                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                   {clients.map((c) => {
-                    const clientNum = (c as { client_number?: string; clientNumber?: string }).client_number || (c as { client_number?: string; clientNumber?: string }).clientNumber;
+                    const matches = matchesClientSearch(c, clientSearch);
+                    if (!matches && c.id !== clientId) return null;
                     return (
-                      <SelectItem key={c.id} value={c.id}>
-                        {clientNum ? `${clientNum} · ${c.name} (${c.entity})` : `${c.name} (${c.entity})`}
+                      <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                        <ClientSelectOptionContent
+                          client={c}
+                          isDuplicate={duplicateClientIds.has(c.id)}
+                        />
                       </SelectItem>
                     );
                   })}

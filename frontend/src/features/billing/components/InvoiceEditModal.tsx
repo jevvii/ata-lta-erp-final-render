@@ -14,6 +14,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients, type ClientSummary } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
@@ -256,6 +264,7 @@ export function InvoiceEditModal({
       setOriginWrId('');
       setStoredLinkageError(null);
       setFormError(null);
+      setClientSearch('');
       setLinkedDisbursementIds([]);
     }
   }, [isOpen, invoice]);
@@ -270,6 +279,9 @@ export function InvoiceEditModal({
     }
     return [];
   }, [clientsData]);
+
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
 
   const automaticDetails = useMemo(() => {
     if (!invoice) return {};
@@ -846,6 +858,7 @@ export function InvoiceEditModal({
                 <SelectValue placeholder="Select a client..." />
               </SelectTrigger>
               <SelectContent>
+                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                 {clientId && !clients.some((c) => c.id === clientId) && (
                   <SelectItem value={clientId}>
                     {invoice.client_number || invoice.clientNumber
@@ -854,13 +867,15 @@ export function InvoiceEditModal({
                   </SelectItem>
                 )}
                 {clients.map((c) => {
-                  const clientNum =
-                    (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
-                    (c as { client_number?: string | null })?.client_number;
-                  const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                  const matches = matchesClientSearch(c, clientSearch);
+                  if (!matches && c.id !== clientId) return null;
                   return (
-                    <SelectItem key={c.id} value={c.id}>
-                      {label}
+                    <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                      <ClientSelectOptionContent
+                        client={c}
+                        isDuplicate={duplicateClientIds.has(c.id)}
+                        showClientNumber
+                      />
                     </SelectItem>
                   );
                 })}

@@ -17,6 +17,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
@@ -115,6 +123,8 @@ export function InvoiceCreateModal({
   // Clients & Work Requests queries
   const { data: clientsData } = useClients();
   const clients = clientsData || [];
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
 
   const { data: workRequestsData } = useWorkRequests(
     { clientId: prefill?.clientId || undefined },
@@ -205,6 +215,7 @@ export function InvoiceCreateModal({
       setLinkedDisbursementIds([]);
       setInvoiceNumber('');
       setNotes('');
+      setClientSearch('');
       setFormError(null);
     }
     prevIsOpenRef.current = isOpen;
@@ -709,15 +720,18 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
+                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                   <SelectItem value="__all__">All Clients (Auto-detect from Work Request)</SelectItem>
                   {clients.map((c) => {
-                    const clientNum =
-                      (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
-                      (c as { client_number?: string | null })?.client_number;
-                    const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                    const matches = matchesClientSearch(c, clientSearch);
+                    if (!matches && c.id !== clientId) return null;
                     return (
-                      <SelectItem key={c.id} value={c.id}>
-                        {label}
+                      <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                        <ClientSelectOptionContent
+                          client={c}
+                          isDuplicate={duplicateClientIds.has(c.id)}
+                          showClientNumber
+                        />
                       </SelectItem>
                     );
                   })}

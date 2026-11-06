@@ -5,11 +5,18 @@ import { useSessionStore } from '@/lib/session';
 export interface ClientSummary {
   id: string;
   name: string;
-  entity: 'ATA' | 'LTA';
+  entity?: 'ATA' | 'LTA' | 'BOTH' | string;
   tin?: string | null;
+  tradeName?: string | null;
+  trade_name?: string | null;
+  clientNumber?: string | null;
+  client_number?: string | null;
+  retainerAmount?: number;
+  status?: string;
+  email?: string;
+  contactPerson?: string;
   rdoCode?: string | null;
   address?: string | null;
-  status?: string;
   retainer?: boolean;
 }
 

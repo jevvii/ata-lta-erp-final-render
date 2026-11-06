@@ -4,6 +4,7 @@
  * Filter bar supporting search, category filter (9 categories), and physical lifecycle filter.
  */
 
+import React, { useState, useMemo } from 'react';
 import { Search, RotateCcw, Plus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  type ClientSelectItemLike,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { DOCUMENT_CATEGORIES, DOCUMENT_LIFECYCLE_STAGES } from '../api/types';
 import { CATEGORY_LABELS, LIFECYCLE_LABELS } from '../constants';
 import { DUE_DATE_FILTER_OPTIONS } from '@/lib/dateFilters';
@@ -34,7 +44,7 @@ export interface DocumentFilterBarProps {
   dueDate?: string;
   onDueDateChange?: (value: string) => void;
   workRequests?: Array<{ id: string; title: string; work_order_number?: string | null }>;
-  clients?: Array<{ id: string; name: string }>;
+  clients?: ClientSelectItemLike[];
   team?: Array<{ id: string; name: string }>;
   isAdmin?: boolean;
   onReset: () => void;
@@ -65,6 +75,9 @@ export function DocumentFilterBar({
   onUploadClick,
   canUpload = false,
 }: DocumentFilterBarProps) {
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+
   const isFiltered = Boolean(
     search ||
       category ||
@@ -163,12 +176,40 @@ export function DocumentFilterBar({
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
               <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                 <SelectItem value="all">All Clients</SelectItem>
-                {clients.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                {(() => {
+                  const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
+                  const selectedClient = clients.find((c) => c.id === client);
+                  const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
+
+                  return (
+                    <>
+                      {selectedIsFilteredOut && (
+                        <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                          <ClientSelectOptionContent
+                            client={selectedClient}
+                            isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                          />
+                        </SelectItem>
+                      )}
+                      {filtered.length === 0 ? (
+                        <div className="py-3 px-2 text-center text-xs text-[#64748B]">
+                          No matching clients found
+                        </div>
+                      ) : (
+                        filtered.map((c) => (
+                          <SelectItem key={c.id} value={c.id}>
+                            <ClientSelectOptionContent
+                              client={c}
+                              isDuplicate={duplicateClientIds.has(c.id)}
+                            />
+                          </SelectItem>
+                        ))
+                      )}
+                    </>
+                  );
+                })()}
               </SelectContent>
             </Select>
           </div>
@@ -222,7 +263,10 @@ export function DocumentFilterBar({
           <Button
             variant="ghost"
             size="sm"
-            onClick={onReset}
+            onClick={() => {
+              setClientSearch('');
+              onReset();
+            }}
             className="h-9 text-xs text-[#475569] hover:text-[#1E293B] rounded-[6px]"
             data-testid="document-reset-filters-btn"
           >

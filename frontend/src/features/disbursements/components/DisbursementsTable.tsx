@@ -10,6 +10,21 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { cn } from '@/lib/utils';
 import { DISBURSEMENT_CATEGORIES, DISBURSEMENT_STATUSES, FUND_SOURCES } from '../api/schemas';
 import { useDisbursementsList } from '../api/useDisbursements';
@@ -58,6 +73,8 @@ export function DisbursementsTable({
   const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
   const { data: clientsData = [] } = useClients();
   const { data: teamData = [] } = useTeam();
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsData), [clientsData]);
 
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const activeSelectedId = selectedId !== undefined ? selectedId : internalSelectedId;
@@ -339,23 +356,34 @@ export function DisbursementsTable({
           </select>
 
           {/* Clients Filter */}
-          <select
-            value={selectedClient}
-            onChange={(e) => {
-              setSelectedClient(e.target.value);
+          <Select
+            value={selectedClient || 'ALL'}
+            onValueChange={(val) => {
+              setSelectedClient(val === 'ALL' ? '' : val);
               setPage(1);
             }}
-            className="text-[11px] h-6 px-1 py-0 border rounded-[4px] bg-surface border-border text-ink focus:outline-none focus:ring-1 focus:ring-primary shrink-0 max-w-[76px] sm:max-w-[88px] truncate"
-            data-testid="filter-client-select"
-            title="Filter by Client"
           >
-            <option value="">All Clients</option>
-            {clientsData.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger
+              className="h-6 text-[11px] bg-white border border-[#E2E8F0] rounded px-2 text-[#475569] min-w-[140px] max-w-[220px]"
+              data-testid="filter-client-select"
+              title="Filter by Client"
+            >
+              <SelectValue placeholder="All Clients" />
+            </SelectTrigger>
+            <SelectContent>
+              <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+              <SelectItem value="ALL">All Clients</SelectItem>
+              {clientsData.map((c) => {
+                const matches = matchesClientSearch(c, clientSearch);
+                if (!matches && c.id !== selectedClient) return null;
+                return (
+                  <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                    <ClientSelectOptionContent client={c} isDuplicate={duplicateClientIds.has(c.id)} />
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
 
           {/* Employee Filter (Admin only) */}
           {isAdmin && (

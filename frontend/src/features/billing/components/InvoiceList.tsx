@@ -29,6 +29,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useInvoices } from '../api/useInvoices';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
@@ -92,6 +100,8 @@ export function InvoiceList({
   // Queries
   const { data: clientsData } = useClients();
   const clientsList = clientsData || [];
+  const [clientSearch, setClientSearch] = useState('');
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsList), [clientsList]);
   const { data: rawWrs } = useWorkRequests({ archived: false });
   const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
   const { data: teamData = [] } = useTeam();
@@ -286,12 +296,17 @@ export function InvoiceList({
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
               <SelectContent>
+                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
                 <SelectItem value="all">All Clients</SelectItem>
-                {clientsList.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                {clientsList.map((c) => {
+                  const matches = matchesClientSearch(c, clientSearch);
+                  if (!matches && c.id !== clientFilter) return null;
+                  return (
+                    <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                      <ClientSelectOptionContent client={c} isDuplicate={duplicateClientIds.has(c.id)} />
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

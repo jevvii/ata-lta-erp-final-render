@@ -22,6 +22,8 @@ import {
 import { Layers, Calendar, Search, AlertTriangle } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
+import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import { ClientSelectOptionContent } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import { AssignerSelect } from './AssignerSelect';
 import { TaskTypeBadge } from '../lib/taskTypes';
@@ -152,15 +154,12 @@ export function OtherTemplateGenerateModal({
     );
   }, [selectedTemplate]);
 
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+
   // Search filter for clients
   const filteredClients = useMemo(() => {
     if (!clientSearch.trim()) return clients;
-    const q = clientSearch.toLowerCase();
-    return clients.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        (c.tin && c.tin.toLowerCase().includes(q))
-    );
+    return clients.filter((c) => matchesClientSearch(c, clientSearch));
   }, [clients, clientSearch]);
 
   // Project Team Members strictly: Manager (assignedTo) + Co-Assignees
@@ -367,18 +366,40 @@ export function OtherTemplateGenerateModal({
               >
                 <SelectValue placeholder="Select target client..." />
               </SelectTrigger>
-              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                {filteredClients.length === 0 ? (
-                  <div className="p-2 text-xs text-[#475569] text-center">
-                    No matching clients found
-                  </div>
-                ) : (
-                  filteredClients.map((c) => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs">
-                      {c.name} {c.entity ? `(${c.entity})` : ''}
-                    </SelectItem>
-                  ))
-                )}
+              <SelectContent data-radix-select-viewport="" className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                {(() => {
+                  const selectedClient = clients.find((c) => c.id === clientId);
+                  const selectedIsFilteredOut = selectedClient && !filteredClients.some((c) => c.id === selectedClient.id);
+
+                  return (
+                    <>
+                      {selectedIsFilteredOut && (
+                        <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                          <ClientSelectOptionContent
+                            client={selectedClient}
+                            isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                            showEntity
+                          />
+                        </SelectItem>
+                      )}
+                      {filteredClients.length === 0 ? (
+                        <div className="p-2 text-xs text-[#475569] text-center">
+                          No matching clients found
+                        </div>
+                      ) : (
+                        filteredClients.map((c) => (
+                          <SelectItem key={c.id} value={c.id} className="text-xs">
+                            <ClientSelectOptionContent
+                              client={c}
+                              isDuplicate={duplicateClientIds.has(c.id)}
+                              showEntity
+                            />
+                          </SelectItem>
+                        ))
+                      )}
+                    </>
+                  );
+                })()}
               </SelectContent>
             </Select>
             {clientError && (
