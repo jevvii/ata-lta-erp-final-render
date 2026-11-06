@@ -71,6 +71,85 @@ export function downloadCsvTemplate(): void {
 }
 
 /**
+ * Safely parse retainer fee from CSV cell or user input string:
+ * - Trims whitespace
+ * - Handles currency prefixes/suffixes (₱, PHP, pesos, peso, $)
+ * - Handles signs (+/-) before or after currency symbols
+ * - Supports plain decimals and standard comma/space thousand-separators
+ * - Rejects malformed separators, multiple decimals, or stray characters
+ * - Returns rounded 2-decimal number or NaN if invalid
+ */
+export function parseRetainerFee(raw: string): number {
+  if (typeof raw !== 'string') {
+    if (typeof raw === 'number' && !isNaN(raw)) {
+      return Math.round(raw * 100) / 100;
+    }
+    return NaN;
+  }
+
+  let trimmed = raw.trim();
+  if (!trimmed) {
+    return NaN;
+  }
+
+  let sign = 1;
+
+  // Sign before currency symbol
+  if (trimmed.startsWith('-')) {
+    sign = -1;
+    trimmed = trimmed.slice(1).trim();
+  } else if (trimmed.startsWith('+')) {
+    trimmed = trimmed.slice(1).trim();
+  }
+
+  // Leading currency token
+  const leadingCurrencyRegex = /^(?:php|₱|\$)\s*/i;
+  if (leadingCurrencyRegex.test(trimmed)) {
+    trimmed = trimmed.replace(leadingCurrencyRegex, '').trim();
+  }
+
+  // Sign after currency symbol (e.g. ₱-4,000.00)
+  if (sign === 1) {
+    if (trimmed.startsWith('-')) {
+      sign = -1;
+      trimmed = trimmed.slice(1).trim();
+    } else if (trimmed.startsWith('+')) {
+      trimmed = trimmed.slice(1).trim();
+    }
+  }
+
+  // Trailing currency token
+  const trailingCurrencyRegex = /\s*(?:pesos?|php|₱|\$)$/i;
+  if (trailingCurrencyRegex.test(trimmed)) {
+    trimmed = trimmed.replace(trailingCurrencyRegex, '').trim();
+  }
+
+  if (!trimmed) {
+    return NaN;
+  }
+
+  // Must match either plain number or valid thousand-grouped number (with comma or space)
+  const isPlain = /^(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed);
+  const isGrouped = /^\d{1,3}(?:[ ,]\d{3})+(?:\.\d+)?$/.test(trimmed);
+
+  if (!isPlain && !isGrouped) {
+    return NaN;
+  }
+
+  const cleaned = trimmed.replace(/[ ,]/g, '');
+  const val = Number(cleaned);
+  if (isNaN(val)) {
+    return NaN;
+  }
+
+  const result = sign * val;
+  if (result === 0) {
+    return 0;
+  }
+  return Math.round(result * 100) / 100;
+}
+
+/**
  * RFC4180-compliant CSV parser:
  * - Strips UTF-8 BOM if present
  * - Handles quoted fields with embedded commas, line breaks (CRLF or LF)
@@ -193,15 +272,29 @@ export function validateCsvData(
       return;
     }
 
-    const name = row[nameIdx]?.trim() || '';
-    const tin = row[tinIdx]?.trim() || '';
-    const entity = row[entityIdx]?.trim().toUpperCase() || '';
-    const retainerRaw = row[retainerIdx]?.trim().toLowerCase() || '';
-    const feeRaw = feeIdx !== -1 ? row[feeIdx]?.trim() : '';
-    const rdoCode = rdoIdx !== -1 ? row[rdoIdx]?.trim().toUpperCase() : '';
-    const tradeName = tradeIdx !== -1 ? row[tradeIdx]?.trim() : '';
-    const address = addrIdx !== -1 ? row[addrIdx]?.trim() : '';
-    const contactPersonRaw = pocIdx !== -1 ? row[pocIdx]?.trim() : '';
+    const normalizedRow = [...row];
+    while (feeIdx !== -1 && normalizedRow.length > headerRow.length) {
+      const cellA = normalizedRow[feeIdx]?.trim() ?? '';
+      const cellB = normalizedRow[feeIdx + 1]?.trim() ?? '';
+      if (
+        /^[+-]?(?:(?:php|₱|\$)\s*)?\d{1,3}(?:,\d{3})*$/i.test(cellA) &&
+        /^\d{3}(?:\.\d+)?(?:\s*(?:php|pesos?|₱|\$))?$/i.test(cellB)
+      ) {
+        normalizedRow.splice(feeIdx, 2, `${cellA},${cellB}`);
+      } else {
+        break;
+      }
+    }
+
+    const name = normalizedRow[nameIdx]?.trim() || '';
+    const tin = normalizedRow[tinIdx]?.trim() || '';
+    const entity = normalizedRow[entityIdx]?.trim().toUpperCase() || '';
+    const retainerRaw = normalizedRow[retainerIdx]?.trim().toLowerCase() || '';
+    const feeRaw = feeIdx !== -1 ? normalizedRow[feeIdx]?.trim() : '';
+    const rdoCode = rdoIdx !== -1 ? normalizedRow[rdoIdx]?.trim().toUpperCase() : '';
+    const tradeName = tradeIdx !== -1 ? normalizedRow[tradeIdx]?.trim() : '';
+    const address = addrIdx !== -1 ? normalizedRow[addrIdx]?.trim() : '';
+    const contactPersonRaw = pocIdx !== -1 ? normalizedRow[pocIdx]?.trim() : '';
 
     const rowErrors: string[] = [];
 
@@ -229,7 +322,7 @@ export function validateCsvData(
       if (!feeRaw) {
         rowErrors.push("Retainer's Fee is required when On Retainer is checked");
       } else {
-        const fee = parseFloat(feeRaw);
+        const fee = parseRetainerFee(feeRaw);
         if (isNaN(fee) || fee < 0) {
           rowErrors.push("Retainer's Fee must be a non-negative number");
         } else {

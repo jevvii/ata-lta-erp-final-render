@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   parseCSV,
+  parseRetainerFee,
   validateCsvData,
   generateCsvTemplate,
   downloadCsvTemplate,
@@ -94,6 +95,58 @@ describe('csvImport lib: pure parsing, validation, and template utilities', () =
       expect(appendChildSpy).toHaveBeenCalled();
       expect(removeChildSpy).toHaveBeenCalled();
       expect(revokeObjectURLMock).toHaveBeenCalledWith('blob:mock-url');
+    });
+  });
+
+  describe('parseRetainerFee', () => {
+    it('parses standard plain numbers and zero', () => {
+      expect(parseRetainerFee('4000')).toBe(4000);
+      expect(parseRetainerFee('4000.00')).toBe(4000);
+      expect(parseRetainerFee('0')).toBe(0);
+      expect(parseRetainerFee('0.00')).toBe(0);
+      expect(parseRetainerFee('0.5')).toBe(0.5);
+      expect(parseRetainerFee('.50')).toBe(0.5);
+    });
+
+    it('parses comma-grouped numbers and rounds to 2 decimals', () => {
+      expect(parseRetainerFee('4,000.00')).toBe(4000);
+      expect(parseRetainerFee('15,250.75')).toBe(15250.75);
+      expect(parseRetainerFee('1,234,567.89')).toBe(1234567.89);
+    });
+
+    it('supports spaces as thousand separators', () => {
+      expect(parseRetainerFee('4 000.00')).toBe(4000);
+      expect(parseRetainerFee('1 234 567.89')).toBe(1234567.89);
+    });
+
+    it('strips currency prefixes and suffixes (case-insensitive)', () => {
+      expect(parseRetainerFee('₱4,000.00')).toBe(4000);
+      expect(parseRetainerFee('PHP 4,000.00')).toBe(4000);
+      expect(parseRetainerFee('php 4,000.00')).toBe(4000);
+      expect(parseRetainerFee('4,000.00 pesos')).toBe(4000);
+      expect(parseRetainerFee('4000.00 pesos')).toBe(4000);
+      expect(parseRetainerFee('4000 peso')).toBe(4000);
+      expect(parseRetainerFee('$4,000.00')).toBe(4000);
+      expect(parseRetainerFee(' ₱ 4,000.00 ')).toBe(4000);
+    });
+
+    it('preserves signs before or after currency tokens', () => {
+      expect(parseRetainerFee('+₱4,000.00')).toBe(4000);
+      expect(parseRetainerFee('₱+4,000.00')).toBe(4000);
+      expect(parseRetainerFee('-4,000.00')).toBe(-4000);
+      expect(parseRetainerFee('-₱4,000.00')).toBe(-4000);
+      expect(parseRetainerFee('₱-4,000.00')).toBe(-4000);
+      expect(parseRetainerFee('-0')).toBe(0);
+    });
+
+    it('rejects invalid or malformed number strings with NaN', () => {
+      expect(parseRetainerFee('')).toBeNaN();
+      expect(parseRetainerFee('   ')).toBeNaN();
+      expect(parseRetainerFee('abc')).toBeNaN();
+      expect(parseRetainerFee('4000abc')).toBeNaN();
+      expect(parseRetainerFee('4.000.00')).toBeNaN();
+      expect(parseRetainerFee('4,,000')).toBeNaN();
+      expect(parseRetainerFee('12,34')).toBeNaN();
     });
   });
 
@@ -252,6 +305,86 @@ describe('csvImport lib: pure parsing, validation, and template utilities', () =
       ]);
       expect(nonRetainer.records[0]!.record.retainer).toBe(false);
       expect(nonRetainer.records[0]!.record.retainerFee).toBeNull();
+    });
+
+    it('parses formatted and comma-separated retainer fees without truncating to first digit', () => {
+      const testCases = [
+        { raw: '4,000.00', expected: 4000 },
+        { raw: '15,250.75', expected: 15250.75 },
+        { raw: '1,234,567.89', expected: 1234567.89 },
+        { raw: '₱4,000.00', expected: 4000 },
+        { raw: 'PHP 4,000.00', expected: 4000 },
+        { raw: '4,000.00 pesos', expected: 4000 },
+        { raw: '4000.00 pesos', expected: 4000 },
+        { raw: '$4,000.00', expected: 4000 },
+      ];
+
+      for (const { raw, expected } of testCases) {
+        const rows = [
+          validHeader,
+          ['Retainer Co', '123-456-789-00001', 'ATA', 'yes', raw, '', '', '', ''],
+        ];
+        const res = validateCsvData(rows);
+        expect(res.isValid).toBe(true);
+        expect(res.errors).toHaveLength(0);
+        expect(res.records[0]!.record.retainer).toBe(true);
+        expect(res.records[0]!.record.retainerFee).toBe(expected);
+      }
+    });
+
+    it('handles unquoted thousand-separator commas in Retainer fee column and preserves column alignment', () => {
+      // 9-column CSV with unquoted 4,000.00 in the Retainer's Fee column
+      const rawCsv9Col =
+        'Name,TIN,Entity,On Retainer,Retainer\'s Fee,RDO Code,Trade Name,Business Address,Point of Contact\n' +
+        'Acme Corp,123-456-789-00001,ATA,yes,4,000.00,034A,Acme DBA,123 Makati Ave,John Doe';
+
+      const parsedRows9 = parseCSV(rawCsv9Col);
+      // parseCSV splits unquoted 4,000.00 into ['4', '000.00'], producing 10 items in the data row
+      expect(parsedRows9[1]).toHaveLength(10);
+
+      const res9 = validateCsvData(parsedRows9);
+      expect(res9.isValid).toBe(true);
+      expect(res9.errors).toHaveLength(0);
+      expect(res9.records).toHaveLength(1);
+
+      const rec9 = res9.records[0]!.record;
+      expect(rec9.name).toBe('Acme Corp');
+      expect(rec9.tin).toBe('123-456-789-00001');
+      expect(rec9.entity).toBe('ATA');
+      expect(rec9.retainer).toBe(true);
+      expect(rec9.retainerFee).toBe(4000);
+      expect(rec9.rdoCode).toBe('034A');
+      expect(rec9.tradeName).toBe('Acme DBA');
+      expect(rec9.address).toBe('123 Makati Ave');
+      expect(rec9.contactPerson).toBe('John Doe');
+
+      // 5-column CSV with unquoted 4,000.00 at the end of the row
+      const rawCsv5Col =
+        'Name,TIN,Entity,On Retainer,Retainer\'s Fee\n' +
+        'Acme Corp,123-456-789-00001,ATA,yes,4,000.00';
+
+      const parsedRows5 = parseCSV(rawCsv5Col);
+      expect(parsedRows5[1]).toHaveLength(6);
+
+      const res5 = validateCsvData(parsedRows5);
+      expect(res5.isValid).toBe(true);
+      expect(res5.errors).toHaveLength(0);
+      expect(res5.records).toHaveLength(1);
+      expect(res5.records[0]!.record.retainerFee).toBe(4000);
+    });
+
+    it('rejects invalid or negative retainer fee strings with clear validation error', () => {
+      const invalidFeeStrings = ['-4,000.00', '-₱4,000.00', '4000abc', '4.000.00', 'abc'];
+      for (const invalidFee of invalidFeeStrings) {
+        const rows = [
+          validHeader,
+          ['Retainer Co', '123-456-789-00001', 'ATA', 'yes', invalidFee, '', '', '', ''],
+        ];
+        const res = validateCsvData(rows);
+        expect(res.records).toHaveLength(0);
+        expect(res.errors).toHaveLength(1);
+        expect(res.errors[0]!.messages).toContain("Retainer's Fee must be a non-negative number");
+      }
     });
 
     it('validates RDO Code format (up to 4 alphanumeric characters)', () => {

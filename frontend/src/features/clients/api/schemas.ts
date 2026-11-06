@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod';
+import { parseRetainerFee } from '../lib/csvImport';
 
 export const contactDetailSchema = z.object({
   id: z.string().optional(),
@@ -26,10 +27,14 @@ export const createClientSchema = z.object({
   address: z.string().max(500).optional().nullable(),
   entity: z.enum(['ATA', 'LTA']),
   retainer: z.boolean().default(false),
-  retainerFee: z.preprocess(
-    (val) => (val === '' || val === undefined || val === null ? null : Number(val)),
-    z.number().nonnegative('Retainer fee must be non-negative').nullable().optional()
-  ),
+  retainerFee: z.preprocess((val) => {
+    if (val === '' || val === undefined || val === null) return null;
+    if (typeof val === 'string') {
+      const parsed = parseRetainerFee(val);
+      return isNaN(parsed) ? Number(val) : parsed;
+    }
+    return Number(val);
+  }, z.number().nonnegative('Retainer fee must be non-negative').nullable().optional()),
   tradeName: z.string().max(255).optional().nullable(),
   contactUserId: z.preprocess(
     (val) => (val === '' || val === undefined || val === null ? null : val),
