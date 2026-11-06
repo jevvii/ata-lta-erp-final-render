@@ -58,7 +58,13 @@ import { runBlockingAction } from './BlockingActionModal';
 import { useWorkRequests, useWorkRequestMutations, prefetchWorkRequestDetail } from '../api/useWorkRequests';
 import { usePhaseTransitions } from '../api/usePhaseTransitions';
 import { useClients } from '../api/useClients';
-import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
 import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import { useDebounce } from '../hooks/useDebounce';
@@ -122,6 +128,7 @@ function WorkRequestListInner({
   const [priorityFilter, setPriorityFilter] = useState<string>('all');
   const [clientFilter, setClientFilter] = useState<string>('all');
   const [clientFilterSearch, setClientFilterSearch] = useState<string>('');
+  const [clientFilterSort, setClientFilterSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<string>('all');
   const [phaseFilter, setPhaseFilter] = useState<string>('all');
@@ -178,6 +185,7 @@ function WorkRequestListInner({
   const { data: rawClients } = useClients();
   const clients = Array.isArray(rawClients) ? rawClients : [];
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientFilterSort), [clients, clientFilterSort]);
   const { data: rawTeam } = useTeam();
   const team = Array.isArray(rawTeam) ? rawTeam : [];
   const { advancePhase } = usePhaseTransitions();
@@ -306,6 +314,7 @@ function WorkRequestListInner({
     setPriorityFilter('all');
     setClientFilter('all');
     setClientFilterSearch('');
+    setClientFilterSort(DEFAULT_CLIENT_SORT);
     setAssigneeFilter('all');
     setDateFilter('all');
     setPhaseFilter('all');
@@ -597,11 +606,16 @@ function WorkRequestListInner({
               <SelectValue placeholder="Client" />
             </SelectTrigger>
             <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-              <ClientSelectSearchHeader value={clientFilterSearch} onChange={setClientFilterSearch} />
+              <ClientSelectSearchHeader
+                value={clientFilterSearch}
+                onChange={setClientFilterSearch}
+                sortBy={clientFilterSort}
+                onSortChange={setClientFilterSort}
+              />
               <SelectItem value="all" className="text-xs">All Clients</SelectItem>
               {(() => {
-                const filtered = clients.filter((c) => matchesClientSearch(c, clientFilterSearch));
-                const selectedClient = clients.find((c) => c.id === clientFilter);
+                const filtered = sortedClients.filter((c) => matchesClientSearch(c, clientFilterSearch));
+                const selectedClient = sortedClients.find((c) => c.id === clientFilter);
                 const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
 
                 return (

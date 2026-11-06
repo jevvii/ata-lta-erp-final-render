@@ -98,3 +98,77 @@ export function formatAutoDetectedClientDisplay(
   const tin = getClientTin(client);
   return tin ? `${name} • TIN ${tin}` : name;
 }
+
+export type ClientSortOption =
+  | 'id_asc'
+  | 'id_desc'
+  | 'name_asc'
+  | 'name_desc'
+  | 'tin_asc'
+  | 'tin_desc';
+
+export const DEFAULT_CLIENT_SORT: ClientSortOption = 'id_asc';
+
+export const CLIENT_SORT_OPTIONS: ReadonlyArray<{ value: ClientSortOption; label: string }> = [
+  { value: 'id_asc', label: 'ID (0→9)' },
+  { value: 'id_desc', label: 'ID (9→0)' },
+  { value: 'name_asc', label: 'Name (A→Z)' },
+  { value: 'name_desc', label: 'Name (Z→A)' },
+  { value: 'tin_asc', label: 'TIN (0→9)' },
+  { value: 'tin_desc', label: 'TIN (9→0)' },
+];
+
+export function sortClients<T extends ClientSelectItemLike>(
+  clients: readonly T[],
+  sortBy: ClientSortOption = DEFAULT_CLIENT_SORT
+): T[] {
+  return [...clients].sort((a, b) => {
+    if (sortBy === 'id_asc' || sortBy === 'id_desc') {
+      const aNum = getClientNumber(a);
+      const bNum = getClientNumber(b);
+      const mult = sortBy === 'id_asc' ? 1 : -1;
+
+      // If only one has clientNumber: the one with clientNumber ALWAYS comes first
+      if (aNum && !bNum) return -1;
+      if (!aNum && bNum) return 1;
+
+      if (aNum && bNum) {
+        const cmp = aNum.localeCompare(bNum, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return mult * cmp;
+        return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });
+      }
+
+      // If neither has clientNumber: compare (a.id ?? '') vs (b.id ?? '')
+      const idCmp = (a.id ?? '').localeCompare(b.id ?? '', undefined, { numeric: true, sensitivity: 'base' });
+      if (idCmp !== 0) return mult * idCmp;
+      return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    if (sortBy === 'name_asc' || sortBy === 'name_desc') {
+      const mult = sortBy === 'name_asc' ? 1 : -1;
+      const cmp = (a.name ?? '').trim().localeCompare((b.name ?? '').trim(), undefined, { numeric: true, sensitivity: 'base' });
+      if (cmp !== 0) return mult * cmp;
+      const aId = getClientNumber(a) ?? a.id ?? '';
+      const bId = getClientNumber(b) ?? b.id ?? '';
+      return aId.localeCompare(bId, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    if (sortBy === 'tin_asc' || sortBy === 'tin_desc') {
+      const aTin = getClientTin(a);
+      const bTin = getClientTin(b);
+      const mult = sortBy === 'tin_asc' ? 1 : -1;
+
+      // If only one has tin: the one with tin ALWAYS comes first
+      if (aTin && !bTin) return -1;
+      if (!aTin && bTin) return 1;
+
+      if (aTin && bTin) {
+        const cmp = aTin.localeCompare(bTin, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return mult * cmp;
+      }
+      return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    return 0;
+  });
+}

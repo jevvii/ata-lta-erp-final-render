@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest, type ApiError } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
+import { sortClients, DEFAULT_CLIENT_SORT } from '@/features/clients/lib/clientSelectUtils';
 
 export interface ClientSummary {
   id: string;
@@ -67,7 +68,9 @@ export function useClients(filters?: ClientFilters, options?: { enabled?: boolea
         path,
         Object.keys(headers).length > 0 ? { headers } : undefined
       );
-      return res.data;
+      return Array.isArray(res.data)
+        ? sortClients(res.data, DEFAULT_CLIENT_SORT)
+        : res.data;
     },
     enabled: options?.enabled ?? true,
     staleTime: 60 * 1000,

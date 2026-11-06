@@ -17,6 +17,9 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -265,6 +268,7 @@ export function InvoiceEditModal({
       setStoredLinkageError(null);
       setFormError(null);
       setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setLinkedDisbursementIds([]);
     }
   }, [isOpen, invoice]);
@@ -281,7 +285,9 @@ export function InvoiceEditModal({
   }, [clientsData]);
 
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
 
   const automaticDetails = useMemo(() => {
     if (!invoice) return {};
@@ -858,7 +864,12 @@ export function InvoiceEditModal({
                 <SelectValue placeholder="Select a client..." />
               </SelectTrigger>
               <SelectContent>
-                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                <ClientSelectSearchHeader
+                  value={clientSearch}
+                  onChange={setClientSearch}
+                  sortBy={clientSort}
+                  onSortChange={setClientSort}
+                />
                 {clientId && !clients.some((c) => c.id === clientId) && (
                   <SelectItem value={clientId}>
                     {invoice.client_number || invoice.clientNumber
@@ -866,7 +877,7 @@ export function InvoiceEditModal({
                       : invoice.clients?.name || clientId}
                   </SelectItem>
                 )}
-                {clients.map((c) => {
+                {sortedClients.map((c) => {
                   const matches = matchesClientSearch(c, clientSearch);
                   if (!matches && c.id !== clientId) return null;
                   return (

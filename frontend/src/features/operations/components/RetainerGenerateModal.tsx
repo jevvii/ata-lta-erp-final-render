@@ -21,7 +21,13 @@ import {
 import { AlertTriangle, Layers, Calendar } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
-import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
 import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import { AssignerSelect } from './AssignerSelect';
@@ -67,6 +73,7 @@ export function RetainerGenerateModal({
   );
   const [clientId, setClientId] = useState<string>('');
   const [clientSearch, setClientSearch] = useState<string>('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const [dueDate, setDueDate] = useState<string>('');
   const [priority, setPriority] = useState<Priority>('Normal');
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
@@ -79,6 +86,7 @@ export function RetainerGenerateModal({
     useRetainerTemplates({ enabled: isOpen });
   const { data: clients = [] } = useClients(undefined, { enabled: isOpen });
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
   const { data: team = [] } = useTeam();
   const { generateFromTemplate } = useRetainerMutations();
   const activeEntity = useSessionStore((state) => state.activeEntity);
@@ -346,11 +354,16 @@ export function RetainerGenerateModal({
                   <SelectValue placeholder="All retainer clients" />
                 </SelectTrigger>
                 <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
                   <SelectItem value="all" className="text-xs">— All Retainer Clients —</SelectItem>
                   {(() => {
-                    const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
-                    const selectedClient = clients.find((c) => c.id === clientId);
+                    const filtered = sortedClients.filter((c) => matchesClientSearch(c, clientSearch));
+                    const selectedClient = sortedClients.find((c) => c.id === clientId);
                     const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
 
                     return (

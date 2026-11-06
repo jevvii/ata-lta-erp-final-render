@@ -30,7 +30,13 @@ import { useRetainerMutations } from '@/features/operations/api/useRetainers';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { useClients } from '@/features/operations/api/useClients';
-import { getDuplicateClientIds, matchesClientSearch } from '@/features/clients/lib/clientSelectUtils';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
 import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { TaskTypeSelect } from '@/features/operations/lib/taskTypes';
 import { useUsersList } from '@/features/admin/api/useUsers';
@@ -71,7 +77,9 @@ export function RetainerTemplateModal({
   const [description, setDescription] = useState('');
   const [clientId, setClientId] = useState<string>('');
   const [clientSearch, setClientSearch] = useState<string>('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = React.useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
   const [schedule, setSchedule] = useState<string>('monthly');
   const [priority, setPriority] = useState<Priority>('Normal');
   const [pfAmount, setPfAmount] = useState<string | number>('');
@@ -122,11 +130,13 @@ export function RetainerTemplateModal({
       );
       setErrors({});
       setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
     } else {
       setName('');
       setDescription('');
       setClientId('');
       setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setSchedule('monthly');
       setPriority('Normal');
       setPfAmount('');
@@ -396,11 +406,16 @@ export function RetainerTemplateModal({
                   <SelectValue placeholder="All Clients / Unassigned" />
                 </SelectTrigger>
                 <SelectContent>
-                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
                   <SelectItem value="none">None (Select upon generation)</SelectItem>
                   {(() => {
-                    const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
-                    const selectedClient = clients.find((c) => c.id === clientId);
+                    const filtered = sortedClients.filter((c) => matchesClientSearch(c, clientSearch));
+                    const selectedClient = sortedClients.find((c) => c.id === clientId);
                     const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
 
                     return (

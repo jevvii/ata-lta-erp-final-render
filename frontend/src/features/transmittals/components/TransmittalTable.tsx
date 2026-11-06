@@ -36,6 +36,9 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -100,7 +103,9 @@ export function TransmittalTable({
   const { data: clientsData = [] } = useClients();
   const { data: teamData = [] } = useTeam();
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsData), [clientsData]);
+  const sortedClients = useMemo(() => sortClients(clientsData, clientSort), [clientsData, clientSort]);
 
   const handleResetFilters = () => {
     setSearchTerm('');
@@ -110,6 +115,7 @@ export function TransmittalTable({
     setEmployeeFilter('all');
     setDueDateFilter('all');
     setClientSearch('');
+    setClientSort(DEFAULT_CLIENT_SORT);
   };
 
   const hasActiveFilters =
@@ -232,9 +238,14 @@ export function TransmittalTable({
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
               <SelectContent>
-                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                <ClientSelectSearchHeader
+                  value={clientSearch}
+                  onChange={setClientSearch}
+                  sortBy={clientSort}
+                  onSortChange={setClientSort}
+                />
                 <SelectItem value="all">All Clients</SelectItem>
-                {clientsData.map((c) => {
+                {sortedClients.map((c) => {
                   const matches = matchesClientSearch(c, clientSearch);
                   if (!matches && c.id !== clientFilter) return null;
                   return (

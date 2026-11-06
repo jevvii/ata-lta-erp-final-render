@@ -31,7 +31,13 @@ import {
   getContactPlaceholder,
   getContactMaxLength,
 } from '../lib/formatters';
-import { getDuplicateClientIds, matchesClientSearch } from '../lib/clientSelectUtils';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '../lib/clientSelectUtils';
 import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import type { Client, ContactDetailType } from '../api/types';
 
@@ -70,12 +76,14 @@ export function ClientModal({
   const { data: clientsData } = useClientsList({ limit: 100 });
   const allClients = clientsData?.data || [];
   const [relatedSearch, setRelatedSearch] = useState('');
+  const [relatedSort, setRelatedSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(allClients), [allClients]);
   const availableClients = React.useMemo(() => {
-    return allClients
+    const list = allClients
       .filter((c) => c.id !== client?.id)
       .filter((c) => matchesClientSearch(c, relatedSearch));
-  }, [allClients, client?.id, relatedSearch]);
+    return sortClients(list, relatedSort);
+  }, [allClients, client?.id, relatedSearch, relatedSort]);
 
   const isEditing = Boolean(client);
 
@@ -142,6 +150,7 @@ export function ClientModal({
       setRelatedCompanies([]);
     }
     setRelatedSearch('');
+    setRelatedSort(DEFAULT_CLIENT_SORT);
     setErrors({});
   }, [client, isOpen, defaultEntity]);
 
@@ -815,6 +824,8 @@ export function ClientModal({
                           <ClientSelectSearchHeader
                             value={relatedSearch}
                             onChange={setRelatedSearch}
+                            sortBy={relatedSort}
+                            onSortChange={setRelatedSort}
                             placeholder="Search affiliate name or TIN..."
                           />
                           {availableClients.length === 0 ? (

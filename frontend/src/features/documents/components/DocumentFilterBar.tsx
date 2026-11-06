@@ -4,7 +4,7 @@
  * Filter bar supporting search, category filter (9 categories), and physical lifecycle filter.
  */
 
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Search, RotateCcw, Plus } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,10 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
   type ClientSelectItemLike,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -76,7 +79,9 @@ export function DocumentFilterBar({
   canUpload = false,
 }: DocumentFilterBarProps) {
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
 
   const isFiltered = Boolean(
     search ||
@@ -176,11 +181,16 @@ export function DocumentFilterBar({
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
               <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                <ClientSelectSearchHeader
+                  value={clientSearch}
+                  onChange={setClientSearch}
+                  sortBy={clientSort}
+                  onSortChange={setClientSort}
+                />
                 <SelectItem value="all">All Clients</SelectItem>
                 {(() => {
-                  const filtered = clients.filter((c) => matchesClientSearch(c, clientSearch));
-                  const selectedClient = clients.find((c) => c.id === client);
+                  const filtered = sortedClients.filter((c) => matchesClientSearch(c, clientSearch));
+                  const selectedClient = sortedClients.find((c) => c.id === client);
                   const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
 
                   return (
@@ -265,6 +275,7 @@ export function DocumentFilterBar({
             size="sm"
             onClick={() => {
               setClientSearch('');
+              setClientSort(DEFAULT_CLIENT_SORT);
               onReset();
             }}
             className="h-9 text-xs text-[#475569] hover:text-[#1E293B] rounded-[6px]"

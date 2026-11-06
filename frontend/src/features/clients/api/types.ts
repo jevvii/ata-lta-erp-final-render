@@ -64,7 +64,7 @@ export interface ClientFilters {
   archived?: boolean;
   page?: number;
   limit?: number;
-  sortBy?: 'name' | 'created_at' | 'updated_at' | 'status' | string;
+  sortBy?: 'client_number' | 'name' | 'tin' | 'created_at' | 'updated_at' | 'status' | string;
   sortOrder?: 'asc' | 'desc';
   entity?: string | null;
   retainer?: boolean | 'all';

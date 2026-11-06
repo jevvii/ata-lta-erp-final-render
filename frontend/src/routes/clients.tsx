@@ -6,7 +6,7 @@
  * Mounts BlockingActionModal at root.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -17,6 +17,7 @@ import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { apiRequest } from '@/lib/api';
 import { BlockingActionModal } from '@/features/operations/components/BlockingActionModal';
+import { sortClients } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientFilterBar,
   ClientTable,
@@ -48,6 +49,8 @@ export default function ClientsPage() {
     retainer: undefined,
     page: 1,
     limit: 50,
+    sortBy: 'client_number',
+    sortOrder: 'asc',
   });
 
   // Modals state
@@ -120,6 +123,16 @@ export default function ClientsPage() {
       retainer: undefined,
       page: 1,
       limit: 50,
+      sortBy: 'client_number',
+      sortOrder: 'asc',
+    });
+  };
+
+  const handleSortColumn = (field: 'client_number' | 'name' | 'tin') => {
+    setFilters((prev) => {
+      const isSame = (prev.sortBy || 'client_number') === field;
+      const nextOrder = isSame && prev.sortOrder === 'asc' ? 'desc' : 'asc';
+      return { ...prev, sortBy: field, sortOrder: nextOrder, page: 1 };
     });
   };
 
@@ -154,11 +167,38 @@ export default function ClientsPage() {
     }
   };
 
-  const clients = (clientsData?.data || []).filter((c) => {
-    if (filters.retainer === true) return c.retainer === true;
-    if (filters.retainer === false) return c.retainer === false;
-    return true;
-  });
+  const clients = useMemo(() => {
+    const raw = (clientsData?.data || []).filter((c) => {
+      if (filters.retainer === true) return c.retainer === true;
+      if (filters.retainer === false) return c.retainer === false;
+      return true;
+    });
+
+    const sortBy = filters.sortBy || 'client_number';
+    const sortOrder = filters.sortOrder || 'asc';
+
+    if (sortBy === 'created_at') {
+      return [...raw].sort((a, b) => {
+        const aDate = new Date(a.createdAt || 0).getTime();
+        const bDate = new Date(b.createdAt || 0).getTime();
+        return sortOrder === 'desc' ? bDate - aDate : aDate - bDate;
+      });
+    }
+
+    if (sortBy === 'client_number') {
+      return sortClients(raw, sortOrder === 'desc' ? 'id_desc' : 'id_asc');
+    }
+
+    if (sortBy === 'name') {
+      return sortClients(raw, sortOrder === 'desc' ? 'name_desc' : 'name_asc');
+    }
+
+    if (sortBy === 'tin') {
+      return sortClients(raw, sortOrder === 'desc' ? 'tin_desc' : 'tin_asc');
+    }
+
+    return raw;
+  }, [clientsData?.data, filters.retainer, filters.sortBy, filters.sortOrder]);
 
   return (
     <div className="w-full space-y-6" data-testid="clients-page">
@@ -231,6 +271,9 @@ export default function ClientsPage() {
         onEdit={handleEdit}
         onArchive={handleArchive}
         onRestore={handleRestore}
+        sortBy={filters.sortBy}
+        sortOrder={filters.sortOrder}
+        onSort={handleSortColumn}
       />
 
       {/* Client Detail Inspection Modal */}

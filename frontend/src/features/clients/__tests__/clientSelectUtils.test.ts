@@ -6,6 +6,9 @@ import {
   getDuplicateClientIds,
   matchesClientSearch,
   formatAutoDetectedClientDisplay,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  CLIENT_SORT_OPTIONS,
   type ClientSelectItemLike,
 } from '../lib/clientSelectUtils';
 
@@ -137,6 +140,69 @@ describe('clientSelectUtils', () => {
     it('uses fallback name if client is null', () => {
       expect(formatAutoDetectedClientDisplay(null, 'Fallback Client')).toBe('Fallback Client');
       expect(formatAutoDetectedClientDisplay(null, null)).toBe('');
+    });
+  });
+
+  describe('sortClients', () => {
+    const sample: ClientSelectItemLike[] = [
+      { id: '10', clientNumber: 'CLI-10', name: 'Zeta Corp', tin: '999-000-000-000' },
+      { id: '2', clientNumber: 'CLI-2', name: 'Alpha Ltd', tin: '111-000-000-000' },
+      { id: '1', clientNumber: 'CLI-1', name: 'Beta Inc', tin: null },
+      { id: 'no-num-b', name: 'Delta LLC', tin: '222-000-000-000' },
+      { id: 'no-num-a', name: 'Charlie LLC', tin: null },
+    ];
+
+    it('defaults to id_asc with numeric awareness and clientNumber first', () => {
+      const sorted = sortClients(sample);
+      // CLI-1, CLI-2, CLI-10 (numeric order), then no-num-a, no-num-b sorted by id
+      expect(sorted.map((c) => c.id)).toEqual(['1', '2', '10', 'no-num-a', 'no-num-b']);
+    });
+
+    it('sorts id_desc with clients having clientNumber first, in reverse numeric order', () => {
+      const sorted = sortClients(sample, 'id_desc');
+      // CLI-10, CLI-2, CLI-1, then no-num-b, no-num-a
+      expect(sorted.map((c) => c.id)).toEqual(['10', '2', '1', 'no-num-b', 'no-num-a']);
+    });
+
+    it('sorts name_asc and name_desc alphabetically', () => {
+      const asc = sortClients(sample, 'name_asc');
+      expect(asc.map((c) => c.name)).toEqual([
+        'Alpha Ltd',
+        'Beta Inc',
+        'Charlie LLC',
+        'Delta LLC',
+        'Zeta Corp',
+      ]);
+
+      const desc = sortClients(sample, 'name_desc');
+      expect(desc.map((c) => c.name)).toEqual([
+        'Zeta Corp',
+        'Delta LLC',
+        'Charlie LLC',
+        'Beta Inc',
+        'Alpha Ltd',
+      ]);
+    });
+
+    it('sorts tin_asc and tin_desc with TIN clients first', () => {
+      const asc = sortClients(sample, 'tin_asc');
+      // Clients with TIN: 111 (id 2), 222 (id no-num-b), 999 (id 10), then missing TINs sorted by name
+      expect(asc.map((c) => c.id)).toEqual(['2', 'no-num-b', '10', '1', 'no-num-a']);
+
+      const desc = sortClients(sample, 'tin_desc');
+      // Clients with TIN: 999 (id 10), 222 (id no-num-b), 111 (id 2), then missing TINs sorted by name
+      expect(desc.map((c) => c.id)).toEqual(['10', 'no-num-b', '2', '1', 'no-num-a']);
+    });
+
+    it('does not mutate the original array (immutability)', () => {
+      const original = [...sample];
+      sortClients(sample, 'name_asc');
+      expect(sample).toEqual(original);
+    });
+
+    it('exports DEFAULT_CLIENT_SORT as id_asc and 6 valid options', () => {
+      expect(DEFAULT_CLIENT_SORT).toBe('id_asc');
+      expect(CLIENT_SORT_OPTIONS).toHaveLength(6);
     });
   });
 });

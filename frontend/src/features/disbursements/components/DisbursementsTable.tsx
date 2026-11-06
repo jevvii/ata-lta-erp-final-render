@@ -20,6 +20,9 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -74,7 +77,9 @@ export function DisbursementsTable({
   const { data: clientsData = [] } = useClients();
   const { data: teamData = [] } = useTeam();
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsData), [clientsData]);
+  const sortedClients = useMemo(() => sortClients(clientsData, clientSort), [clientsData, clientSort]);
 
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const activeSelectedId = selectedId !== undefined ? selectedId : internalSelectedId;
@@ -243,6 +248,8 @@ export function DisbursementsTable({
     setSelectedFundSource('');
     setSelectedWorkRequest('');
     setSelectedClient('');
+    setClientSearch('');
+    setClientSort(DEFAULT_CLIENT_SORT);
     setSelectedEmployee('');
     setSelectedDueDate('all');
     setPage(1);
@@ -371,9 +378,14 @@ export function DisbursementsTable({
               <SelectValue placeholder="All Clients" />
             </SelectTrigger>
             <SelectContent>
-              <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+              <ClientSelectSearchHeader
+                value={clientSearch}
+                onChange={setClientSearch}
+                sortBy={clientSort}
+                onSortChange={setClientSort}
+              />
               <SelectItem value="ALL">All Clients</SelectItem>
-              {clientsData.map((c) => {
+              {sortedClients.map((c) => {
                 const matches = matchesClientSearch(c, clientSearch);
                 if (!matches && c.id !== selectedClient) return null;
                 return (

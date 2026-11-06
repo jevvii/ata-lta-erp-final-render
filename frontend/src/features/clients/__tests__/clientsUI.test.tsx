@@ -428,5 +428,33 @@ describe('Clients UI Components & RBAC Integration', () => {
         );
       });
     });
+
+    it('renders sort selector and sortable column headers that toggle client sorting', async () => {
+      setAdminSession();
+
+      const { wrapper } = createWrapper();
+      render(<ClientsPage />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('clients-table')).toBeInTheDocument();
+        expect(screen.getByTestId('clients-sort-select')).toBeInTheDocument();
+        expect(screen.getByTestId('clients-header-id')).toBeInTheDocument();
+        expect(screen.getByTestId('clients-header-name')).toBeInTheDocument();
+        expect(screen.getByTestId('clients-header-tin')).toBeInTheDocument();
+      });
+
+      // Default sorting is CLI-ATA-0001 then CLI-ATA-0002
+      const rows = screen.getAllByRole('row');
+      expect(rows[1]).toHaveTextContent('CLI-ATA-0001');
+
+      // Click name header to sort by name
+      fireEvent.click(screen.getByTestId('clients-header-name'));
+
+      // Ayala Land Inc. (CLI-ATA-0002) should now come before Megaworld Prime Corp (CLI-ATA-0001)
+      await waitFor(() => {
+        const sortedRows = screen.getAllByRole('row');
+        expect(sortedRows[1]).toHaveTextContent('Ayala Land Inc.');
+      });
+    });
   });
 });

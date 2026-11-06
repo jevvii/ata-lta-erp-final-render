@@ -1,4 +1,4 @@
-import { Search, RotateCcw, Building2, Archive, CheckCircle2 } from 'lucide-react';
+import { Search, RotateCcw, Building2, Archive, CheckCircle2, ArrowUpDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import {
@@ -108,6 +108,32 @@ export function ClientFilterBar({
               <SelectItem value="all" className="rounded-[6px]">All Retainer Types</SelectItem>
               <SelectItem value="retainer" className="rounded-[6px]">Retainer Clients Only</SelectItem>
               <SelectItem value="non-retainer" className="rounded-[6px]">Non-Retainer Clients</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* Sort Selector */}
+        <div className="w-full sm:w-44">
+          <Select
+            value={`${filters.sortBy || 'client_number'}:${filters.sortOrder || 'asc'}`}
+            onValueChange={(val) => {
+              const [sortBy, sortOrder] = val.split(':') as [string, 'asc' | 'desc'];
+              onFilterChange({ sortBy, sortOrder, page: 1 });
+            }}
+          >
+            <SelectTrigger className="text-xs h-9 bg-[#FFFFFF] rounded-[6px] border border-[#E2E8F0]" data-testid="clients-sort-select">
+              <ArrowUpDown className="h-3.5 w-3.5 mr-1 text-[#475569]" />
+              <SelectValue placeholder="Sort" />
+            </SelectTrigger>
+            <SelectContent className="rounded-[12px] border border-[#E2E8F0] bg-[#FFFFFF] shadow-float">
+              <SelectItem value="client_number:asc" className="rounded-[6px]">Sort: ID (0→9)</SelectItem>
+              <SelectItem value="client_number:desc" className="rounded-[6px]">Sort: ID (9→0)</SelectItem>
+              <SelectItem value="name:asc" className="rounded-[6px]">Sort: Name (A→Z)</SelectItem>
+              <SelectItem value="name:desc" className="rounded-[6px]">Sort: Name (Z→A)</SelectItem>
+              <SelectItem value="tin:asc" className="rounded-[6px]">Sort: TIN (0→9)</SelectItem>
+              <SelectItem value="tin:desc" className="rounded-[6px]">Sort: TIN (9→0)</SelectItem>
+              <SelectItem value="created_at:desc" className="rounded-[6px]">Sort: Newest First</SelectItem>
+              <SelectItem value="created_at:asc" className="rounded-[6px]">Sort: Oldest First</SelectItem>
             </SelectContent>
           </Select>
         </div>

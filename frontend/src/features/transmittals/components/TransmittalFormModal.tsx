@@ -48,6 +48,9 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -117,7 +120,9 @@ export function TransmittalFormModal({
   const { data: clientsData = [] } = useClients();
   const clients = clientsProp ?? clientsData;
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = React.useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
   const { data: workRequestsData } = useWorkRequests({ archived: false });
   const workRequests = React.useMemo(() => {
     if (!workRequestsData) return [];
@@ -279,6 +284,7 @@ export function TransmittalFormModal({
       setRecipientDetails('');
       setNotes('');
       setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
       setLinkedDisbursementIds([]);
       setLinkedInvoiceIds([]);
@@ -578,8 +584,13 @@ export function TransmittalFormModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
-                  {clients.map((c) => {
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
+                  {sortedClients.map((c) => {
                     const matches = matchesClientSearch(c, clientSearch);
                     if (!matches && c.id !== clientId) return null;
                     return (

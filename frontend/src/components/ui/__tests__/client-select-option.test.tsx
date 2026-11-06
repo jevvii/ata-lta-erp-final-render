@@ -1,4 +1,3 @@
-import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import {
@@ -96,6 +95,25 @@ describe('client-select-option components', () => {
 
       fireEvent.click(clearBtn);
       expect(handleChange).toHaveBeenCalledWith('');
+    });
+
+    it('renders sort selector with DEFAULT_CLIENT_SORT and notifies onSortChange', () => {
+      const handleSortChange = vi.fn();
+      render(
+        <ClientSelectSearchHeader
+          value=""
+          onChange={vi.fn()}
+          sortBy="id_asc"
+          onSortChange={handleSortChange}
+        />
+      );
+
+      const sortSelect = screen.getByTestId('client-select-sort') as HTMLSelectElement;
+      expect(sortSelect).toBeInTheDocument();
+      expect(sortSelect.value).toBe('id_asc');
+
+      fireEvent.change(sortSelect, { target: { value: 'name_asc' } });
+      expect(handleSortChange).toHaveBeenCalledWith('name_asc');
     });
   });
 });

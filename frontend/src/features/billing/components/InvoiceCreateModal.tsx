@@ -20,6 +20,9 @@ import {
 import {
   getDuplicateClientIds,
   matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import {
   ClientSelectOptionContent,
@@ -124,7 +127,9 @@ export function InvoiceCreateModal({
   const { data: clientsData } = useClients();
   const clients = clientsData || [];
   const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
 
   const { data: workRequestsData } = useWorkRequests(
     { clientId: prefill?.clientId || undefined },
@@ -216,6 +221,7 @@ export function InvoiceCreateModal({
       setInvoiceNumber('');
       setNotes('');
       setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setFormError(null);
     }
     prevIsOpenRef.current = isOpen;
@@ -720,9 +726,14 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <ClientSelectSearchHeader value={clientSearch} onChange={setClientSearch} />
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
                   <SelectItem value="__all__">All Clients (Auto-detect from Work Request)</SelectItem>
-                  {clients.map((c) => {
+                  {sortedClients.map((c) => {
                     const matches = matchesClientSearch(c, clientSearch);
                     if (!matches && c.id !== clientId) return null;
                     return (
