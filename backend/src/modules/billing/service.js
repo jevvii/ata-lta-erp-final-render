@@ -1394,7 +1394,7 @@ const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
  */
 const buildVoucherHtml = (invoice, entityId) => {
   const entityName =
-    entityId === 'ATA' ? 'Amaya Tan & Associates' : 'LTA — Lanting Tan & Associates';
+    entityId === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
 
   const paymentRows = (invoice.payments || [])
     .map((p, idx) => {
