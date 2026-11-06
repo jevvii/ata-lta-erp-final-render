@@ -371,7 +371,7 @@ export function DisbursementsTable({
             }}
           >
             <SelectTrigger
-              className="h-6 text-[11px] bg-white border border-[#E2E8F0] rounded px-2 text-[#475569] min-w-[140px] max-w-[220px]"
+              className="h-6 text-[11px] bg-white border border-border rounded px-2 text-muted min-w-[140px] max-w-[220px]"
               data-testid="filter-client-select"
               title="Filter by Client"
             >
