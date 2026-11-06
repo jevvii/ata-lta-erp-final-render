@@ -28,10 +28,53 @@ export function isUuid(value?: string | null): boolean {
 }
 
 /**
+ * Normalizes any phase slug or fallback status into standard canonical phase slugs:
+ * 'pre_processing', 'processing', 'quality_assurance', or 'completion'.
+ */
+export function normalizePhaseSlug(phase?: string | null, status?: string | null): string {
+  const raw = String(phase || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (
+    raw === 'pre_processing' ||
+    raw === 'processing' ||
+    raw === 'quality_assurance' ||
+    raw === 'completion'
+  ) {
+    return raw;
+  }
+  if (raw === 'preprocessing') return 'pre_processing';
+  if (raw === 'qa') return 'quality_assurance';
+  if (raw === 'completed') return 'completion';
+
+  const rawStatus = String(status || '').trim().toLowerCase();
+  if (
+    rawStatus === 'pre-processing' ||
+    rawStatus === 'pre_processing' ||
+    rawStatus === 'draft' ||
+    rawStatus === 'received' ||
+    rawStatus === 'for client approval' ||
+    rawStatus === 'for requirements' ||
+    rawStatus === 'pending requirements' ||
+    rawStatus === 'for assignment'
+  ) {
+    return 'pre_processing';
+  }
+  if (rawStatus === 'quality assurance' || rawStatus === 'for quality check') {
+    return 'quality_assurance';
+  }
+  if (rawStatus === 'completed' || rawStatus === 'completion') {
+    return 'completion';
+  }
+  return raw;
+}
+
+/**
  * Formats a phase slug into a human-readable label (e.g. 'pre_processing' -> 'Pre-processing').
  */
 export function formatPhaseLabel(phase?: string | null): string {
-  const normalized = String(phase || '').toLowerCase().trim();
+  const normalized = normalizePhaseSlug(phase);
   if (normalized === 'pre_processing') return 'Pre-processing';
   if (normalized === 'processing') return 'Processing';
   if (normalized === 'quality_assurance') return 'Quality Assurance';
@@ -42,7 +85,8 @@ export function formatPhaseLabel(phase?: string | null): string {
 /**
  * Determines whether a task is locked due to its phase vs. the work request's active phase.
  * - Current stored task on edit is never locked.
- * - If either task.phase or workRequestPhase is empty/null/undefined, not locked.
+ * - If task.phase is empty/null/undefined, not locked.
+ * - Defaults workRequestPhase to 'pre_processing' if null/empty.
  * - For non-invoice records (disbursement, document, transmittal): locked if task.phase !== workRequestPhase.
  * - For invoice records: locked if PHASE_SEQUENCE.indexOf(task.phase) > PHASE_SEQUENCE.indexOf(workRequestPhase).
  */
@@ -56,12 +100,12 @@ export function isTaskPhaseLocked(
     return false;
   }
 
-  const taskPhase = typeof task.phase === 'string' ? task.phase.trim() : '';
-  const wrPhase = typeof workRequestPhase === 'string' ? workRequestPhase.trim() : '';
-
-  if (!taskPhase || !wrPhase) {
+  const taskPhase = normalizePhaseSlug(task.phase);
+  if (!taskPhase) {
     return false;
   }
+
+  const wrPhase = normalizePhaseSlug(workRequestPhase) || 'pre_processing';
 
   if (recordType !== 'invoice') {
     return taskPhase !== wrPhase;
@@ -293,6 +337,10 @@ export interface SelectableTaskOption {
   isPrereqLocked: boolean;
   disabled: boolean;
   label: string;
+  phaseSlug: string;
+  phaseLabel: string;
+  isActivePhase: boolean;
+  isPastPhase: boolean;
 }
 
 export interface UseSelectableTasksOptions {
@@ -325,14 +373,20 @@ export function useSelectableTasks({
   // Resolve Work Request phase from explicit prop or React Query cache fallback
   const resolvedWrPhase = useMemo(() => {
     if (workRequestPhase !== undefined && workRequestPhase !== null && workRequestPhase !== '') {
-      return workRequestPhase;
+      return normalizePhaseSlug(workRequestPhase) || 'pre_processing';
     }
     if (!workRequestId) return null;
 
     const detail = queryClient.getQueryData<WorkRequest>(
       operationsKeys.workRequestDetail(workRequestId)
     );
-    if (detail?.phase) return detail.phase;
+    if (detail) {
+      const rawPhase =
+        detail.phase ??
+        (detail as { currentPhase?: string | null }).currentPhase ??
+        (detail as { current_phase?: string | null }).current_phase;
+      return normalizePhaseSlug(rawPhase, detail.status) || 'pre_processing';
+    }
 
     const lists = queryClient.getQueriesData<{ data?: WorkRequest[] } | WorkRequest[]>({
       queryKey: operationsKeys.workRequests(),
@@ -341,10 +395,16 @@ export function useSelectableTasks({
       const arr = Array.isArray(data) ? data : data?.data;
       if (Array.isArray(arr)) {
         const hit = arr.find((w) => w.id === workRequestId);
-        if (hit?.phase) return hit.phase;
+        if (hit) {
+          const rawPhase =
+            hit.phase ??
+            (hit as { currentPhase?: string | null }).currentPhase ??
+            (hit as { current_phase?: string | null }).current_phase;
+          return normalizePhaseSlug(rawPhase, hit.status) || 'pre_processing';
+        }
       }
     }
-    return null;
+    return 'pre_processing';
   }, [workRequestPhase, workRequestId, queryClient]);
 
   const { data: rawTeam = [] } = useTeam();
@@ -406,10 +466,18 @@ export function useSelectableTasks({
         ? false
         : !isAuthorized || isPhaseLocked || isPrereqLocked;
 
+      const phaseSlug = normalizePhaseSlug(task.phase) || 'pre_processing';
+      const phaseLabel = formatPhaseLabel(phaseSlug) || 'Pre-processing';
+      const effectiveWrPhase = resolvedWrPhase || 'pre_processing';
+      const isActivePhase = phaseSlug === effectiveWrPhase;
+      const taskPhaseSeqIdx = (PHASE_SEQUENCE as readonly string[]).indexOf(phaseSlug);
+      const wrPhaseSeqIdx = (PHASE_SEQUENCE as readonly string[]).indexOf(effectiveWrPhase);
+      const isPastPhase =
+        taskPhaseSeqIdx !== -1 && wrPhaseSeqIdx !== -1 && taskPhaseSeqIdx < wrPhaseSeqIdx;
+
       let label = `${task.title} — ${assigneeText}`;
       if (!isCurrentStoredTask) {
         if (isPhaseLocked) {
-          const phaseLabel = formatPhaseLabel(task.phase);
           label = `${task.title} — ${assigneeText} (Locked: ${phaseLabel} phase not active)`;
         } else if (isPrereqLocked) {
           label = `${task.title} — ${assigneeText} (Locked: Waiting on prerequisite task)`;
@@ -428,6 +496,10 @@ export function useSelectableTasks({
         isPrereqLocked,
         disabled,
         label,
+        phaseSlug,
+        phaseLabel,
+        isActivePhase,
+        isPastPhase,
       };
     });
 
@@ -461,6 +533,10 @@ export function useSelectableTasks({
         isPrereqLocked: false,
         disabled: false,
         label: `${currentTaskId} (Current)`,
+        phaseSlug: 'pre_processing',
+        phaseLabel: 'Pre-processing',
+        isActivePhase: true,
+        isPastPhase: false,
       });
     }
 
@@ -576,3 +652,6 @@ export function useSelectableTasks({
     isAdmin,
   };
 }
+
+export { TaskOptionContent } from '../components/TaskOptionContent';
+

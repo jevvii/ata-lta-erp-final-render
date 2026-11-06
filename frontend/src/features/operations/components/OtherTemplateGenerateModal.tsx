@@ -19,9 +19,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Layers, Calendar, Search, AlertTriangle } from 'lucide-react';
+import { Layers, Calendar, Search, AlertTriangle, ArrowUpDown } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  CLIENT_SORT_OPTIONS,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import { ClientSelectOptionContent } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import { AssignerSelect } from './AssignerSelect';
 import { TaskTypeBadge } from '../lib/taskTypes';
@@ -66,6 +75,7 @@ export function OtherTemplateGenerateModal({
   const [templateId, setTemplateId] = useState<string>('');
   const [clientId, setClientId] = useState<string>('');
   const [clientSearch, setClientSearch] = useState<string>('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const [dueDate, setDueDate] = useState<string>('');
   const [priority, setPriority] = useState<Priority>('Normal');
   const [description, setDescription] = useState<string>('');
@@ -152,16 +162,15 @@ export function OtherTemplateGenerateModal({
     );
   }, [selectedTemplate]);
 
-  // Search filter for clients
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+
+  // Search filter and sort for clients
   const filteredClients = useMemo(() => {
-    if (!clientSearch.trim()) return clients;
-    const q = clientSearch.toLowerCase();
-    return clients.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        (c.tin && c.tin.toLowerCase().includes(q))
-    );
-  }, [clients, clientSearch]);
+    const list = clientSearch.trim()
+      ? clients.filter((c) => matchesClientSearch(c, clientSearch))
+      : clients;
+    return sortClients(list, clientSort);
+  }, [clients, clientSearch, clientSort]);
 
   // Project Team Members strictly: Manager (assignedTo) + Co-Assignees
   const projectTeam = useMemo(() => {
@@ -340,17 +349,35 @@ export function OtherTemplateGenerateModal({
               )}
             </div>
 
-            {/* Optional search filter input */}
-            <div className="relative mb-1">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[#475569]" />
-              <Input
-                type="text"
-                placeholder="Search client name or TIN..."
-                value={clientSearch}
-                onChange={(e) => setClientSearch(e.target.value)}
-                className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
-                data-testid="client-search-input"
-              />
+            {/* Optional search filter input + sort */}
+            <div className="flex items-center gap-1.5 mb-1">
+              <div className="relative flex-1 min-w-0">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-[#475569]" />
+                <Input
+                  type="text"
+                  placeholder="Search client name or TIN..."
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                  className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
+                  data-testid="client-search-input"
+                />
+              </div>
+              <div className="relative shrink-0 flex items-center">
+                <ArrowUpDown className="absolute left-1.5 top-1/2 -translate-y-1/2 h-3 w-3 text-[#64748B] pointer-events-none" />
+                <select
+                  value={clientSort}
+                  onChange={(e) => setClientSort(e.target.value as ClientSortOption)}
+                  aria-label="Sort clients"
+                  data-testid="client-select-sort"
+                  className="h-8 pl-5 pr-1.5 text-[11px] font-medium bg-[#FFFFFF] border border-[#E2E8F0] rounded-[6px] text-[#475569] hover:text-[#0F172A] focus:outline-none focus:border-[#0F172A] cursor-pointer"
+                >
+                  {CLIENT_SORT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <Select
@@ -367,18 +394,40 @@ export function OtherTemplateGenerateModal({
               >
                 <SelectValue placeholder="Select target client..." />
               </SelectTrigger>
-              <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                {filteredClients.length === 0 ? (
-                  <div className="p-2 text-xs text-[#475569] text-center">
-                    No matching clients found
-                  </div>
-                ) : (
-                  filteredClients.map((c) => (
-                    <SelectItem key={c.id} value={c.id} className="text-xs">
-                      {c.name} {c.entity ? `(${c.entity})` : ''}
-                    </SelectItem>
-                  ))
-                )}
+              <SelectContent data-radix-select-viewport="" className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                {(() => {
+                  const selectedClient = clients.find((c) => c.id === clientId);
+                  const selectedIsFilteredOut = selectedClient && !filteredClients.some((c) => c.id === selectedClient.id);
+
+                  return (
+                    <>
+                      {selectedIsFilteredOut && (
+                        <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                          <ClientSelectOptionContent
+                            client={selectedClient}
+                            isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                            showEntity
+                          />
+                        </SelectItem>
+                      )}
+                      {filteredClients.length === 0 ? (
+                        <div className="p-2 text-xs text-[#475569] text-center">
+                          No matching clients found
+                        </div>
+                      ) : (
+                        filteredClients.map((c) => (
+                          <SelectItem key={c.id} value={c.id} className="text-xs">
+                            <ClientSelectOptionContent
+                              client={c}
+                              isDuplicate={duplicateClientIds.has(c.id)}
+                              showEntity
+                            />
+                          </SelectItem>
+                        ))
+                      )}
+                    </>
+                  );
+                })()}
               </SelectContent>
             </Select>
             {clientError && (

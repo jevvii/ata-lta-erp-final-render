@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 vi.mock('@/components/ui/date-input', () => ({ DateInput: () => null }));
 import { CreateDisbursementModal } from '../components/CreateDisbursementModal';
@@ -11,10 +11,18 @@ const WR_1 = '22222222-2222-4222-8222-222222222222';
 const WR_2 = '22222222-2222-4222-8222-333333333333';
 const CLIENT_1 = '11111111-1111-4111-8111-111111111111';
 const TASK_ASSIGNED = '33333333-3333-4333-8333-333333333333';
+const TASK_ASSIGNED_2 = '66666666-6666-4666-8666-666666666666';
 const TASK_UNASSIGNED = '44444444-4444-4444-8444-444444444444';
 const CALLER_USER_ID = 'user-disbursement-caller';
 
 let client: QueryClient;
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 afterEach(() => {
   cleanup();
@@ -74,6 +82,13 @@ function setupMockFetch(
             id: TASK_ASSIGNED,
             workRequestId: WR_1,
             title: 'Assigned Voucher Task',
+            assigneeId: CALLER_USER_ID,
+            assignees: [CALLER_USER_ID],
+          },
+          {
+            id: TASK_ASSIGNED_2,
+            workRequestId: WR_1,
+            title: 'Second Assigned Task',
             assigneeId: CALLER_USER_ID,
             assignees: [CALLER_USER_ID],
           },
@@ -149,19 +164,20 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
         expect(qState?.status).toBe('success');
       });
 
-      const taskSelect = screen.getByTestId('select-work-request-task');
-      const optionTexts = within(taskSelect)
-        .getAllByRole('option')
-        .map((el) => el.textContent);
+      const taskSelectTrigger = screen.getByTestId('select-work-request-task');
+      fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-      // Assigned task must be in dropdown
-      expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
+      // Assigned task must be in dropdown and enabled
+      const assignedOpt = await screen.findByRole('option', { name: /Assigned Voucher Task/i });
+      expect(assignedOpt).toBeInTheDocument();
+      expect(assignedOpt).not.toHaveAttribute('aria-disabled', 'true');
+
       // Foreign unassigned task must be in dropdown but marked as not assigned
-      expect(
-        optionTexts.some(
-          (t) => t?.includes('Unassigned Foreign Task') && t?.includes('Not assigned to you')
-        )
-      ).toBe(true);
+      const unassignedOpt = await screen.findByRole('option', {
+        name: /Unassigned Foreign Task.*Not assigned to you/i,
+      });
+      expect(unassignedOpt).toBeInTheDocument();
+      expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
 
       unmount();
       cleanup();
@@ -197,16 +213,15 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       expect(qState?.status).toBe('success');
     });
 
-    const taskSelect = screen.getByTestId('select-work-request-task');
-    const optionTexts = within(taskSelect)
-      .getAllByRole('option')
-      .map((el) => el.textContent);
+    const taskSelectTrigger = screen.getByTestId('select-work-request-task');
+    fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-    expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
-    expect(optionTexts.some((t) => t?.includes('Unassigned Foreign Task'))).toBe(true);
-    expect(optionTexts.find((t) => t?.includes('Unassigned Foreign Task'))).not.toContain(
-      'Not assigned to you'
-    );
+    const assignedOpt = await screen.findByRole('option', { name: /Assigned Voucher Task/i });
+    const unassignedOpt = await screen.findByRole('option', { name: /Unassigned Foreign Task/i });
+    expect(assignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).not.toHaveAttribute('aria-disabled', 'true');
+    expect(unassignedOpt.textContent).not.toContain('Not assigned to you');
   });
 
   it('denies admin exemption to email lorein@ata-lta.ph when role is Staff', async () => {
@@ -238,17 +253,16 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       expect(qState?.status).toBe('success');
     });
 
-    const taskSelect = screen.getByTestId('select-work-request-task');
-    const optionTexts = within(taskSelect)
-      .getAllByRole('option')
-      .map((el) => el.textContent);
+    const taskSelectTrigger = screen.getByTestId('select-work-request-task');
+    fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
 
-    expect(optionTexts.some((t) => t?.includes('Assigned Voucher Task'))).toBe(true);
-    expect(
-      optionTexts.some(
-        (t) => t?.includes('Unassigned Foreign Task') && t?.includes('Not assigned to you')
-      )
-    ).toBe(true);
+    const assignedOpt = await screen.findByRole('option', { name: /Assigned Voucher Task/i });
+    expect(assignedOpt).toBeInTheDocument();
+    const unassignedOpt = await screen.findByRole('option', {
+      name: /Unassigned Foreign Task.*Not assigned to you/i,
+    });
+    expect(unassignedOpt).toBeInTheDocument();
+    expect(unassignedOpt).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('blocks submission and shows visible error for invalid/unassigned prefilled task', async () => {
@@ -412,16 +426,18 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       expect(qState?.status).toBe('success');
     });
 
-    const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
-    fireEvent.change(taskSelect, { target: { value: TASK_ASSIGNED } });
-    expect(taskSelect.value).toBe(TASK_ASSIGNED);
+    const taskSelectTrigger = screen.getByTestId('select-work-request-task');
+    fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+    const opt = await screen.findByRole('option', { name: /Assigned Voucher Task/i });
+    fireEvent.click(opt);
+    expect(taskSelectTrigger).toHaveTextContent(/Assigned Voucher Task/i);
 
     // Switch work request
     const wrSelect = screen.getByTestId('select-work-request');
     fireEvent.change(wrSelect, { target: { value: WR_2 } });
 
     // Task selection must be cleared immediately
-    expect(taskSelect.value).toBe('');
+    expect(taskSelectTrigger).not.toHaveTextContent(/Assigned Voucher Task/i);
   });
 
   it('Deferred receipt upload followed by assignment revocation/invalidation => no create POST', async () => {
@@ -553,9 +569,11 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       expect(qState?.status).toBe('success');
     });
 
-    const taskSelect = screen.getByTestId('select-work-request-task');
-    expect(taskSelect).not.toBeDisabled();
-    fireEvent.change(taskSelect, { target: { value: TASK_ASSIGNED } });
+    const taskSelectTrigger = screen.getByTestId('select-work-request-task');
+    expect(taskSelectTrigger).not.toBeDisabled();
+    fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+    const opt = await screen.findByRole('option', { name: /Assigned Voucher Task/i });
+    fireEvent.click(opt);
 
     // Attach receipt file
     const file = new File(['dummy binary'], 'receipt.png', { type: 'image/png' });
@@ -576,8 +594,10 @@ describe('F02: Standalone Disbursements Task Scoping & Lifecycle', () => {
       )).toBe(true);
     });
 
-    // While upload completion is pending, the user changes task selection to None
-    fireEvent.change(taskSelect, { target: { value: '' } });
+    // While upload completion is pending, the user changes task selection
+    fireEvent.keyDown(taskSelectTrigger, { key: 'ArrowDown', code: 'ArrowDown' });
+    const secondOpt = await screen.findByRole('option', { name: /Second Assigned Task/i });
+    fireEvent.click(secondOpt);
 
     // Now resolve the upload completion for attempt 1
     resolveUploadComplete(

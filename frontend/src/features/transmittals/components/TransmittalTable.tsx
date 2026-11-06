@@ -34,6 +34,17 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -91,6 +102,10 @@ export function TransmittalTable({
   const workRequests = useMemo(() => (Array.isArray(rawWrs) ? rawWrs : rawWrs?.data ?? []), [rawWrs]);
   const { data: clientsData = [] } = useClients();
   const { data: teamData = [] } = useTeam();
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsData), [clientsData]);
+  const sortedClients = useMemo(() => sortClients(clientsData, clientSort), [clientsData, clientSort]);
 
   const handleResetFilters = () => {
     setSearchTerm('');
@@ -99,6 +114,8 @@ export function TransmittalTable({
     setClientFilter('all');
     setEmployeeFilter('all');
     setDueDateFilter('all');
+    setClientSearch('');
+    setClientSort(DEFAULT_CLIENT_SORT);
   };
 
   const hasActiveFilters =
@@ -221,12 +238,22 @@ export function TransmittalTable({
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
               <SelectContent>
+                <ClientSelectSearchHeader
+                  value={clientSearch}
+                  onChange={setClientSearch}
+                  sortBy={clientSort}
+                  onSortChange={setClientSort}
+                />
                 <SelectItem value="all">All Clients</SelectItem>
-                {clientsData.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                {sortedClients.map((c) => {
+                  const matches = matchesClientSearch(c, clientSearch);
+                  if (!matches && c.id !== clientFilter) return null;
+                  return (
+                    <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                      <ClientSelectOptionContent client={c} isDuplicate={duplicateClientIds.has(c.id)} />
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </div>

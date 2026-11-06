@@ -48,7 +48,7 @@ import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import { isUserAdmin } from '@/features/operations/lib/taskScope';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import type { WorkRequest } from '@/features/operations/api/types';
 
@@ -562,7 +562,7 @@ export function DocumentUploadModal({
                 <Select
                   value={linkedTaskId}
                   onValueChange={handleTaskChange}
-                  disabled={Boolean(defaultTaskId) || !workRequestId || isTaskBlocked}
+                  disabled={Boolean(defaultTaskId) || !workRequestId || isNoTasksBlocked}
                 >
                   <SelectTrigger
                     id="workRequestTask"
@@ -577,8 +577,8 @@ export function DocumentUploadModal({
                   </SelectTrigger>
                   <SelectContent>
                     {taskOptions.map((opt) => (
-                      <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled}>
-                        {opt.label}
+                      <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled} aria-label={opt.label}>
+                        <TaskOptionContent option={opt} />
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -113,7 +113,7 @@ function harness(block: Stage) {
       await act(async () => { resume(body === undefined ? responseAtGate : json(body, status)); await deferred; });
     },
     prepare: async () => {
-      await waitFor(() => expect(screen.getByTestId('display-client-name')).toHaveValue('ATA Client'));
+      await waitFor(() => expect(screen.getByTestId('select-client')).toHaveValue('33333333-3333-4333-8333-333333333333'));
       fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '100' } });
       fireEvent.change(screen.getByTestId('textarea-description'), { target: { value: 'Receipt context regression' } });
       fireEvent.drop(screen.getByTestId('receipt-dropzone'), { dataTransfer: { files: [pdf()] } });

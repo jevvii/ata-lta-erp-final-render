@@ -173,13 +173,46 @@ export function PrintPreviewModal({
     setFeedback(null);
     // Reserve the window during the click so popup blockers allow the async PDF.
     const pdfWindow = window.open('', '_blank');
+    const suffix = hideCompanyDetails ? '-no-company-details' : '';
+    const filename = `${invoice.invoice_number || invoice.id}${suffix}.pdf`;
     try {
-      const url = await fetchInvoicePdfUrl(invoice.id, !hideCompanyDetails);
+      const rawUrl = await fetchInvoicePdfUrl(invoice.id, !hideCompanyDetails);
+      const url =
+        rawUrl.includes('/storage/v1/object/sign/') && !rawUrl.includes('download=')
+          ? `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}download=${encodeURIComponent(filename)}`
+          : rawUrl;
       if (pdfWindow) pdfWindow.location.href = url;
       else window.open(url, '_blank');
     } catch {
-      pdfWindow?.close();
-      setFeedback('Unable to generate the PDF. Please try again.');
+      if (pdfWindow && typeof pdfWindow.document?.write === 'function') {
+        try {
+          const body = buildStatementDocument(invoice, { includeCompanyDetails: !hideCompanyDetails });
+          pdfWindow.document.open();
+          pdfWindow.document.write(
+            `<!doctype html><html><head><meta charset="utf-8"><title>${filename}</title><style>${STATEMENT_CSS}</style></head><body>${body}</body></html>`
+          );
+          pdfWindow.document.close();
+          const imgs = Array.from(pdfWindow.document.images || []);
+          await Promise.all(
+            imgs.map((img) =>
+              img.complete
+                ? Promise.resolve()
+                : new Promise<void>((resolve) => {
+                    img.onload = () => resolve();
+                    img.onerror = () => resolve();
+                  })
+            )
+          );
+          pdfWindow.focus?.();
+          pdfWindow.print?.();
+        } catch {
+          pdfWindow?.close();
+          setFeedback('Unable to generate the PDF. Please try again.');
+        }
+      } else {
+        pdfWindow?.close();
+        setFeedback('Unable to generate the PDF. Please try again.');
+      }
     } finally {
       setDownloading(false);
     }

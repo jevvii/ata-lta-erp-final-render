@@ -14,10 +14,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients, type ClientSummary } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { useWorkRequestTasks } from '@/features/operations/api/useTasks';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
@@ -256,6 +267,8 @@ export function InvoiceEditModal({
       setOriginWrId('');
       setStoredLinkageError(null);
       setFormError(null);
+      setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setLinkedDisbursementIds([]);
     }
   }, [isOpen, invoice]);
@@ -270,6 +283,11 @@ export function InvoiceEditModal({
     }
     return [];
   }, [clientsData]);
+
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
 
   const automaticDetails = useMemo(() => {
     if (!invoice) return {};
@@ -846,6 +864,12 @@ export function InvoiceEditModal({
                 <SelectValue placeholder="Select a client..." />
               </SelectTrigger>
               <SelectContent>
+                <ClientSelectSearchHeader
+                  value={clientSearch}
+                  onChange={setClientSearch}
+                  sortBy={clientSort}
+                  onSortChange={setClientSort}
+                />
                 {clientId && !clients.some((c) => c.id === clientId) && (
                   <SelectItem value={clientId}>
                     {invoice.client_number || invoice.clientNumber
@@ -853,14 +877,16 @@ export function InvoiceEditModal({
                       : invoice.clients?.name || clientId}
                   </SelectItem>
                 )}
-                {clients.map((c) => {
-                  const clientNum =
-                    (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
-                    (c as { client_number?: string | null })?.client_number;
-                  const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                {sortedClients.map((c) => {
+                  const matches = matchesClientSearch(c, clientSearch);
+                  if (!matches && c.id !== clientId) return null;
                   return (
-                    <SelectItem key={c.id} value={c.id}>
-                      {label}
+                    <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                      <ClientSelectOptionContent
+                        client={c}
+                        isDuplicate={duplicateClientIds.has(c.id)}
+                        showClientNumber
+                      />
                     </SelectItem>
                   );
                 })}
@@ -928,7 +954,7 @@ export function InvoiceEditModal({
             <Select
               value={selectedTaskId || '__none__'}
               onValueChange={(val) => setSelectedTaskId(val === '__none__' ? '' : val)}
-              disabled={!canEditFinancials || !workRequestId || (isTaskBlocked && !originTaskId)}
+              disabled={!canEditFinancials || !workRequestId || (isNoTasksBlocked && selectedTaskId !== originTaskId)}
             >
               <SelectTrigger
                 id="edit-invoice-task"
@@ -951,8 +977,8 @@ export function InvoiceEditModal({
                   </SelectItem>
                 )}
                 {taskOptions.map((opt) => (
-                  <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId}>
-                    {opt.label}
+                  <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId} aria-label={opt.label}>
+                    <TaskOptionContent option={opt} />
                   </SelectItem>
                 ))}
               </SelectContent>

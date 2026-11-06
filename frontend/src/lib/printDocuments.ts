@@ -272,7 +272,7 @@ export function buildStatementDocument(
   const details = inv.print_details || {};
   const entity = inv.entity_code === 'LTA' ? 'LTA' : 'ATA';
   const companyName =
-    entity === 'ATA' ? 'A.T.A. BUSINESS CONSULTANCY' : 'LTA BUSINESS MANAGEMENT CORP';
+    entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
 
   const auto = getAutomaticPaymentDetails(inv.payments?.[0]);
   const dateVal = details.paymentDate ?? auto.paymentDate;

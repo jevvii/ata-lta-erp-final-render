@@ -17,9 +17,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
 import {
@@ -86,6 +97,7 @@ export function InvoiceCreateModal({
 
   // Form Fields
   const [clientId, setClientId] = useState('');
+  const [clientFilterId, setClientFilterId] = useState('');
   const [workRequestId, setWorkRequestId] = useState('');
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [linkedTransmittalId, setLinkedTransmittalId] = useState('');
@@ -114,12 +126,34 @@ export function InvoiceCreateModal({
   // Clients & Work Requests queries
   const { data: clientsData } = useClients();
   const clients = clientsData || [];
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
 
   const { data: workRequestsData } = useWorkRequests(
-    { clientId: clientId || undefined },
+    { clientId: prefill?.clientId || undefined },
     { enabled: isOpen }
   );
-  const workRequests = useMemo(() => workRequestsData?.data || [], [workRequestsData]);
+  const workRequests = useMemo(() => {
+    if (!workRequestsData) return [];
+    if (Array.isArray(workRequestsData)) return workRequestsData;
+    return workRequestsData.data || [];
+  }, [workRequestsData]);
+
+  const availableWorkRequests = useMemo(() => {
+    const activeFilterClientId = prefill?.clientId || clientFilterId;
+    const preservedWrId = prefill?.workRequestId || workRequestId;
+    let list = workRequests;
+    if (activeFilterClientId) {
+      list = list.filter(
+        (wr) =>
+          (wr.client_id || (wr as { clientId?: string }).clientId) === activeFilterClientId ||
+          (Boolean(prefill?.workRequestId) && wr.id === preservedWrId)
+      );
+    }
+    return list;
+  }, [workRequests, prefill?.clientId, prefill?.workRequestId, clientFilterId, workRequestId]);
 
   const queryClient = useQueryClient();
   const currentUser = useSessionStore((state) => state.user);
@@ -151,6 +185,7 @@ export function InvoiceCreateModal({
         lastPrefillKeyRef.current = currentPrefillKey;
         setWorkRequestId(prefill?.workRequestId || '');
         setClientId(prefill?.clientId || '');
+        setClientFilterId(prefill?.clientId || '');
         setSelectedTaskId(prefill?.taskId || '');
         setLinkedTransmittalId(prefill?.linkedTransmittalId || '');
         if (prefill?.attachedDisbursement) {
@@ -179,11 +214,14 @@ export function InvoiceCreateModal({
       lastPrefillKeyRef.current = '';
       setWorkRequestId('');
       setClientId('');
+      setClientFilterId('');
       setSelectedTaskId('');
       setLinkedTransmittalId('');
       setLinkedDisbursementIds([]);
       setInvoiceNumber('');
       setNotes('');
+      setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setFormError(null);
     }
     prevIsOpenRef.current = isOpen;
@@ -193,19 +231,30 @@ export function InvoiceCreateModal({
   useEffect(() => {
     if (isOpen && workRequestId && workRequests.length > 0 && !prefill?.clientId) {
       const matchedWr = workRequests.find((w) => w.id === workRequestId);
-      if (matchedWr?.client_id && matchedWr.client_id !== clientId) {
-        setClientId(matchedWr.client_id);
+      const wrClientId =
+        matchedWr?.client_id || (matchedWr as { clientId?: string })?.clientId;
+      if (wrClientId && wrClientId !== clientId) {
+        setClientId(wrClientId);
       }
     }
   }, [isOpen, workRequestId, workRequests, prefill?.clientId, clientId]);
 
   const handleClientChange = (newClientId: string) => {
-    setClientId(newClientId);
-    setWorkRequestId('');
-    setSelectedTaskId('');
-    setLinkedTransmittalId('');
-    setLinkedDisbursementIds([]);
+    const actualClientId = newClientId === '__all__' ? '' : newClientId;
+    setClientId(actualClientId);
+    setClientFilterId(actualClientId);
     setFormError(null);
+    if (workRequestId) {
+      const currentWr = workRequests.find((w) => w.id === workRequestId);
+      const currentWrClientId =
+        currentWr?.client_id || (currentWr as { clientId?: string })?.clientId;
+      if (!actualClientId || (currentWr && currentWrClientId !== actualClientId)) {
+        setWorkRequestId('');
+        setSelectedTaskId('');
+        setLinkedTransmittalId('');
+        setLinkedDisbursementIds([]);
+      }
+    }
   };
 
   const handleWorkRequestChange = (newWrId: string) => {
@@ -215,9 +264,15 @@ export function InvoiceCreateModal({
     setLinkedDisbursementIds([]);
     setFormError(null);
     if (!prefill?.clientId) {
-      const matchedWr = workRequests.find((w) => w.id === newWrId);
-      if (matchedWr?.client_id) {
-        setClientId(matchedWr.client_id);
+      if (newWrId) {
+        const matchedWr = workRequests.find((w) => w.id === newWrId);
+        const wrClientId =
+          matchedWr?.client_id || (matchedWr as { clientId?: string })?.clientId;
+        if (wrClientId) {
+          setClientId(wrClientId);
+        }
+      } else if (!clientFilterId) {
+        setClientId('');
       }
     }
   };
@@ -230,6 +285,43 @@ export function InvoiceCreateModal({
     () => workRequests.find((w) => w.id === workRequestId),
     [workRequests, workRequestId]
   );
+
+  const clientDisplayName = useMemo(() => {
+    if (selectedWorkRequest) {
+      const wrClientId =
+        selectedWorkRequest.client_id ||
+        (selectedWorkRequest as { clientId?: string }).clientId ||
+        clientId;
+      const matchedClient = clients.find((c) => c.id === wrClientId);
+      const rawName =
+        (selectedWorkRequest as { clientName?: string; client_name?: string }).clientName ||
+        selectedWorkRequest.client_name ||
+        matchedClient?.name;
+      const clientNum =
+        (selectedWorkRequest as { clientNumber?: string | null; client_number?: string | null })
+          ?.clientNumber ||
+        (selectedWorkRequest as { client_number?: string | null })?.client_number ||
+        (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+          ?.clientNumber ||
+        (matchedClient as { client_number?: string | null })?.client_number;
+      if (rawName) {
+        return clientNum ? `${clientNum} · ${rawName}` : rawName;
+      }
+      return wrClientId ? `Client (${wrClientId})` : '';
+    }
+    if (clientId) {
+      const matchedClient = clients.find((c) => c.id === clientId);
+      if (matchedClient) {
+        const clientNum =
+          (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+            ?.clientNumber ||
+          (matchedClient as { client_number?: string | null })?.client_number;
+        return clientNum ? `${clientNum} · ${matchedClient.name}` : matchedClient.name;
+      }
+      return `Client (${clientId})`;
+    }
+    return '';
+  }, [selectedWorkRequest, clientId, clients]);
 
   // Work Request Tasks query & selectability hook
   const {
@@ -378,7 +470,11 @@ export function InvoiceCreateModal({
   // Auto-generate sequential invoice number matching prototype
   useEffect(() => {
     if (isOpen) {
-      const invoices = existingInvoicesData?.data || [];
+      const invoices = Array.isArray(existingInvoicesData?.data)
+        ? existingInvoicesData.data
+        : Array.isArray(existingInvoicesData)
+          ? existingInvoicesData
+          : [];
       const nextNumber = getNextInvoiceNumber(activeEntity, invoices);
       setInvoiceNumber(nextNumber);
     }
@@ -499,8 +595,14 @@ export function InvoiceCreateModal({
       type: item.type,
     }));
 
+    const resolvedClientId =
+      clientId ||
+      selectedWorkRequest?.client_id ||
+      (selectedWorkRequest as { clientId?: string })?.clientId ||
+      '';
+
     const payload = {
-      clientId,
+      clientId: resolvedClientId,
       workRequestId,
       linkedTaskId: !SUPPORT_TASK_ID_PAYLOAD ? (trimmedTaskId || null) : undefined,
       ...(SUPPORT_TASK_ID_PAYLOAD && trimmedTaskId
@@ -611,26 +713,44 @@ export function InvoiceCreateModal({
               >
                 Client*
               </label>
-              <Select value={clientId} onValueChange={handleClientChange} disabled={isClientLocked}>
+              <Select
+                value={clientId}
+                onValueChange={handleClientChange}
+                disabled={isClientLocked}
+              >
                 <SelectTrigger
                   id="create-invoice-client"
                   className="h-9 text-xs"
                   data-testid="select-client"
                 >
-                  <SelectValue placeholder="Select a client..." />
+                  <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {clients.map((c) => {
-                    const clientNum =
-                      (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
-                      (c as { client_number?: string | null })?.client_number;
-                    const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
+                  <SelectItem value="__all__">All Clients (Auto-detect from Work Request)</SelectItem>
+                  {sortedClients.map((c) => {
+                    const matches = matchesClientSearch(c, clientSearch);
+                    if (!matches && c.id !== clientId) return null;
                     return (
-                      <SelectItem key={c.id} value={c.id}>
-                        {label}
+                      <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                        <ClientSelectOptionContent
+                          client={c}
+                          isDuplicate={duplicateClientIds.has(c.id)}
+                          showClientNumber
+                        />
                       </SelectItem>
                     );
                   })}
+                  {clientId && !clients.some((c) => c.id === clientId) && (
+                    <SelectItem key={clientId} value={clientId}>
+                      {clientDisplayName || clientId}
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -655,7 +775,7 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select work request..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {workRequests.map((wr) => {
+                  {availableWorkRequests.map((wr) => {
                     const wrNum =
                       (wr as {
                         workRequestNumber?: string | null;
@@ -666,7 +786,26 @@ export function InvoiceCreateModal({
                       (wr as { work_request_number?: string | null })?.work_request_number ||
                       (wr as { workOrderNumber?: string | null })?.workOrderNumber ||
                       (wr as { work_order_number?: string | null })?.work_order_number;
-                    const label = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                    const titlePart = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                    const wrClientId = wr.client_id || (wr as { clientId?: string }).clientId;
+                    const matchedClient = clients.find((c) => c.id === wrClientId);
+                    const clientLabel =
+                      (wr as { clientName?: string | null }).clientName ||
+                      wr.client_name ||
+                      matchedClient?.name;
+                    const clientNum =
+                      (wr as { clientNumber?: string | null; client_number?: string | null })
+                        ?.clientNumber ||
+                      (wr as { client_number?: string | null })?.client_number ||
+                      (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+                        ?.clientNumber ||
+                      (matchedClient as { client_number?: string | null })?.client_number;
+                    const clientPart = clientLabel
+                      ? clientNum
+                        ? `${clientNum} · ${clientLabel}`
+                        : clientLabel
+                      : null;
+                    const label = clientPart ? `${titlePart} — ${clientPart}` : titlePart;
                     return (
                       <SelectItem key={wr.id} value={wr.id}>
                         {label}
@@ -690,7 +829,7 @@ export function InvoiceCreateModal({
                   setSelectedTaskId(val);
                   setFormError(null);
                 }}
-                disabled={isTaskLocked || !workRequestId || isTaskBlocked}
+                disabled={isTaskLocked || !workRequestId || isNoTasksBlocked}
               >
                 <SelectTrigger
                   id="create-invoice-task"
@@ -705,8 +844,8 @@ export function InvoiceCreateModal({
                 </SelectTrigger>
                 <SelectContent>
                   {taskOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled}>
-                      {opt.label}
+                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled} aria-label={opt.label}>
+                      <TaskOptionContent option={opt} />
                     </SelectItem>
                   ))}
                 </SelectContent>

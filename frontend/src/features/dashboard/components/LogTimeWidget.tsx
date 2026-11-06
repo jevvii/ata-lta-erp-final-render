@@ -29,6 +29,8 @@ import {
   useCreateTimeEntry,
 } from '../api/useTimeEntries';
 import { useAssignedTasks } from '../api/useAssignedTasks';
+import { getPhaseBadgeInfo } from '@/features/operations/lib/statusBadges';
+import { formatPhaseLabel } from '@/features/operations/hooks/useSelectableTasks';
 import { TimeEntryEditModal } from './TimeEntryEditModal';
 import { TimeEntryDeleteModal } from './TimeEntryDeleteModal';
 import { useBlockingModal } from '@/features/operations/components/BlockingActionModal';
@@ -156,7 +158,8 @@ export function LogTimeWidget({
         if (effectiveExternalTaskId && assignedTasks.some((task) => task.taskId === effectiveExternalTaskId)) {
           setSelectedTaskId(effectiveExternalTaskId);
         } else {
-          setSelectedTaskId(assignedTasks[0]?.taskId || '');
+          const firstSelectable = assignedTasks.find((t) => !t.isPhaseLocked) || assignedTasks[0];
+          setSelectedTaskId(firstSelectable?.taskId || '');
         }
       }
     }
@@ -424,8 +427,17 @@ export function LogTimeWidget({
                     <option value="">No tasks currently assigned to you</option>
                   ) : (
                     assignedTasks.map((task) => (
-                      <option key={task.taskId} value={task.taskId}>
+                      <option
+                        key={task.taskId}
+                        value={task.taskId}
+                        disabled={Boolean(task.isPhaseLocked)}
+                      >
                         [{task.entity}] {task.taskTitle} — {task.workRequestTitle}
+                        {task.isPhaseLocked
+                          ? ` — [${formatPhaseLabel(task.phase)} · Upcoming Phase (Locked)]`
+                          : task.phase
+                            ? ` — [${formatPhaseLabel(task.phase)}]`
+                            : ''}
                       </option>
                     ))
                   )}
@@ -450,14 +462,37 @@ export function LogTimeWidget({
                   >
                     {activeTask?.status || 'In Progress'}
                   </Badge>
-                  {activeTask?.phase && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs font-mono rounded-[4px] border-[#CBD5E1] bg-[#FFFFFF] text-[#475569]"
-                    >
-                      {activeTask.phase}
-                    </Badge>
-                  )}
+                  {activeTask?.phase && (() => {
+                    const phaseInfo = getPhaseBadgeInfo(activeTask.phase);
+                    return (
+                      <>
+                        <span
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] border text-xs font-medium ${phaseInfo.badgeClass}`}
+                          data-testid={`active-task-phase-pill-${activeTask.taskId}`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
+                          <span>{phaseInfo.label}</span>
+                        </span>
+                        {activeTask.isPhaseLocked ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] text-xs font-medium bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]"
+                            data-testid={`active-task-status-pill-${activeTask.taskId}`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" />
+                            <span>Upcoming Phase (Locked)</span>
+                          </span>
+                        ) : (
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] text-xs font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#93C5FD]"
+                            data-testid={`active-task-status-pill-${activeTask.taskId}`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB]" />
+                            <span>Active Phase</span>
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
                   <Badge
                     variant="outline"
                     className="text-xs font-mono rounded-[4px] border-[#CBD5E1] bg-[#FFFFFF] text-[#475569]"

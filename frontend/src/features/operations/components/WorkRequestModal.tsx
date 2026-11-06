@@ -21,6 +21,14 @@ import { AssignerSelect } from './AssignerSelect';
 import { TaskLineItems, type TaskItemData } from './TaskLineItems';
 import { runBlockingAction } from './BlockingActionModal';
 import { useClients } from '../api/useClients';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
 import { useTeam } from '../api/useTeam';
 import {
   useWorkRequestMutations,
@@ -100,9 +108,13 @@ export function WorkRequestModal({
     workRequest?.entity === 'LTA' || (!workRequest && activeSessionEntity === 'LTA') ? 'LTA' : 'ATA'
   );
   const [clientId, setClientId] = useState<string>('');
+  const [clientSearch, setClientSearch] = useState<string>('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const [clientError, setClientError] = useState<string | null>(null);
   const { data: rawClients } = useClients({ entity }, { enabled: isOpen });
   const clients = useMemo(() => (Array.isArray(rawClients) ? rawClients : []), [rawClients]);
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
   const [priority, setPriority] = useState<Priority>('Normal');
   const [dueDateError, setDueDateError] = useState<string | null>(null);
   const [dueDate, setDueDate] = useState<string>('');
@@ -192,6 +204,8 @@ export function WorkRequestModal({
     }
     setManagerError(null);
     setClientError(null);
+    setClientSearch('');
+    setClientSort(DEFAULT_CLIENT_SORT);
     setTitleError(null);
     setDueDateError(null);
     setIsDirty(false);
@@ -876,14 +890,49 @@ export function WorkRequestModal({
                   <SelectValue placeholder="Select Client..." />
                 </SelectTrigger>
                 <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
                   <SelectItem value="unselected" className="text-xs">— No Client —</SelectItem>
-                  {clients
-                    .filter((c) => c.entity === entity)
-                    .map((c) => (
-                      <SelectItem key={c.id} value={c.id} className="text-xs">
-                        {c.name} ({c.entity})
-                      </SelectItem>
-                    ))}
+                  {(() => {
+                    const filtered = sortedClients
+                      .filter((c) => c.entity === entity)
+                      .filter((c) => matchesClientSearch(c, clientSearch));
+                    const selectedClient = sortedClients.find((c) => c.id === clientId && c.entity === entity);
+                    const selectedIsFilteredOut = selectedClient && !filtered.some((c) => c.id === selectedClient.id);
+
+                    return (
+                      <>
+                        {selectedIsFilteredOut && (
+                          <SelectItem key={selectedClient.id} value={selectedClient.id} className="hidden">
+                            <ClientSelectOptionContent
+                              client={selectedClient}
+                              isDuplicate={duplicateClientIds.has(selectedClient.id)}
+                              showEntity
+                            />
+                          </SelectItem>
+                        )}
+                        {filtered.length === 0 ? (
+                          <div className="py-3 px-2 text-center text-xs text-[#64748B]">
+                            No matching clients found
+                          </div>
+                        ) : (
+                          filtered.map((c) => (
+                            <SelectItem key={c.id} value={c.id} className="text-xs">
+                              <ClientSelectOptionContent
+                                client={c}
+                                isDuplicate={duplicateClientIds.has(c.id)}
+                                showEntity
+                              />
+                            </SelectItem>
+                          ))
+                        )}
+                      </>
+                    );
+                  })()}
                 </SelectContent>
               </Select>
               {clientError && (

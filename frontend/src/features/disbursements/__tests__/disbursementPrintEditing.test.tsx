@@ -91,15 +91,15 @@ describe('Voucher print and admin edit controls', () => {
     fireEvent.click(screen.getByTestId('disbursement-generic-option'));
     expect(screen.queryByAltText('ATA Logo')).not.toBeInTheDocument();
     expect(screen.getByTestId('disbursement-a4-sheet')).toHaveTextContent(
-      'ATA Accounting Services Firm'
+      'ATA Business Consultancy'
     );
     fireEvent.click(screen.getByTestId('disbursement-company-option'));
     expect(screen.getByTestId('disbursement-a4-sheet')).not.toHaveTextContent(
-      'Accounting Services Firm'
+      'ATA Business Consultancy'
     );
     fireEvent.click(screen.getByTestId('print-disbursement-button'));
     await waitFor(() => expect(print).toHaveBeenCalledOnce());
-    expect(write.mock.calls[0]![0]).not.toContain('Accounting Services Firm');
+    expect(write.mock.calls[0]![0]).not.toContain('ATA Business Consultancy');
     open.mockReturnValue(popup as unknown as Window);
     fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
     await waitFor(() => expect(popup.location.href).toBe('https://example.test/voucher.pdf'));
@@ -210,5 +210,77 @@ describe('Voucher print and admin edit controls', () => {
     );
     expect(screen.getByTestId('disbursement-total-amount')).toHaveTextContent('2,500.00');
     expect(screen.getByTestId('sig-prepared-by')).toHaveTextContent('P. Cruz');
+  });
+
+  it('appends download filename parameter to Supabase signed URLs on disbursement PDF download', async () => {
+    const popup = { location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    global.fetch = vi.fn().mockImplementation(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: String(url).includes('/pdf')
+          ? {
+              url: 'https://example.supabase.co/storage/v1/object/sign/disbursements/voucher-100.pdf?token=sign456',
+            }
+          : voucher,
+      }),
+    }));
+
+    const { wrapper } = harness();
+    render(<DisbursementPrintModal isOpen disbursement={voucher} onClose={vi.fn()} />, { wrapper });
+
+    fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
+    await waitFor(() => {
+      expect(popup.location.href).toBe(
+        'https://example.supabase.co/storage/v1/object/sign/disbursements/voucher-100.pdf?token=sign456&download=ATA-100.pdf'
+      );
+    });
+  });
+
+  it('falls back to client-side print rendering when backend disbursement PDF fails and popup is writable', async () => {
+    const write = vi.fn();
+    const openDoc = vi.fn();
+    const closeDoc = vi.fn();
+    const focus = vi.fn();
+    const print = vi.fn();
+    const close = vi.fn();
+    const fallbackWindow = {
+      document: { open: openDoc, write, close: closeDoc, images: [] },
+      focus,
+      print,
+      close,
+      location: { href: '' },
+    };
+    vi.spyOn(window, 'open').mockReturnValue(fallbackWindow as unknown as Window);
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (String(url).includes('/pdf')) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ title: 'Internal Server Error', detail: 'Service unavailable' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: voucher }) };
+    });
+
+    const { wrapper } = harness();
+    render(<DisbursementPrintModal isOpen disbursement={voucher} onClose={vi.fn()} />, { wrapper });
+
+    fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
+
+    await waitFor(() => {
+      expect(print).toHaveBeenCalledOnce();
+    });
+    expect(openDoc).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0]![0]).toContain('<title>ATA-100.pdf</title>');
+    expect(write.mock.calls[0]![0]).toContain('Expense Report');
+    expect(write.mock.calls[0]![0]).toContain('M. Santos');
+    expect(closeDoc).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

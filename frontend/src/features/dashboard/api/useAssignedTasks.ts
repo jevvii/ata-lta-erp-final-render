@@ -11,6 +11,10 @@ import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
 import { isTaskAssignee } from '@/features/operations/lib/taskScope';
+import {
+  normalizePhaseSlug,
+  isTaskPhaseLocked,
+} from '@/features/operations/hooks/useSelectableTasks';
 import { dashboardKeys } from './queryKeys';
 import type { AssignableTaskOption } from './types';
 import type { WorkRequest, Task } from '@/features/operations/api/types';
@@ -52,6 +56,23 @@ export function useAssignedTasks(options: UseAssignedTasksOptions = {}) {
 
       for (const wr of workRequests) {
         const tasks: Task[] = wr.tasks || [];
+        const rawWrPhase =
+          wr.phase ||
+          (wr as { currentPhase?: string | null }).currentPhase ||
+          (wr as { current_phase?: string | null }).current_phase ||
+          null;
+        const hasPreProcessingTasks = tasks.some(
+          (t) =>
+            normalizePhaseSlug(t.phase) === 'pre_processing' &&
+            !['completed', 'done', 'cancelled'].includes(String(t.status || '').toLowerCase())
+        );
+        const effectiveWrPhase = rawWrPhase
+          ? normalizePhaseSlug(rawWrPhase, wr.status)
+          : wr.status
+            ? normalizePhaseSlug(null, wr.status)
+            : hasPreProcessingTasks
+              ? 'pre_processing'
+              : null;
 
         if (tasks.length === 0 && effectiveAllTasksForAdmin) {
           const wrAssigneeId =
@@ -86,6 +107,8 @@ export function useAssignedTasks(options: UseAssignedTasksOptions = {}) {
               (wr as { currentPhase?: string | null }).currentPhase ||
               (wr as { current_phase?: string | null }).current_phase ||
               null,
+            workRequestPhase: effectiveWrPhase,
+            isPhaseLocked: false,
             clientName: wr.clientName || wr.client_name || (wr.client && wr.client.name) || null,
             assigneeId: wrAssigneeId,
             assigneeName: wrAssigneeName,
@@ -110,6 +133,9 @@ export function useAssignedTasks(options: UseAssignedTasksOptions = {}) {
         for (const task of tasks) {
           const isCurrentUserAssigned = isTaskAssignee(user, task);
           const isAssigned = effectiveAllTasksForAdmin || isCurrentUserAssigned;
+          const isPhaseLocked = effectiveWrPhase
+            ? isTaskPhaseLocked(task, effectiveWrPhase, 'disbursement')
+            : false;
 
           if (isAssigned) {
             const taskAssigneesList = task.taskAssignees || task.task_assignees || [];
@@ -232,6 +258,8 @@ export function useAssignedTasks(options: UseAssignedTasksOptions = {}) {
               entity: (wr as { entity_code?: string }).entity_code || wr.entity || 'ATA',
               status: task.status,
               phase: task.phase || null,
+              workRequestPhase: effectiveWrPhase,
+              isPhaseLocked,
               clientName: wr.clientName || wr.client_name || (wr.client && wr.client.name) || null,
               assigneeId,
               assigneeName,

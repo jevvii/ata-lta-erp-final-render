@@ -359,15 +359,16 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
       expect(wrSelect).toBeInTheDocument();
       expect(wrSelect.value).toBe('');
 
-      // Auto-detected client is displayed in read-only input
-      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
-      expect(clientDisplay).toBeInTheDocument();
-      expect(clientDisplay.readOnly).toBe(true);
+      // Associated client is an enabled select initially with value === ''
+      const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+      expect(clientSelect).toBeInTheDocument();
+      expect(clientSelect.disabled).toBe(false);
+      expect(clientSelect.value).toBe('');
 
       // Manual input fields are completely removed per UAT2-12
       expect(screen.queryByTestId('input-work-request-id')).not.toBeInTheDocument();
       expect(screen.queryByTestId('input-client-id')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('select-client')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('display-client-name')).not.toBeInTheDocument();
     });
 
     it('auto-populates and displays client when selecting a work request that has client_id', async () => {
@@ -437,8 +438,9 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
 
       // Verify Client is auto-detected and displayed
       await waitFor(() => {
-        const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(clientDisplay.value).toBe('Acme Philippines Corp');
+        const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(clientSelect.value).toBe('c1111111-1111-1111-1111-111111111111');
+        expect(clientSelect.options[clientSelect.selectedIndex]?.text).toContain('Acme Philippines Corp');
       });
     });
 
@@ -484,8 +486,76 @@ describe('CHALLENGER FIN 2 EMPIRICAL ADVERSARIAL SUITE', () => {
 
       // Client display safely shows the fallback name
       await waitFor(() => {
-        const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
-        expect(clientDisplay.value).toBe('Unknown External Entity');
+        const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+        expect(clientSelect.value).toBe('c9999999-9999-9999-9999-999999999999');
+        expect(clientSelect.options[clientSelect.selectedIndex]?.text).toBe('Unknown External Entity');
+      });
+    });
+
+    it('selecting a Client first in select-client filters select-work-request options to that client', async () => {
+      const mockClients = [
+        { id: 'c1111111-1111-1111-1111-111111111111', name: 'Acme Philippines Corp', entity: 'ATA' },
+        { id: 'c2222222-2222-2222-2222-222222222222', name: 'Beta Solutions Inc', entity: 'ATA' },
+      ];
+
+      const mockWorkRequests = [
+        {
+          id: 'wr-11111111-1111-1111-1111-111111111111',
+          title: 'Acme Tax Audit',
+          clientId: 'c1111111-1111-1111-1111-111111111111',
+          clientName: 'Acme Philippines Corp',
+          entity: 'ATA',
+        },
+        {
+          id: 'wr-22222222-2222-2222-2222-222222222222',
+          title: 'Beta Consulting',
+          clientId: 'c2222222-2222-2222-2222-222222222222',
+          clientName: 'Beta Solutions Inc',
+          entity: 'ATA',
+        },
+      ];
+
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url.includes('/work-requests')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockWorkRequests }),
+          };
+        }
+        if (url.includes('/clients')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'content-type': 'application/json' }),
+            json: async () => ({ data: mockClients }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          json: async () => ({ data: [] }),
+        };
+      });
+
+      const { wrapper } = createHarness();
+      render(<CreateDisbursementModal isOpen={true} onClose={() => {}} />, { wrapper });
+
+      await waitFor(() => {
+        expect(screen.getByText(/Acme Tax Audit/i)).toBeInTheDocument();
+      });
+
+      const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
+
+      // Select Beta Solutions Inc in client dropdown
+      fireEvent.change(clientSelect, { target: { value: 'c2222222-2222-2222-2222-222222222222' } });
+
+      await waitFor(() => {
+        expect(clientSelect.value).toBe('c2222222-2222-2222-2222-222222222222');
+        expect(screen.getByText(/Beta Consulting/i)).toBeInTheDocument();
+        expect(screen.queryByText(/Acme Tax Audit/i)).not.toBeInTheDocument();
       });
     });
 

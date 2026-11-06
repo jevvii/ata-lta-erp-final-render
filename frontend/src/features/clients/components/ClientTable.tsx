@@ -1,4 +1,17 @@
-import { Eye, Edit3, Archive, RotateCcw, FolderOpen, Building, CheckCircle, Mail, Phone } from 'lucide-react';
+import {
+  Eye,
+  Edit3,
+  Archive,
+  RotateCcw,
+  FolderOpen,
+  Building,
+  CheckCircle,
+  Mail,
+  Phone,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+} from 'lucide-react';
 import {
   Table,
   TableBody,
@@ -19,6 +32,9 @@ export interface ClientTableProps {
   onEdit: (client: Client) => void;
   onArchive: (client: Client) => void;
   onRestore: (client: Client) => void;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  onSort?: (field: 'client_number' | 'name' | 'tin') => void;
 }
 
 export function ClientTable({
@@ -28,8 +44,23 @@ export function ClientTable({
   onEdit,
   onArchive,
   onRestore,
+  sortBy,
+  sortOrder,
+  onSort,
 }: ClientTableProps) {
   const canEditClients = usePermission('clients:edit');
+
+  const renderSortIndicator = (field: 'client_number' | 'name' | 'tin') => {
+    if (!onSort) return null;
+    if (sortBy === field) {
+      return sortOrder === 'desc' ? (
+        <ArrowDown className="h-3 w-3 inline ml-1 text-[#1D4ED8]" />
+      ) : (
+        <ArrowUp className="h-3 w-3 inline ml-1 text-[#1D4ED8]" />
+      );
+    }
+    return <ArrowUpDown className="h-3 w-3 inline ml-1 text-[#94A3B8] opacity-60 hover:opacity-100" />;
+  };
 
   if (isLoading) {
     return (
@@ -66,9 +97,36 @@ export function ClientTable({
       <Table data-testid="clients-table">
         <TableHeader>
           <TableRow className="bg-[#F8FAFC] border-b border-[#E2E8F0] hover:bg-[#F8FAFC]">
-            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] w-[120px]">ID</TableHead>
-            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B] w-1/4">Client Name</TableHead>
-            <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">TIN & RDO</TableHead>
+            <TableHead
+              className={`font-bold tracking-normal text-xs text-[#1E293B] w-[120px] ${
+                onSort ? 'cursor-pointer select-none hover:text-[#1D4ED8] transition-colors' : ''
+              }`}
+              onClick={onSort ? () => onSort('client_number') : undefined}
+              data-testid="clients-header-id"
+            >
+              <span>ID</span>
+              {renderSortIndicator('client_number')}
+            </TableHead>
+            <TableHead
+              className={`font-bold tracking-normal text-xs text-[#1E293B] w-1/4 ${
+                onSort ? 'cursor-pointer select-none hover:text-[#1D4ED8] transition-colors' : ''
+              }`}
+              onClick={onSort ? () => onSort('name') : undefined}
+              data-testid="clients-header-name"
+            >
+              <span>Client Name</span>
+              {renderSortIndicator('name')}
+            </TableHead>
+            <TableHead
+              className={`font-bold tracking-normal text-xs text-[#1E293B] ${
+                onSort ? 'cursor-pointer select-none hover:text-[#1D4ED8] transition-colors' : ''
+              }`}
+              onClick={onSort ? () => onSort('tin') : undefined}
+              data-testid="clients-header-tin"
+            >
+              <span>TIN & RDO</span>
+              {renderSortIndicator('tin')}
+            </TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Entity</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Agreement</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Contact</TableHead>

@@ -13,6 +13,7 @@ import { useDisbursementDetail, fetchDisbursementPdfUrl } from '../api/useDisbur
 import {
   buildDisbursementDocument,
   DISBURSEMENT_DOCUMENT_CSS,
+  DISBURSEMENT_PAGE_CSS,
   printDisbursementDocument,
 } from '@/lib/disbursementDocument';
 import { DisbursementEditModal } from './DisbursementEditModal';
@@ -50,13 +51,46 @@ export function DisbursementPrintModal({
     const popup = window.open('', '_blank');
     setDownloading(true);
     setError('');
+    const suffix = hideCompany ? '-no-company-details' : noLogo ? '-no-logo' : '';
+    const filename = `${item.disbursement_number || item.id}${suffix}.pdf`;
     try {
-      const url = await fetchDisbursementPdfUrl(item.id, options);
+      const rawUrl = await fetchDisbursementPdfUrl(item.id, options);
+      const url =
+        rawUrl.includes('/storage/v1/object/sign/') && !rawUrl.includes('download=')
+          ? `${rawUrl}${rawUrl.includes('?') ? '&' : '?'}download=${encodeURIComponent(filename)}`
+          : rawUrl;
       if (popup) popup.location.href = url;
       else window.open(url, '_blank');
     } catch {
-      popup?.close();
-      setError('Unable to generate the PDF. Please try again.');
+      if (popup && typeof popup.document?.write === 'function') {
+        try {
+          const body = buildDisbursementDocument(item, options);
+          popup.document.open();
+          popup.document.write(
+            `<!doctype html><html><head><meta charset="utf-8"><title>${filename}</title><style>${DISBURSEMENT_PAGE_CSS}\n${DISBURSEMENT_DOCUMENT_CSS}</style></head><body><main class="disbursement-document">${body}</main></body></html>`
+          );
+          popup.document.close();
+          const imgs = Array.from(popup.document.images || []);
+          await Promise.all(
+            imgs.map((img) =>
+              img.complete
+                ? Promise.resolve()
+                : new Promise<void>((resolve) => {
+                    img.onload = () => resolve();
+                    img.onerror = () => resolve();
+                  })
+            )
+          );
+          popup.focus?.();
+          popup.print?.();
+        } catch {
+          popup?.close();
+          setError('Unable to generate the PDF. Please try again.');
+        }
+      } else {
+        popup?.close();
+        setError('Unable to generate the PDF. Please try again.');
+      }
     } finally {
       setDownloading(false);
     }

@@ -38,9 +38,12 @@ describe('Canonical statement rendering', () => {
         expect(html).toContain('THANK YOU !!!');
       }
       expect(branded).toContain(`${entity}-LOGO.jpg`);
+      expect(branded).toContain(
+        entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+      );
       expect(plain).not.toContain('<img');
-      expect(plain).not.toContain('BUSINESS CONSULTANCY');
-      expect(plain).not.toContain('BUSINESS MANAGEMENT');
+      expect(plain).not.toContain('ATA Business Consultancy');
+      expect(plain).not.toContain('LTA Business Management Corp.');
       expect(plain).toContain('STATEMENT');
       expect(plain).toContain('min-height:65px');
       expect(plain).toContain('Reyes &amp; Cruz');

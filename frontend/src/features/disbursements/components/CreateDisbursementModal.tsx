@@ -8,6 +8,13 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -22,7 +29,7 @@ import {
 import { apiRequest, ApiError } from '@/lib/api';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import {
   isTaskAssignee,
@@ -32,6 +39,7 @@ import {
 import { useTeam } from '@/features/operations/api/useTeam';
 import { useInvoices } from '@/features/billing/api/useInvoices';
 import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
+import { formatAutoDetectedClientDisplay } from '@/features/clients/lib/clientSelectUtils';
 import type { ClientSummary } from '@/features/operations/api/useClients';
 import type { WorkRequest, Task } from '@/features/operations/api/types';
 import type { CreateDisbursementInput, FundSource } from '../api/types';
@@ -157,6 +165,9 @@ export function CreateDisbursementModal({
     prefill?.workRequestId || defaultWorkRequestId || ''
   );
   const [clientId, setClientId] = useState(prefill?.clientId || defaultClientId || '');
+  const [clientFilterId, setClientFilterId] = useState<string>(
+    prefill?.clientId || defaultClientId || ''
+  );
   const [selectedTaskId, setSelectedTaskId] = useState(prefill?.taskId || defaultTaskId || '');
   const [linkedInvoiceId, setLinkedInvoiceId] = useState(
     prefill?.linkedInvoiceId || defaultInvoiceId || ''
@@ -390,11 +401,16 @@ export function CreateDisbursementModal({
   // Filter available work requests by clientId when client is locked or prefilled (Contract Rule 3)
   // and scope by activeEntity when not ALL, while preserving the explicitly requested/default WR
   const availableWorkRequests = React.useMemo(() => {
-    const lockedClientId = prefill?.clientId || defaultClientId;
-    const preservedWrId = prefill?.workRequestId || defaultWorkRequestId || linkedWorkRequestId;
+    const activeFilterClientId = prefill?.clientId || defaultClientId || clientFilterId;
+    const lockedWrId = prefill?.workRequestId || defaultWorkRequestId;
+    const preservedWrId = lockedWrId || linkedWorkRequestId;
     let list = workRequests;
-    if (lockedClientId) {
-      list = list.filter((wr) => (wr.client_id || wr.clientId) === lockedClientId || wr.id === preservedWrId);
+    if (activeFilterClientId) {
+      list = list.filter(
+        (wr) =>
+          (wr.client_id || wr.clientId) === activeFilterClientId ||
+          (Boolean(lockedWrId) && wr.id === lockedWrId)
+      );
     }
     if (activeEntity && activeEntity !== 'ALL') {
       list = list.filter((wr) => {
@@ -414,6 +430,7 @@ export function CreateDisbursementModal({
     workRequests,
     prefill?.clientId,
     defaultClientId,
+    clientFilterId,
     prefill?.workRequestId,
     defaultWorkRequestId,
     linkedWorkRequestId,
@@ -431,6 +448,7 @@ export function CreateDisbursementModal({
       setDescription(prefill?.defaultDescription || defaultDescription || '');
       setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
       setClientId(prefill?.clientId || defaultClientId || '');
+      setClientFilterId(prefill?.clientId || defaultClientId || '');
       setSelectedTaskId(prefill?.taskId || defaultTaskId || '');
       setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
       setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
@@ -448,6 +466,7 @@ export function CreateDisbursementModal({
       setFundSource('Firm Fund');
       setLinkedWorkRequestId('');
       setClientId('');
+      setClientFilterId('');
       setSelectedTaskId('');
       setLinkedInvoiceId('');
       setLinkedTransmittalId('');
@@ -467,6 +486,7 @@ export function CreateDisbursementModal({
       }
       if (prefill?.clientId && prefill.clientId !== clientId) {
         setClientId(prefill.clientId);
+        setClientFilterId(prefill.clientId);
       }
       if (prefill?.taskId && prefill.taskId !== selectedTaskId) {
         setSelectedTaskId(prefill.taskId);
@@ -515,6 +535,9 @@ export function CreateDisbursementModal({
     return undefined;
   }, [activeEntity, selectedWr?.entity]);
 
+  const isClientLocked = Boolean(
+    prefill?.clientId || defaultClientId || prefill?.workRequestId || defaultWorkRequestId
+  );
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId || defaultTaskId);
   const isInvoiceLocked = Boolean(prefill?.linkedInvoiceId || defaultInvoiceId);
@@ -626,20 +649,47 @@ export function CreateDisbursementModal({
 
   const clientDisplayName = React.useMemo(() => {
     if (selectedWr) {
-      return (
+      const wrClientId = selectedWr.clientId || selectedWr.client_id;
+      const matchedClient = wrClientId ? clients.find((c) => c.id === wrClientId) : undefined;
+      const wrClientTin =
+        (selectedWr as { clientTin?: string | null; client_tin?: string | null })?.clientTin ||
+        (selectedWr as { client_tin?: string | null })?.client_tin;
+      const fallbackName =
         selectedWr.clientName ||
         selectedWr.client_name ||
-        clients.find((c) => c.id === (selectedWr.clientId || selectedWr.client_id))?.name ||
-        ((selectedWr.clientId || selectedWr.client_id)
-          ? `Client (${selectedWr.clientId || selectedWr.client_id})`
-          : '')
-      );
+        selectedWr.client?.name ||
+        matchedClient?.name ||
+        (wrClientId ? `Client (${wrClientId})` : '');
+      const clientWithTin = matchedClient
+        ? { ...matchedClient, tin: matchedClient.tin || wrClientTin || null }
+        : wrClientTin
+          ? { id: wrClientId || '', name: fallbackName, tin: wrClientTin }
+          : matchedClient;
+      return formatAutoDetectedClientDisplay(clientWithTin, fallbackName);
     }
     if (clientId) {
-      return clients.find((c) => c.id === clientId)?.name || `Client (${clientId})`;
+      const matchedClient = clients.find((c) => c.id === clientId);
+      const fallbackName = matchedClient?.name || `Client (${clientId})`;
+      return formatAutoDetectedClientDisplay(matchedClient, fallbackName);
     }
     return '';
   }, [selectedWr, clientId, clients]);
+
+  const handleSelectClient = (newClientId: string) => {
+    setClientId(newClientId);
+    setClientFilterId(newClientId);
+    if (linkedWorkRequestId) {
+      const currentWr = workRequests.find((w) => w.id === linkedWorkRequestId);
+      const currentWrClientId = currentWr?.clientId || currentWr?.client_id;
+      if (!newClientId || (currentWr && currentWrClientId !== newClientId)) {
+        setLinkedWorkRequestId('');
+        setSelectedTaskId('');
+        if (!isInvoiceLocked) setLinkedInvoiceId('');
+        if (!isTransmittalLocked) setLinkedTransmittalId('');
+        setUploadedReceipt(null);
+      }
+    }
+  };
 
   const handleSelectWorkRequest = (wrId: string) => {
     setLinkedWorkRequestId(wrId);
@@ -672,7 +722,11 @@ export function CreateDisbursementModal({
         setClientId(wrClientId);
       }
     } else if (!isClientLockedByPrefill) {
-      setClientId('');
+      if (!clientFilterId) {
+        setClientId('');
+      } else {
+        setClientId(clientFilterId);
+      }
     }
   };
 
@@ -746,6 +800,7 @@ export function CreateDisbursementModal({
     setFundSource('Firm Fund');
     setLinkedWorkRequestId(prefill?.workRequestId || defaultWorkRequestId || '');
     setClientId(prefill?.clientId || defaultClientId || '');
+    setClientFilterId(prefill?.clientId || defaultClientId || '');
     setSelectedTaskId(prefill?.taskId || '');
     setLinkedInvoiceId(prefill?.linkedInvoiceId || defaultInvoiceId || '');
     setLinkedTransmittalId(prefill?.linkedTransmittalId || defaultTransmittalId || '');
@@ -1156,34 +1211,47 @@ export function CreateDisbursementModal({
             )}
           </div>
 
-          {/* Associated Client (Auto-Detected, Read-Only) & Linked Task */}
+          {/* Associated Client Dropdown & Linked Task */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <label className="text-xs font-semibold text-ink">
-                Associated Client (Auto-Detected)
+                Associated Client <span className="text-red-500">*</span>
               </label>
-              <Input
-                type="text"
-                readOnly
-                disabled
-                value={
-                  clientDisplayName ||
-                  (clientId ? `Client Associated (${clientId.slice(0, 8)})` : '')
-                }
-                placeholder="Auto-detected from Work Request"
-                className="bg-canvas text-ink cursor-not-allowed text-xs disabled:opacity-80"
-                data-testid="display-client-name"
-              />
+              <select
+                value={clientId}
+                onChange={(e) => handleSelectClient(e.target.value)}
+                disabled={isClientLocked}
+                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
+                data-testid="select-client"
+              >
+                <option value="">All Clients (Auto-detect from Work Request)</option>
+                {clients.map((c) => {
+                  const clientNum =
+                    (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
+                    (c as { client_number?: string | null })?.client_number;
+                  const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {label}
+                    </option>
+                  );
+                })}
+                {clientId && !clients.some((c) => c.id === clientId) && (
+                  <option value={clientId}>
+                    {clientDisplayName || `Client (${clientId})`}
+                  </option>
+                )}
+              </select>
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-semibold text-ink">
                 Linked Task <span className="text-red-500">*</span>
               </label>
-              <select
+              <Select
                 value={selectedTaskId}
-                onChange={(e) => {
-                  setSelectedTaskId(e.target.value);
+                onValueChange={(val) => {
+                  setSelectedTaskId(val);
                   if (errors.selectedTaskId) {
                     setErrors((prev) => {
                       const copy = { ...prev };
@@ -1192,21 +1260,34 @@ export function CreateDisbursementModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !linkedWorkRequestId || isTaskBlocked}
-                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
-                data-testid="select-work-request-task"
+                disabled={isTaskLocked || !linkedWorkRequestId || isNoTasksBlocked}
               >
-                <option value="">
-                  {!linkedWorkRequestId
-                    ? 'Select a Work Request first...'
-                    : 'Select a task...'}
-                </option>
-                {taskOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id} disabled={opt.disabled}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  id="create-disbursement-task"
+                  className="h-9 text-xs bg-surface border-border"
+                  data-testid="select-work-request-task"
+                >
+                  <SelectValue
+                    placeholder={
+                      !linkedWorkRequestId
+                        ? 'Select a Work Request first...'
+                        : 'Select a task...'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {taskOptions.map((opt) => (
+                    <SelectItem
+                      key={opt.id}
+                      value={opt.id}
+                      disabled={opt.disabled}
+                      aria-label={opt.label}
+                    >
+                      <TaskOptionContent option={opt} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {errors.selectedTaskId && (
                 <span className="text-xs text-red-600 block" data-testid="error-selected-task">
                   {errors.selectedTaskId}

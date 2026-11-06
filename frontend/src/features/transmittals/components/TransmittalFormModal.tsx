@@ -45,9 +45,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  getDuplicateClientIds,
+  matchesClientSearch,
+  sortClients,
+  DEFAULT_CLIENT_SORT,
+  type ClientSortOption,
+} from '@/features/clients/lib/clientSelectUtils';
+import {
+  ClientSelectOptionContent,
+  ClientSelectSearchHeader,
+} from '@/components/ui/client-select-option';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
 import type { Disbursement } from '@/features/disbursements/api/types';
@@ -73,6 +84,17 @@ export interface TransmittalFormModalProps {
   onClose: () => void;
   transmittalToEdit?: Transmittal | null;
   prefill?: FinancialPrefill;
+  clients?: Array<{
+    id: string;
+    name: string;
+    address?: string;
+    tin?: string;
+    tradeName?: string;
+    trade_name?: string;
+    clientNumber?: string;
+    client_number?: string;
+    entity?: string;
+  }>;
 }
 
 interface FormLineItem {
@@ -87,6 +109,7 @@ export function TransmittalFormModal({
   onClose,
   transmittalToEdit,
   prefill,
+  clients: clientsProp,
 }: TransmittalFormModalProps) {
   const isEditMode = Boolean(transmittalToEdit);
 
@@ -94,7 +117,12 @@ export function TransmittalFormModal({
   const updateMutation = useUpdateTransmittal();
 
   // Load clients and work requests for selection
-  const { data: clients = [] } = useClients();
+  const { data: clientsData = [] } = useClients();
+  const clients = clientsProp ?? clientsData;
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
+  const duplicateClientIds = React.useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const sortedClients = React.useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
   const { data: workRequestsData } = useWorkRequests({ archived: false });
   const workRequests = React.useMemo(() => {
     if (!workRequestsData) return [];
@@ -255,6 +283,8 @@ export function TransmittalFormModal({
       setRecipientName('');
       setRecipientDetails('');
       setNotes('');
+      setClientSearch('');
+      setClientSort(DEFAULT_CLIENT_SORT);
       setItems([{ id: 'item-1', description: '', documentType: 'Contract', quantity: 1 }]);
       setLinkedDisbursementIds([]);
       setLinkedInvoiceIds([]);
@@ -554,11 +584,21 @@ export function TransmittalFormModal({
                   <SelectValue placeholder="Select client..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {clients.map((c) => {
-                    const clientNum = (c as { client_number?: string; clientNumber?: string }).client_number || (c as { client_number?: string; clientNumber?: string }).clientNumber;
+                  <ClientSelectSearchHeader
+                    value={clientSearch}
+                    onChange={setClientSearch}
+                    sortBy={clientSort}
+                    onSortChange={setClientSort}
+                  />
+                  {sortedClients.map((c) => {
+                    const matches = matchesClientSearch(c, clientSearch);
+                    if (!matches && c.id !== clientId) return null;
                     return (
-                      <SelectItem key={c.id} value={c.id}>
-                        {clientNum ? `${clientNum} · ${c.name} (${c.entity})` : `${c.name} (${c.entity})`}
+                      <SelectItem key={c.id} value={c.id} className={!matches ? 'hidden' : undefined}>
+                        <ClientSelectOptionContent
+                          client={c}
+                          isDuplicate={duplicateClientIds.has(c.id)}
+                        />
                       </SelectItem>
                     );
                   })}
@@ -636,7 +676,7 @@ export function TransmittalFormModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !workRequestId || (isTaskBlocked && selectedTaskId !== originTaskId)}
+                disabled={isTaskLocked || !workRequestId || (isNoTasksBlocked && selectedTaskId !== originTaskId)}
               >
                 <SelectTrigger id="workRequestTask" className="text-xs" data-testid="task-select">
                   <SelectValue
@@ -649,8 +689,8 @@ export function TransmittalFormModal({
                 </SelectTrigger>
                 <SelectContent>
                   {taskOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId}>
-                      {opt.label}
+                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId} aria-label={opt.label}>
+                      <TaskOptionContent option={opt} />
                     </SelectItem>
                   ))}
                 </SelectContent>

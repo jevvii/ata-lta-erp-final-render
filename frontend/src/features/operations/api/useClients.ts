@@ -1,15 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest, type ApiError } from '@/lib/api';
 import { useSessionStore } from '@/lib/session';
+import { sortClients, DEFAULT_CLIENT_SORT } from '@/features/clients/lib/clientSelectUtils';
 
 export interface ClientSummary {
   id: string;
   name: string;
-  entity: 'ATA' | 'LTA';
+  entity?: 'ATA' | 'LTA' | 'BOTH' | string;
   tin?: string | null;
+  tradeName?: string | null;
+  trade_name?: string | null;
+  clientNumber?: string | null;
+  client_number?: string | null;
+  retainerAmount?: number;
+  status?: string;
+  email?: string;
+  contactPerson?: string;
   rdoCode?: string | null;
   address?: string | null;
-  status?: string;
   retainer?: boolean;
 }
 
@@ -60,7 +68,9 @@ export function useClients(filters?: ClientFilters, options?: { enabled?: boolea
         path,
         Object.keys(headers).length > 0 ? { headers } : undefined
       );
-      return res.data;
+      return Array.isArray(res.data)
+        ? sortClients(res.data, DEFAULT_CLIENT_SORT)
+        : res.data;
     },
     enabled: options?.enabled ?? true,
     staleTime: 60 * 1000,

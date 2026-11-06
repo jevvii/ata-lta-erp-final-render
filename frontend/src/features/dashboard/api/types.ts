@@ -255,6 +255,8 @@ export interface AssignableTaskOption {
   entity: string;
   status: string;
   phase?: string | null;
+  workRequestPhase?: string | null;
+  isPhaseLocked?: boolean;
   clientName?: string | null;
   assigneeId?: string | null;
   assigneeName?: string | null;
