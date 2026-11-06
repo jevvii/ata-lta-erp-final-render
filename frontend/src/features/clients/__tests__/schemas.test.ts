@@ -124,6 +124,48 @@ describe('Clients Module Schemas & Validation (clients@2.0.0)', () => {
       };
       expect(() => createClientSchema.parse(invalid)).toThrow();
     });
+
+    it('accepts and sanitizes formatted string retainer fee (e.g. 4,000.00 and ₱4,000.00)', () => {
+      const payloadWithCommas = {
+        name: 'Acme Corp',
+        tin: '123-456-789-000',
+        entity: 'ATA',
+        retainer: true,
+        retainerFee: '4,000.00',
+      };
+      const parsed = createClientSchema.parse(payloadWithCommas);
+      expect(parsed.retainerFee).toBe(4000);
+
+      const payloadWithCurrency = {
+        name: 'Acme Corp',
+        tin: '123-456-789-000',
+        entity: 'ATA',
+        retainer: true,
+        retainerFee: '₱4,000.00',
+      };
+      const parsedCurrency = createClientSchema.parse(payloadWithCurrency);
+      expect(parsedCurrency.retainerFee).toBe(4000);
+    });
+
+    it('rejects formatted string retainer fee if negative or invalid non-number', () => {
+      const negativeString = {
+        name: 'Acme Corp',
+        tin: '123-456-789-000',
+        entity: 'ATA',
+        retainer: true,
+        retainerFee: '-4,000.00',
+      };
+      expect(() => createClientSchema.parse(negativeString)).toThrow();
+
+      const invalidString = {
+        name: 'Acme Corp',
+        tin: '123-456-789-000',
+        entity: 'ATA',
+        retainer: true,
+        retainerFee: 'not-a-number',
+      };
+      expect(() => createClientSchema.parse(invalidString)).toThrow();
+    });
   });
 
   describe('updateClientSchema', () => {
