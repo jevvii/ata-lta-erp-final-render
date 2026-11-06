@@ -122,6 +122,50 @@ const loadRelated = async (clientIds) => {
   return { contactDetails, relatedCompanies };
 };
 
+const sortClientsList = (clients, { sortField, sortAsc }) => {
+  const getVal = (item, field) => {
+    if (field === 'client_number') return item.client_number || item.clientNumber || null;
+    if (field === 'created_at') return item.created_at || item.createdAt || null;
+    if (field === 'updated_at') return item.updated_at || item.updatedAt || null;
+    return item[field] || null;
+  };
+
+  return [...clients].sort((a, b) => {
+    const aVal = getVal(a, sortField);
+    const bVal = getVal(b, sortField);
+
+    const aEmpty = aVal === null || aVal === undefined || String(aVal).trim() === '';
+    const bEmpty = bVal === null || bVal === undefined || String(bVal).trim() === '';
+
+    // Null/empty values always sort last regardless of ascending/descending
+    if (aEmpty && !bEmpty) return 1;
+    if (!aEmpty && bEmpty) return -1;
+    if (aEmpty && bEmpty) {
+      const nameA = a.name || '';
+      const nameB = b.name || '';
+      return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    let cmp;
+    if (sortField === 'created_at' || sortField === 'updated_at') {
+      const timeA = new Date(aVal).getTime() || 0;
+      const timeB = new Date(bVal).getTime() || 0;
+      cmp = timeA === timeB ? 0 : timeA < timeB ? -1 : 1;
+    } else {
+      cmp = String(aVal).localeCompare(String(bVal), undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    if (cmp !== 0) {
+      return sortAsc ? cmp : -cmp;
+    }
+
+    // Tie-breaker: name ascending
+    const nameA = a.name || '';
+    const nameB = b.name || '';
+    return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+  });
+};
+
 /**
  * Fetch clients with optional filters, sorting, pagination, and related records.
  * @param {Object} params
@@ -147,10 +191,13 @@ const listClients = async ({
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-  const sortField = ['name', 'created_at', 'updated_at', 'status'].includes(sortBy)
+  const sortField = ['client_number', 'name', 'tin', 'created_at', 'updated_at', 'status'].includes(sortBy)
     ? sortBy
-    : 'name';
-  const sortAsc = String(sortOrder).toLowerCase() === 'asc';
+    : 'client_number';
+  const sortAsc =
+    sortOrder === undefined || sortOrder === null || String(sortOrder).trim() === ''
+      ? true
+      : String(sortOrder).toLowerCase() !== 'desc';
 
   const isArchived = archived === true || archived === 'true' || status === 'Archived';
 
@@ -213,7 +260,7 @@ const listClients = async ({
     })
   );
 
-  const result = mapped;
+  const result = sortClientsList(mapped, { sortField, sortAsc });
   const total = count || 0;
 
   if (!isPaginated) {

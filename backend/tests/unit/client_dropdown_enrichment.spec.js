@@ -1,6 +1,7 @@
 const operationsService = require('../../src/modules/operations/service');
 const billingService = require('../../src/modules/billing/service');
 const transmittalsService = require('../../src/modules/transmittals/service');
+const clientsService = require('../../src/modules/clients/service');
 const { supabaseAdmin } = require('../../src/services/supabaseClient');
 
 const createFluentMock = (data) => {
@@ -262,6 +263,136 @@ describe('Client Dropdown TIN & Trade Name Backend Enrichment', () => {
       expect(res.client_trade_name).toBe('Acme Trading');
       expect(res.clients.tin).toBe('123-456-789-000');
       expect(res.clients.trade_name).toBe('Acme Trading');
+    });
+  });
+
+  describe('Clients Module - Client Sorting & Ordering', () => {
+    const sampleRows = [
+      { id: 'c1', name: 'Zebra Corp', client_number: 'CLI-ATA-0002', tin: '999-000-111-000', created_at: '2026-01-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c2', name: 'Alpha Logistics', client_number: 'CLI-ATA-0001', tin: '111-222-333-000', created_at: '2026-02-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c3', name: 'Middle Enterprises', client_number: 'CLI-ATA-0010', tin: '555-666-777-000', created_at: '2026-03-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c4', name: 'Beta Technologies', client_number: null, tin: '333-444-555-000', created_at: '2026-01-15T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c5', name: 'Gamma Holdings', client_number: '', tin: null, created_at: '2026-04-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+    ];
+
+    const mockClientsQuery = (rows) => {
+      let orderCalls = [];
+      const selectSpy = jest.spyOn(supabaseAdmin, 'from').mockImplementation((table) => {
+        if (table === 'clients') {
+          const mock = createFluentMock(rows);
+          mock.order = jest.fn().mockImplementation((col, opts) => {
+            orderCalls.push({ col, opts });
+            return mock;
+          });
+          mock.then = (resolve) => resolve({ data: rows, error: null, count: rows.length });
+          return mock;
+        }
+        if (table === 'entities') return createFluentMock([{ id: 'ent-ata', code: 'ATA' }]);
+        if (table === 'client_contact_details' || table === 'client_related_companies') {
+          return createFluentMock([]);
+        }
+        return createFluentMock([]);
+      });
+      return { selectSpy, getOrderCalls: () => orderCalls };
+    };
+
+    it('defaults to sorting by client_number ascending with null/empty values placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({ entityId: 'ent-ata' });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'client_number', opts: { ascending: true } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c2', 'c1', 'c3', 'c4', 'c5']);
+      expect(res.data[0].client_number).toBe('CLI-ATA-0001');
+      expect(res.data[1].client_number).toBe('CLI-ATA-0002');
+      expect(res.data[2].client_number).toBe('CLI-ATA-0010');
+      expect(res.data[3].client_number).toBeNull();
+      expect(res.data[4].client_number).toBeNull();
+    });
+
+    it('sorts by client_number descending with null/empty values placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'client_number',
+        sortOrder: 'desc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'client_number', opts: { ascending: false } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c3', 'c1', 'c2', 'c4', 'c5']);
+    });
+
+    it('sorts by name ascending', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'name',
+        sortOrder: 'asc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'name', opts: { ascending: true } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c2', 'c4', 'c5', 'c3', 'c1']);
+    });
+
+    it('sorts by name descending', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'name',
+        sortOrder: 'desc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'name', opts: { ascending: false } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c1', 'c3', 'c5', 'c4', 'c2']);
+    });
+
+    it('sorts by tin ascending with nulls placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'tin',
+        sortOrder: 'asc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'tin', opts: { ascending: true } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c2', 'c4', 'c3', 'c1', 'c5']);
+    });
+
+    it('sorts by tin descending with nulls placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'tin',
+        sortOrder: 'desc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'tin', opts: { ascending: false } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c1', 'c3', 'c4', 'c2', 'c5']);
+    });
+
+    it('sorts by created_at descending', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'created_at',
+        sortOrder: 'desc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'created_at', opts: { ascending: false } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c5', 'c3', 'c2', 'c4', 'c1']);
     });
   });
 });
