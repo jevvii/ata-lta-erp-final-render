@@ -95,7 +95,9 @@ const getSignedUploadUrl = async ({
       detail: 'Storage bucket is not configured',
     });
   }
-  const { data, error } = await supabaseAdmin.storage.from(activeBucket).createSignedUploadUrl(path);
+  const { data, error } = await supabaseAdmin.storage
+    .from(activeBucket)
+    .createSignedUploadUrl(path);
 
   if (error) {
     throw new AppError({
@@ -113,13 +115,14 @@ const getSignedUploadUrl = async ({
  * @param {Object} params
  * @param {string} params.path - Storage path
  * @param {number} [params.expiresInSeconds=300]
+ * @param {string|boolean} [params.download]
  * @returns {Promise<string>}
  */
-const getSignedDownloadUrl = async ({ path, expiresInSeconds = 300 }) => {
+const getSignedDownloadUrl = async ({ path, expiresInSeconds = 300, download }) => {
   assertBucket();
   const { data, error } = await supabaseAdmin.storage
     .from(bucket)
-    .createSignedUrl(path, expiresInSeconds);
+    .createSignedUrl(path, expiresInSeconds, download ? { download } : undefined);
 
   if (error) {
     throw new AppError({
@@ -156,9 +159,10 @@ const deleteObject = async (path) => {
  * @param {string} params.path - Storage path
  * @param {Buffer} params.buffer - File bytes
  * @param {string} params.contentType
+ * @param {string|boolean} [params.download]
  * @returns {Promise<string>} Public/signed download URL
  */
-const uploadBuffer = async ({ path, buffer, contentType }) => {
+const uploadBuffer = async ({ path, buffer, contentType, download }) => {
   assertBucket();
   const { error: uploadError } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, {
     contentType,
@@ -173,7 +177,8 @@ const uploadBuffer = async ({ path, buffer, contentType }) => {
     });
   }
 
-  return getSignedDownloadUrl({ path, expiresInSeconds: 300 });
+  const downloadFilename = download !== undefined ? download : path ? path.split('/').pop() : true;
+  return getSignedDownloadUrl({ path, expiresInSeconds: 300, download: downloadFilename });
 };
 
 /**
@@ -187,9 +192,7 @@ const verifyObjectExists = async ({ path, bucket: targetBucket }) => {
   const activeBucket = targetBucket || env.storage.bucket;
   if (!activeBucket) return false;
   try {
-    const { data, error } = await supabaseAdmin.storage
-      .from(activeBucket)
-      .download(path);
+    const { data, error } = await supabaseAdmin.storage.from(activeBucket).download(path);
     if (error || !data) return false;
     return true;
   } catch (_e) {
@@ -317,7 +320,8 @@ const verifyReceiptObject = async ({
     return {
       valid: false,
       code: 'RECEIPT_UPLOAD_VERIFICATION_FAILED',
-      error: 'Receipt binary magic bytes header does not match any allowed MIME type (PDF, PNG, JPEG).',
+      error:
+        'Receipt binary magic bytes header does not match any allowed MIME type (PDF, PNG, JPEG).',
     };
   }
 

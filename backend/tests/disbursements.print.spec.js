@@ -101,7 +101,7 @@ it.each([
     await api('get', path).expect(200);
     const html = generatePdf.mock.calls[0][0].html;
     expect(html.includes('<img')).toBe(hasLogo);
-    expect(html.includes('ATA Accounting Services Firm')).toBe(hasCompany);
+    expect(html.includes('ATA Business Consultancy')).toBe(hasCompany);
     if (hasLogo) expect(html).toContain('data:image/jpeg;base64,');
     expect(html).toContain('Expense Report');
     expect(html).toContain('Payment Voucher');
@@ -141,7 +141,9 @@ it.each(['ATA', 'LTA'])(
       disbursement_number: `${entity}-100`,
     });
     await api('get', `/v1/disbursements/${voucher.id}/pdf`, admin, 'ALL').expect(200);
-    expect(generatePdf.mock.calls[0][0].html).toContain(`${entity} Accounting Services Firm`);
+    expect(generatePdf.mock.calls[0][0].html).toContain(
+      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+    );
     expect(uploadBuffer.mock.calls[0][0].path).toBe(
       `entities/${entity}/disbursements/${voucher.id}/pdf/${entity}-100.pdf`
     );

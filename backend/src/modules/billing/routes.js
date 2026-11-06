@@ -51,8 +51,7 @@ const fieldLevelSecurity = (req, res, next) => {
     }
   } else {
     const allowed =
-      hasPermission(permissions, 'billing:edit') ||
-      hasPermission(permissions, 'billing:request');
+      hasPermission(permissions, 'billing:edit') || hasPermission(permissions, 'billing:request');
     if (!allowed) {
       return next(
         new AppError({
@@ -93,6 +92,18 @@ router.get(
   resolveEntity({ allowAll: true }),
   requirePermission('billing:view'),
   billingController.listInvoices
+);
+router.get(
+  '/:id/pdf',
+  resolveEntity({ allowAll: true }),
+  requirePermission('billing:view'),
+  billingController.getInvoicePdf
+);
+router.get(
+  '/:id/voucher',
+  resolveEntity({ allowAll: true }),
+  requirePermission('billing:view'),
+  billingController.getVoucherPdf
 );
 router.get(
   '/:id',
@@ -169,9 +180,5 @@ router.post(
   audit('invoice.payment', { table: 'invoice_payments' }),
   billingController.recordPayment
 );
-
-// --- PDF Generation ---
-router.get('/:id/pdf', requirePermission('billing:view'), billingController.getInvoicePdf);
-router.get('/:id/voucher', requirePermission('billing:view'), billingController.getVoucherPdf);
 
 module.exports = router;

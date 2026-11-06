@@ -330,4 +330,126 @@ describe('/v1/clients', () => {
     expect(multiDupRes.body.code).toBe('DUPLICATE_TIN');
     expect(multiDupRes.body.detail).toContain('777-888-999-00001');
   });
+
+  describe('Client Sorting & Ordering via API', () => {
+    let token;
+    beforeEach(() => {
+      resetMock();
+      seedDefaults();
+      token = registerUser({
+        email: 'admin-sort@ata-lta.ph',
+        name: 'Admin Sort',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      mockTables.clients.set('c-zebra', {
+        id: 'c-zebra',
+        name: 'Zebra Corp',
+        client_number: 'CLI-ATA-0002',
+        tin: '999-000-111-000',
+        created_at: '2026-01-01T00:00:00Z',
+        entity_id: 'ent-ata',
+        entity_code: 'ATA',
+        deleted_at: null,
+        status: 'Active',
+      });
+      mockTables.clients.set('c-alpha', {
+        id: 'c-alpha',
+        name: 'Alpha Logistics',
+        client_number: 'CLI-ATA-0001',
+        tin: '111-222-333-000',
+        created_at: '2026-02-01T00:00:00Z',
+        entity_id: 'ent-ata',
+        entity_code: 'ATA',
+        deleted_at: null,
+        status: 'Active',
+      });
+      mockTables.clients.set('c-middle', {
+        id: 'c-middle',
+        name: 'Middle Enterprises',
+        client_number: 'CLI-ATA-0010',
+        tin: '555-666-777-000',
+        created_at: '2026-03-01T00:00:00Z',
+        entity_id: 'ent-ata',
+        entity_code: 'ATA',
+        deleted_at: null,
+        status: 'Active',
+      });
+      mockTables.clients.set('c-beta', {
+        id: 'c-beta',
+        name: 'Beta Technologies',
+        client_number: null,
+        tin: '333-444-555-000',
+        created_at: '2026-01-15T00:00:00Z',
+        entity_id: 'ent-ata',
+        entity_code: 'ATA',
+        deleted_at: null,
+        status: 'Active',
+      });
+    });
+
+    it('defaults to client_number ascending with nulls last', async () => {
+      const res = await request(app)
+        .get('/v1/clients')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      const ids = res.body.data.map((c) => c.id);
+      expect(ids).toEqual(['c-alpha', 'c-zebra', 'c-middle', 'c-beta']);
+    });
+
+    it('sorts by client_number descending with nulls last', async () => {
+      const res = await request(app)
+        .get('/v1/clients?sortBy=client_number&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      const ids = res.body.data.map((c) => c.id);
+      expect(ids).toEqual(['c-middle', 'c-zebra', 'c-alpha', 'c-beta']);
+    });
+
+    it('sorts by name ascending and descending', async () => {
+      const ascRes = await request(app)
+        .get('/v1/clients?sortBy=name&sortOrder=asc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(ascRes.body.data.map((c) => c.id)).toEqual(['c-alpha', 'c-beta', 'c-middle', 'c-zebra']);
+
+      const descRes = await request(app)
+        .get('/v1/clients?sortBy=name&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-beta', 'c-alpha']);
+    });
+
+    it('sorts by tin ascending and descending', async () => {
+      const ascRes = await request(app)
+        .get('/v1/clients?sortBy=tin&sortOrder=asc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(ascRes.body.data.map((c) => c.id)).toEqual(['c-alpha', 'c-beta', 'c-middle', 'c-zebra']);
+
+      const descRes = await request(app)
+        .get('/v1/clients?sortBy=tin&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-beta', 'c-alpha']);
+    });
+
+    it('sorts by created_at descending', async () => {
+      const res = await request(app)
+        .get('/v1/clients?sortBy=created_at&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(res.body.data.map((c) => c.id)).toEqual(['c-middle', 'c-alpha', 'c-beta', 'c-zebra']);
+    });
+  });
 });

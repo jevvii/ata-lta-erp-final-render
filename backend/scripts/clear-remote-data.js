@@ -192,8 +192,20 @@ async function run() {
     if (tablesToClear.length > 0) {
       console.log('1️⃣ Truncating operational tables with CASCADE...');
       const quotedTables = tablesToClear.map((t) => `"${t}"`).join(', ');
-      await client.query(`TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE;`);
-      console.log('   ✅ Tables truncated.');
+      const hasReviewEvents = tablesToClear.includes('task_creation_review_events');
+      if (hasReviewEvents) {
+        await client.query('ALTER TABLE public.task_creation_review_events DISABLE TRIGGER trg_task_creation_review_events_truncate;');
+        await client.query('ALTER TABLE public.task_creation_review_events DISABLE TRIGGER trg_task_creation_review_events_immutable;');
+      }
+      try {
+        await client.query(`TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE;`);
+        console.log('   ✅ Tables truncated.');
+      } finally {
+        if (hasReviewEvents) {
+          await client.query('ALTER TABLE public.task_creation_review_events ENABLE TRIGGER trg_task_creation_review_events_truncate;');
+          await client.query('ALTER TABLE public.task_creation_review_events ENABLE TRIGGER trg_task_creation_review_events_immutable;');
+        }
+      }
     }
 
     console.log('2️⃣ Cleaning up users table (retaining only System Administrator)...');

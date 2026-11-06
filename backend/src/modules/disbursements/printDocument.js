@@ -104,7 +104,7 @@ exports.DISBURSEMENT_DOCUMENT_CSS = `
 .disbursement-document strong { font-weight: 700; }
 .disbursement-document .voucher-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; min-height: 72px; padding-bottom: 12px; margin-bottom: 24px; border-bottom: 2px solid #111; }
 .disbursement-document .voucher-company { display: flex; align-items: center; gap: 12px; flex: 1; }
-.disbursement-document .voucher-logo { height: 48px; max-width: 100px; object-fit: contain; }
+.disbursement-document .voucher-logo { height: 48px; max-width: 130px; object-fit: contain; }
 .disbursement-document .voucher-company-name { font-size: 13pt; font-weight: 700; }
 .disbursement-document .voucher-title { font-size: 20pt; font-weight: 700; line-height: 1.15; text-align: right; }
 .disbursement-document .voucher-subtitle { font-size: 9pt; text-align: right; margin-top: 5px; }
@@ -133,7 +133,7 @@ exports.DISBURSEMENT_DOCUMENT_CSS = `
 `;
 function buildDisbursementDocument(d, options = {}) {
   const entity = (d.entity_code || d.entityCode) === 'LTA' ? 'LTA' : 'ATA';
-  const company = `${entity} Accounting Services Firm`;
+  const company = entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
   const includeCompany = options.includeCompanyDetails !== false;
   const details = getDisbursementPrintDetails(d);
   const formatAmount = (n) =>

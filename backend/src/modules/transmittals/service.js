@@ -321,7 +321,7 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
     workRequestId || work_request_id || linkedWorkRequestId || linked_work_request_id;
 
   const makeQuery = () => {
-    let q = supabaseAdmin.from('transmittals').select('*, clients(name, client_number)');
+    let q = supabaseAdmin.from('transmittals').select('*, clients(name, client_number, tin, trade_name)');
 
     if (includeDeleted !== true && includeDeleted !== 'true') {
       q = q.is('deleted_at', null);
@@ -394,11 +394,20 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
   const mapped = rows.map((row) => {
     const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
     const clientNumber = row.clients?.client_number || row.client_number || null;
+    const clientName = row.clients?.name || row.client_name || null;
+    const clientTin = row.clients?.tin || row.client_tin || null;
+    const clientTradeName = row.clients?.trade_name || row.client_trade_name || null;
     const wrNumber = wr?.work_request_number || null;
     return {
       ...row,
+      clientName,
+      client_name: clientName,
       clientNumber,
       client_number: clientNumber,
+      clientTin,
+      client_tin: clientTin,
+      clientTradeName,
+      client_trade_name: clientTradeName,
       workRequestNumber: wrNumber,
       work_request_number: wrNumber,
       work_request_title: wr?.title || null,
@@ -745,7 +754,7 @@ const createTransmittal = async ({ entityId, entityCode, userId, user, data }) =
 const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
   let query = supabaseAdmin
     .from('transmittals')
-    .select('*, clients(name, address, tin, client_number)')
+    .select('*, clients(name, address, tin, client_number, trade_name)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -827,11 +836,20 @@ const getTransmittalById = async ({ entityId, id, user, internal = false }) => {
   }
 
   const clientNumber = transmittal.clients?.client_number || transmittal.client_number || null;
+  const clientName = transmittal.clients?.name || transmittal.client_name || null;
+  const clientTin = transmittal.clients?.tin || transmittal.client_tin || null;
+  const clientTradeName = transmittal.clients?.trade_name || transmittal.client_trade_name || null;
 
   return {
     ...transmittal,
+    clientName,
+    client_name: clientName,
     clientNumber,
     client_number: clientNumber,
+    clientTin,
+    client_tin: clientTin,
+    clientTradeName,
+    client_trade_name: clientTradeName,
     workRequestNumber: wrNumber,
     work_request_number: wrNumber,
     work_request_title: wrTitle,

@@ -313,7 +313,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const effectiveLinkedTransmittalId = linkedTransmittalId || linked_transmittal_id;
 
   const makeQuery = () => {
-    let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number)');
+    let q = supabaseAdmin.from('invoices').select('*, clients(name, client_number, tin, trade_name)');
     if (includeDeleted !== true && includeDeleted !== 'true') {
       q = q.is('deleted_at', null);
     }
@@ -329,9 +329,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     if (clientId) q = q.eq('client_id', clientId);
     if (effectiveFilterWrId) q = q.eq('work_request_id', effectiveFilterWrId);
     if (effectiveFilterTaskId) {
-      q = q.or(
-        `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
-      );
+      q = q.or(`task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`);
     }
     if (effectiveLinkedTransmittalId) {
       q = q.eq('linked_transmittal_id', effectiveLinkedTransmittalId);
@@ -363,9 +361,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
 
   // Batch resolve parent Work Request and creator (Task A.3)
   const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
-  const transmittalIds = [
-    ...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean)),
-  ];
+  const transmittalIds = [...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean))];
   let wrMap = new Map();
   let userMap = new Map();
   let transmittalMap = new Map();
@@ -399,15 +395,22 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const mapped = rows.map((row) => {
     const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
     const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
-    const tr = row.linked_transmittal_id
-      ? transmittalMap.get(row.linked_transmittal_id)
-      : null;
+    const tr = row.linked_transmittal_id ? transmittalMap.get(row.linked_transmittal_id) : null;
     const clientNumber = row.clients?.client_number || row.client_number || null;
+    const clientName = row.clients?.name || row.client_name || null;
+    const clientTin = row.clients?.tin || row.client_tin || null;
+    const clientTradeName = row.clients?.trade_name || row.client_trade_name || null;
     const wrNumber = wr?.work_request_number || null;
     return {
       ...row,
+      clientName,
+      client_name: clientName,
       clientNumber,
       client_number: clientNumber,
+      clientTin,
+      client_tin: clientTin,
+      clientTradeName,
+      client_trade_name: clientTradeName,
       workRequestNumber: wrNumber,
       work_request_number: wrNumber,
       entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
@@ -505,7 +508,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
   let invoiceNumber = (data.invoiceNumber || '').trim();
   if (!invoiceNumber) {
     const entityCode = await resolveEntityCode(entityId);
-    const code = (entityCode && entityCode !== 'ALL' && entityCode.length <= 5) ? entityCode : 'ATA';
+    const code = entityCode && entityCode !== 'ALL' && entityCode.length <= 5 ? entityCode : 'ATA';
     const year = new Date().getFullYear();
     const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
       p_prefix: `${code}-SI-${year}`,
@@ -616,7 +619,7 @@ const getInvoiceById = async ({
 }) => {
   let query = supabaseAdmin
     .from('invoices')
-    .select('*, clients(name, tin, address, client_number)')
+    .select('*, clients(name, tin, address, client_number, trade_name)')
     .eq('id', id)
     .is('deleted_at', null);
 
@@ -629,7 +632,7 @@ const getInvoiceById = async ({
   if ((error || !invoice) && entityId && entityId !== 'ALL' && allowFallback) {
     const { data: fallbackInvoice } = await supabaseAdmin
       .from('invoices')
-      .select('*, clients(name, tin, address, client_number)')
+      .select('*, clients(name, tin, address, client_number, trade_name)')
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
@@ -755,11 +758,20 @@ const getInvoiceById = async ({
   }
 
   const clientNumber = invoice.clients?.client_number || invoice.client_number || null;
+  const clientName = invoice.clients?.name || invoice.client_name || null;
+  const clientTin = invoice.clients?.tin || invoice.client_tin || null;
+  const clientTradeName = invoice.clients?.trade_name || invoice.client_trade_name || null;
   const entityCode = await resolveEntityCode(invoice.entity_id);
   return {
     ...invoice,
+    clientName,
+    client_name: clientName,
     clientNumber,
     client_number: clientNumber,
+    clientTin,
+    client_tin: clientTin,
+    clientTradeName,
+    client_trade_name: clientTradeName,
     workRequestNumber: wrNumber,
     work_request_number: wrNumber,
     entity_code: entityCode,
@@ -1336,10 +1348,17 @@ const recordPayment = async ({ entityId, invoiceId, userId, user, data }) => {
  * @param {string} params.id - Invoice UUID
  * @returns {Promise<{ url: string }>}
  */
-const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDetails = true, user }) => {
-  const invoice = await getInvoiceById({ entityId, id, user });
+const generateInvoicePdf = async ({
+  entityId,
+  entityCode,
+  id,
+  includeCompanyDetails = true,
+  user,
+}) => {
+  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
 
-  const code = entityCode || entityId;
+  const code =
+    invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;
   let body = buildStatementDocument({ ...invoice, entity_code: code }, { includeCompanyDetails });
   // Embed deployed backend assets: PDF rendering has no frontend base URL.
   if (includeCompanyDetails) {
@@ -1370,9 +1389,10 @@ const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDeta
  * @returns {Promise<{ url: string }>}
  */
 const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
-  const invoice = await getInvoiceById({ entityId, id, user });
+  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
 
-  const code = entityCode || entityId;
+  const code =
+    invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;
   const html = buildVoucherHtml(invoice, code);
   const pdfBuffer = await generatePdf({ html, options: { format: 'A4' } });
 
@@ -1394,7 +1414,7 @@ const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
  */
 const buildVoucherHtml = (invoice, entityId) => {
   const entityName =
-    entityId === 'ATA' ? 'Amaya Tan & Associates' : 'LTA — Lanting Tan & Associates';
+    entityId === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
 
   const paymentRows = (invoice.payments || [])
     .map((p, idx) => {
