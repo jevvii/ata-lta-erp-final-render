@@ -168,11 +168,14 @@ describe('InvoiceCreateModal Component', () => {
     );
 
     // Client, WR, and Task should be locked (disabled)
-    const clientTrigger = screen.getByTestId('select-client');
+    const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
     const wrTrigger = screen.getByTestId('select-work-request');
     const taskTrigger = screen.getByTestId('select-work-request-task');
 
-    expect(clientTrigger).toBeDisabled();
+    expect(clientDisplay).toBeDisabled();
+    await waitFor(() => {
+      expect(clientDisplay).toHaveValue('Acme Philippines Corp');
+    });
     expect(wrTrigger).toBeDisabled();
     expect(taskTrigger).toBeDisabled();
   });

@@ -353,15 +353,13 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
             wrapper,
           });
 
-          const clientTrigger = screen.getByTestId('select-client');
+          const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
           const wrTrigger = screen.getByTestId('select-work-request');
           const taskTrigger = screen.getByTestId('select-work-request-task');
 
-          if (expectClientLocked) {
-            expect(clientTrigger).toBeDisabled();
-          } else {
-            expect(clientTrigger).not.toBeDisabled();
-          }
+          // Client display is ALWAYS read-only & disabled per UAT2-12 (matching Suite 3)
+          expect(clientDisplay).toBeDisabled();
+          expect(clientDisplay.readOnly).toBe(true);
 
           if (expectWrLocked) {
             expect(wrTrigger).toBeDisabled();
@@ -388,10 +386,13 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         { wrapper }
       );
 
-      const clientTrigger = screen.getByTestId('select-client');
+      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
       const wrTrigger = screen.getByTestId('select-work-request');
       expect(wrTrigger).toBeDisabled();
-      expect(clientTrigger).toBeDisabled();
+      expect(clientDisplay).toBeDisabled();
+      await waitFor(() => {
+        expect(clientDisplay.value).toContain('Alpha');
+      });
     });
   });
 
@@ -682,15 +683,19 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       );
 
       // Verify triggers are disabled and inert
-      const clientTrigger = screen.getByTestId('select-client');
+      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
       const wrTrigger = screen.getByTestId('select-work-request');
       const taskTrigger = screen.getByTestId('select-work-request-task');
-      expect(clientTrigger).toBeDisabled();
+      expect(clientDisplay).toBeDisabled();
+      expect(clientDisplay.readOnly).toBe(true);
+      await waitFor(() => {
+        expect(clientDisplay.value).toContain('Alpha');
+      });
       expect(wrTrigger).toBeDisabled();
       expect(taskTrigger).toBeDisabled();
 
       // Clicking disabled controls must not open any select content / options
-      fireEvent.click(clientTrigger);
+      fireEvent.click(clientDisplay);
       fireEvent.click(wrTrigger);
       fireEvent.click(taskTrigger);
       expect(screen.queryByRole('listbox')).toBeNull();
@@ -1110,7 +1115,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       render(<InvoiceCreateModal isOpen={true} onClose={vi.fn()} />, { wrapper });
 
       await waitFor(() => {
-        expect(screen.getByTestId('select-client')).not.toBeDisabled();
+        expect(screen.getByTestId('display-client-name')).toBeDisabled();
       });
 
       // Initially task trigger is disabled because WR is not selected
@@ -1278,8 +1283,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       // Verify WR_1 and Client 1 auto-detected
       await waitFor(() => {
-        const clientTrigger = screen.getByTestId('select-client');
-        expect(clientTrigger).toBeDisabled();
+        const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
+        expect(clientDisplay).toBeDisabled();
+        expect(clientDisplay.value).toContain('Alpha');
       });
 
       // Cycle 2: Close modal
@@ -1310,8 +1316,9 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       rerender(<InvoiceCreateModal isOpen={true} onClose={vi.fn()} />);
 
-      const clientTriggerFresh = screen.getByTestId('select-client');
-      expect(clientTriggerFresh).not.toBeDisabled();
+      const clientDisplayFresh = screen.getByTestId('display-client-name') as HTMLInputElement;
+      expect(clientDisplayFresh).toBeDisabled();
+      expect(clientDisplayFresh.value).toBe('');
       const wrTriggerFresh = screen.getByTestId('select-work-request');
       expect(wrTriggerFresh).not.toBeDisabled();
     });

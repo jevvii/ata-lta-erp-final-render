@@ -355,8 +355,12 @@ describe('CHALLENGER FIN 2: Billing WR-Task Link Empirical Verification Suite', 
         { wrapper }
       );
 
-      const clientTrigger = screen.getByTestId('select-client');
-      expect(clientTrigger).toBeDisabled();
+      const clientDisplay = screen.getByTestId('display-client-name') as HTMLInputElement;
+      expect(clientDisplay).toBeDisabled();
+      expect(clientDisplay.readOnly).toBe(true);
+      await waitFor(() => {
+        expect(clientDisplay.value).toContain('Acme');
+      });
 
       const wrTrigger = screen.getByTestId('select-work-request');
       expect(wrTrigger).not.toBeDisabled();

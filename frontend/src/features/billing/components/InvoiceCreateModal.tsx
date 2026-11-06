@@ -116,10 +116,28 @@ export function InvoiceCreateModal({
   const clients = clientsData || [];
 
   const { data: workRequestsData } = useWorkRequests(
-    { clientId: clientId || undefined },
+    { clientId: prefill?.clientId || undefined },
     { enabled: isOpen }
   );
-  const workRequests = useMemo(() => workRequestsData?.data || [], [workRequestsData]);
+  const workRequests = useMemo(() => {
+    if (!workRequestsData) return [];
+    if (Array.isArray(workRequestsData)) return workRequestsData;
+    return workRequestsData.data || [];
+  }, [workRequestsData]);
+
+  const availableWorkRequests = useMemo(() => {
+    const lockedClientId = prefill?.clientId;
+    const preservedWrId = prefill?.workRequestId || workRequestId;
+    let list = workRequests;
+    if (lockedClientId) {
+      list = list.filter(
+        (wr) =>
+          (wr.client_id || (wr as { clientId?: string }).clientId) === lockedClientId ||
+          wr.id === preservedWrId
+      );
+    }
+    return list;
+  }, [workRequests, prefill?.clientId, prefill?.workRequestId, workRequestId]);
 
   const queryClient = useQueryClient();
   const currentUser = useSessionStore((state) => state.user);
@@ -193,20 +211,13 @@ export function InvoiceCreateModal({
   useEffect(() => {
     if (isOpen && workRequestId && workRequests.length > 0 && !prefill?.clientId) {
       const matchedWr = workRequests.find((w) => w.id === workRequestId);
-      if (matchedWr?.client_id && matchedWr.client_id !== clientId) {
-        setClientId(matchedWr.client_id);
+      const wrClientId =
+        matchedWr?.client_id || (matchedWr as { clientId?: string })?.clientId;
+      if (wrClientId && wrClientId !== clientId) {
+        setClientId(wrClientId);
       }
     }
   }, [isOpen, workRequestId, workRequests, prefill?.clientId, clientId]);
-
-  const handleClientChange = (newClientId: string) => {
-    setClientId(newClientId);
-    setWorkRequestId('');
-    setSelectedTaskId('');
-    setLinkedTransmittalId('');
-    setLinkedDisbursementIds([]);
-    setFormError(null);
-  };
 
   const handleWorkRequestChange = (newWrId: string) => {
     setWorkRequestId(newWrId);
@@ -215,14 +226,17 @@ export function InvoiceCreateModal({
     setLinkedDisbursementIds([]);
     setFormError(null);
     if (!prefill?.clientId) {
-      const matchedWr = workRequests.find((w) => w.id === newWrId);
-      if (matchedWr?.client_id) {
-        setClientId(matchedWr.client_id);
+      if (newWrId) {
+        const matchedWr = workRequests.find((w) => w.id === newWrId);
+        const wrClientId =
+          matchedWr?.client_id || (matchedWr as { clientId?: string })?.clientId;
+        setClientId(wrClientId || '');
+      } else {
+        setClientId('');
       }
     }
   };
 
-  const isClientLocked = Boolean(prefill?.clientId || prefill?.workRequestId);
   const isWrLocked = Boolean(prefill?.workRequestId);
   const isTaskLocked = Boolean(prefill?.taskId && !prefill?.attachedDisbursement);
 
@@ -230,6 +244,43 @@ export function InvoiceCreateModal({
     () => workRequests.find((w) => w.id === workRequestId),
     [workRequests, workRequestId]
   );
+
+  const clientDisplayName = useMemo(() => {
+    if (selectedWorkRequest) {
+      const wrClientId =
+        selectedWorkRequest.client_id ||
+        (selectedWorkRequest as { clientId?: string }).clientId ||
+        clientId;
+      const matchedClient = clients.find((c) => c.id === wrClientId);
+      const rawName =
+        (selectedWorkRequest as { clientName?: string; client_name?: string }).clientName ||
+        selectedWorkRequest.client_name ||
+        matchedClient?.name;
+      const clientNum =
+        (selectedWorkRequest as { clientNumber?: string | null; client_number?: string | null })
+          ?.clientNumber ||
+        (selectedWorkRequest as { client_number?: string | null })?.client_number ||
+        (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+          ?.clientNumber ||
+        (matchedClient as { client_number?: string | null })?.client_number;
+      if (rawName) {
+        return clientNum ? `${clientNum} · ${rawName}` : rawName;
+      }
+      return wrClientId ? `Client (${wrClientId})` : '';
+    }
+    if (clientId) {
+      const matchedClient = clients.find((c) => c.id === clientId);
+      if (matchedClient) {
+        const clientNum =
+          (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+            ?.clientNumber ||
+          (matchedClient as { client_number?: string | null })?.client_number;
+        return clientNum ? `${clientNum} · ${matchedClient.name}` : matchedClient.name;
+      }
+      return `Client (${clientId})`;
+    }
+    return '';
+  }, [selectedWorkRequest, clientId, clients]);
 
   // Work Request Tasks query & selectability hook
   const {
@@ -378,7 +429,11 @@ export function InvoiceCreateModal({
   // Auto-generate sequential invoice number matching prototype
   useEffect(() => {
     if (isOpen) {
-      const invoices = existingInvoicesData?.data || [];
+      const invoices = Array.isArray(existingInvoicesData?.data)
+        ? existingInvoicesData.data
+        : Array.isArray(existingInvoicesData)
+          ? existingInvoicesData
+          : [];
       const nextNumber = getNextInvoiceNumber(activeEntity, invoices);
       setInvoiceNumber(nextNumber);
     }
@@ -499,8 +554,14 @@ export function InvoiceCreateModal({
       type: item.type,
     }));
 
+    const resolvedClientId =
+      clientId ||
+      selectedWorkRequest?.client_id ||
+      (selectedWorkRequest as { clientId?: string })?.clientId ||
+      '';
+
     const payload = {
-      clientId,
+      clientId: resolvedClientId,
       workRequestId,
       linkedTaskId: !SUPPORT_TASK_ID_PAYLOAD ? (trimmedTaskId || null) : undefined,
       ...(SUPPORT_TASK_ID_PAYLOAD && trimmedTaskId
@@ -606,37 +667,6 @@ export function InvoiceCreateModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label
-                htmlFor="create-invoice-client"
-                className="text-xs font-semibold text-[#1E293B] block mb-1"
-              >
-                Client*
-              </label>
-              <Select value={clientId} onValueChange={handleClientChange} disabled={isClientLocked}>
-                <SelectTrigger
-                  id="create-invoice-client"
-                  className="h-9 text-xs"
-                  data-testid="select-client"
-                >
-                  <SelectValue placeholder="Select a client..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {clients.map((c) => {
-                    const clientNum =
-                      (c as { clientNumber?: string | null; client_number?: string | null })?.clientNumber ||
-                      (c as { client_number?: string | null })?.client_number;
-                    const label = clientNum ? `${clientNum} · ${c.name}` : c.name;
-                    return (
-                      <SelectItem key={c.id} value={c.id}>
-                        {label}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <label
                 htmlFor="create-invoice-wr"
                 className="text-xs font-semibold text-[#1E293B] block mb-1"
               >
@@ -655,7 +685,7 @@ export function InvoiceCreateModal({
                   <SelectValue placeholder="Select work request..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {workRequests.map((wr) => {
+                  {availableWorkRequests.map((wr) => {
                     const wrNum =
                       (wr as {
                         workRequestNumber?: string | null;
@@ -666,7 +696,26 @@ export function InvoiceCreateModal({
                       (wr as { work_request_number?: string | null })?.work_request_number ||
                       (wr as { workOrderNumber?: string | null })?.workOrderNumber ||
                       (wr as { work_order_number?: string | null })?.work_order_number;
-                    const label = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                    const titlePart = wrNum ? `${wrNum} · ${wr.title}` : wr.title;
+                    const wrClientId = wr.client_id || (wr as { clientId?: string }).clientId;
+                    const matchedClient = clients.find((c) => c.id === wrClientId);
+                    const clientLabel =
+                      (wr as { clientName?: string | null }).clientName ||
+                      wr.client_name ||
+                      matchedClient?.name;
+                    const clientNum =
+                      (wr as { clientNumber?: string | null; client_number?: string | null })
+                        ?.clientNumber ||
+                      (wr as { client_number?: string | null })?.client_number ||
+                      (matchedClient as { clientNumber?: string | null; client_number?: string | null })
+                        ?.clientNumber ||
+                      (matchedClient as { client_number?: string | null })?.client_number;
+                    const clientPart = clientLabel
+                      ? clientNum
+                        ? `${clientNum} · ${clientLabel}`
+                        : clientLabel
+                      : null;
+                    const label = clientPart ? `${titlePart} — ${clientPart}` : titlePart;
                     return (
                       <SelectItem key={wr.id} value={wr.id}>
                         {label}
@@ -675,6 +724,28 @@ export function InvoiceCreateModal({
                   })}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div>
+              <label
+                htmlFor="create-invoice-client"
+                className="text-xs font-semibold text-[#1E293B] block mb-1"
+              >
+                Associated Client (Auto-Detected)
+              </label>
+              <Input
+                id="create-invoice-client"
+                type="text"
+                readOnly
+                disabled
+                value={
+                  clientDisplayName ||
+                  (clientId ? `Client Associated (${clientId.slice(0, 8)})` : '')
+                }
+                placeholder="Auto-detected from Work Request"
+                className="h-9 bg-slate-50 text-[#1E293B] cursor-not-allowed text-xs disabled:opacity-80"
+                data-testid="display-client-name"
+              />
             </div>
 
             <div>
