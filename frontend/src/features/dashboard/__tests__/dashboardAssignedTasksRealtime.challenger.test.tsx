@@ -158,7 +158,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     render(<PendingTasksCard />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Prepare BIR 1702-RT Form')).toBeInTheDocument();
+      expect(screen.getByText('Corporate Tax Returns 2026')).toBeInTheDocument();
     });
 
     expect(apiSpy).toHaveBeenCalledWith(
@@ -220,18 +220,17 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     const { unmount } = render(<PendingTasksCard />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
-      expect(screen.getByText('Junior Voucher Verification')).toBeInTheDocument();
+      expect(screen.getByText('Executive Audit 2026')).toBeInTheDocument();
     });
 
     const badge = screen.getByTestId('pending-tasks-count-badge');
-    expect(badge).toHaveTextContent('2 Tasks Incomplete');
+    expect(badge).toHaveTextContent('1 Work Request Incomplete');
 
     unmount();
 
-    // Verify non-Admin (e.g. Manager/Staff even with timelog:edit_all) strictly sees ONLY their own tasks
+    // Verify non-Admin (e.g. Manager/Staff even with timelog:edit_all) strictly sees ONLY their own tasks/WRs
     useSessionStore.getState().setSession({
-      user: { ...sampleWorkerUser, id: 'usr-admin-1', role: 'Manager' },
+      user: { ...sampleWorkerUser, id: 'usr-unrelated-worker', role: 'Manager' },
       permissions: ['workflow:view', 'timelog:create', 'timelog:edit_all', 'workflow:edit'],
       activeEntity: 'ATA',
       unreadCount: 0,
@@ -240,9 +239,8 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     render(<PendingTasksCard />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Executive Review of Audited Statements')).toBeInTheDocument();
+      expect(screen.queryByText('Executive Audit 2026')).not.toBeInTheDocument();
     });
-    expect(screen.queryByText('Junior Voucher Verification')).not.toBeInTheDocument();
   });
 
   // ==========================================================================
@@ -323,6 +321,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
             {
               id: 'wr-201',
               title: 'New Client Onboarding',
+              status: 'In Progress',
               entity_code: 'ATA',
               client_name: 'Metro Retailers',
               tasks: [
@@ -378,11 +377,11 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
       queryKey: dashboardKeys.assignedTasks.all,
     });
 
-    // UI reactively updates with newly assigned task
+    // UI reactively updates with newly assigned task's work request
     await waitFor(() => {
-      expect(screen.getByText('Draft Client Engagement Letter')).toBeInTheDocument();
+      expect(screen.getByTestId('pending-tasks-list')).toBeInTheDocument();
+      expect(screen.getAllByText('New Client Onboarding').length).toBeGreaterThan(0);
     });
-    expect(screen.queryByText('All caught up!')).not.toBeInTheDocument();
   });
 
   // ==========================================================================
@@ -426,7 +425,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     render(<DashboardPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Asset Depreciation Schedule')).toBeInTheDocument();
+      expect(screen.getByText('Year-End Review')).toBeInTheDocument();
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -460,7 +459,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     await waitFor(() => {
       expect(screen.getByText('All caught up!')).toBeInTheDocument();
     });
-    expect(screen.queryByText('Asset Depreciation Schedule')).not.toBeInTheDocument();
+    expect(screen.queryByText('Year-End Review')).not.toBeInTheDocument();
   });
 
   it('4b. Real-Time Eviction: CDC task completion triggers invalidation and eviction', async () => {
@@ -472,6 +471,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
             {
               id: 'wr-302',
               title: 'Quarterly Filing',
+              status: isCompleted ? 'Completed' : 'In Progress',
               entity_code: 'ATA',
               client_name: 'Summit Inc',
               tasks: [
@@ -498,7 +498,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     render(<DashboardPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('VAT Summary Preparation')).toBeInTheDocument();
+      expect(screen.getByText('Quarterly Filing')).toBeInTheDocument();
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
@@ -540,6 +540,13 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
   // Test 5: Cross-User Discard
   // ==========================================================================
   it('5. Cross-User Discard: CDC event for another user task is discarded with zero invalidations to assignedTasks.all', async () => {
+    useSessionStore.getState().setSession({
+      user: sampleWorkerUser,
+      permissions: ['workflow:view', 'timelog:create'],
+      activeEntity: 'ATA',
+      unreadCount: 0,
+    });
+
     vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
       if (path.includes('/operations/work-requests')) {
         return {
@@ -573,24 +580,32 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     render(<DashboardPage />, { wrapper: createWrapper() });
 
     await waitFor(() => {
-      expect(screen.getByText('Keep Assigned Task Active')).toBeInTheDocument();
+      expect(screen.getByText('Stable Work Request')).toBeInTheDocument();
     });
 
     const mockClient = supabase as unknown as MockSupabaseClient;
     const tasksChannel = mockClient.getChannel('cdc_tasks');
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    // Broadcast CDC event for an unrelated task belonging to a different user
+    // Broadcast CDC event for an unrelated task belonging to a different user (pure metadata update)
     act(() => {
       tasksChannel?.emit('postgres_changes', {
-        eventType: 'INSERT',
-        new: {
+        eventType: 'UPDATE',
+        old: {
           id: 'task-foreign-user',
           work_request_id: 'wr-401',
           title: 'Foreign User Task',
           assignee_id: 'usr-other-worker',
           status: 'In Progress',
           version: 1,
+        },
+        new: {
+          id: 'task-foreign-user',
+          work_request_id: 'wr-401',
+          title: 'Foreign User Task Renamed',
+          assignee_id: 'usr-other-worker',
+          status: 'In Progress',
+          version: 2,
         },
       });
     });
@@ -603,7 +618,7 @@ describe('Challenger M3: Dashboard Assigned Tasks Real-Time Caching & Strict Use
     expect(assignedTasksInvalidation).toBeUndefined();
 
     // UI remains stable and unaffected
-    expect(screen.getByText('Keep Assigned Task Active')).toBeInTheDocument();
+    expect(screen.getAllByText('Stable Work Request').length).toBeGreaterThan(0);
     expect(screen.queryByText('Foreign User Task')).not.toBeInTheDocument();
   });
 

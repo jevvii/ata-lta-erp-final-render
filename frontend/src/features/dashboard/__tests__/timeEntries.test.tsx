@@ -135,6 +135,7 @@ describe('Time Entries API Hooks & Contract Compliance (time-entries@2.0.0)', ()
           userId: 'user-1',
           userName: 'Maria Reyes',
           userRole: 'Staff',
+          userAvatarUrl: null,
           taskId: 'task-1',
           entryDate: '2026-10-04',
           durationMinutes: 45,

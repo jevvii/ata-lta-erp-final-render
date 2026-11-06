@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { renderHook, render, screen } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useSessionStore } from '@/lib/session';
@@ -8,6 +8,8 @@ import {
   formatTaskAssignees,
   isTaskSelectableForRecord,
   isUserAuthorizedForTask,
+  normalizePhaseSlug,
+  TaskOptionContent,
 } from '../hooks/useSelectableTasks';
 import type { Task, TaskStatus } from '../api/types';
 
@@ -548,5 +550,127 @@ describe('useSelectableTasks hook', () => {
     expect(result.current.blockingMessage).toBe(
       'No tasks are available in the current phase yet — complete the active phase or prerequisite tasks first.'
     );
+  });
+
+  describe('normalizePhaseSlug and phase lock fallbacks', () => {
+    it('normalizes various phase variations and status fallbacks correctly', () => {
+      expect(normalizePhaseSlug('pre_processing')).toBe('pre_processing');
+      expect(normalizePhaseSlug('Pre-processing')).toBe('pre_processing');
+      expect(normalizePhaseSlug('PREPROCESSING')).toBe('pre_processing');
+      expect(normalizePhaseSlug('qa')).toBe('quality_assurance');
+      expect(normalizePhaseSlug('Quality Assurance')).toBe('quality_assurance');
+      expect(normalizePhaseSlug('completed')).toBe('completion');
+
+      // Status fallbacks
+      expect(normalizePhaseSlug(null, 'Draft')).toBe('pre_processing');
+      expect(normalizePhaseSlug(null, 'Received')).toBe('pre_processing');
+      expect(normalizePhaseSlug(null, 'For Assignment')).toBe('pre_processing');
+      expect(normalizePhaseSlug(null, 'For Requirements')).toBe('pre_processing');
+      expect(normalizePhaseSlug(null, 'Quality Assurance')).toBe('quality_assurance');
+      expect(normalizePhaseSlug(null, 'Completed')).toBe('completion');
+    });
+
+    it('locks processing tasks when WR has phase: "Pre-processing", "pre_processing", or null across all record types', () => {
+      mockTasks = [
+        createTestTask({
+          id: 't-pre',
+          title: 'Pre Task',
+          status: 'In Progress',
+          phase: 'pre_processing',
+          assigneeId: USER_ALICE,
+          assigneeName: 'Alice Santos',
+          assignees: [USER_ALICE],
+        }),
+        createTestTask({
+          id: 't-proc',
+          title: 'Proc Task',
+          status: 'In Progress',
+          phase: 'processing',
+          assigneeId: USER_ALICE,
+          assigneeName: 'Alice Santos',
+          assignees: [USER_ALICE],
+        }),
+      ];
+
+      const phaseVariations = ['pre_processing', 'Pre-processing', null, undefined];
+      const recordTypes = ['invoice', 'disbursement', 'transmittal', 'document'] as const;
+
+      for (const phaseVariation of phaseVariations) {
+        for (const recordType of recordTypes) {
+          const { result } = renderHook(
+            () =>
+              useSelectableTasks({
+                workRequestId: WR_ID,
+                workRequestPhase: phaseVariation,
+                recordType,
+              }),
+            { wrapper }
+          );
+
+          const preOpt = result.current.options.find((o) => o.id === 't-pre');
+          const procOpt = result.current.options.find((o) => o.id === 't-proc');
+
+          expect(preOpt?.disabled).toBe(false);
+          expect(preOpt?.isPhaseLocked).toBe(false);
+          expect(preOpt?.phaseSlug).toBe('pre_processing');
+          expect(preOpt?.isActivePhase).toBe(true);
+
+          expect(procOpt?.disabled).toBe(true);
+          expect(procOpt?.isPhaseLocked).toBe(true);
+          expect(procOpt?.phaseSlug).toBe('processing');
+          expect(procOpt?.isActivePhase).toBe(false);
+          expect(procOpt?.label).toContain('Locked: Processing phase not active');
+        }
+      }
+    });
+
+    it('renders TaskOptionContent with matching phase & status pills for active and locked tasks', () => {
+      mockTasks = [
+        createTestTask({
+          id: 't-pre',
+          title: 'Active Task',
+          status: 'In Progress',
+          phase: 'pre_processing',
+          assigneeId: USER_ALICE,
+          assigneeName: 'Alice Santos',
+          assignees: [USER_ALICE],
+        }),
+        createTestTask({
+          id: 't-proc',
+          title: 'Future Task',
+          status: 'In Progress',
+          phase: 'processing',
+          assigneeId: USER_ALICE,
+          assigneeName: 'Alice Santos',
+          assignees: [USER_ALICE],
+        }),
+      ];
+
+      const { result } = renderHook(
+        () =>
+          useSelectableTasks({
+            workRequestId: WR_ID,
+            workRequestPhase: 'pre_processing',
+            recordType: 'invoice',
+          }),
+        { wrapper }
+      );
+
+      const activeOpt = result.current.options.find((o) => o.id === 't-pre')!;
+      const lockedOpt = result.current.options.find((o) => o.id === 't-proc')!;
+
+      const { unmount: unmountActive } = render(<TaskOptionContent option={activeOpt} />);
+      const activePhasePill = screen.getByTestId(`task-option-phase-pill-${activeOpt.id}`);
+      const activeStatusPill = screen.getByTestId(`task-option-status-pill-${activeOpt.id}`);
+      expect(activePhasePill).toHaveTextContent('Pre-processing');
+      expect(activeStatusPill).toHaveTextContent('Active Phase');
+      unmountActive();
+
+      render(<TaskOptionContent option={lockedOpt} />);
+      const lockedPhasePill = screen.getByTestId(`task-option-phase-pill-${lockedOpt.id}`);
+      const lockedStatusPill = screen.getByTestId(`task-option-status-pill-${lockedOpt.id}`);
+      expect(lockedPhasePill).toHaveTextContent('Processing');
+      expect(lockedStatusPill).toHaveTextContent('Upcoming Phase (Locked)');
+    });
   });
 });

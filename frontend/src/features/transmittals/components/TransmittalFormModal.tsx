@@ -47,7 +47,7 @@ import {
 } from '@/components/ui/select';
 import { useClients } from '@/features/operations/api/useClients';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
 import type { Disbursement } from '@/features/disbursements/api/types';
@@ -649,8 +649,8 @@ export function TransmittalFormModal({
                 </SelectTrigger>
                 <SelectContent>
                   {taskOptions.map((opt) => (
-                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId}>
-                      {opt.label}
+                    <SelectItem key={opt.id} value={opt.id} disabled={opt.disabled && opt.id !== originTaskId} aria-label={opt.label}>
+                      <TaskOptionContent option={opt} />
                     </SelectItem>
                   ))}
                 </SelectContent>

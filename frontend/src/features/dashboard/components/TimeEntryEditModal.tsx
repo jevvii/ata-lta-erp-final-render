@@ -15,6 +15,7 @@ import { Clock, Calendar, FileText, CheckCircle2 } from 'lucide-react';
 import { useUpdateTimeEntry } from '../api/useTimeEntries';
 import { useBlockingModal } from '@/features/operations/components/BlockingActionModal';
 import { ApiError } from '@/lib/api';
+import { formatPhaseLabel } from '@/features/operations/hooks/useSelectableTasks';
 import type { TimeEntry, AssignableTaskOption } from '../api/types';
 
 interface TimeEntryEditModalProps {
@@ -152,8 +153,17 @@ export function TimeEntryEditModal({
               data-testid="edit-task-select"
             >
               {tasks.map((t) => (
-                <option key={t.taskId} value={t.taskId}>
+                <option
+                  key={t.taskId}
+                  value={t.taskId}
+                  disabled={Boolean(t.isPhaseLocked) && t.taskId !== entry?.taskId}
+                >
                   [{t.entity}] {t.taskTitle} ({t.workRequestTitle})
+                  {t.isPhaseLocked && t.taskId !== entry?.taskId
+                    ? ` — [${formatPhaseLabel(t.phase)} · Upcoming Phase (Locked)]`
+                    : t.phase
+                      ? ` — [${formatPhaseLabel(t.phase)}]`
+                      : ''}
                 </option>
               ))}
               {!tasks.some((t) => t.taskId === taskId) && entry && (

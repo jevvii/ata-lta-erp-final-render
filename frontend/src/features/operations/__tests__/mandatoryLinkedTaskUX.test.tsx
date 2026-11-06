@@ -8,6 +8,7 @@ import { CreateDisbursementModal } from '@/features/disbursements/components/Cre
 import { DocumentUploadModal } from '@/features/documents/components/DocumentUploadModal';
 import { TransmittalFormModal } from '@/features/transmittals/components/TransmittalFormModal';
 import { TaskDetailModal } from '@/features/operations/components/TaskDetailModal';
+import { LogTimeWidget } from '@/features/dashboard/components/LogTimeWidget';
 import type { Task, WorkRequest } from '@/features/operations/api/types';
 
 const CLIENT_ID = '11111111-1111-4111-8111-111111111111';
@@ -141,12 +142,36 @@ function setupMocks() {
         }
 
         return respond([
-          { id: WR_EMPTY, title: 'WR Empty Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
-          { id: WR_SINGLE, title: 'WR Single Task', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
-          { id: WR_MULTI, title: 'WR Multi Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
-          { id: WR_UNASSIGNED, title: 'WR Unassigned', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
-          { id: WR_PHASE_LOCKED, title: 'WR Phase Locked', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing' },
+          { id: WR_EMPTY, title: 'WR Empty Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing', tasks: [] },
+          { id: WR_SINGLE, title: 'WR Single Task', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing', tasks: [] },
+          { id: WR_MULTI, title: 'WR Multi Tasks', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing', tasks: [] },
+          { id: WR_UNASSIGNED, title: 'WR Unassigned', client_id: CLIENT_ID, clientId: CLIENT_ID, entity: 'ATA', status: 'In Progress', phase: 'pre_processing', tasks: [] },
+          {
+            id: WR_PHASE_LOCKED,
+            title: 'WR Phase Locked',
+            client_id: CLIENT_ID,
+            clientId: CLIENT_ID,
+            entity: 'ATA',
+            status: 'In Progress',
+            phase: 'pre_processing',
+            tasks: [
+              {
+                id: TASK_FUTURE_PHASE,
+                workRequestId: WR_PHASE_LOCKED,
+                title: 'Future Processing Task',
+                status: 'Assigned',
+                phase: 'processing',
+                assigneeId: USER_STAFF_ID,
+                assigneeName: 'Juan Dela Cruz',
+                assignees: [USER_STAFF_ID],
+              },
+            ],
+          },
         ]);
+      }
+
+      if (url.includes('/time-entries')) {
+        return respond({ date: '2026-11-06', totalMinutes: 0, total_minutes: 0, byTask: [], by_task: [] });
       }
 
       if (url.includes('/invoices')) {
@@ -340,6 +365,22 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
 
       const submitBtn = screen.getByTestId('submit-create-disbursement-btn');
       expect(submitBtn).toBeDisabled();
+    });
+
+    it('renders phase badge and Upcoming Phase (Locked) pill when tasks are phase-locked', async () => {
+      render(
+        <CreateDisbursementModal
+          isOpen
+          onClose={vi.fn()}
+          prefill={{ workRequestId: WR_PHASE_LOCKED, clientId: CLIENT_ID }}
+        />,
+        { wrapper }
+      );
+
+      const lockedPills = await screen.findByTestId('disbursement-locked-tasks-pills');
+      expect(lockedPills).toBeInTheDocument();
+      expect(screen.getByTestId(`task-option-phase-pill-${TASK_FUTURE_PHASE}`)).toHaveTextContent('Processing');
+      expect(screen.getByTestId(`task-option-status-pill-${TASK_FUTURE_PHASE}`)).toHaveTextContent('Upcoming Phase (Locked)');
     });
   });
 
@@ -657,6 +698,27 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
       expect(disbBtn).toBeDisabled();
       expect(transBtn).toBeDisabled();
       expect(uploadBtn).toBeDisabled();
+    });
+  });
+
+  describe('6. LogTimeWidget Phase-Locking UX', () => {
+    it('disables processing task option with Upcoming Phase (Locked) and shows phase status pills when WR is in pre_processing', async () => {
+      render(<LogTimeWidget />, { wrapper });
+
+      const select = await screen.findByTestId('task-picker-select');
+      expect(select).toBeInTheDocument();
+
+      const option = await screen.findByRole('option', {
+        name: /Future Processing Task.*Upcoming Phase \(Locked\)/i,
+      });
+      expect(option).toBeInTheDocument();
+      expect(option).toBeDisabled();
+
+      const phasePill = await screen.findByTestId(`active-task-phase-pill-${TASK_FUTURE_PHASE}`);
+      expect(phasePill).toHaveTextContent('Processing');
+
+      const statusPill = await screen.findByTestId(`active-task-status-pill-${TASK_FUTURE_PHASE}`);
+      expect(statusPill).toHaveTextContent('Upcoming Phase (Locked)');
     });
   });
 });

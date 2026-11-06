@@ -22,7 +22,7 @@ import {
 import { apiRequest, ApiError } from '@/lib/api';
 import { useWorkRequests } from '@/features/operations/api/useWorkRequests';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
-import { useSelectableTasks } from '@/features/operations/hooks/useSelectableTasks';
+import { useSelectableTasks, TaskOptionContent } from '@/features/operations/hooks/useSelectableTasks';
 import { TaskBlockingAlert } from '@/features/operations/components/TaskBlockingAlert';
 import {
   isTaskAssignee,
@@ -1256,6 +1256,19 @@ export function CreateDisbursementModal({
                   </option>
                 ))}
               </select>
+              {taskOptions.find((o) => o.id === selectedTaskId) ? (
+                <div className="mt-1.5" data-testid="disbursement-selected-task-pill">
+                  <TaskOptionContent option={taskOptions.find((o) => o.id === selectedTaskId)!} />
+                </div>
+              ) : taskOptions.some((o) => o.isPhaseLocked) ? (
+                <div className="mt-1.5 flex flex-col gap-1" data-testid="disbursement-locked-tasks-pills">
+                  {taskOptions
+                    .filter((o) => o.isPhaseLocked)
+                    .map((opt) => (
+                      <TaskOptionContent key={opt.id} option={opt} />
+                    ))}
+                </div>
+              ) : null}
               {errors.selectedTaskId && (
                 <span className="text-xs text-red-600 block" data-testid="error-selected-task">
                   {errors.selectedTaskId}
