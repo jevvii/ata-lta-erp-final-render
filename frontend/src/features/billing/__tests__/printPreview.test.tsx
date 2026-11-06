@@ -342,4 +342,81 @@ describe('Company details controls', () => {
     });
     expect(screen.getByTestId('a4-document-sheet')).toBeInTheDocument();
   });
+
+  it('appends download filename parameter to Supabase signed URLs on PDF download', async () => {
+    const popup = { location: { href: '' }, close: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    global.fetch = vi.fn().mockImplementation(async (url) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: String(url).includes('/pdf')
+          ? {
+              url: 'https://example.supabase.co/storage/v1/object/sign/invoices/inv-0088.pdf?token=secret123',
+            }
+          : mockInvoiceForPrint,
+      }),
+    }));
+
+    const { wrapper } = createHarness();
+    render(
+      <PrintPreviewModal isOpen onClose={vi.fn()} initialInvoice={mockInvoiceForPrint} />,
+      { wrapper }
+    );
+
+    fireEvent.click(screen.getByTestId('download-pdf-button'));
+    await waitFor(() => {
+      expect(popup.location.href).toBe(
+        'https://example.supabase.co/storage/v1/object/sign/invoices/inv-0088.pdf?token=secret123&download=ATA-SI-2026-0088.pdf'
+      );
+    });
+  });
+
+  it('falls back to client-side print rendering when backend PDF generation fails and window is writable', async () => {
+    const write = vi.fn();
+    const openDoc = vi.fn();
+    const closeDoc = vi.fn();
+    const focus = vi.fn();
+    const print = vi.fn();
+    const close = vi.fn();
+    const fallbackWindow = {
+      document: { open: openDoc, write, close: closeDoc, images: [] },
+      focus,
+      print,
+      close,
+      location: { href: '' },
+    };
+    vi.spyOn(window, 'open').mockReturnValue(fallbackWindow as unknown as Window);
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (String(url).includes('/pdf')) {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({ title: 'Internal Server Error', detail: 'PDF service cold-start timeout' }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ data: mockInvoiceForPrint }) };
+    });
+
+    const { wrapper } = createHarness();
+    render(
+      <PrintPreviewModal isOpen onClose={vi.fn()} initialInvoice={mockInvoiceForPrint} />,
+      { wrapper }
+    );
+
+    fireEvent.click(screen.getByTestId('download-pdf-button'));
+
+    await waitFor(() => {
+      expect(print).toHaveBeenCalledOnce();
+    });
+    expect(openDoc).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledOnce();
+    expect(write.mock.calls[0]![0]).toContain('<title>ATA-SI-2026-0088.pdf</title>');
+    expect(write.mock.calls[0]![0]).toContain('Acme Corporation');
+    expect(closeDoc).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.queryByText('Unable to generate the PDF. Please try again.')).not.toBeInTheDocument();
+  });
 });
