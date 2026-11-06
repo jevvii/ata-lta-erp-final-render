@@ -1,4 +1,3 @@
-import React from 'react';
 import { getPhaseBadgeInfo } from '../lib/statusBadges';
 import type { SelectableTaskOption } from '../hooks/useSelectableTasks';
 
