@@ -1,7 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 // Module Barrel Exports to verify
 import {
@@ -471,7 +478,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
           const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
           const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
-          const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
+          const taskSelect = screen.getByTestId('select-work-request-task');
 
           if (expectWrLocked || Boolean(prefill.clientId)) {
             expect(clientSelect.disabled).toBe(true);
@@ -486,10 +493,10 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
           }
 
           if (expectTaskDisabled || expectTaskLocked) {
-            expect(taskSelect.disabled).toBe(true);
+            expect(taskSelect).toBeDisabled();
           } else {
             await waitFor(() => {
-              expect(taskSelect.disabled).toBe(false);
+              expect(taskSelect).not.toBeDisabled();
             });
           }
         });
@@ -777,11 +784,11 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
 
       const wrSelect = screen.getByTestId('select-work-request') as HTMLSelectElement;
       const clientSelect = screen.getByTestId('select-client') as HTMLSelectElement;
-      const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
+      const taskSelect = screen.getByTestId('select-work-request-task');
 
       expect(wrSelect.disabled).toBe(true);
       expect(clientSelect.disabled).toBe(true);
-      expect(taskSelect.disabled).toBe(true);
+      expect(taskSelect).toBeDisabled();
 
       // Attempt interaction on locked controls
       fireEvent.click(wrSelect);
@@ -923,9 +930,11 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         expect(screen.getByText(/Prepare GIS Form & Notarize/)).toBeInTheDocument();
       });
 
-      const taskSelect = screen.getByTestId('select-work-request-task') as HTMLSelectElement;
-      fireEvent.change(taskSelect, { target: { value: TASK_1_ID } });
-      expect(taskSelect.value).toBe(TASK_1_ID);
+      const taskSelect = screen.getByTestId('select-work-request-task');
+      fireEvent.keyDown(taskSelect, { key: 'ArrowDown', code: 'ArrowDown' });
+      const opt = await screen.findByRole('option', { name: /Prepare GIS Form & Notarize/i });
+      fireEvent.click(opt);
+      expect(taskSelect).toHaveTextContent(/Prepare GIS Form & Notarize/i);
 
       // 2. Switch to WR 2
       fireEvent.change(wrSelect, { target: { value: WR_2.id } });
@@ -933,7 +942,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         expect(clientSelect.value).toBe(CLIENT_2.id);
       });
       // Selected task from WR 1 must be cleared (and not retained across WR switch)
-      expect(taskSelect.value).not.toBe(TASK_1_ID);
+      expect(taskSelect).not.toHaveTextContent(/Prepare GIS Form & Notarize/i);
 
       // 3. Clear WR (select empty option)
       fireEvent.change(wrSelect, { target: { value: '' } });
@@ -941,7 +950,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
         expect(clientSelect.value).toBe('');
       });
       // Task dropdown must now be disabled
-      expect(taskSelect.disabled).toBe(true);
+      expect(taskSelect).toBeDisabled();
     });
 
     it('CreateDisbursementModal: handles orphan WR with unlisted client_id gracefully without crashing', async () => {

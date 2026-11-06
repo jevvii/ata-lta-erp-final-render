@@ -1,11 +1,18 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CreateDisbursementModal } from '../components/CreateDisbursementModal';
 import { useSessionStore } from '@/lib/session';
 import { useBlockingModalStore } from '@/features/operations/components/BlockingActionModal';
 import type { WorkRequest } from '@/features/operations/api/types';
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+  Element.prototype.hasPointerCapture = vi.fn(() => false);
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
+});
 
 // Mock session store
 vi.mock('@/lib/session', async (importOriginal) => {
@@ -741,8 +748,8 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId('select-work-request-task')).toHaveValue(
-        '55555555-5555-4555-8555-555555555555'
+      expect(screen.getByTestId('select-work-request-task')).toHaveTextContent(
+        /Active Task/i
       );
     });
 
@@ -932,7 +939,7 @@ describe('RECEIPT-ENTITY-20261021 Frontend Contract & Lifecycle Tests', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('select-work-request')).toHaveValue('11111111-1111-4111-8111-111111111111');
-      expect(screen.getByTestId('select-work-request-task')).toHaveValue('55555555-5555-4555-8555-555555555555');
+      expect(screen.getByTestId('select-work-request-task')).toHaveTextContent(/Active Task/i);
     });
 
     fireEvent.change(screen.getByTestId('input-amount'), { target: { value: '1000' } });

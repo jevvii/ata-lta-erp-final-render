@@ -804,7 +804,7 @@ export function InvoiceCreateModal({
                   setSelectedTaskId(val);
                   setFormError(null);
                 }}
-                disabled={isTaskLocked || !workRequestId || isTaskBlocked}
+                disabled={isTaskLocked || !workRequestId || isNoTasksBlocked}
               >
                 <SelectTrigger
                   id="create-invoice-task"

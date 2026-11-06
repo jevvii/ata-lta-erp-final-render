@@ -928,7 +928,7 @@ export function InvoiceEditModal({
             <Select
               value={selectedTaskId || '__none__'}
               onValueChange={(val) => setSelectedTaskId(val === '__none__' ? '' : val)}
-              disabled={!canEditFinancials || !workRequestId || (isTaskBlocked && !originTaskId)}
+              disabled={!canEditFinancials || !workRequestId || (isNoTasksBlocked && selectedTaskId !== originTaskId)}
             >
               <SelectTrigger
                 id="edit-invoice-task"

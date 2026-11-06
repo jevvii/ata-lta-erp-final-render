@@ -324,7 +324,7 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
   });
 
   describe('2. CreateDisbursementModal UX', () => {
-    it('renders required label "Linked Task *" and displays assignees', async () => {
+    it('renders required label "Linked Task *" and displays assignees inside opened dropdown', async () => {
       render(
         <CreateDisbursementModal isOpen onClose={vi.fn()} prefill={{ workRequestId: WR_MULTI, clientId: CLIENT_ID }} />,
         { wrapper }
@@ -333,12 +333,21 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
       expect(screen.getByText(/Linked Task/i)).toBeInTheDocument();
 
       const taskSelect = await screen.findByTestId('select-work-request-task');
-      await waitFor(() => {
-        expect(taskSelect.textContent).toContain('Multi Task One');
-      });
+      expect(taskSelect).not.toBeDisabled();
 
-      expect(taskSelect.textContent).toContain('Multi Task One — Juan Dela Cruz');
-      expect(taskSelect.textContent).toContain('Multi Task Two — Maria Santos (Not assigned to you)');
+      // Before opening, options are not rendered in DOM
+      expect(screen.queryByRole('option', { name: /Multi Task One/i })).not.toBeInTheDocument();
+
+      // Open dropdown
+      fireEvent.keyDown(taskSelect, { key: 'ArrowDown', code: 'ArrowDown' });
+
+      const opt1 = await screen.findByRole('option', { name: /Multi Task One — Juan Dela Cruz/i });
+      expect(opt1).toBeInTheDocument();
+      expect(opt1).not.toHaveAttribute('aria-disabled', 'true');
+
+      const opt2 = await screen.findByRole('option', { name: /Multi Task Two — Maria Santos \(Not assigned to you\)/i });
+      expect(opt2).toBeInTheDocument();
+      expect(opt2).toHaveAttribute('aria-disabled', 'true');
     });
 
     it('disables submit and renders blocking state 1 when WR has no tasks', async () => {
@@ -367,7 +376,7 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
       expect(submitBtn).toBeDisabled();
     });
 
-    it('renders phase badge and Upcoming Phase (Locked) pill when tasks are phase-locked', async () => {
+    it('renders phase badge and Upcoming Phase (Locked) pill inside dropdown when tasks are phase-locked', async () => {
       render(
         <CreateDisbursementModal
           isOpen
@@ -377,10 +386,20 @@ describe('Mandatory Linked Task UX Contract Verification Suite', () => {
         { wrapper }
       );
 
-      const lockedPills = await screen.findByTestId('disbursement-locked-tasks-pills');
-      expect(lockedPills).toBeInTheDocument();
-      expect(screen.getByTestId(`task-option-phase-pill-${TASK_FUTURE_PHASE}`)).toHaveTextContent('Processing');
-      expect(screen.getByTestId(`task-option-status-pill-${TASK_FUTURE_PHASE}`)).toHaveTextContent('Upcoming Phase (Locked)');
+      // Verify pills are NOT rendered before opening
+      expect(screen.queryByTestId(`task-option-phase-pill-${TASK_FUTURE_PHASE}`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`task-option-status-pill-${TASK_FUTURE_PHASE}`)).not.toBeInTheDocument();
+
+      const taskSelect = await screen.findByTestId('select-work-request-task');
+      expect(taskSelect).not.toBeDisabled();
+
+      // Open dropdown
+      fireEvent.keyDown(taskSelect, { key: 'ArrowDown', code: 'ArrowDown' });
+
+      const phasePill = await screen.findByTestId(`task-option-phase-pill-${TASK_FUTURE_PHASE}`);
+      expect(phasePill).toHaveTextContent('Processing');
+      const statusPill = screen.getByTestId(`task-option-status-pill-${TASK_FUTURE_PHASE}`);
+      expect(statusPill).toHaveTextContent('Upcoming Phase (Locked)');
     });
   });
 

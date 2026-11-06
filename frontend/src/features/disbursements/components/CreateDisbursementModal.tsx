@@ -8,6 +8,13 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1229,10 +1236,10 @@ export function CreateDisbursementModal({
               <label className="text-xs font-semibold text-ink">
                 Linked Task <span className="text-red-500">*</span>
               </label>
-              <select
+              <Select
                 value={selectedTaskId}
-                onChange={(e) => {
-                  setSelectedTaskId(e.target.value);
+                onValueChange={(val) => {
+                  setSelectedTaskId(val);
                   if (errors.selectedTaskId) {
                     setErrors((prev) => {
                       const copy = { ...prev };
@@ -1241,34 +1248,34 @@ export function CreateDisbursementModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !linkedWorkRequestId || isTaskBlocked}
-                className="w-full text-xs p-2 border rounded-[6px] bg-surface border-border focus:outline-none focus:ring-1 focus:ring-primary disabled:bg-canvas disabled:cursor-not-allowed"
-                data-testid="select-work-request-task"
+                disabled={isTaskLocked || !linkedWorkRequestId || isNoTasksBlocked}
               >
-                <option value="">
-                  {!linkedWorkRequestId
-                    ? 'Select a Work Request first...'
-                    : 'Select a task...'}
-                </option>
-                {taskOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id} disabled={opt.disabled}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              {taskOptions.find((o) => o.id === selectedTaskId) ? (
-                <div className="mt-1.5" data-testid="disbursement-selected-task-pill">
-                  <TaskOptionContent option={taskOptions.find((o) => o.id === selectedTaskId)!} />
-                </div>
-              ) : taskOptions.some((o) => o.isPhaseLocked) ? (
-                <div className="mt-1.5 flex flex-col gap-1" data-testid="disbursement-locked-tasks-pills">
-                  {taskOptions
-                    .filter((o) => o.isPhaseLocked)
-                    .map((opt) => (
-                      <TaskOptionContent key={opt.id} option={opt} />
-                    ))}
-                </div>
-              ) : null}
+                <SelectTrigger
+                  id="create-disbursement-task"
+                  className="h-9 text-xs bg-surface border-border"
+                  data-testid="select-work-request-task"
+                >
+                  <SelectValue
+                    placeholder={
+                      !linkedWorkRequestId
+                        ? 'Select a Work Request first...'
+                        : 'Select a task...'
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {taskOptions.map((opt) => (
+                    <SelectItem
+                      key={opt.id}
+                      value={opt.id}
+                      disabled={opt.disabled}
+                      aria-label={opt.label}
+                    >
+                      <TaskOptionContent option={opt} />
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {errors.selectedTaskId && (
                 <span className="text-xs text-red-600 block" data-testid="error-selected-task">
                   {errors.selectedTaskId}

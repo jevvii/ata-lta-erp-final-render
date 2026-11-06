@@ -636,7 +636,7 @@ export function TransmittalFormModal({
                     });
                   }
                 }}
-                disabled={isTaskLocked || !workRequestId || (isTaskBlocked && selectedTaskId !== originTaskId)}
+                disabled={isTaskLocked || !workRequestId || (isNoTasksBlocked && selectedTaskId !== originTaskId)}
               >
                 <SelectTrigger id="workRequestTask" className="text-xs" data-testid="task-select">
                   <SelectValue

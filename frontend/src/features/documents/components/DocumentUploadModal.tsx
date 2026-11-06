@@ -562,7 +562,7 @@ export function DocumentUploadModal({
                 <Select
                   value={linkedTaskId}
                   onValueChange={handleTaskChange}
-                  disabled={Boolean(defaultTaskId) || !workRequestId || isTaskBlocked}
+                  disabled={Boolean(defaultTaskId) || !workRequestId || isNoTasksBlocked}
                 >
                   <SelectTrigger
                     id="workRequestTask"
