@@ -329,9 +329,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     if (clientId) q = q.eq('client_id', clientId);
     if (effectiveFilterWrId) q = q.eq('work_request_id', effectiveFilterWrId);
     if (effectiveFilterTaskId) {
-      q = q.or(
-        `task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`
-      );
+      q = q.or(`task_id.eq.${effectiveFilterTaskId},linked_task_id.eq.${effectiveFilterTaskId}`);
     }
     if (effectiveLinkedTransmittalId) {
       q = q.eq('linked_transmittal_id', effectiveLinkedTransmittalId);
@@ -363,9 +361,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
 
   // Batch resolve parent Work Request and creator (Task A.3)
   const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
-  const transmittalIds = [
-    ...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean)),
-  ];
+  const transmittalIds = [...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean))];
   let wrMap = new Map();
   let userMap = new Map();
   let transmittalMap = new Map();
@@ -399,9 +395,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
   const mapped = rows.map((row) => {
     const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
     const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
-    const tr = row.linked_transmittal_id
-      ? transmittalMap.get(row.linked_transmittal_id)
-      : null;
+    const tr = row.linked_transmittal_id ? transmittalMap.get(row.linked_transmittal_id) : null;
     const clientNumber = row.clients?.client_number || row.client_number || null;
     const clientName = row.clients?.name || row.client_name || null;
     const clientTin = row.clients?.tin || row.client_tin || null;
@@ -514,7 +508,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
   let invoiceNumber = (data.invoiceNumber || '').trim();
   if (!invoiceNumber) {
     const entityCode = await resolveEntityCode(entityId);
-    const code = (entityCode && entityCode !== 'ALL' && entityCode.length <= 5) ? entityCode : 'ATA';
+    const code = entityCode && entityCode !== 'ALL' && entityCode.length <= 5 ? entityCode : 'ATA';
     const year = new Date().getFullYear();
     const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
       p_prefix: `${code}-SI-${year}`,
@@ -1354,10 +1348,17 @@ const recordPayment = async ({ entityId, invoiceId, userId, user, data }) => {
  * @param {string} params.id - Invoice UUID
  * @returns {Promise<{ url: string }>}
  */
-const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDetails = true, user }) => {
-  const invoice = await getInvoiceById({ entityId, id, user });
+const generateInvoicePdf = async ({
+  entityId,
+  entityCode,
+  id,
+  includeCompanyDetails = true,
+  user,
+}) => {
+  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
 
-  const code = entityCode || entityId;
+  const code =
+    invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;
   let body = buildStatementDocument({ ...invoice, entity_code: code }, { includeCompanyDetails });
   // Embed deployed backend assets: PDF rendering has no frontend base URL.
   if (includeCompanyDetails) {
@@ -1388,9 +1389,10 @@ const generateInvoicePdf = async ({ entityId, entityCode, id, includeCompanyDeta
  * @returns {Promise<{ url: string }>}
  */
 const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
-  const invoice = await getInvoiceById({ entityId, id, user });
+  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
 
-  const code = entityCode || entityId;
+  const code =
+    invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;
   const html = buildVoucherHtml(invoice, code);
   const pdfBuffer = await generatePdf({ html, options: { format: 'A4' } });
 

@@ -58,7 +58,7 @@ beforeEach(async () => {
     title: 'Audit Task',
     status: 'In Progress',
   });
-  admin = registerUser({ email: 'admin@example.test', role: 'Admin', entities: ['ATA'] });
+  admin = registerUser({ email: 'admin@example.test', role: 'Admin', entities: ['ATA', 'LTA'] });
   accounting = registerUser({
     id: accountingId,
     email: 'accounting@example.test',
@@ -212,6 +212,144 @@ it('validates the PDF toggle', async () => {
     .set('X-Active-Entity', 'ATA')
     .expect(400);
 });
+it.each(['ATA', 'LTA'])(
+  'uses the invoice entity for storage and branding when active entity is ALL (%s)',
+  async (entity) => {
+    const ltaClientId = '11111111-1111-1111-1111-111111111112';
+    const ltaWrId = '33333333-3333-3333-3333-333333333334';
+    const ltaTaskId = '44444444-4444-4444-4444-444444444445';
+    mockTables.clients.set(ltaClientId, {
+      id: ltaClientId,
+      entity_id: 'ent-lta',
+      name: 'LTA Manila Trading',
+      address: 'Manila',
+    });
+    mockTables.work_requests.set(ltaWrId, {
+      id: ltaWrId,
+      entity_id: 'ent-lta',
+      client_id: ltaClientId,
+      title: 'LTA Audit',
+      status: 'In Progress',
+    });
+    mockTables.tasks.set(ltaTaskId, {
+      id: ltaTaskId,
+      work_request_id: ltaWrId,
+      entity_id: 'ent-lta',
+      title: 'LTA Task',
+      status: 'In Progress',
+    });
+    Object.assign(mockTables.invoices.get(invoice.id), {
+      entity_id: entity === 'ATA' ? 'ent-ata' : 'ent-lta',
+      client_id: entity === 'ATA' ? clientId : ltaClientId,
+      work_request_id: entity === 'ATA' ? workRequestId : ltaWrId,
+      task_id: entity === 'ATA' ? taskId : ltaTaskId,
+      linked_task_id: entity === 'ATA' ? taskId : ltaTaskId,
+      invoice_number: `${entity}-100`,
+    });
+
+    generatePdf.mockClear();
+    uploadBuffer.mockClear();
+
+    await request(app)
+      .get(`/v1/invoices/${invoice.id}/pdf`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ALL')
+      .expect(200);
+
+    expect(generatePdf).toHaveBeenCalledTimes(1);
+    expect(generatePdf.mock.calls[0][0].html).toContain(
+      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+    );
+    expect(uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(uploadBuffer.mock.calls[0][0].path).toBe(
+      `entities/${entity}/invoices/${invoice.id}/pdf/${entity}-100.pdf`
+    );
+  }
+);
+it.each(['ATA', 'LTA'])(
+  'uses the invoice entity for voucher storage and branding when active entity is ALL (%s)',
+  async (entity) => {
+    const ltaClientId = '11111111-1111-1111-1111-111111111112';
+    const ltaWrId = '33333333-3333-3333-3333-333333333334';
+    const ltaTaskId = '44444444-4444-4444-4444-444444444445';
+    mockTables.clients.set(ltaClientId, {
+      id: ltaClientId,
+      entity_id: 'ent-lta',
+      name: 'LTA Manila Trading',
+      address: 'Manila',
+    });
+    mockTables.work_requests.set(ltaWrId, {
+      id: ltaWrId,
+      entity_id: 'ent-lta',
+      client_id: ltaClientId,
+      title: 'LTA Audit',
+      status: 'In Progress',
+    });
+    mockTables.tasks.set(ltaTaskId, {
+      id: ltaTaskId,
+      work_request_id: ltaWrId,
+      entity_id: 'ent-lta',
+      title: 'LTA Task',
+      status: 'In Progress',
+    });
+    Object.assign(mockTables.invoices.get(invoice.id), {
+      entity_id: entity === 'ATA' ? 'ent-ata' : 'ent-lta',
+      client_id: entity === 'ATA' ? clientId : ltaClientId,
+      work_request_id: entity === 'ATA' ? workRequestId : ltaWrId,
+      task_id: entity === 'ATA' ? taskId : ltaTaskId,
+      linked_task_id: entity === 'ATA' ? taskId : ltaTaskId,
+      invoice_number: `${entity}-100`,
+    });
+
+    generatePdf.mockClear();
+    uploadBuffer.mockClear();
+
+    await request(app)
+      .get(`/v1/invoices/${invoice.id}/voucher`)
+      .set('Authorization', `Bearer ${admin}`)
+      .set('X-Active-Entity', 'ALL')
+      .expect(200);
+
+    expect(generatePdf).toHaveBeenCalledTimes(1);
+    expect(generatePdf.mock.calls[0][0].html).toContain(
+      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+    );
+    expect(uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(uploadBuffer.mock.calls[0][0].path).toBe(
+      `entities/${entity}/invoices/${invoice.id}/voucher/${entity}-100-voucher.pdf`
+    );
+  }
+);
+it('requests signed download url with { download: filename } in storageService', async () => {
+  const { uploadBuffer } = require('../src/services/storageService');
+  const { supabaseAdmin } = require('../src/services/supabaseClient');
+
+  const mockBucket = {
+    upload: jest.fn().mockResolvedValue({ data: {}, error: null }),
+    createSignedUrl: jest.fn().mockResolvedValue({
+      data: { signedUrl: 'https://storage.example.com/download' },
+      error: null,
+    }),
+  };
+  const fromSpy = jest.spyOn(supabaseAdmin.storage, 'from').mockReturnValue(mockBucket);
+
+  try {
+    const url = await uploadBuffer({
+      path: `entities/ATA/invoices/${invoice.id}/pdf/ATA-100.pdf`,
+      buffer: Buffer.from('test-pdf'),
+      contentType: 'application/pdf',
+    });
+
+    expect(url).toBe('https://storage.example.com/download');
+    expect(mockBucket.createSignedUrl).toHaveBeenCalledWith(
+      `entities/ATA/invoices/${invoice.id}/pdf/ATA-100.pdf`,
+      300,
+      { download: 'ATA-100.pdf' }
+    );
+  } finally {
+    fromSpy.mockRestore();
+  }
+});
 it.each(['ATA', 'LTA'])('escapes statement values and omits branding for %s', (entity) => {
   const html = buildStatementDocument(
     {
@@ -359,7 +497,9 @@ describe('STATEMENT-DETAILS-20261025 canonical payments, overrides, and fail-fas
       })
       .expect(200);
 
-    await pay({ amount: 500, method: 'Check', reference: 'AUTO-CHK', date: '2026-10-25' }).expect(201);
+    await pay({ amount: 500, method: 'Check', reference: 'AUTO-CHK', date: '2026-10-25' }).expect(
+      201
+    );
 
     let res = await request(app)
       .get(`/v1/invoices/${invoice.id}`)

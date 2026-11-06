@@ -15,6 +15,7 @@
  *   render never leaks memory or chromium child processes.
  */
 
+const fs = require('fs');
 const { chromium } = require('playwright-core');
 
 const MAX_CONCURRENT_RENDERS = 1;
@@ -29,7 +30,6 @@ const CHROMIUM_ARGS = [
   '--disable-gpu',
   '--disable-software-rasterizer',
   '--no-zygote',
-  '--single-process', // One Chromium process instead of one per renderer — much lower RSS
 ];
 
 let browserPromise = null;
@@ -70,6 +70,47 @@ const releaseRenderSlot = () => {
 // ─── Shared browser lifecycle ────────────────────────────────────────────
 
 /**
+ * Resolve launch options and executable path for Chromium.
+ * 1. Checks candidate system/env paths (Render Alpine Docker, local paths).
+ * 2. Checks Playwright's default chromium executable path.
+ * 3. Falls back to @sparticuz/chromium for native Linux x64 containers.
+ */
+const resolveLaunchOptions = async () => {
+  const candidates = [
+    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    process.env.CHROMIUM_PATH,
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/google-chrome',
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'string' && fs.existsSync(candidate)) {
+      return { headless: true, executablePath: candidate, args: CHROMIUM_ARGS };
+    }
+  }
+
+  try {
+    const defaultPath = chromium.executablePath();
+    if (defaultPath && fs.existsSync(defaultPath)) {
+      return { headless: true, executablePath: defaultPath, args: CHROMIUM_ARGS };
+    }
+  } catch {
+    // ignore
+  }
+
+  const rawSparticuz = require('@sparticuz/chromium');
+  const sparticuzChromium = rawSparticuz.default || rawSparticuz;
+  const executablePath = await sparticuzChromium.executablePath();
+  return {
+    headless: true,
+    executablePath,
+    args: Array.from(new Set([...(sparticuzChromium.args || []), ...CHROMIUM_ARGS])),
+  };
+};
+
+/**
  * Lazily launch a shared headless Chromium browser instance.
  * A failed launch resets the promise so the next call retries cleanly.
  * @returns {Promise<import('playwright-core').Browser>}
@@ -77,8 +118,8 @@ const releaseRenderSlot = () => {
 const getBrowser = () => {
   if (!browserPromise) {
     renderCount = 0;
-    browserPromise = chromium
-      .launch({ headless: true, args: CHROMIUM_ARGS })
+    browserPromise = resolveLaunchOptions()
+      .then((launchOpts) => chromium.launch(launchOpts))
       .then((browser) => {
         browser.on('disconnected', () => {
           browserPromise = null;
