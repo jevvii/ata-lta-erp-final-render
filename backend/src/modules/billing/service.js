@@ -1355,7 +1355,7 @@ const generateInvoicePdf = async ({
   includeCompanyDetails = true,
   user,
 }) => {
-  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
+  const invoice = await getInvoiceById({ entityId, id, user });
 
   const code =
     invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;
@@ -1389,7 +1389,7 @@ const generateInvoicePdf = async ({
  * @returns {Promise<{ url: string }>}
  */
 const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
-  const invoice = await getInvoiceById({ entityId, id, user, allowFallback: true });
+  const invoice = await getInvoiceById({ entityId, id, user });
 
   const code =
     invoice.entity_code || (entityCode && entityCode !== 'ALL' ? entityCode : null) || entityId;

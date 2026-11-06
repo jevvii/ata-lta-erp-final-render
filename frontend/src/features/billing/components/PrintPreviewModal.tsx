@@ -1,3 +1,4 @@
+import { ApiError } from '@/lib/api';
 import { useState, useEffect } from 'react';
 import { Printer, Download, Lock, Pencil, X, AlertTriangle } from 'lucide-react';
 import {
@@ -183,13 +184,20 @@ export function PrintPreviewModal({
           : rawUrl;
       if (pdfWindow) pdfWindow.location.href = url;
       else window.open(url, '_blank');
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        pdfWindow?.close();
+        setFeedback('Unable to generate the PDF. Please try again.');
+        return;
+      }
       if (pdfWindow && typeof pdfWindow.document?.write === 'function') {
         try {
           const body = buildStatementDocument(invoice, { includeCompanyDetails: !hideCompanyDetails });
           pdfWindow.document.open();
+          const title = document.createElement('title');
+          title.textContent = filename;
           pdfWindow.document.write(
-            `<!doctype html><html><head><meta charset="utf-8"><title>${filename}</title><style>${STATEMENT_CSS}</style></head><body>${body}</body></html>`
+            `<!doctype html><html><head><meta charset="utf-8">${title.outerHTML}<style>${STATEMENT_CSS}</style></head><body>${body}</body></html>`
           );
           pdfWindow.document.close();
           const imgs = Array.from(pdfWindow.document.images || []);

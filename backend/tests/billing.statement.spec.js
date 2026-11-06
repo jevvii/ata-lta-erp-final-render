@@ -212,6 +212,16 @@ it('validates the PDF toggle', async () => {
     .set('X-Active-Entity', 'ATA')
     .expect(400);
 });
+it.each(['pdf', 'voucher'])('does not generate %s across the selected entity', async (kind) => {
+  await request(app)
+    .get(`/v1/invoices/${invoice.id}/${kind}`)
+    .set('Authorization', `Bearer ${admin}`)
+    .set('X-Active-Entity', 'LTA')
+    .expect(404);
+  expect(generatePdf).not.toHaveBeenCalled();
+  expect(uploadBuffer).not.toHaveBeenCalled();
+});
+
 it.each(['ATA', 'LTA'])(
   'uses the invoice entity for storage and branding when active entity is ALL (%s)',
   async (entity) => {

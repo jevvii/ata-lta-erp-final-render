@@ -238,7 +238,24 @@ describe('Voucher print and admin edit controls', () => {
     });
   });
 
-  it('falls back to client-side print rendering when backend disbursement PDF fails and popup is writable', async () => {
+  it.each([401, 403, 404])('does not print cached content when the PDF request returns %s', async (status) => {
+    const write = vi.fn();
+    const close = vi.fn();
+    const popup = { document: { open: vi.fn(), write, close: vi.fn(), images: [] }, close, location: { href: '' }, print: vi.fn(), focus: vi.fn() };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    global.fetch = vi.fn().mockImplementation(async (url) => String(url).includes('/pdf')
+      ? { ok: false, status, json: async () => ({ title: 'Access unavailable' }) }
+      : { ok: true, status: 200, json: async () => ({ data: voucher }) });
+    const { wrapper } = harness();
+    render(<DisbursementPrintModal isOpen disbursement={voucher} onClose={vi.fn()} />, { wrapper });
+    fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
+    await waitFor(() => expect(close).toHaveBeenCalled());
+    expect(write).not.toHaveBeenCalled();
+    expect(popup.print).not.toHaveBeenCalled();
+  });
+
+  it.each(['regular', '</title><script>window.printInjected = true</script>'])('falls back to client-side print rendering when backend disbursement PDF fails and popup is writable', async (number) => {
+    const fallbackRecord = { ...voucher, disbursement_number: number === 'regular' ? voucher.disbursement_number : number };
     const write = vi.fn();
     const openDoc = vi.fn();
     const closeDoc = vi.fn();
@@ -262,11 +279,11 @@ describe('Voucher print and admin edit controls', () => {
           json: async () => ({ title: 'Internal Server Error', detail: 'Service unavailable' }),
         };
       }
-      return { ok: true, status: 200, json: async () => ({ data: voucher }) };
+      return { ok: true, status: 200, json: async () => ({ data: fallbackRecord }) };
     });
 
     const { wrapper } = harness();
-    render(<DisbursementPrintModal isOpen disbursement={voucher} onClose={vi.fn()} />, { wrapper });
+    render(<DisbursementPrintModal isOpen disbursement={fallbackRecord} onClose={vi.fn()} />, { wrapper });
 
     fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
 
@@ -275,7 +292,9 @@ describe('Voucher print and admin edit controls', () => {
     });
     expect(openDoc).toHaveBeenCalledOnce();
     expect(write).toHaveBeenCalledOnce();
-    expect(write.mock.calls[0]![0]).toContain('<title>ATA-100.pdf</title>');
+    const printedDoc = new DOMParser().parseFromString(write.mock.calls[0]![0], 'text/html');
+    expect(printedDoc.title).toBe(`${fallbackRecord.disbursement_number}.pdf`);
+    expect(printedDoc.querySelector('script')).toBeNull();
     expect(write.mock.calls[0]![0]).toContain('Expense Report');
     expect(write.mock.calls[0]![0]).toContain('M. Santos');
     expect(closeDoc).toHaveBeenCalledOnce();

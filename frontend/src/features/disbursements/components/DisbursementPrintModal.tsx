@@ -1,3 +1,4 @@
+import { ApiError } from '@/lib/api';
 import { useEffect, useState } from 'react';
 import { Printer, Download, Pencil } from 'lucide-react';
 import {
@@ -61,13 +62,20 @@ export function DisbursementPrintModal({
           : rawUrl;
       if (popup) popup.location.href = url;
       else window.open(url, '_blank');
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+        popup?.close();
+        setError('Unable to generate the PDF. Please try again.');
+        return;
+      }
       if (popup && typeof popup.document?.write === 'function') {
         try {
           const body = buildDisbursementDocument(item, options);
           popup.document.open();
+          const title = document.createElement('title');
+          title.textContent = filename;
           popup.document.write(
-            `<!doctype html><html><head><meta charset="utf-8"><title>${filename}</title><style>${DISBURSEMENT_PAGE_CSS}\n${DISBURSEMENT_DOCUMENT_CSS}</style></head><body><main class="disbursement-document">${body}</main></body></html>`
+            `<!doctype html><html><head><meta charset="utf-8">${title.outerHTML}<style>${DISBURSEMENT_PAGE_CSS}\n${DISBURSEMENT_DOCUMENT_CSS}</style></head><body><main class="disbursement-document">${body}</main></body></html>`
           );
           popup.document.close();
           const imgs = Array.from(popup.document.images || []);
