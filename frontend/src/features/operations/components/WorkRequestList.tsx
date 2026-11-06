@@ -183,7 +183,7 @@ function WorkRequestListInner({
     return rawWorkRequests?.data ?? [];
   }, [rawWorkRequests]);
   const { data: rawClients } = useClients();
-  const clients = Array.isArray(rawClients) ? rawClients : [];
+  const clients = useMemo(() => Array.isArray(rawClients) ? rawClients : [], [rawClients]);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
   const sortedClients = useMemo(() => sortClients(clients, clientFilterSort), [clients, clientFilterSort]);
   const { data: rawTeam } = useTeam();

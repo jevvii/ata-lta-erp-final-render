@@ -125,7 +125,7 @@ export function InvoiceCreateModal({
 
   // Clients & Work Requests queries
   const { data: clientsData } = useClients();
-  const clients = clientsData || [];
+  const clients = useMemo(() => clientsData || [], [clientsData]);
   const [clientSearch, setClientSearch] = useState('');
   const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);

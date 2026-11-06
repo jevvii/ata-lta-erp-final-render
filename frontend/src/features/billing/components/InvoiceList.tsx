@@ -102,7 +102,7 @@ export function InvoiceList({
 
   // Queries
   const { data: clientsData } = useClients();
-  const clientsList = clientsData || [];
+  const clientsList = useMemo(() => clientsData || [], [clientsData]);
   const [clientSearch, setClientSearch] = useState('');
   const [clientSort, setClientSort] = useState<ClientSortOption>(DEFAULT_CLIENT_SORT);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clientsList), [clientsList]);

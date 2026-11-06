@@ -96,6 +96,39 @@ export default function ClientsPage() {
     };
   }, [urlClientId, canViewClients, clientsData?.data]);
 
+  const clients = useMemo(() => {
+    const raw = (clientsData?.data || []).filter((c) => {
+      if (filters.retainer === true) return c.retainer === true;
+      if (filters.retainer === false) return c.retainer === false;
+      return true;
+    });
+
+    const sortBy = filters.sortBy || 'client_number';
+    const sortOrder = filters.sortOrder || 'asc';
+
+    if (sortBy === 'created_at') {
+      return [...raw].sort((a, b) => {
+        const aDate = new Date(a.createdAt || 0).getTime();
+        const bDate = new Date(b.createdAt || 0).getTime();
+        return sortOrder === 'desc' ? bDate - aDate : aDate - bDate;
+      });
+    }
+
+    if (sortBy === 'client_number') {
+      return sortClients(raw, sortOrder === 'desc' ? 'id_desc' : 'id_asc');
+    }
+
+    if (sortBy === 'name') {
+      return sortClients(raw, sortOrder === 'desc' ? 'name_desc' : 'name_asc');
+    }
+
+    if (sortBy === 'tin') {
+      return sortClients(raw, sortOrder === 'desc' ? 'tin_desc' : 'tin_asc');
+    }
+
+    return raw;
+  }, [clientsData?.data, filters.retainer, filters.sortBy, filters.sortOrder]);
+
   // Flag Check
   if (!isModuleEnabled('Clients')) {
     return <ModulePlaceholder name="Clients" />;
@@ -167,38 +200,7 @@ export default function ClientsPage() {
     }
   };
 
-  const clients = useMemo(() => {
-    const raw = (clientsData?.data || []).filter((c) => {
-      if (filters.retainer === true) return c.retainer === true;
-      if (filters.retainer === false) return c.retainer === false;
-      return true;
-    });
 
-    const sortBy = filters.sortBy || 'client_number';
-    const sortOrder = filters.sortOrder || 'asc';
-
-    if (sortBy === 'created_at') {
-      return [...raw].sort((a, b) => {
-        const aDate = new Date(a.createdAt || 0).getTime();
-        const bDate = new Date(b.createdAt || 0).getTime();
-        return sortOrder === 'desc' ? bDate - aDate : aDate - bDate;
-      });
-    }
-
-    if (sortBy === 'client_number') {
-      return sortClients(raw, sortOrder === 'desc' ? 'id_desc' : 'id_asc');
-    }
-
-    if (sortBy === 'name') {
-      return sortClients(raw, sortOrder === 'desc' ? 'name_desc' : 'name_asc');
-    }
-
-    if (sortBy === 'tin') {
-      return sortClients(raw, sortOrder === 'desc' ? 'tin_desc' : 'tin_asc');
-    }
-
-    return raw;
-  }, [clientsData?.data, filters.retainer, filters.sortBy, filters.sortOrder]);
 
   return (
     <div className="w-full space-y-6" data-testid="clients-page">

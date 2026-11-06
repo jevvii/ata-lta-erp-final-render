@@ -276,7 +276,7 @@ describe('Client Dropdown TIN & Trade Name Backend Enrichment', () => {
     ];
 
     const mockClientsQuery = (rows) => {
-      let orderCalls = [];
+      const orderCalls = [];
       const selectSpy = jest.spyOn(supabaseAdmin, 'from').mockImplementation((table) => {
         if (table === 'clients') {
           const mock = createFluentMock(rows);

@@ -158,7 +158,7 @@ export function LogTimeWidget({
         if (effectiveExternalTaskId && assignedTasks.some((task) => task.taskId === effectiveExternalTaskId)) {
           setSelectedTaskId(effectiveExternalTaskId);
         } else {
-          const firstSelectable = assignedTasks.find((t) => !t.isPhaseLocked) || assignedTasks[0];
+          const firstSelectable = assignedTasks.find((t) => !t.isPhaseLocked);
           setSelectedTaskId(firstSelectable?.taskId || '');
         }
       }
@@ -211,6 +211,10 @@ export function LogTimeWidget({
     }
     if (!selectedTaskId || !assignedTasks.some((task) => task.taskId === selectedTaskId)) {
       setValidationError('Please select an assigned task to log time against.');
+      return;
+    }
+    if (assignedTasks.find((task) => task.taskId === selectedTaskId)?.isPhaseLocked) {
+      setValidationError('This task is locked until its work-request phase is active.');
       return;
     }
     const totalDurationSeconds = durationMinutes * 60 + durationSeconds;

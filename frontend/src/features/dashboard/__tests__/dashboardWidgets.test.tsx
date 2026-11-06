@@ -138,6 +138,22 @@ describe('Dashboard Widgets (LogTimeWidget & DashboardPage)', () => {
       expect(screen.queryByText(/Financial Statements Audit/)).not.toBeInTheDocument();
     });
 
+    it('rejects submission of a preselected task whose work-request phase is not active', async () => {
+      const apiSpy = vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
+        if (path.includes('/operations/work-requests')) return {
+          data: sampleTasksResponse.data.map((wr) => ({ ...wr, phase: 'pre_processing' })),
+        } as never;
+        if (path.includes('/time-entries/summary')) return sampleSummaryResponse as never;
+        if (path.includes('/time-entries')) return sampleEntriesResponse as never;
+        return { data: [] } as never;
+      });
+      render(<LogTimeWidget preselectedTaskId="task-assigned-1" />, { wrapper: createWrapper() });
+      await waitFor(() => expect(screen.getByTestId('task-picker-select')).toHaveValue('task-assigned-1'));
+      fireEvent.submit(screen.getByTestId('submit-timelog-btn').closest('form')!);
+      await waitFor(() => expect(screen.getByText('This task is locked until its work-request phase is active.')).toBeInTheDocument());
+      expect(apiSpy.mock.calls.some(([, options]) => options?.method === 'POST')).toBe(false);
+    });
+
     it('updates duration input when clicking duration quick-chips', async () => {
       vi.spyOn(api, 'apiRequest').mockImplementation(async (path: string) => {
         if (path.includes('/operations/work-requests')) return sampleTasksResponse as never;

@@ -215,6 +215,17 @@ describe('Clients UI Components & RBAC Integration', () => {
   });
 
   describe('RBAC Gating & Route Protection', () => {
+    it('handles permission transitions without changing hook order', async () => {
+      setAdminSession();
+      const { wrapper } = createWrapper();
+      render(<ClientsPage />, { wrapper });
+      await waitFor(() => expect(screen.getByTestId('clients-page')).toBeInTheDocument());
+      act(() => setUnprivilegedSession());
+      expect(screen.queryByTestId('clients-page')).not.toBeInTheDocument();
+      act(() => setAdminSession());
+      await waitFor(() => expect(screen.getByTestId('clients-page')).toBeInTheDocument());
+    });
+
     it('renders <Forbidden /> when user lacks clients:view permission', () => {
       setUnprivilegedSession();
       const { wrapper } = createWrapper();

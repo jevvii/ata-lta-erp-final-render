@@ -60,6 +60,11 @@ export function TimeEntryEditModal({
     e.preventDefault();
     if (!entry) return;
 
+    if (taskId !== entry.taskId && tasks.find((task) => task.taskId === taskId)?.isPhaseLocked) {
+      setValidationError('This task is locked until its work-request phase is active.');
+      return;
+    }
+
     if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1440) {
       setValidationError('Duration must be between 1 and 1440 minutes (24h).');
       return;
