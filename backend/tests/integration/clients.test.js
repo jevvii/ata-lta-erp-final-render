@@ -348,6 +348,7 @@ describe('/v1/clients', () => {
         name: 'Zebra Corp',
         client_number: 'CLI-ATA-0002',
         tin: '999-000-111-000',
+        rdo_code: '047',
         created_at: '2026-01-01T00:00:00Z',
         entity_id: 'ent-ata',
         entity_code: 'ATA',
@@ -359,6 +360,7 @@ describe('/v1/clients', () => {
         name: 'Alpha Logistics',
         client_number: 'CLI-ATA-0001',
         tin: '111-222-333-000',
+        rdo_code: '034A',
         created_at: '2026-02-01T00:00:00Z',
         entity_id: 'ent-ata',
         entity_code: 'ATA',
@@ -370,6 +372,7 @@ describe('/v1/clients', () => {
         name: 'Middle Enterprises',
         client_number: 'CLI-ATA-0010',
         tin: '555-666-777-000',
+        rdo_code: '044',
         created_at: '2026-03-01T00:00:00Z',
         entity_id: 'ent-ata',
         entity_code: 'ATA',
@@ -381,6 +384,7 @@ describe('/v1/clients', () => {
         name: 'Beta Technologies',
         client_number: null,
         tin: '333-444-555-000',
+        rdo_code: null,
         created_at: '2026-01-15T00:00:00Z',
         entity_id: 'ent-ata',
         entity_code: 'ATA',
@@ -450,6 +454,38 @@ describe('/v1/clients', () => {
         .set('X-Active-Entity', 'ATA')
         .expect(200);
       expect(res.body.data.map((c) => c.id)).toEqual(['c-middle', 'c-alpha', 'c-beta', 'c-zebra']);
+    });
+
+    it('sorts by rdo_code ascending and descending with nulls last', async () => {
+      const ascRes = await request(app)
+        .get('/v1/clients?sortBy=rdo_code&sortOrder=asc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(ascRes.body.data.map((c) => c.id)).toEqual(['c-alpha', 'c-middle', 'c-zebra', 'c-beta']);
+
+      const descRes = await request(app)
+        .get('/v1/clients?sortBy=rdo_code&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-alpha', 'c-beta']);
+    });
+
+    it('sorts by rdoCode alias identically to rdo_code', async () => {
+      const ascRes = await request(app)
+        .get('/v1/clients?sortBy=rdoCode&sortOrder=asc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(ascRes.body.data.map((c) => c.id)).toEqual(['c-alpha', 'c-middle', 'c-zebra', 'c-beta']);
+
+      const descRes = await request(app)
+        .get('/v1/clients?sortBy=rdoCode&sortOrder=desc')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-alpha', 'c-beta']);
     });
   });
 });

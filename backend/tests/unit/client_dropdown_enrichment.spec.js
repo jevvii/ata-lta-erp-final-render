@@ -268,11 +268,11 @@ describe('Client Dropdown TIN & Trade Name Backend Enrichment', () => {
 
   describe('Clients Module - Client Sorting & Ordering', () => {
     const sampleRows = [
-      { id: 'c1', name: 'Zebra Corp', client_number: 'CLI-ATA-0002', tin: '999-000-111-000', created_at: '2026-01-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
-      { id: 'c2', name: 'Alpha Logistics', client_number: 'CLI-ATA-0001', tin: '111-222-333-000', created_at: '2026-02-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
-      { id: 'c3', name: 'Middle Enterprises', client_number: 'CLI-ATA-0010', tin: '555-666-777-000', created_at: '2026-03-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
-      { id: 'c4', name: 'Beta Technologies', client_number: null, tin: '333-444-555-000', created_at: '2026-01-15T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
-      { id: 'c5', name: 'Gamma Holdings', client_number: '', tin: null, created_at: '2026-04-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c1', name: 'Zebra Corp', client_number: 'CLI-ATA-0002', tin: '999-000-111-000', rdo_code: '047', created_at: '2026-01-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c2', name: 'Alpha Logistics', client_number: 'CLI-ATA-0001', tin: '111-222-333-000', rdo_code: '034A', created_at: '2026-02-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c3', name: 'Middle Enterprises', client_number: 'CLI-ATA-0010', tin: '555-666-777-000', rdo_code: '044', created_at: '2026-03-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c4', name: 'Beta Technologies', client_number: null, tin: '333-444-555-000', rdo_code: null, created_at: '2026-01-15T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
+      { id: 'c5', name: 'Gamma Holdings', client_number: '', tin: null, rdo_code: '', created_at: '2026-04-01T00:00:00Z', entity_id: 'ent-ata', deleted_at: null, status: 'Active' },
     ];
 
     const mockClientsQuery = (rows) => {
@@ -393,6 +393,58 @@ describe('Client Dropdown TIN & Trade Name Backend Enrichment', () => {
       expect(getOrderCalls()[0]).toEqual({ col: 'created_at', opts: { ascending: false } });
       const ids = res.data.map((c) => c.id);
       expect(ids).toEqual(['c5', 'c3', 'c2', 'c4', 'c1']);
+    });
+
+    it('sorts by rdo_code ascending with nulls placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'rdo_code',
+        sortOrder: 'asc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'rdo_code', opts: { ascending: true } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c2', 'c3', 'c1', 'c4', 'c5']);
+      expect(res.data[0].rdoCode).toBe('034A');
+      expect(res.data[1].rdoCode).toBe('044');
+      expect(res.data[2].rdoCode).toBe('047');
+      expect(res.data[3].rdoCode).toBeNull();
+      expect(res.data[4].rdoCode).toBeNull();
+    });
+
+    it('sorts by rdo_code descending with nulls placed last', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'rdo_code',
+        sortOrder: 'desc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'rdo_code', opts: { ascending: false } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c1', 'c3', 'c2', 'c4', 'c5']);
+      expect(res.data[0].rdoCode).toBe('047');
+      expect(res.data[1].rdoCode).toBe('044');
+      expect(res.data[2].rdoCode).toBe('034A');
+      expect(res.data[3].rdoCode).toBeNull();
+      expect(res.data[4].rdoCode).toBeNull();
+    });
+
+    it('sorts by rdoCode alias identically to rdo_code', async () => {
+      const { selectSpy, getOrderCalls } = mockClientsQuery(sampleRows);
+      const res = await clientsService.listClients({
+        entityId: 'ent-ata',
+        sortBy: 'rdoCode',
+        sortOrder: 'asc',
+      });
+      selectSpy.mockRestore();
+
+      expect(getOrderCalls()[0]).toEqual({ col: 'rdo_code', opts: { ascending: true } });
+      const ids = res.data.map((c) => c.id);
+      expect(ids).toEqual(['c2', 'c3', 'c1', 'c4', 'c5']);
     });
   });
 });
