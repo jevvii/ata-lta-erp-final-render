@@ -440,7 +440,7 @@ describe('Clients UI Components & RBAC Integration', () => {
       });
     });
 
-    it('renders sort selector and sortable column headers that toggle client sorting', async () => {
+    it('renders sort selector and sortable column headers that toggle client sorting including RDO', async () => {
       setAdminSession();
 
       const { wrapper } = createWrapper();
@@ -451,8 +451,13 @@ describe('Clients UI Components & RBAC Integration', () => {
         expect(screen.getByTestId('clients-sort-select')).toBeInTheDocument();
         expect(screen.getByTestId('clients-header-id')).toBeInTheDocument();
         expect(screen.getByTestId('clients-header-name')).toBeInTheDocument();
-        expect(screen.getByTestId('clients-header-tin')).toBeInTheDocument();
+        expect(screen.getByTestId('clients-header-tin')).toHaveTextContent('TIN');
+        expect(screen.getByTestId('clients-header-rdo')).toHaveTextContent('RDO');
       });
+
+      // Verify separate TIN and RDO cells
+      expect(screen.getByTestId('client-tin-c-101')).toHaveTextContent('111-222-333-000');
+      expect(screen.getByTestId('client-rdo-c-101')).toHaveTextContent('RDO 044');
 
       // Default sorting is CLI-ATA-0001 then CLI-ATA-0002
       const rows = screen.getAllByRole('row');
@@ -465,6 +470,19 @@ describe('Clients UI Components & RBAC Integration', () => {
       await waitFor(() => {
         const sortedRows = screen.getAllByRole('row');
         expect(sortedRows[1]).toHaveTextContent('Ayala Land Inc.');
+      });
+
+      // Click RDO header to sort by RDO descending
+      fireEvent.click(screen.getByTestId('clients-header-rdo')); // asc: 044 then 047
+      await waitFor(() => {
+        const sortedRows = screen.getAllByRole('row');
+        expect(sortedRows[1]).toHaveTextContent('RDO 044');
+      });
+
+      fireEvent.click(screen.getByTestId('clients-header-rdo')); // desc: 047 then 044
+      await waitFor(() => {
+        const sortedRows = screen.getAllByRole('row');
+        expect(sortedRows[1]).toHaveTextContent('RDO 047');
       });
     });
   });

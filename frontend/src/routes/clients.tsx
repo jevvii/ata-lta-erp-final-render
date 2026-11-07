@@ -126,6 +126,10 @@ export default function ClientsPage() {
       return sortClients(raw, sortOrder === 'desc' ? 'tin_desc' : 'tin_asc');
     }
 
+    if (sortBy === 'rdo_code' || sortBy === 'rdoCode') {
+      return sortClients(raw, sortOrder === 'desc' ? 'rdo_desc' : 'rdo_asc');
+    }
+
     return raw;
   }, [clientsData?.data, filters.retainer, filters.sortBy, filters.sortOrder]);
 
@@ -161,7 +165,7 @@ export default function ClientsPage() {
     });
   };
 
-  const handleSortColumn = (field: 'client_number' | 'name' | 'tin') => {
+  const handleSortColumn = (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => {
     setFilters((prev) => {
       const isSame = (prev.sortBy || 'client_number') === field;
       const nextOrder = isSame && prev.sortOrder === 'asc' ? 'desc' : 'asc';
@@ -199,6 +203,7 @@ export default function ClientsPage() {
       // Captured by BlockingActionModal
     }
   };
+
 
 
 

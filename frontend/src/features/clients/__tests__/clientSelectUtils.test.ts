@@ -3,6 +3,7 @@ import {
   getClientTradeName,
   getClientNumber,
   getClientTin,
+  getClientRdo,
   getDuplicateClientIds,
   matchesClientSearch,
   formatAutoDetectedClientDisplay,
@@ -55,6 +56,20 @@ describe('clientSelectUtils', () => {
 
     it('returns trimmed tin', () => {
       expect(getClientTin({ id: '1', name: 'Acme', tin: ' 123-456-789-000 ' })).toBe('123-456-789-000');
+    });
+  });
+
+  describe('getClientRdo', () => {
+    it('returns null when RDO is absent or empty', () => {
+      expect(getClientRdo(null)).toBeNull();
+      expect(getClientRdo({ id: '1', name: 'Acme' })).toBeNull();
+      expect(getClientRdo({ id: '1', name: 'Acme', rdoCode: ' ' })).toBeNull();
+      expect(getClientRdo({ id: '1', name: 'Acme', rdo_code: '' })).toBeNull();
+    });
+
+    it('returns trimmed RDO from rdoCode or rdo_code', () => {
+      expect(getClientRdo({ id: '1', name: 'Acme', rdoCode: ' 044 ' })).toBe('044');
+      expect(getClientRdo({ id: '1', name: 'Acme', rdo_code: '047' })).toBe('047');
     });
   });
 
@@ -145,11 +160,11 @@ describe('clientSelectUtils', () => {
 
   describe('sortClients', () => {
     const sample: ClientSelectItemLike[] = [
-      { id: '10', clientNumber: 'CLI-10', name: 'Zeta Corp', tin: '999-000-000-000' },
-      { id: '2', clientNumber: 'CLI-2', name: 'Alpha Ltd', tin: '111-000-000-000' },
-      { id: '1', clientNumber: 'CLI-1', name: 'Beta Inc', tin: null },
-      { id: 'no-num-b', name: 'Delta LLC', tin: '222-000-000-000' },
-      { id: 'no-num-a', name: 'Charlie LLC', tin: null },
+      { id: '10', clientNumber: 'CLI-10', name: 'Zeta Corp', tin: '999-000-000-000', rdoCode: '048' },
+      { id: '2', clientNumber: 'CLI-2', name: 'Alpha Ltd', tin: '111-000-000-000', rdoCode: '044' },
+      { id: '1', clientNumber: 'CLI-1', name: 'Beta Inc', tin: null, rdoCode: '047' },
+      { id: 'no-num-b', name: 'Delta LLC', tin: '222-000-000-000', rdoCode: null },
+      { id: 'no-num-a', name: 'Charlie LLC', tin: null, rdoCode: '' },
     ];
 
     it('defaults to id_asc with numeric awareness and clientNumber first', () => {
@@ -194,15 +209,25 @@ describe('clientSelectUtils', () => {
       expect(desc.map((c) => c.id)).toEqual(['10', 'no-num-b', '2', '1', 'no-num-a']);
     });
 
+    it('sorts rdo_asc and rdo_desc with RDO clients first', () => {
+      const asc = sortClients(sample, 'rdo_asc');
+      // Clients with RDO: 044 (id 2), 047 (id 1), 048 (id 10), then missing RDOs sorted by name
+      expect(asc.map((c) => c.id)).toEqual(['2', '1', '10', 'no-num-a', 'no-num-b']);
+
+      const desc = sortClients(sample, 'rdo_desc');
+      // Clients with RDO: 048 (id 10), 047 (id 1), 044 (id 2), then missing RDOs sorted by name
+      expect(desc.map((c) => c.id)).toEqual(['10', '1', '2', 'no-num-a', 'no-num-b']);
+    });
+
     it('does not mutate the original array (immutability)', () => {
       const original = [...sample];
       sortClients(sample, 'name_asc');
       expect(sample).toEqual(original);
     });
 
-    it('exports DEFAULT_CLIENT_SORT as id_asc and 6 valid options', () => {
+    it('exports DEFAULT_CLIENT_SORT as id_asc and 8 valid options', () => {
       expect(DEFAULT_CLIENT_SORT).toBe('id_asc');
-      expect(CLIENT_SORT_OPTIONS).toHaveLength(6);
+      expect(CLIENT_SORT_OPTIONS).toHaveLength(8);
     });
   });
 });
