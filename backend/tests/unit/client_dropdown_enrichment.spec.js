@@ -284,6 +284,7 @@ describe('Client Dropdown TIN & Trade Name Backend Enrichment', () => {
             orderCalls.push({ col, opts });
             return mock;
           });
+          mock.range = jest.fn().mockReturnValue(mock);
           mock.then = (resolve) => resolve({ data: rows, error: null, count: rows.length });
           return mock;
         }

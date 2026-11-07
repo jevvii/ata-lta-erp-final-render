@@ -7,7 +7,7 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const AppError = require('../../lib/AppError');
 const { concurrencyConflict, resolveExpectedVersion } = require('../../lib/concurrency');
 const { randomUUID } = require('crypto');
-const { isUserEntitledToEntity } = require('../../lib/userScope');
+const { isUserEntitledToEntity, fetchInPages } = require('../../lib/userScope');
 
 /**
  * Map a database row to the API client shape.
@@ -126,7 +126,7 @@ const loadRelated = async (clientIds) => {
 const sortClientsList = (clients, { sortField, sortAsc }) => {
   const getVal = (item, field) => {
     if (field === 'client_number') return item.client_number || item.clientNumber || null;
-    if (field === 'rdo_code' || field === 'rdoCode') return item.rdo_code || item.rdoCode || null;
+    if (field === 'rdo_code' || field === 'rdoCode') return (item.rdo_code || item.rdoCode || '').trim() || null;
     if (field === 'created_at') return item.created_at || item.createdAt || null;
     if (field === 'updated_at') return item.updated_at || item.updatedAt || null;
     return item[field] || null;
@@ -204,38 +204,57 @@ const listClients = async ({
 
   const isArchived = archived === true || archived === 'true' || status === 'Archived';
 
-  let query = supabaseAdmin
-    .from('clients')
-    .select('*', { count: 'exact' })
-    .order(sortField, { ascending: sortAsc });
+  const makeQuery = () => {
+    let query = supabaseAdmin
+      .from('clients')
+      .select('*', { count: 'exact' })
+      .order(sortField, { ascending: sortAsc });
 
-  if (isArchived) {
-    query = query.or('status.eq.Archived,deleted_at.not.is.null');
-  } else {
-    query = query.is('deleted_at', null).neq('status', 'Archived');
-  }
+    if (isArchived) {
+      query = query.or('status.eq.Archived,deleted_at.not.is.null');
+    } else {
+      query = query.is('deleted_at', null).neq('status', 'Archived');
+    }
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
+    if (entityId && entityId !== 'ALL') {
+      query = query.eq('entity_id', entityId);
+    }
 
-  if (status && status !== 'Archived') {
-    query = query.eq('status', status);
-  }
+    if (status && status !== 'Archived') {
+      query = query.eq('status', status);
+    }
 
-  if (search) {
-    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
-  }
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
+    }
+    return query;
+  };
 
   // Client master records are shared within the authorized entity. Project
   // membership scopes work requests and their records, not the client directory.
 
-  if (isPaginated) {
+  let response;
+  if (sortField === 'rdo_code') {
+    // PostgreSQL text order differs from the directory's natural RDO order.
+    // Sort the authorized rows before slicing, fetching past Supabase's row cap.
+    const allRows = await fetchInPages(makeQuery);
+    const sortedRows = sortClientsList(allRows, { sortField, sortAsc });
     const offset = (pageNum - 1) * limitNum;
-    query = query.range(offset, offset + limitNum - 1);
+    response = {
+      data: isPaginated ? sortedRows.slice(offset, offset + limitNum) : sortedRows,
+      error: null,
+      count: sortedRows.length,
+    };
+  } else {
+    let query = makeQuery();
+    if (isPaginated) {
+      const offset = (pageNum - 1) * limitNum;
+      query = query.range(offset, offset + limitNum - 1);
+    }
+    response = await query;
   }
 
-  const { data, error, count } = await query;
+  const { data, error, count } = response;
 
   if (error) {
     throw new AppError({

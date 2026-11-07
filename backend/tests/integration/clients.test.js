@@ -472,6 +472,49 @@ describe('/v1/clients', () => {
       expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-alpha', 'c-beta']);
     });
 
+    it.each(['asc', 'desc'])('sorts RDO globally before pagination (%s)', async (direction) => {
+      mockTables.clients.get('c-alpha').rdo_code = '2';
+      mockTables.clients.get('c-middle').rdo_code = '10';
+      mockTables.clients.get('c-zebra').rdo_code = '3';
+      const expected = direction === 'asc'
+        ? ['c-alpha', 'c-zebra', 'c-middle', 'c-beta']
+        : ['c-middle', 'c-zebra', 'c-alpha', 'c-beta'];
+      const ids = [];
+      const metas = [];
+      for (let page = 1; page <= 4; page++) {
+        const res = await request(app)
+          .get(`/v1/clients?sortBy=rdo_code&sortOrder=${direction}&page=${page}&limit=1`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('X-Active-Entity', 'ATA')
+          .expect(200);
+        ids.push(...res.body.data.map((client) => client.id));
+        metas.push(res.body.meta);
+      }
+      expect(ids).toEqual(expected);
+      metas.forEach((meta, index) => expect(meta).toMatchObject({ total: 4, page: index + 1, limit: 1, totalPages: 4 }));
+    });
+
+    it('keeps RDO pagination complete and entity-scoped beyond 1,000 clients', async () => {
+      mockTables.clients.clear();
+      for (let index = 1; index <= 1001; index++) {
+        mockTables.clients.set(`rdo-${index}`, {
+          id: `rdo-${index}`, name: `Client ${index}`, rdo_code: String(index),
+          entity_id: 'ent-ata', status: 'Active', deleted_at: null,
+        });
+      }
+      mockTables.clients.set('other-entity', {
+        id: 'other-entity', name: 'Foreign client', rdo_code: '9999',
+        entity_id: 'ent-lta', status: 'Active', deleted_at: null,
+      });
+      const res = await request(app)
+        .get('/v1/clients?sortBy=rdo_code&sortOrder=asc&page=1001&limit=1')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+      expect(res.body.data.map((client) => client.id)).toEqual(['rdo-1001']);
+      expect(res.body.meta).toMatchObject({ total: 1001, page: 1001, limit: 1, totalPages: 1001 });
+    });
+
     it('sorts by rdoCode alias identically to rdo_code', async () => {
       const ascRes = await request(app)
         .get('/v1/clients?sortBy=rdoCode&sortOrder=asc')
