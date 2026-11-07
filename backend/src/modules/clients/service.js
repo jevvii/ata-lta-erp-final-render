@@ -25,6 +25,7 @@ const toApiClient = (row, extras = {}) => {
     name: row.name,
     tin: row.tin,
     rdoCode: row.rdo_code || null,
+    rdo_code: row.rdo_code || null,
     address: row.address || null,
     tradeName: row.trade_name || null,
     contactUserId: row.contact_user_id || null,
@@ -125,6 +126,7 @@ const loadRelated = async (clientIds) => {
 const sortClientsList = (clients, { sortField, sortAsc }) => {
   const getVal = (item, field) => {
     if (field === 'client_number') return item.client_number || item.clientNumber || null;
+    if (field === 'rdo_code' || field === 'rdoCode') return item.rdo_code || item.rdoCode || null;
     if (field === 'created_at') return item.created_at || item.createdAt || null;
     if (field === 'updated_at') return item.updated_at || item.updatedAt || null;
     return item[field] || null;
@@ -191,8 +193,9 @@ const listClients = async ({
   const isPaginated = page !== undefined || limit !== undefined;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
-  const sortField = ['client_number', 'name', 'tin', 'created_at', 'updated_at', 'status'].includes(sortBy)
-    ? sortBy
+  const normalizedSortBy = sortBy === 'rdoCode' ? 'rdo_code' : sortBy;
+  const sortField = ['client_number', 'name', 'tin', 'rdo_code', 'created_at', 'updated_at', 'status'].includes(normalizedSortBy)
+    ? normalizedSortBy
     : 'client_number';
   const sortAsc =
     sortOrder === undefined || sortOrder === null || String(sortOrder).trim() === ''
