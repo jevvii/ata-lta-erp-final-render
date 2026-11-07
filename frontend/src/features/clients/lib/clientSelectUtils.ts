@@ -3,6 +3,8 @@ export interface ClientSelectItemLike {
   name: string;
   entity?: string | null;
   tin?: string | null;
+  rdoCode?: string | null;
+  rdo_code?: string | null;
   tradeName?: string | null;
   trade_name?: string | null;
   clientNumber?: string | null;
@@ -26,6 +28,12 @@ export function getClientNumber(client?: ClientSelectItemLike | null): string | 
 export function getClientTin(client?: ClientSelectItemLike | null): string | null {
   if (!client) return null;
   const raw = (client.tin ?? '').trim();
+  return raw || null;
+}
+
+export function getClientRdo(client?: ClientSelectItemLike | null): string | null {
+  if (!client) return null;
+  const raw = (client.rdoCode ?? client.rdo_code ?? '').trim();
   return raw || null;
 }
 
@@ -105,7 +113,9 @@ export type ClientSortOption =
   | 'name_asc'
   | 'name_desc'
   | 'tin_asc'
-  | 'tin_desc';
+  | 'tin_desc'
+  | 'rdo_asc'
+  | 'rdo_desc';
 
 export const DEFAULT_CLIENT_SORT: ClientSortOption = 'id_asc';
 
@@ -116,6 +126,8 @@ export const CLIENT_SORT_OPTIONS: ReadonlyArray<{ value: ClientSortOption; label
   { value: 'name_desc', label: 'Name (Z→A)' },
   { value: 'tin_asc', label: 'TIN (0→9)' },
   { value: 'tin_desc', label: 'TIN (9→0)' },
+  { value: 'rdo_asc', label: 'RDO (0→9)' },
+  { value: 'rdo_desc', label: 'RDO (9→0)' },
 ];
 
 export function sortClients<T extends ClientSelectItemLike>(
@@ -164,6 +176,22 @@ export function sortClients<T extends ClientSelectItemLike>(
 
       if (aTin && bTin) {
         const cmp = aTin.localeCompare(bTin, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return mult * cmp;
+      }
+      return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    if (sortBy === 'rdo_asc' || sortBy === 'rdo_desc') {
+      const aRdo = getClientRdo(a);
+      const bRdo = getClientRdo(b);
+      const mult = sortBy === 'rdo_asc' ? 1 : -1;
+
+      // If only one has RDO: the one with RDO ALWAYS comes first (missing goes last in both)
+      if (aRdo && !bRdo) return -1;
+      if (!aRdo && bRdo) return 1;
+
+      if (aRdo && bRdo) {
+        const cmp = aRdo.localeCompare(bRdo, undefined, { numeric: true, sensitivity: 'base' });
         if (cmp !== 0) return mult * cmp;
       }
       return (a.name ?? '').localeCompare(b.name ?? '', undefined, { numeric: true, sensitivity: 'base' });

@@ -132,6 +132,8 @@ export function ClientFilterBar({
               <SelectItem value="name:desc" className="rounded-[6px]">Sort: Name (Z→A)</SelectItem>
               <SelectItem value="tin:asc" className="rounded-[6px]">Sort: TIN (0→9)</SelectItem>
               <SelectItem value="tin:desc" className="rounded-[6px]">Sort: TIN (9→0)</SelectItem>
+              <SelectItem value="rdo_code:asc" className="rounded-[6px]">Sort: RDO (0→9)</SelectItem>
+              <SelectItem value="rdo_code:desc" className="rounded-[6px]">Sort: RDO (9→0)</SelectItem>
               <SelectItem value="created_at:desc" className="rounded-[6px]">Sort: Newest First</SelectItem>
               <SelectItem value="created_at:asc" className="rounded-[6px]">Sort: Oldest First</SelectItem>
             </SelectContent>

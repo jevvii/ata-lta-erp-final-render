@@ -34,7 +34,7 @@ export interface ClientTableProps {
   onRestore: (client: Client) => void;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
-  onSort?: (field: 'client_number' | 'name' | 'tin') => void;
+  onSort?: (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => void;
 }
 
 export function ClientTable({
@@ -50,7 +50,7 @@ export function ClientTable({
 }: ClientTableProps) {
   const canEditClients = usePermission('clients:edit');
 
-  const renderSortIndicator = (field: 'client_number' | 'name' | 'tin') => {
+  const renderSortIndicator = (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => {
     if (!onSort) return null;
     if (sortBy === field) {
       return sortOrder === 'desc' ? (
@@ -124,8 +124,18 @@ export function ClientTable({
               onClick={onSort ? () => onSort('tin') : undefined}
               data-testid="clients-header-tin"
             >
-              <span>TIN & RDO</span>
+              <span>TIN</span>
               {renderSortIndicator('tin')}
+            </TableHead>
+            <TableHead
+              className={`font-bold tracking-normal text-xs text-[#1E293B] ${
+                onSort ? 'cursor-pointer select-none hover:text-[#1D4ED8] transition-colors' : ''
+              }`}
+              onClick={onSort ? () => onSort('rdo_code') : undefined}
+              data-testid="clients-header-rdo"
+            >
+              <span>RDO</span>
+              {renderSortIndicator('rdo_code')}
             </TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Entity</TableHead>
             <TableHead className="font-bold tracking-normal text-xs text-[#1E293B]">Agreement</TableHead>
@@ -171,16 +181,18 @@ export function ClientTable({
                   </div>
                 </TableCell>
 
-                {/* TIN & RDO */}
+                {/* TIN */}
                 <TableCell className="py-3">
                   <div className="text-xs font-mono text-[#1E293B] tabular-nums font-semibold" data-testid={`client-tin-${client.id}`}>
                     {client.tin}
                   </div>
-                  {client.rdoCode && (
-                    <div className="text-xs text-[#475569] mt-0.5">
-                      RDO {client.rdoCode}
-                    </div>
-                  )}
+                </TableCell>
+
+                {/* RDO */}
+                <TableCell className="py-3">
+                  <div className="text-xs font-mono text-[#1E293B] tabular-nums font-medium" data-testid={`client-rdo-${client.id}`}>
+                    {client.rdoCode ? `RDO ${client.rdoCode}` : '—'}
+                  </div>
                 </TableCell>
 
                 {/* Entity */}

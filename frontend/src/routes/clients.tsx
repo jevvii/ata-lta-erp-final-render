@@ -128,7 +128,7 @@ export default function ClientsPage() {
     });
   };
 
-  const handleSortColumn = (field: 'client_number' | 'name' | 'tin') => {
+  const handleSortColumn = (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => {
     setFilters((prev) => {
       const isSame = (prev.sortBy || 'client_number') === field;
       const nextOrder = isSame && prev.sortOrder === 'asc' ? 'desc' : 'asc';
@@ -195,6 +195,21 @@ export default function ClientsPage() {
 
     if (sortBy === 'tin') {
       return sortClients(raw, sortOrder === 'desc' ? 'tin_desc' : 'tin_asc');
+    }
+
+    if (sortBy === 'rdo_code' || sortBy === 'rdoCode') {
+      return [...raw].sort((a, b) => {
+        const aRdo = (a.rdoCode || '').trim();
+        const bRdo = (b.rdoCode || '').trim();
+        const aEmpty = !aRdo;
+        const bEmpty = !bRdo;
+        if (aEmpty && !bEmpty) return 1;
+        if (!aEmpty && bEmpty) return -1;
+        if (aEmpty && bEmpty) return (a.name || '').localeCompare(b.name || '');
+        const cmp = aRdo.localeCompare(bRdo, undefined, { numeric: true, sensitivity: 'base' });
+        if (cmp !== 0) return sortOrder === 'desc' ? -cmp : cmp;
+        return (a.name || '').localeCompare(b.name || '');
+      });
     }
 
     return raw;
