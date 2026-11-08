@@ -145,6 +145,11 @@ export function getDefaultListRootKey(table: string): readonly unknown[] {
   }
 }
 
+export const TABLE_QUERY_KEY_MAP: Record<string, readonly (readonly unknown[])[]> = {
+  users: [['admin', 'users'], ['me', 'team']],
+  user_departments: [['admin', 'users'], ['me', 'team']],
+};
+
 // ============================================================================
 // Model Normalization Engine (Spec SPEC-REALTIME-SYNC-001 §4 Parcel 2)
 // ============================================================================
@@ -967,6 +972,7 @@ function invalidateCounts(queryClient: QueryClient, table: string): void {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit', 'count'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
       break;
     case 'audit_logs':
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });

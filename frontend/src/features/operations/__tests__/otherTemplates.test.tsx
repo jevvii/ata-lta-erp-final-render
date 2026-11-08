@@ -265,8 +265,9 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
 
       // Check Action Buttons
       expect(screen.getByTestId('create-other-template-btn')).toHaveTextContent(
-        '+ New Other Template'
+        'New Other Template'
       );
+      expect(screen.getByTestId('create-other-template-btn').textContent).not.toContain('+');
       expect(screen.getByTestId('generate-other-template-btn')).toHaveTextContent(
         'Generate from Other Template'
       );
@@ -446,6 +447,230 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       fireEvent.change(typeSelect0, { target: { value: 'documents' } });
       expect(typeSelect0).toHaveValue('documents');
     });
+
+    it('renders Operating Entity toggle when activeEntity is ALL, omits when ATA or LTA, and includes entity in submission', async () => {
+      // 1. When activeEntity is 'ATA', toggle is omitted
+      useSessionStore.getState().setSession({
+        user: { id: 'u-admin-1', role: 'Admin', email: 'alice@ata-lta.ph', name: 'Alice', departments: [], entities: ['ATA', 'LTA'] },
+        permissions: ['retainers:edit'],
+        activeEntity: 'ATA',
+      });
+
+      const { wrapper } = createHarness();
+      const { unmount } = render(
+        <OtherTemplateModal template={null} isOpen={true} onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      expect(screen.queryByTestId('other-template-entity-toggle')).toBeNull();
+      unmount();
+
+      // 2. When activeEntity is 'ALL', toggle is rendered
+      useSessionStore.getState().setSession({
+        user: { id: 'u-admin-1', role: 'Admin', email: 'alice@ata-lta.ph', name: 'Alice', departments: [], entities: ['ATA', 'LTA'] },
+        permissions: ['retainers:edit'],
+        activeEntity: 'ALL',
+      });
+
+      const onSuccess = vi.fn();
+      render(
+        <OtherTemplateModal template={null} isOpen={true} onClose={vi.fn()} onSuccess={onSuccess} />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('other-template-entity-toggle')).toBeInTheDocument();
+      const ataBtn = screen.getByTestId('other-template-entity-ata');
+      const ltaBtn = screen.getByTestId('other-template-entity-lta');
+      expect(ataBtn).toBeInTheDocument();
+      expect(ltaBtn).toBeInTheDocument();
+
+      // Switch to LTA
+      fireEvent.click(ltaBtn);
+
+      // Fill in required title and task title
+      fireEvent.change(screen.getByTestId('other-template-title-input'), {
+        target: { value: 'New Entity Scoped Template' },
+      });
+      fireEvent.change(screen.getByTestId('task-title-input-0'), {
+        target: { value: 'Initial Task' },
+      });
+
+      // Submit
+      fireEvent.click(screen.getByTestId('other-template-submit-btn'));
+
+      await waitFor(() => {
+        const calls = vi.mocked(global.fetch).mock.calls;
+        const postCall = calls.find(
+          (c) => String(c[0]).includes('/operations/templates') && c[1]?.method === 'POST'
+        );
+        expect(postCall).toBeDefined();
+        const body = JSON.parse(postCall![1]!.body as string);
+        expect(body.entity).toBe('LTA');
+        expect(body.title).toBe('New Entity Scoped Template');
+      });
+    });
+
+    it('supports checklist completion checkbox toggling and preserves completed: true on submit', async () => {
+      const { wrapper } = createHarness();
+      render(
+        <OtherTemplateModal template={null} isOpen={true} onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      // Add subtask
+      fireEvent.click(screen.getByTestId('add-subtask-btn-0'));
+
+      const checkbox = screen.getByTestId('other-template-checklist-checkbox-0-0') as HTMLInputElement;
+      expect(checkbox).toBeInTheDocument();
+      expect(checkbox.checked).toBe(false);
+
+      const textInput = screen.getByTestId('checklist-item-input-0-0');
+      fireEvent.change(textInput, { target: { value: 'Review By-Laws draft' } });
+
+      // Toggle checkbox to true
+      fireEvent.click(checkbox);
+      expect(checkbox.checked).toBe(true);
+      expect(textInput.className).toContain('line-through');
+
+      // Fill required fields
+      fireEvent.change(screen.getByTestId('other-template-title-input'), {
+        target: { value: 'Charter Amendment Workflow' },
+      });
+      fireEvent.change(screen.getByTestId('task-title-input-0'), {
+        target: { value: 'Review Documents' },
+      });
+
+      // Submit
+      fireEvent.click(screen.getByTestId('other-template-submit-btn'));
+
+      await waitFor(() => {
+        const calls = vi.mocked(global.fetch).mock.calls;
+        const postCall = calls.find(
+          (c) => String(c[0]).includes('/operations/templates') && c[1]?.method === 'POST'
+        );
+        expect(postCall).toBeDefined();
+        const body = JSON.parse(postCall![1]!.body as string);
+        expect(body.tasks[0].checklist[0].completed).toBe(true);
+        expect(body.tasks[0].checklist[0].text).toBe('Review By-Laws draft');
+      });
+    });
+
+    it('saves draft to localStorage, displays draft-restore-banner on reopen, restores, discards, and prevents pointer-down dismissal', async () => {
+      localStorage.clear();
+      const { wrapper } = createHarness();
+      const { unmount } = render(
+        <OtherTemplateModal isOpen={true} template={null} onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      // Verify pointer-down outside prevention on DialogContent
+      const modal = screen.getByTestId('other-template-modal');
+      const pointerDownEvent = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
+      modal.dispatchEvent(pointerDownEvent);
+      // Modal should remain mounted
+      expect(screen.getByTestId('other-template-modal')).toBeInTheDocument();
+
+      // Enter title to trigger dirty state and draft autosave
+      fireEvent.change(screen.getByTestId('other-template-title-input'), {
+        target: { value: 'Draft Other Template Autosave' },
+      });
+
+      // Wait for 1000ms debounce
+      await waitFor(
+        () => {
+          const stored = localStorage.getItem('erp_other_template_draft_new');
+          expect(stored).not.toBeNull();
+          expect(stored).toContain('Draft Other Template Autosave');
+        },
+        { timeout: 2500 }
+      );
+
+      // Unmount modal
+      unmount();
+
+      // Reopen modal: draft-restore-banner should appear
+      const { unmount: unmount2 } = render(
+        <OtherTemplateModal isOpen={true} template={null} onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
+      expect(screen.getByTestId('restore-draft-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('discard-draft-btn')).toBeInTheDocument();
+
+      // Click Restore
+      fireEvent.click(screen.getByTestId('restore-draft-btn'));
+      expect(screen.getByTestId('other-template-title-input')).toHaveValue(
+        'Draft Other Template Autosave'
+      );
+      expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
+
+      unmount2();
+
+      // Reopen and test Discard
+      render(<OtherTemplateModal isOpen={true} template={null} onClose={vi.fn()} />, { wrapper });
+
+      expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('discard-draft-btn'));
+      expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
+      expect(localStorage.getItem('erp_other_template_draft_new')).toBeNull();
+      expect(screen.getByTestId('other-template-title-input')).toHaveValue('');
+    });
+
+    it('supports drag-and-drop task reordering in OtherTemplateModal and sanitizes forward dependencies', async () => {
+      const templateWithTwoTasks: RetainerTemplate = {
+        ...mockOtherTemplates[0]!,
+        tasks: [
+          {
+            local_id: 'task_other_1',
+            title: 'Initial Drafting Task',
+            phase: 'pre_processing',
+            assignees: [],
+          },
+          {
+            local_id: 'task_other_2',
+            title: 'Subsequent Submission Task',
+            phase: 'processing',
+            depends_on_local_id: 'task_other_1',
+            assignees: [],
+          },
+        ],
+      };
+
+      const { wrapper } = createHarness();
+      render(
+        <OtherTemplateModal template={templateWithTwoTasks} isOpen={true} onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      // Verify drag handles exist on both tasks
+      const handle0 = screen.getByTestId('task-drag-handle-0');
+      const handle1 = screen.getByTestId('task-drag-handle-1');
+      expect(handle0).toBeInTheDocument();
+      expect(handle1).toBeInTheDocument();
+
+      // Verify initial titles and dependency
+      expect(screen.getByTestId('task-title-input-0')).toHaveValue('Initial Drafting Task');
+      expect(screen.getByTestId('task-title-input-1')).toHaveValue('Subsequent Submission Task');
+      expect(screen.getByTestId('task-dep-select-1')).toHaveTextContent('Initial Drafting Task');
+
+      // Drag Task 2 (index 1) onto Task 1 (index 0)
+      const row0 = screen.getByTestId('task-row-0');
+
+      fireEvent.dragStart(handle1, { dataTransfer: { setData: vi.fn(), getData: () => '1' } });
+      fireEvent.dragOver(row0);
+      fireEvent.drop(row0, { dataTransfer: { getData: () => '1' } });
+
+      // After drop: Task 2 is at index 0, Task 1 is at index 1
+      await waitFor(() => {
+        expect(screen.getByTestId('task-title-input-0')).toHaveValue('Subsequent Submission Task');
+        expect(screen.getByTestId('task-title-input-1')).toHaveValue('Initial Drafting Task');
+      });
+
+      // Dependency of Task 2 on Task 1 cleared
+      expect(screen.getByTestId('task-dep-select-0')).toHaveTextContent('None (Independent)');
+      expect(screen.getByTestId('task-dep-select-0')).toBeDisabled();
+    });
   });
 
   describe('3. Other Template Generation Modal (OtherTemplateGenerateModal)', () => {
@@ -487,6 +712,123 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       expect(screen.getByTestId('other-template-due-date-input')).toBeRequired();
       expect(screen.getByTestId('other-template-description-textarea')).toBeInTheDocument();
       expect(screen.getByText(/Team Governance/i)).toBeInTheDocument();
+    });
+
+    it('scopes target clients by template entity, displays unmapped assignee alert for pre-assigned task users outside project team, and auto-clears alert when user is added to Team Governance', async () => {
+      // Create a mock template with a pre-assigned assignee (e.g. u-staff-1) and entity LTA
+      const otherTemplateWithAssignee: RetainerTemplate = {
+        id: 'tpl-other-lta-scoped',
+        entity: 'LTA',
+        entity_id: 'ent-lta',
+        name: 'LTA Specialized Filing',
+        title: 'LTA Specialized Filing',
+        description: 'LTA Specialized regulatory filing workflow',
+        template_type: 'other',
+        client_id: null,
+        clientId: null,
+        schedule: null,
+        priority: 'Normal',
+        pf_amount: 0,
+        pfAmount: 0,
+        recurrence: 'none',
+        created_at: '2026-10-01T00:00:00Z',
+        updated_at: '2026-10-01T00:00:00Z',
+        tasks: [
+          {
+            local_id: 'task_lta_1',
+            title: 'Verify Regulatory Submissions',
+            phase: 'pre_processing',
+            default_assignees: ['u-staff-1'],
+            assignees: ['u-staff-1'], // Juan dela Cruz is unmapped initially
+          },
+        ],
+      };
+
+      // Mock fetch return for template
+      const prevFetch = global.fetch;
+      global.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/operations/templates') && u.includes('type=other')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ data: [otherTemplateWithAssignee] }),
+          });
+        }
+        return prevFetch(url, opts);
+      });
+
+      const { wrapper } = createHarness();
+      render(
+        <OtherTemplateGenerateModal
+          isOpen={true}
+          preselectedTemplateId="tpl-other-lta-scoped"
+          onClose={vi.fn()}
+        />,
+        { wrapper }
+      );
+
+      // Verify Client select: since template is LTA, only LTA client (BioHealth Pharma Corp) should be listed, NOT Acme Advisory Group (ATA)
+      const clientSelect = await screen.findByTestId('other-template-client-select');
+      expect(clientSelect).toBeInTheDocument();
+
+      // Open Client select dropdown
+      fireEvent.pointerDown(clientSelect, { button: 0, ctrlKey: false });
+      fireEvent.keyDown(clientSelect, { key: 'ArrowDown', code: 'ArrowDown' });
+
+      // BioHealth Pharma Corp (LTA) should be in the document
+      expect(await screen.findByRole('option', { name: /BioHealth Pharma Corp/ })).toBeInTheDocument();
+      // Acme Advisory Group (ATA) must NOT be an option
+      expect(screen.queryByRole('option', { name: /Acme Advisory Group/ })).toBeNull();
+
+      // Select BioHealth Pharma Corp
+      const biohealthOption = screen.getByRole('option', { name: /BioHealth Pharma Corp/ });
+      fireEvent.click(biohealthOption);
+
+      // Select Manager (Maria Santos)
+      const primarySelect = screen.getByTestId('assigner-primary-select');
+      fireEvent.pointerDown(primarySelect, { button: 0, ctrlKey: false });
+      fireEvent.keyDown(primarySelect, { key: 'ArrowDown', code: 'ArrowDown' });
+      const mariaOption = await screen.findByRole('option', { name: /Maria Santos/ });
+      fireEvent.click(mariaOption);
+
+      // Set Due Date
+      fireEvent.change(screen.getByTestId('other-template-due-date-input'), {
+        target: { value: '2026-12-31' },
+      });
+
+      // Task has pre-assigned Juan dela Cruz (u-staff-1) who is not in project team
+      expect(screen.getByTestId('unmapped-assignee-alert-task_lta_1')).toBeInTheDocument();
+      expect(screen.getByTestId('unmapped-assignee-alert-0')).toHaveTextContent(
+        /Template default assignee .*is not in the assigned team/
+      );
+
+      // Attempt submit: should trigger blocker error
+      fireEvent.click(screen.getByTestId('other-template-generate-submit-btn'));
+      expect(await screen.findByTestId('generate-error')).toHaveTextContent(
+        'All task assignees must belong to the selected project team. Please update unmapped assignees.'
+      );
+
+      // Add Juan dela Cruz to Co-Assignees in Team Governance
+      const coSelect = screen.getByTestId('assigner-coassignee-select');
+      fireEvent.pointerDown(coSelect, { button: 0, ctrlKey: false });
+      fireEvent.keyDown(coSelect, { key: 'ArrowDown', code: 'ArrowDown' });
+      const juanOption = await screen.findByRole('option', { name: /Juan dela Cruz/ });
+      fireEvent.click(juanOption);
+
+      // Unmapped alert and generate error should clear automatically
+      await waitFor(() => {
+        expect(screen.queryByTestId('unmapped-assignee-alert-task_lta_1')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('generate-error')).not.toBeInTheDocument();
+      });
+
+      // Submit succeeds now
+      fireEvent.click(screen.getByTestId('other-template-generate-submit-btn'));
+      await waitFor(() => {
+        const calls = vi.mocked(global.fetch).mock.calls;
+        const genCall = calls.find((c) => String(c[0]).includes('/generate'));
+        expect(genCall).toBeDefined();
+      });
     });
   });
 });

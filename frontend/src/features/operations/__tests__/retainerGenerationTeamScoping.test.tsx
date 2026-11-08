@@ -3,8 +3,12 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RetainerGenerateModal } from '../components/RetainerGenerateModal';
+import { RetainerTemplateModal } from '../components/RetainerTemplateModal';
+import { TaskLineItems } from '../components/TaskLineItems';
 import { useBlockingModalStore } from '../components/BlockingActionModal';
 import { useSessionStore } from '@/lib/session';
+import { TABLE_QUERY_KEY_MAP } from '@/lib/realtime';
+import { handleIncomingTabSyncMessage } from '@/lib/tabSync';
 import type { RetainerTemplate } from '../api/types';
 import type { TeamMember } from '../api/useTeam';
 
@@ -79,6 +83,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
   });
 
   beforeEach(() => {
+    localStorage.clear();
     useBlockingModalStore.getState().reset();
     useSessionStore.getState().setSession({
       user: {
@@ -89,17 +94,20 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
         departments: ['Operations'],
         entities: ['ATA'],
       },
-      permissions: ['retainers:use'],
+      permissions: ['retainers:use', 'retainers:edit'],
       activeEntity: 'ATA',
     });
 
-    global.fetch = vi.fn().mockImplementation((url: string) => {
+    global.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
       const u = String(url);
+      const method = init?.method?.toUpperCase() || 'GET';
       if (u.includes('/operations/templates') && !u.includes('/generate')) {
         return Promise.resolve({
           ok: true,
-          status: 200,
-          json: async () => ({ data: [mockTemplate] }),
+          status: method === 'POST' ? 201 : 200,
+          json: async () => ({
+            data: method === 'POST' || method === 'PUT' ? mockTemplate : [mockTemplate],
+          }),
         } as Response);
       }
       if (u.includes('/clients')) {
@@ -107,11 +115,21 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
           ok: true,
           status: 200,
           json: async () => ({
-            data: [{ id: 'c-1', name: 'Acme Philippines Corp', entity: 'ATA' }],
+            data: [
+              { id: 'c-1', name: 'Acme Philippines Corp', entity: 'ATA' },
+              { id: 'c-2', name: 'LTA Holdings Corp', entity: 'LTA' },
+            ],
           }),
         } as Response);
       }
       if (u.includes('/me/team')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ data: mockTeam }),
+        } as Response);
+      }
+      if (u.includes('/admin/users')) {
         return Promise.resolve({
           ok: true,
           status: 200,
@@ -134,6 +152,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
   });
 
   afterEach(() => {
+    localStorage.clear();
     global.fetch = originalFetch;
     useBlockingModalStore.getState().reset();
   });
@@ -496,4 +515,392 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
     ).toBeInTheDocument();
     expect(screen.queryByText(/e83dc90b/i)).not.toBeInTheDocument();
   });
+
+  describe('Retainer Template Modal Parity, Entity Scoping & Draft Retention', () => {
+    it('shows Operating Entity toggle when activeEntity is ALL and allows switching to LTA', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-1',
+        email: 'alice@ata-lta.ph',
+        name: 'Alice Admin',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA', 'LTA'],
+      },
+      permissions: ['retainers:edit', 'retainers:use'],
+      activeEntity: 'ALL',
+    });
+
+    const { wrapper } = createHarness();
+    render(<RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />, { wrapper });
+
+    expect(screen.getByTestId('retainer-template-entity-toggle')).toBeInTheDocument();
+    expect(screen.getByTestId('retainer-template-entity-ata')).toBeInTheDocument();
+    expect(screen.getByTestId('retainer-template-entity-lta')).toBeInTheDocument();
+
+    // Switch to LTA
+    fireEvent.click(screen.getByTestId('retainer-template-entity-lta'));
+
+    // Fill form and submit
+    fireEvent.change(screen.getByTestId('template-name-input'), {
+      target: { value: 'LTA Retainer Template' },
+    });
+    fireEvent.change(screen.getByTestId('task-title-input-0'), {
+      target: { value: 'LTA Phase 1 Review' },
+    });
+
+    fireEvent.click(screen.getByTestId('template-modal-submit-btn'));
+
+    await waitFor(() => {
+      const calls = vi.mocked(global.fetch).mock.calls;
+      const tplPost = calls.find(
+        (c) => String(c[0]).includes('/operations/templates') && c[1]?.method === 'POST'
+      );
+      expect(tplPost).toBeDefined();
+      const body = JSON.parse(String(tplPost![1]?.body));
+      expect(body.entity).toBe('LTA');
+      expect(body.name).toBe('LTA Retainer Template');
+    });
+  });
+
+  it('hides Operating Entity toggle when activeEntity is LTA and defaults entity to LTA', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-mgr-1',
+        email: 'maria@ata-lta.ph',
+        name: 'Maria Santos',
+        role: 'Manager',
+        departments: ['Operations'],
+        entities: ['LTA'],
+      },
+      permissions: ['retainers:edit', 'retainers:use'],
+      activeEntity: 'LTA',
+    });
+
+    const { wrapper } = createHarness();
+    render(<RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />, { wrapper });
+
+    expect(screen.queryByTestId('retainer-template-entity-toggle')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('template-name-input'), {
+      target: { value: 'Scoped LTA Template' },
+    });
+    fireEvent.change(screen.getByTestId('task-title-input-0'), {
+      target: { value: 'Scoped LTA Task' },
+    });
+
+    fireEvent.click(screen.getByTestId('template-modal-submit-btn'));
+
+    await waitFor(() => {
+      const calls = vi.mocked(global.fetch).mock.calls;
+      const tplPost = calls.find(
+        (c) => String(c[0]).includes('/operations/templates') && c[1]?.method === 'POST'
+      );
+      expect(tplPost).toBeDefined();
+      const body = JSON.parse(String(tplPost![1]?.body));
+      expect(body.entity).toBe('LTA');
+    });
+  });
+
+  it('renders checklist completion checkbox, toggles completed state and submits completed: true', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-1',
+        email: 'alice@ata-lta.ph',
+        name: 'Alice Admin',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['retainers:edit'],
+      activeEntity: 'ATA',
+    });
+
+    const { wrapper } = createHarness();
+    render(<RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />, { wrapper });
+
+    // Add subtask
+    fireEvent.click(screen.getByTestId('add-subtask-btn-0'));
+
+    const checkbox = screen.getByTestId('template-checklist-checkbox-0-0');
+    expect(checkbox).toBeInTheDocument();
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
+
+    const textInput = screen.getByTestId('checklist-item-input-0-0');
+    expect(textInput.className).toContain('text-[#0F172A]');
+    expect(textInput.className).not.toContain('line-through');
+
+    // Toggle checkbox
+    fireEvent.click(checkbox);
+    expect((checkbox as HTMLInputElement).checked).toBe(true);
+    expect(textInput.className).toContain('line-through');
+
+    fireEvent.change(textInput, { target: { value: 'Submit SEC Annex' } });
+    fireEvent.change(screen.getByTestId('template-name-input'), {
+      target: { value: 'Checklist Parity Template' },
+    });
+    fireEvent.change(screen.getByTestId('task-title-input-0'), {
+      target: { value: 'Compliance Task' },
+    });
+
+    fireEvent.click(screen.getByTestId('template-modal-submit-btn'));
+
+    await waitFor(() => {
+      const calls = vi.mocked(global.fetch).mock.calls;
+      const tplPost = calls.find(
+        (c) => String(c[0]).includes('/operations/templates') && c[1]?.method === 'POST'
+      );
+      expect(tplPost).toBeDefined();
+      const body = JSON.parse(String(tplPost![1]?.body));
+      expect(body.tasks[0].checklist[0].completed).toBe(true);
+      expect(body.tasks[0].checklist[0].text).toBe('Submit SEC Annex');
+    });
+  });
+
+  it('saves draft to localStorage, displays draft-restore-banner on reopen, restores and discards draft', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-admin-1',
+        email: 'alice@ata-lta.ph',
+        name: 'Alice Admin',
+        role: 'Admin',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['retainers:edit'],
+      activeEntity: 'ATA',
+    });
+
+    const { wrapper } = createHarness();
+    const { unmount } = render(
+      <RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />,
+      { wrapper }
+    );
+
+    // Enter name to create dirty state
+    fireEvent.change(screen.getByTestId('template-name-input'), {
+      target: { value: 'Draft Retainer Persistence Test' },
+    });
+
+    // Wait for 1000ms debounce
+    await waitFor(
+      () => {
+        const stored = localStorage.getItem('erp_retainer_template_draft_new');
+        expect(stored).not.toBeNull();
+        expect(stored).toContain('Draft Retainer Persistence Test');
+      },
+      { timeout: 2500 }
+    );
+
+    // Unmount modal
+    unmount();
+
+    // Reopen modal: draft-restore-banner should be visible
+    const { unmount: unmount2 } = render(
+      <RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />,
+      { wrapper }
+    );
+
+    expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('restore-draft-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('discard-draft-btn')).toBeInTheDocument();
+
+    // Click Restore
+    fireEvent.click(screen.getByTestId('restore-draft-btn'));
+    expect(screen.getByTestId('template-name-input')).toHaveValue('Draft Retainer Persistence Test');
+    expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
+
+    unmount2();
+
+    // Reopen and test Discard
+    render(<RetainerTemplateModal isOpen={true} template={null} onClose={vi.fn()} />, { wrapper });
+
+    expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('discard-draft-btn'));
+    expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
+    expect(localStorage.getItem('erp_retainer_template_draft_new')).toBeNull();
+    expect(screen.getByTestId('template-name-input')).toHaveValue('');
+  });
+
+  it('immediately clears unmapped assignee alert and blocker error when unmapped user is added to Team Governance in RetainerGenerateModal', async () => {
+    useSessionStore.getState().setSession({
+      user: {
+        id: 'u-mgr-1',
+        email: 'maria@ata-lta.ph',
+        name: 'Maria Santos',
+        role: 'Manager',
+        departments: ['Operations'],
+        entities: ['ATA'],
+      },
+      permissions: ['retainers:use'],
+      activeEntity: 'ATA',
+    });
+
+    const { wrapper } = createHarness();
+    render(<RetainerGenerateModal isOpen={true} onClose={vi.fn()} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('template-select')).not.toBeDisabled();
+    });
+
+    // 1. Select template
+    await openAndSelect(screen.getByTestId('template-select'), /Annual Corporate Retainer/);
+
+    // 2. Select Manager
+    await openAndSelect(screen.getByTestId('assigner-primary-select'), /Maria Santos/);
+
+    // 3. Set Due Date
+    fireEvent.change(screen.getByTestId('due-date-input'), { target: { value: '2026-12-31' } });
+
+    // Task 1 alert is currently present (Carlos Reyes is unmapped)
+    expect(screen.getByTestId('unmapped-assignee-alert-task_1')).toBeInTheDocument();
+
+    // Attempt generate: should trigger assignee blocker error
+    fireEvent.click(screen.getByTestId('generate-submit-btn'));
+    expect(screen.getByTestId('generate-error')).toHaveTextContent(
+      'All task assignees must belong to the selected project team. Please update unmapped assignees.'
+    );
+
+    // 4. Add Carlos Reyes to Co-Assignees in Team Governance
+    await openAndSelect(screen.getByTestId('assigner-coassignee-select'), /Carlos Reyes/);
+
+    // Alert should immediately disappear and error should automatically clear
+    await waitFor(() => {
+      expect(screen.queryByTestId('unmapped-assignee-alert-task_1')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('generate-error')).not.toBeInTheDocument();
+    });
+
+    // 5. Submit should now succeed without blocker
+    fireEvent.click(screen.getByTestId('generate-submit-btn'));
+
+    await waitFor(() => {
+      const calls = vi.mocked(global.fetch).mock.calls;
+      const genCall = calls.find((c) => String(c[0]).includes('/generate'));
+      expect(genCall).toBeDefined();
+    });
+  });
+
+  it('supports drag-and-drop task reordering in RetainerTemplateModal and sanitizes invalidated dependencies', async () => {
+    const templateWithTwoTasks: RetainerTemplate = {
+      ...mockTemplate,
+      tasks: [
+        {
+          local_id: 'task_1',
+          title: 'First Prerequisite Task',
+          phase: 'pre_processing',
+          assignees: [],
+        },
+        {
+          local_id: 'task_2',
+          title: 'Second Dependent Task',
+          phase: 'processing',
+          depends_on_local_id: 'task_1',
+          assignees: [],
+        },
+      ],
+    };
+
+    const { wrapper } = createHarness();
+    render(
+      <RetainerTemplateModal isOpen={true} template={templateWithTwoTasks} onClose={vi.fn()} />,
+      { wrapper }
+    );
+
+    // Verify drag handles exist on both tasks
+    const handle0 = screen.getByTestId('task-drag-handle-0');
+    const handle1 = screen.getByTestId('task-drag-handle-1');
+    expect(handle0).toBeInTheDocument();
+    expect(handle1).toBeInTheDocument();
+
+    // Verify initial titles and dependency
+    expect(screen.getByTestId('task-title-input-0')).toHaveValue('First Prerequisite Task');
+    expect(screen.getByTestId('task-title-input-1')).toHaveValue('Second Dependent Task');
+    expect(screen.getByTestId('task-depends-select-1')).toHaveTextContent('First Prerequisite Task');
+
+    // Drag Task 2 (index 1) onto Task 1 (index 0)
+    const row0 = screen.getByTestId('task-row-0');
+
+    fireEvent.dragStart(handle1, { dataTransfer: { setData: vi.fn(), getData: () => '1' } });
+    fireEvent.dragOver(row0);
+    fireEvent.drop(row0, { dataTransfer: { getData: () => '1' } });
+
+    // After drop: Task 2 is now at index 0, Task 1 is at index 1
+    await waitFor(() => {
+      expect(screen.getByTestId('task-title-input-0')).toHaveValue('Second Dependent Task');
+      expect(screen.getByTestId('task-title-input-1')).toHaveValue('First Prerequisite Task');
+    });
+
+    // Dependency of Task 2 on Task 1 should have been automatically cleared (since Task 1 is now after Task 2)
+    expect(screen.getByTestId('task-depends-select-0')).toHaveTextContent('None (Can start immediately)');
+  });
+
+  it('supports drag-and-drop task reordering in TaskLineItems and cleans wildcard dependencies on index 0', async () => {
+    const onChangeSpy = vi.fn();
+    const initialTasks = [
+      {
+        localId: 'task-line-1',
+        title: 'Task A',
+        phase: 'pre_processing' as const,
+        coAssignees: [],
+        dependsOn: null,
+      },
+      {
+        localId: 'task-line-2',
+        title: 'Task B',
+        phase: 'processing' as const,
+        coAssignees: [],
+        dependsOn: ['*'], // depends on all preceding
+      },
+    ];
+
+    render(
+      <TaskLineItems
+        tasks={initialTasks}
+        onChange={onChangeSpy}
+        projectTeam={mockTeam}
+      />
+    );
+
+    const handle0 = screen.getByTestId('task-drag-handle-0');
+    const handle1 = screen.getByTestId('task-drag-handle-1');
+    expect(handle0).toBeInTheDocument();
+    expect(handle1).toBeInTheDocument();
+
+    const row0 = screen.getByTestId('task-row-task-line-1');
+
+    // Drag Task B (index 1) onto Task A (index 0)
+    fireEvent.dragStart(handle1, { dataTransfer: { setData: vi.fn(), getData: () => '1' } });
+    fireEvent.dragOver(row0);
+    fireEvent.drop(row0, { dataTransfer: { getData: () => '1' } });
+
+    expect(onChangeSpy).toHaveBeenCalled();
+    const reorderedTasks = onChangeSpy.mock.calls[0]![0];
+    expect(reorderedTasks[0].localId).toBe('task-line-2');
+    expect(reorderedTasks[1].localId).toBe('task-line-1');
+    // Task B moved to index 0, so '*' was removed from dependsOn
+    expect(reorderedTasks[0].dependsOn).toBeNull();
+  });
+
+  it('co-invalidates [me, team] in TABLE_QUERY_KEY_MAP and on cross-tab admin mutations', async () => {
+    // 1. TABLE_QUERY_KEY_MAP mapping includes ['me', 'team']
+    expect(TABLE_QUERY_KEY_MAP.users).toContainEqual(['me', 'team']);
+    expect(TABLE_QUERY_KEY_MAP.user_departments).toContainEqual(['me', 'team']);
+
+    // 2. Tab sync cross-tab invalidation
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    handleIncomingTabSyncMessage(queryClient, {
+      type: 'ENTITY_MUTATED',
+      domain: 'admin',
+      entityId: 'u-1',
+      originTabId: 'tab-other',
+      timestamp: Date.now(),
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['me', 'team'] })
+    );
+  });
+});
 });

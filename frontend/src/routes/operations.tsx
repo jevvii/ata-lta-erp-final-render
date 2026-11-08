@@ -214,9 +214,16 @@ export default function OperationsPage() {
       return 'High';
     };
 
+    const resolvedCode =
+      tpl.entity === 'LTA' || tpl.entity === 'ATA'
+        ? tpl.entity
+        : (tpl as any).entities?.code === 'LTA' || (tpl as any).entities?.code === 'ATA'
+          ? (tpl as any).entities.code
+          : resolveEntityCodeFromUUID(tpl.entity_id) || 'ATA';
+
     return {
       ...tpl,
-      entity: tpl.entity === 'LTA' ? 'LTA' : 'ATA',
+      entity: resolvedCode === 'LTA' ? 'LTA' : 'ATA',
       priority: mapPriority(tpl.priority),
       defaultPriority: mapPriority(tpl.defaultPriority || tpl.default_priority),
       default_priority: mapPriority(tpl.default_priority || tpl.defaultPriority),
@@ -227,6 +234,26 @@ export default function OperationsPage() {
       })),
     };
   };
+
+  const editingAdminTemplate = useMemo(
+    () => toAdminTemplate(editingTemplate),
+    [editingTemplate]
+  );
+
+  const normalizedEditingOtherTemplate = useMemo(() => {
+    if (!editingOtherTemplate) return null;
+    const resolvedCode =
+      editingOtherTemplate.entity === 'LTA' || editingOtherTemplate.entity === 'ATA'
+        ? editingOtherTemplate.entity
+        : (editingOtherTemplate as any).entities?.code === 'LTA' || (editingOtherTemplate as any).entities?.code === 'ATA'
+          ? (editingOtherTemplate as any).entities.code
+          : resolveEntityCodeFromUUID(editingOtherTemplate.entity_id) || 'ATA';
+
+    return {
+      ...editingOtherTemplate,
+      entity: resolvedCode === 'LTA' ? ('LTA' as const) : ('ATA' as const),
+    };
+  }, [editingOtherTemplate]);
 
   if (!canViewModule) {
     return <Forbidden requiredPermission="workflow:view" />;
@@ -617,7 +644,7 @@ export default function OperationsPage() {
                       className="text-xs font-semibold gap-1.5"
                       data-testid="create-other-template-btn"
                     >
-                      <Plus className="h-4 w-4" /> + New Other Template
+                      <Plus className="h-4 w-4" /> New Other Template
                     </Button>
                   )}
                   {canUseRetainers && (
@@ -656,7 +683,7 @@ export default function OperationsPage() {
                       }}
                       className="text-xs mt-2"
                     >
-                      + New Other Template
+                      <Plus className="h-3.5 w-3.5 mr-1" /> New Other Template
                     </Button>
                   )}
                 </div>
@@ -799,33 +826,29 @@ export default function OperationsPage() {
         />
       )}
 
-      {isTemplateModalOpen && (
-        <RetainerTemplateModal
-          isOpen={isTemplateModalOpen}
-          template={toAdminTemplate(editingTemplate)}
-          onClose={() => {
-            setIsTemplateModalOpen(false);
-            setEditingTemplate(null);
-          }}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
-          }}
-        />
-      )}
+      <RetainerTemplateModal
+        isOpen={isTemplateModalOpen}
+        template={editingAdminTemplate}
+        onClose={() => {
+          setIsTemplateModalOpen(false);
+          setEditingTemplate(null);
+        }}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
+        }}
+      />
 
-      {isOtherTemplateModalOpen && (
-        <OtherTemplateModal
-          isOpen={isOtherTemplateModalOpen}
-          template={editingOtherTemplate}
-          onClose={() => {
-            setIsOtherTemplateModalOpen(false);
-            setEditingOtherTemplate(null);
-          }}
-          onSuccess={() => {
-            queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
-          }}
-        />
-      )}
+      <OtherTemplateModal
+        isOpen={isOtherTemplateModalOpen}
+        template={normalizedEditingOtherTemplate}
+        onClose={() => {
+          setIsOtherTemplateModalOpen(false);
+          setEditingOtherTemplate(null);
+        }}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
+        }}
+      />
 
       {isOtherGenerateModalOpen && (
         <OtherTemplateGenerateModal

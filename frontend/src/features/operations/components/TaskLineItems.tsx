@@ -10,6 +10,7 @@ import {
   Lock,
   FileText,
   CheckSquare,
+  GripVertical,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { DateInput } from '@/components/ui/date-input';
@@ -78,6 +79,44 @@ export function TaskLineItems({
   const [yearFields, setYearFields] = useState<Set<string>>(() => new Set());
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [activeDepDropdown, setActiveDepDropdown] = useState<string | null>(null);
+  const [draggedTaskIndex, setDraggedTaskIndex] = useState<number | null>(null);
+  const [dragOverTaskIndex, setDragOverTaskIndex] = useState<number | null>(null);
+  const [dragEnabledIndex, setDragEnabledIndex] = useState<number | null>(null);
+
+  const handleMoveTask = (fromIndex: number, toIndex: number) => {
+    if (
+      Number.isNaN(fromIndex) ||
+      Number.isNaN(toIndex) ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= tasks.length ||
+      toIndex >= tasks.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+
+    const reordered = [...tasks];
+    const [moved] = reordered.splice(fromIndex, 1);
+    if (!moved) return;
+    reordered.splice(toIndex, 0, moved);
+
+    // If the task now at index 0 has dependsOn containing '*', remove '*' from its dependsOn
+    if (reordered[0] && reordered[0].dependsOn) {
+      const deps = Array.isArray(reordered[0].dependsOn)
+        ? reordered[0].dependsOn
+        : [reordered[0].dependsOn];
+      if (deps.includes('*')) {
+        const cleaned = deps.filter((d) => d !== '*');
+        reordered[0] = {
+          ...reordered[0],
+          dependsOn: cleaned.length > 0 ? cleaned : null,
+        };
+      }
+    }
+
+    onChange(reordered);
+  };
 
   // Validate dependencies DAG
   const cycleResult = React.useMemo(() => {
@@ -265,13 +304,76 @@ export function TaskLineItems({
           return (
             <div
               key={task.localId}
+              draggable={!disabled && tasks.length > 1 && (dragEnabledIndex === null || dragEnabledIndex === index)}
+              onDragStart={(e) => {
+                const target = e.target as HTMLElement;
+                if (
+                  target.tagName === 'INPUT' ||
+                  target.tagName === 'TEXTAREA' ||
+                  target.tagName === 'SELECT' ||
+                  (target.tagName === 'BUTTON' && !target.closest(`[data-testid="task-drag-handle-${index}"]`))
+                ) {
+                  e.preventDefault();
+                  return;
+                }
+                setDraggedTaskIndex(index);
+                e.dataTransfer?.setData('text/plain', String(index));
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (draggedTaskIndex !== null && draggedTaskIndex !== index) {
+                  setDragOverTaskIndex(index);
+                }
+              }}
+              onDragLeave={() => {
+                if (dragOverTaskIndex === index) {
+                  setDragOverTaskIndex(null);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const fromIdx = draggedTaskIndex ?? Number(e.dataTransfer?.getData('text/plain'));
+                handleMoveTask(fromIdx, index);
+                setDraggedTaskIndex(null);
+                setDragOverTaskIndex(null);
+                setDragEnabledIndex(null);
+              }}
+              onDragEnd={() => {
+                setDraggedTaskIndex(null);
+                setDragOverTaskIndex(null);
+                setDragEnabledIndex(null);
+              }}
               className={`p-2.5 space-y-2 transition-colors ${
                 isExpanded ? 'bg-[#F8FAFC]' : 'hover:bg-[#F8FAFC]/50'
+              } ${draggedTaskIndex === index ? 'opacity-60' : ''} ${
+                dragOverTaskIndex === index && draggedTaskIndex !== index
+                  ? 'border-[#1D4ED8] bg-[#F8FAFC] ring-1 ring-[#1D4ED8]'
+                  : ''
               }`}
               data-testid={`task-row-${task.localId}`}
             >
               {/* Primary Row Controls */}
               <div className="flex flex-wrap items-center gap-1.5">
+
+                {/* Drag Handle */}
+                {!disabled && tasks.length > 1 && (
+                  <button
+                    type="button"
+                    draggable={true}
+                    onMouseDown={() => setDragEnabledIndex(index)}
+                    onMouseUp={() => setDragEnabledIndex(null)}
+                    onDragStart={(e) => {
+                      setDraggedTaskIndex(index);
+                      e.dataTransfer?.setData('text/plain', String(index));
+                    }}
+                    className="cursor-grab active:cursor-grabbing text-[#94A3B8] hover:text-[#475569] p-0.5 rounded-[4px] shrink-0 select-none focus:outline-none"
+                    aria-label={`Drag to reorder task ${index + 1}`}
+                    title="Drag to reorder task"
+                    data-testid={`task-drag-handle-${index}`}
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
+                )}
 
                 {/* Expand / Collapse Toggle */}
                 <button

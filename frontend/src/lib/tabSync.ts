@@ -201,6 +201,9 @@ function invalidateLinkedCrossDomainCaches(queryClient: QueryClient, domain: str
   } else if (domain === 'transmittals') {
     void queryClient.invalidateQueries({ queryKey: ['disbursements'] });
     void queryClient.invalidateQueries({ queryKey: ['billing'] });
+  } else if (domain === 'admin') {
+    void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
+    void queryClient.invalidateQueries({ queryKey: ['operations'] });
   }
 }
 
@@ -259,6 +262,7 @@ export function handleIncomingTabSyncMessage(
     if (domain === 'admin') {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
     }
     invalidateLinkedCrossDomainCaches(queryClient, domain);
     return;
@@ -383,6 +387,7 @@ export function handleIncomingTabSyncMessage(
     if (domain === 'admin') {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
     }
     invalidateLinkedCrossDomainCaches(queryClient, domain);
   } else {
@@ -401,6 +406,7 @@ export function handleIncomingTabSyncMessage(
     if (domain === 'admin') {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
     }
     invalidateLinkedCrossDomainCaches(queryClient, domain);
   }

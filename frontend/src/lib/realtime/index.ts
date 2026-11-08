@@ -25,6 +25,7 @@ export {
   normalizeCdcClient,
   normalizePersistentItemNumbers,
   triggerTimeEntryCoInvalidation,
+  TABLE_QUERY_KEY_MAP,
 } from './useEntityRealtimeSync';
 export type {
   UseEntityRealtimeSyncOptions,
