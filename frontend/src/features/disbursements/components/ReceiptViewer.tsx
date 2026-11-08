@@ -61,10 +61,8 @@ export function ReceiptViewer({
     (receiptData?.url && /^https?:\/\//i.test(receiptData.url))
   );
 
-  const effectiveUrl =
-    (receiptS3Key && /^https?:\/\//i.test(receiptS3Key))
-      ? (receiptData?.url || receiptS3Key)
-      : (receiptData?.url || '');
+  // Only preview URLs returned by the authorized receipt endpoint.
+  const effectiveUrl = receiptData?.url || '';
 
   const parsedExternal = parseExternalUrl(effectiveUrl || '', fileName);
   const isGoogleDrive = Boolean(parsedExternal.isGoogleDrive && parsedExternal.previewUrl);

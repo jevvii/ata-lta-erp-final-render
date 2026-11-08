@@ -178,11 +178,18 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
   });
 
   describe('ReceiptViewer Google Drive inline preview', () => {
+    it('does not preview a cached external link before receipt authorization completes', () => {
+      render(<ReceiptViewer receiptS3Key="https://drive.google.com/file/d/private123/view" receiptFileName="Private receipt.pdf" isLoadingReceipt onRefetchReceiptUrl={vi.fn()} />);
+      expect(screen.queryByTestId('receipt-gdrive-frame')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('btn-open-modal-receipt')).not.toBeInTheDocument();
+    });
+
     it('renders Google Drive iframe preview and open link when receipt is a Drive URL', () => {
       const gdriveUrl = 'https://drive.google.com/file/d/1234567890abcdef/view?usp=sharing';
       render(
         <ReceiptViewer
           receiptS3Key={gdriveUrl}
+          receiptData={{ url: gdriveUrl, filename: "BIR Official Receipt.pdf", contentType: "text/html", isExternal: true }}
           receiptFileName="BIR Official Receipt.pdf"
           onRefetchReceiptUrl={vi.fn()}
           isDocked={true}
@@ -210,6 +217,7 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
       render(
         <ReceiptViewer
           receiptS3Key={gdriveUrl}
+          receiptData={{ url: gdriveUrl, filename: "BIR Official Receipt.pdf", contentType: "text/html", isExternal: true }}
           receiptFileName="BIR Official Receipt.pdf"
           onRefetchReceiptUrl={vi.fn()}
           isDocked={false}
@@ -228,6 +236,7 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
       render(
         <ReceiptViewer
           receiptS3Key={gdriveUrl}
+          receiptData={{ url: gdriveUrl, filename: "BIR Official Receipt.pdf", contentType: "text/html", isExternal: true }}
           receiptFileName="BIR Official Receipt.pdf"
           onRefetchReceiptUrl={vi.fn()}
           isDocked={true}
