@@ -520,7 +520,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
         expect(inv.version).toBe(2);
       });
 
-      it('updates invoiceNumber with valid expectedVersion: 1', async () => {
+      it('preserves invoiceNumber as immutable with valid expectedVersion: 1', async () => {
         const res = await request(app)
           .patch(`/v1/invoices/${INVOICE_ID}`)
           .set('Authorization', `Bearer ${accountingToken}`)
@@ -532,7 +532,7 @@ describe('Empirical Adversarial Verification: Milestone 3 (Backend Billing OCC)'
 
         expect(res.status).toBe(200);
         const inv = mockTables.invoices.get(INVOICE_ID);
-        expect(inv.invoice_number).toBe('ATA-INV-2026-RENUMBERED');
+        expect(inv.invoice_number).toBe('ATA-INV-2026-001');
         expect(inv.version).toBe(2);
       });
 

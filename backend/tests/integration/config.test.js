@@ -83,12 +83,12 @@ describe('Milestone M1: Public Runtime Config & HTTP Cache-Control', () => {
         {
           id: 'e83dc90b-d9b5-4854-8adf-7fe21c2e6822',
           code: 'ATA',
-          name: 'ATA Accounting Firm',
+          name: 'ATA Business Consultancy Services',
         },
         {
           id: '16749820-0129-44a8-9435-a6013d07a370',
           code: 'LTA',
-          name: 'LTA Accounting Firm',
+          name: 'LTA Business Management Corp',
         },
       ]);
 

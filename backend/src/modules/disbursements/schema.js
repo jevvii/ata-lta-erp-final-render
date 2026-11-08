@@ -59,7 +59,8 @@ const createDisbursementBaseSchema = z
     linked_transmittal_id: uuidOrEmptySchema,
     dueDate: z.string().optional().nullable(),
     notes: z.string().max(2000).optional().nullable(),
-    receiptS3Key: z.string().max(500).optional().nullable(),
+    receiptS3Key: z.string().max(2000).optional().nullable(),
+    externalUrl: z.string().url().max(2000).optional().nullable(),
     receiptFilename: z.string().max(255).optional().nullable(),
     status: z
       .never({
@@ -109,7 +110,8 @@ const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data,
   }
 
   // Enforce paired receipt metadata (R5 / F9)
-  if (data.receiptFilename && !data.receiptS3Key) {
+  const effectiveKey = data.externalUrl || data.receiptS3Key;
+  if (data.receiptFilename && !effectiveKey) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'receiptS3Key is required when receiptFilename is provided',
@@ -117,7 +119,7 @@ const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data,
     });
   }
 
-  if (data.receiptS3Key && !data.receiptFilename) {
+  if (effectiveKey && !data.receiptFilename) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'receiptFilename is required when receiptS3Key is provided',
@@ -192,7 +194,7 @@ const updateDisbursementSchema = createDisbursementBaseSchema
       });
     }
     // Reject contradictory payload: clearing key while supplying filename
-    if (data.receiptS3Key === null && data.receiptFilename) {
+    if (data.receiptS3Key === null && !data.externalUrl && data.receiptFilename) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Cannot set receiptFilename when receiptS3Key is null',
