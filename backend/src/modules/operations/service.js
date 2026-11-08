@@ -54,40 +54,8 @@ const VALID_TRANSITIONS = {
   Cancelled: ['Draft', 'In Progress'],
 };
 
-/* ── Cached entity resolution ─────────────────────────────────────── */
-const ENTITY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const entityIdCache = new Map(); // code → { id, expiresAt }
-const entityCodeCache = new Map(); // id   → { code, expiresAt }
-
-const resolveEntityId = async (code) => {
-  const cached = entityIdCache.get(code);
-  if (cached && Date.now() < cached.expiresAt) return cached.id;
-
-  const { data, error } = await supabaseAdmin
-    .from('entities')
-    .select('id')
-    .eq('code', code)
-    .maybeSingle();
-  if (error || !data) {
-    throw new AppError({ statusCode: 400, title: 'Bad Request', detail: `Unknown entity ${code}` });
-  }
-  entityIdCache.set(code, { id: data.id, expiresAt: Date.now() + ENTITY_CACHE_TTL_MS });
-  return data.id;
-};
-
-const resolveEntityCode = async (id) => {
-  const cached = entityCodeCache.get(id);
-  if (cached && Date.now() < cached.expiresAt) return cached.code;
-
-  const { data, error } = await supabaseAdmin
-    .from('entities')
-    .select('code')
-    .eq('id', id)
-    .maybeSingle();
-  if (error || !data) return id;
-  entityCodeCache.set(id, { code: data.code, expiresAt: Date.now() + ENTITY_CACHE_TTL_MS });
-  return data.code;
-};
+/* ── Entity resolution ─────────────────────────────────────── */
+const { resolveEntityId, resolveEntityCode } = require('../../lib/entityResolver');
 
 const validateWorkRequestClientEntity = async (clientId, entityId) => {
   if (!clientId) return;
@@ -3670,18 +3638,32 @@ const listRetainerTemplates = async ({ entityId, type, user }) => {
     });
   }
 
-  return (data || []).map((t) => ({
-    ...t,
-    entity: t.entities?.code || (t.entity && t.entity.length <= 4 ? t.entity : null),
-  }));
+  return Promise.all(
+    (data || []).map(async (t) => ({
+      ...t,
+      entity:
+        t.entities?.code ||
+        (t.entity && t.entity.length <= 4 ? t.entity : null) ||
+        (await resolveEntityCode(t.entity_id)),
+    }))
+  );
 };
 
 const createRetainerTemplate = async ({ entityId, userId, data }) => {
   const templateType = data.templateType || data.template_type || 'retainer';
   const isOther = templateType === 'other';
 
+  let targetEntityId = entityId;
+  if (data.entity) {
+    try {
+      targetEntityId = await resolveEntityId(data.entity);
+    } catch {
+      targetEntityId = entityId;
+    }
+  }
+
   const row = {
-    entity_id: entityId,
+    entity_id: targetEntityId,
     name: data.title || data.name,
     description: data.description || null,
     template_type: templateType,
@@ -3711,7 +3693,10 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
 
   return {
     ...template,
-    entity: template.entities?.code || (template.entity && template.entity.length <= 4 ? template.entity : null),
+    entity:
+      template.entities?.code ||
+      (template.entity && template.entity.length <= 4 ? template.entity : null) ||
+      (await resolveEntityCode(template.entity_id)),
   };
 };
 
@@ -3734,12 +3719,22 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
   else if (data.assigned_to !== undefined) updates.assigned_to = data.assigned_to;
   if (data.tasks !== undefined) updates.tasks = data.tasks;
 
-  const { data: updated, error } = await supabaseAdmin
+  if (data.entity) {
+    const targetEntityId = await resolveEntityId(data.entity);
+    updates.entity_id = targetEntityId;
+  }
+
+  let query = supabaseAdmin
     .from('retainer_templates')
     .update(updates)
     .eq('id', id)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
+    .is('deleted_at', null);
+
+  if (!data.entity && entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data: updated, error } = await query
     .select('*, entities(code), clients(name)')
     .single();
 
@@ -3753,16 +3748,24 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
 
   return {
     ...updated,
-    entity: updated.entities?.code || (updated.entity && updated.entity.length <= 4 ? updated.entity : null),
+    entity:
+      updated.entities?.code ||
+      (updated.entity && updated.entity.length <= 4 ? updated.entity : null) ||
+      (await resolveEntityCode(updated.entity_id)),
   };
 };
 
 const deleteRetainerTemplate = async ({ entityId, id }) => {
-  const { error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('retainer_templates')
     .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id)
-    .eq('entity_id', entityId);
+    .eq('id', id);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { error } = await query;
 
   if (error) {
     throw new AppError({
@@ -3776,13 +3779,17 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
 };
 
 const generateRetainerTemplate = async ({ entityId, templateId, user, data = {} }) => {
-  const { data: template, error: tplError } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('retainer_templates')
     .select('*, entities(code), clients(name)')
     .eq('id', templateId)
-    .eq('entity_id', entityId)
-    .is('deleted_at', null)
-    .single();
+    .is('deleted_at', null);
+
+  if (entityId && entityId !== 'ALL') {
+    query = query.eq('entity_id', entityId);
+  }
+
+  const { data: template, error: tplError } = await query.single();
 
   if (tplError || !template) {
     throw new AppError({
@@ -3994,7 +4001,7 @@ const generateRetainerTemplate = async ({ entityId, templateId, user, data = {} 
   };
 
   const wrGraph = await createWorkRequest({
-    entityId,
+    entityId: template.entity_id || entityId,
     data: wrPayload,
     user,
   });

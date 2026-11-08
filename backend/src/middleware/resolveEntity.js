@@ -81,11 +81,32 @@ function resolveEntity(options = {}) {
           }
         }
 
-        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id, /clients/:id, /invoices/:id, /disbursements/:id)
+        // 4. Detect from route param id (e.g. /operations/:id, /operations-requests/:id, /clients/:id, /invoices/:id, /disbursements/:id, /templates/:templateId)
         const routeParamId =
           req.params?.id ||
+          req.params?.templateId ||
           req.path?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0] ||
           req.originalUrl?.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+
+        if (!resolvedCode && req.params?.templateId) {
+          const { data: tpl, error: tplParamErr } = await supabaseAdmin
+            .from('retainer_templates')
+            .select('entity_id')
+            .eq('id', req.params.templateId)
+            .maybeSingle();
+          if (tplParamErr) {
+            throw new AppError({
+              statusCode: 500,
+              title: 'Database Error',
+              detail: 'Unable to resolve entity for retainer template',
+            });
+          }
+          if (tpl?.entity_id) {
+            resolvedUUID = tpl.entity_id;
+            resolvedCode = await resolveEntityCode(tpl.entity_id);
+          }
+        }
+
         if (!resolvedCode && routeParamId) {
           const { data: wr, error: wrParamErr } = await supabaseAdmin
             .from('work_requests')
@@ -196,6 +217,23 @@ function resolveEntity(options = {}) {
                       if (doc?.entity_id) {
                         resolvedUUID = doc.entity_id;
                         resolvedCode = await resolveEntityCode(doc.entity_id);
+                      } else {
+                        const { data: tpl, error: tplParamErr } = await supabaseAdmin
+                          .from('retainer_templates')
+                          .select('entity_id')
+                          .eq('id', routeParamId)
+                          .maybeSingle();
+                        if (tplParamErr) {
+                          throw new AppError({
+                            statusCode: 500,
+                            title: 'Database Error',
+                            detail: 'Unable to resolve entity for retainer template',
+                          });
+                        }
+                        if (tpl?.entity_id) {
+                          resolvedUUID = tpl.entity_id;
+                          resolvedCode = await resolveEntityCode(tpl.entity_id);
+                        }
                       }
                     }
                   }

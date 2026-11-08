@@ -167,7 +167,7 @@ it.each(['true', 'false'])(
     expect(html).toContain('L. Tan');
     expect(html).toContain('&lt;script&gt;bad&lt;/script&gt;');
     expect(html.includes('<img')).toBe(toggle === 'true');
-    expect(html.includes('ATA Business Consultancy')).toBe(toggle === 'true');
+    expect(html.includes('ATA Business Consultancy Services')).toBe(toggle === 'true');
     expect(html).toContain('@page { size: A4; margin: 15mm 20mm; }');
     expect(generatePdf.mock.calls[0][0].options.preferCSSPageSize).toBe(true);
     if (toggle === 'true') expect(html).toContain('data:image/jpeg;base64,');
@@ -268,7 +268,7 @@ it.each(['ATA', 'LTA'])(
 
     expect(generatePdf).toHaveBeenCalledTimes(1);
     expect(generatePdf.mock.calls[0][0].html).toContain(
-      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+      entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp'
     );
     expect(uploadBuffer).toHaveBeenCalledTimes(1);
     expect(uploadBuffer.mock.calls[0][0].path).toBe(
@@ -322,7 +322,7 @@ it.each(['ATA', 'LTA'])(
 
     expect(generatePdf).toHaveBeenCalledTimes(1);
     expect(generatePdf.mock.calls[0][0].html).toContain(
-      entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+      entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp'
     );
     expect(uploadBuffer).toHaveBeenCalledTimes(1);
     expect(uploadBuffer.mock.calls[0][0].path).toBe(

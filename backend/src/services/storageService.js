@@ -119,6 +119,9 @@ const getSignedUploadUrl = async ({
  * @returns {Promise<string>}
  */
 const getSignedDownloadUrl = async ({ path, expiresInSeconds = 300, download }) => {
+  if (typeof path === 'string' && /^https?:\/\//i.test(path.trim())) {
+    return path.trim();
+  }
   assertBucket();
   const { data, error } = await supabaseAdmin.storage
     .from(bucket)

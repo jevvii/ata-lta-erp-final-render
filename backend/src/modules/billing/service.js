@@ -534,8 +534,18 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
         status: requestedStatus,
         subtotal,
         total,
-        notes: data.notes || null,
-        terms: data.terms || null,
+        notes:
+          data.notes !== undefined
+            ? data.notes || null
+            : data.terms !== undefined
+              ? data.terms || null
+              : null,
+        terms:
+          data.terms !== undefined
+            ? data.terms || null
+            : data.notes !== undefined
+              ? data.notes || null
+              : null,
       },
       p_line_items: lineItems,
       p_user_id: userId,
@@ -952,13 +962,14 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
     'linked_task_id',
     'linkedTransmittalId',
     'linked_transmittal_id',
-    'invoiceNumber',
     'issueDate',
     'dueDate',
     'lineItems',
     'terms',
   ];
-  const hasFinancialEdit = FINANCIAL_FIELDS.some((field) => data[field] !== undefined);
+  const hasFinancialEdit =
+    FINANCIAL_FIELDS.some((field) => data[field] !== undefined) ||
+    (data.invoiceNumber !== undefined && data.invoiceNumber !== existing.invoice_number);
 
   const isAdmin = effectiveUser?.role === 'Admin';
   if (data.printDetails !== undefined && !isAdmin) {
@@ -1036,12 +1047,21 @@ const updateInvoice = async ({ entityId, id, userId, data, user }) => {
   }
   if (normalizedLinkedTransmittalId !== undefined)
     rpcUpdates.linked_transmittal_id = normalizedLinkedTransmittalId;
-  if (data.invoiceNumber !== undefined) rpcUpdates.invoice_number = data.invoiceNumber;
   if (data.issueDate !== undefined) rpcUpdates.issue_date = data.issueDate;
   if (data.dueDate !== undefined) rpcUpdates.due_date = data.dueDate;
   if (data.status !== undefined) rpcUpdates.status = data.status;
-  if (data.notes !== undefined) rpcUpdates.notes = data.notes;
-  if (data.terms !== undefined) rpcUpdates.terms = data.terms;
+  if (data.notes !== undefined && data.terms !== undefined) {
+    rpcUpdates.notes = data.notes;
+    rpcUpdates.terms = data.terms;
+  } else if (data.terms !== undefined && data.notes === undefined) {
+    rpcUpdates.terms = data.terms;
+    rpcUpdates.notes = data.terms;
+  } else if (data.notes !== undefined && data.terms === undefined) {
+    rpcUpdates.notes = data.notes;
+    if (existing.status === 'Draft' || isAdmin) {
+      rpcUpdates.terms = data.notes;
+    }
+  }
   if (data.archived !== undefined) rpcUpdates.archived = data.archived;
 
   const hasAddress = data.address !== undefined || data.clientAddress !== undefined;
@@ -1414,7 +1434,7 @@ const generateVoucherPdf = async ({ entityId, entityCode, id, user }) => {
  */
 const buildVoucherHtml = (invoice, entityId) => {
   const entityName =
-    entityId === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
+    entityId === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp';
 
   const paymentRows = (invoice.payments || [])
     .map((p, idx) => {

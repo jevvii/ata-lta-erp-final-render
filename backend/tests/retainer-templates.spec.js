@@ -725,4 +725,126 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.data.generation.period_label).toBeNull();
     });
   });
+
+  describe('6. Retainer Templates Entity Resolution & Multi-Entity Scoping', () => {
+    it('creates an LTA retainer template in ALL mode without clientId under ent-lta', async () => {
+      const res = await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${adminToken}`)
+        // Note: X-Active-Entity header omitted -> ALL mode
+        .send({
+          name: 'LTA Retainer Without Client',
+          entity: 'LTA',
+          priority: 'Normal',
+          schedule: 'Monthly',
+          pfAmount: 25000,
+          recurrence: 'none',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.name).toBe('LTA Retainer Without Client');
+      expect(res.body.data.entity).toBe('LTA');
+
+      const stored = mockTables.retainer_templates.get(res.body.data.id);
+      expect(stored).toBeDefined();
+      expect(stored.entity_id).toBe('ent-lta');
+    });
+
+    it('creates a retainer template defaulting to LTA when X-Active-Entity: LTA is provided', async () => {
+      const res = await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'LTA')
+        .send({
+          name: 'Explicit Header LTA Retainer',
+          priority: 'High',
+          recurrence: 'none',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.name).toBe('Explicit Header LTA Retainer');
+      expect(res.body.data.entity).toBe('LTA');
+
+      const stored = mockTables.retainer_templates.get(res.body.data.id);
+      expect(stored).toBeDefined();
+      expect(stored.entity_id).toBe('ent-lta');
+    });
+
+    it('updates, generates, and deletes an LTA retainer template in ALL mode resolving ent-lta from retainer_templates', async () => {
+      const ltaTemplateId = 'tpl-lta-all-resolution';
+      mockTables.retainer_templates.set(ltaTemplateId, {
+        id: ltaTemplateId,
+        entity_id: 'ent-lta',
+        name: 'LTA Template All Resolution',
+        description: 'Template scoped under LTA',
+        priority: 'Normal',
+        recurrence: 'none',
+        assigned_to: managerId,
+        tasks: [{ title: 'LTA Task 1', phase: 'pre_processing' }],
+      });
+
+      // 1. Update in ALL mode (no X-Active-Entity, no entity in body)
+      const updateRes = await request(app)
+        .put(`/v1/operations/templates/${ltaTemplateId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        // Note: X-Active-Entity omitted -> ALL mode
+        .send({
+          name: 'LTA Template Updated In ALL Mode',
+        });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.data.name).toBe('LTA Template Updated In ALL Mode');
+      expect(updateRes.body.data.entity).toBe('LTA');
+      expect(mockTables.retainer_templates.get(ltaTemplateId).entity_id).toBe('ent-lta');
+
+      // 2. Generate in ALL mode (no X-Active-Entity, no entity in body)
+      const genRes = await request(app)
+        .post(`/v1/operations/templates/${ltaTemplateId}/generate`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        // Note: X-Active-Entity omitted -> ALL mode
+        .send({
+          overrides: {
+            dueDate: '2026-12-31',
+          },
+        });
+
+      expect(genRes.status).toBe(201);
+      expect(genRes.body.data.id).toBeDefined();
+      expect(genRes.body.data.title).toBe('LTA Template Updated In ALL Mode');
+      expect(genRes.body.data.entity_id || genRes.body.data.entity).toMatch(/ent-lta|LTA/);
+
+      // 3. Delete in ALL mode (no X-Active-Entity)
+      const delRes = await request(app)
+        .delete(`/v1/operations/templates/${ltaTemplateId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+        // Note: X-Active-Entity omitted -> ALL mode
+
+      expect(delRes.status).toBe(204);
+      expect(mockTables.retainer_templates.get(ltaTemplateId).deleted_at).toBeDefined();
+    });
+
+    it('allows updating a template entity across entities when entity is provided in body', async () => {
+      const templateId = 'tpl-switch-entity';
+      mockTables.retainer_templates.set(templateId, {
+        id: templateId,
+        entity_id: 'ent-ata',
+        name: 'Switch Entity Template',
+        recurrence: 'none',
+      });
+
+      const updateRes = await request(app)
+        .put(`/v1/operations/templates/${templateId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          entity: 'LTA',
+          name: 'Switched to LTA',
+        });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.data.entity).toBe('LTA');
+      expect(mockTables.retainer_templates.get(templateId).entity_id).toBe('ent-lta');
+    });
+  });
 });

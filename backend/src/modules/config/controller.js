@@ -9,8 +9,8 @@ const { supabaseAdmin } = require('../../services/supabaseClient');
 const logger = require('../../lib/logger');
 
 const FALLBACK_ENTITIES = [
-  { id: 'e83dc90b-d9b5-4854-8adf-7fe21c2e6822', code: 'ATA', name: 'ATA Accounting Firm' },
-  { id: '16749820-0129-44a8-9435-a6013d07a370', code: 'LTA', name: 'LTA Accounting Firm' },
+  { id: 'e83dc90b-d9b5-4854-8adf-7fe21c2e6822', code: 'ATA', name: 'ATA Business Consultancy Services' },
+  { id: '16749820-0129-44a8-9435-a6013d07a370', code: 'LTA', name: 'LTA Business Management Corp' },
 ];
 
 const getPublicConfig = async (req, res, next) => {
