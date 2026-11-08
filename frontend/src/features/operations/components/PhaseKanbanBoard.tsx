@@ -73,6 +73,9 @@ import {
   isTaskRejected,
   isTaskPendingApproval,
   canResubmitTask,
+  getTaskAssignees,
+  getFirstName,
+  type TaskAssigneeInfo,
 } from '../lib/taskScope';
 import type {
   Phase,
@@ -99,112 +102,7 @@ interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
   setSearchParams: (setter: (prev: URLSearchParams) => URLSearchParams) => void;
 }
 
-export interface TaskAssigneeInfo {
-  id: string;
-  name: string;
-  avatarUrl?: string | null;
-  isLead: boolean;
-}
-
-export const getFirstName = (fullName: string) => fullName.trim().split(/\s+/)[0] || fullName;
-
-export function getTaskAssignees(
-  task: Task,
-  teamList: Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }> = []
-): TaskAssigneeInfo[] {
-  if (!task) return [];
-
-  const raw = (task as unknown as Record<string, unknown>) || {};
-  const leadId = (task.assigneeId || raw.assignee_id) ? String(task.assigneeId || raw.assignee_id) : null;
-  const leadName = task.assigneeName || (raw.assignee_name as string) || null;
-
-  // Collect all unique assignee user IDs
-  const idSet = new Set<string>();
-  if (leadId) idSet.add(leadId);
-
-  if (Array.isArray(task.assignees)) {
-    task.assignees.forEach((id) => {
-      if (id) idSet.add(String(id));
-    });
-  }
-
-  const rawAssigneeDetails = (task.assigneeDetails || raw.assignee_details) as Array<Record<string, unknown>> | undefined;
-  if (Array.isArray(rawAssigneeDetails)) {
-    rawAssigneeDetails.forEach((d) => {
-      const uId = d.userId || d.user_id || d.id;
-      if (uId) idSet.add(String(uId));
-    });
-  }
-
-  const rawTaskAssignees = (task.taskAssignees || raw.task_assignees) as Array<Record<string, unknown>> | undefined;
-  if (Array.isArray(rawTaskAssignees)) {
-    rawTaskAssignees.forEach((ta) => {
-      const uId = ta.userId || ta.user_id || ta.id;
-      if (uId) idSet.add(String(uId));
-    });
-  }
-
-  // If no IDs are present but task.assigneeName is non-empty, return fallback lead
-  if (idSet.size === 0) {
-    if (leadName && leadName.trim() !== '') {
-      return [{ id: leadName, name: leadName, isLead: true }];
-    }
-    return [];
-  }
-
-  const result: TaskAssigneeInfo[] = [];
-
-  for (const id of idSet) {
-    const isLead = Boolean(leadId && id === leadId);
-
-    // 1. Team directory lookup
-    const teamMember = teamList.find((m) => m.id === id);
-    let resolvedName = teamMember?.name;
-    let resolvedAvatarUrl = teamMember?.avatarUrl ?? null;
-
-    // 2. assigneeDetails lookup
-    if (!resolvedName && Array.isArray(rawAssigneeDetails)) {
-      const detail = rawAssigneeDetails.find((d) => String(d.userId || d.user_id || d.id) === id);
-      if (detail) {
-        resolvedName = (detail.name || detail.userName || detail.user_name) as string | undefined;
-        resolvedAvatarUrl = ((detail.avatarUrl || detail.avatar_url) as string | null | undefined) ?? resolvedAvatarUrl;
-      }
-    }
-
-    // 3. taskAssignees lookup
-    if (!resolvedName && Array.isArray(rawTaskAssignees)) {
-      const ta = rawTaskAssignees.find((t) => String(t.userId || t.user_id || t.id) === id);
-      if (ta) {
-        resolvedName = (ta.userName || ta.user_name || ta.name) as string | undefined;
-        resolvedAvatarUrl = ((ta.avatarUrl || ta.avatar_url) as string | null | undefined) ?? resolvedAvatarUrl;
-      }
-    }
-
-    // 4. Lead name from task
-    if (!resolvedName && isLead && leadName) {
-      resolvedName = leadName;
-    }
-
-    // 5. Fallback
-    if (!resolvedName || resolvedName.trim() === '') {
-      resolvedName = `Staff (${id.slice(0, 8)})`;
-    }
-
-    result.push({
-      id,
-      name: resolvedName,
-      avatarUrl: resolvedAvatarUrl,
-      isLead,
-    });
-  }
-
-  // Sort: Lead first, then alphabetical by name
-  return result.sort((a, b) => {
-    if (a.isLead && !b.isLead) return -1;
-    if (!a.isLead && b.isLead) return 1;
-    return a.name.localeCompare(b.name);
-  });
-}
+export { getTaskAssignees, getFirstName, type TaskAssigneeInfo };
 
 function PhaseKanbanBoardInner({
   initialWorkRequestId,
