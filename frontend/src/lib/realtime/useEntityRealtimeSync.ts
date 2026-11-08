@@ -1,3 +1,5 @@
+import { matchesDisbursementQueuePredicate, matchesDisbursementList, matchesDisbursementEntity } from '@/features/disbursements/lib/cacheMatching';
+export { matchesDisbursementQueuePredicate } from '@/features/disbursements/lib/cacheMatching';
 /**
  * Generic CDC Realtime Sync Hook (Spec §4.3 & §5, Parcel E)
  *
@@ -724,26 +726,6 @@ export function isTaskListOfTargetWr(qKey: unknown, targetWrId: string): boolean
 /**
  * Evaluates whether a disbursement CDC record matches a specific queue predicate.
  */
-export function matchesDisbursementQueuePredicate(
-  record: Record<string, unknown>,
-  queue: unknown
-): boolean {
-  if (Boolean(record.archived)) return false;
-  const reviewReady = Boolean(record.reviewReady ?? record.review_ready);
-  if (queue === 'initial_requests') {
-    return record.status === 'Draft' && reviewReady === true;
-  }
-  if (queue === 'needs_correction') {
-    return record.status === 'Draft' && reviewReady === false;
-  }
-  if (queue === 'ready_for_funding') {
-    return record.status === 'Approved';
-  }
-  if (queue === 'payment_releases') {
-    return record.status === 'Funded';
-  }
-  return true;
-}
 
 /**
  * Safely compares two UUIDs or user IDs with trimming and RFC 4122 case-insensitivity.
@@ -1810,37 +1792,17 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         for (const [qKey, listData] of matchingQueries) {
           if (!listData) continue;
 
-          // Scoped matcher for disbursements: filter-aware cache prepend
+          // Match each cached query scope independently, even in consolidated view.
           if (options.table === 'disbursements' && Array.isArray(qKey) && qKey[0] === 'disbursements') {
+            if (!matchesDisbursementEntity(payloadObj.new, qKey[2])) continue;
             if (qKey[1] === 'all-for-status') {
-              const targetStatus = qKey[3] as string | undefined;
-              if (Boolean(payloadObj.new.archived) || (targetStatus && payloadObj.new.status !== targetStatus)) {
-                continue;
-              }
+              if (payloadObj.new.archived || (qKey[3] && payloadObj.new.status !== qKey[3])) continue;
             } else if (qKey[1] === 'all-for-queue') {
-              const queueName = qKey[3] as string | undefined;
-              if (Boolean(payloadObj.new.archived) || !matchesDisbursementQueuePredicate(payloadObj.new, queueName)) {
-                continue;
-              }
+              if (!matchesDisbursementQueuePredicate(payloadObj.new, qKey[3])) continue;
             } else if (qKey[1] === 'list') {
-              const filters = qKey[3] as Record<string, any> | undefined;
-              if (filters && typeof filters === 'object') {
-                const isArchived = Boolean(payloadObj.new.archived);
-                if (filters.archived === true && !isArchived) {
-                  continue;
-                }
-                if (!filters.archived && isArchived) {
-                  continue;
-                }
-                if (filters.status && payloadObj.new.status !== filters.status) {
-                  continue;
-                }
-                if (filters.queue && !matchesDisbursementQueuePredicate(payloadObj.new, filters.queue)) {
-                  continue;
-                }
-                if (filters.page && Number(filters.page) > 1) {
-                  continue;
-                }
+              if (!matchesDisbursementList(payloadObj.new, qKey[3] as Record<string, unknown> | undefined)) {
+                void queryClient.invalidateQueries({ queryKey: qKey, exact: true });
+                continue;
               }
             }
           }

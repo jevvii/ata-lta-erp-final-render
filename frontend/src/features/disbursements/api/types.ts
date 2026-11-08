@@ -77,6 +77,7 @@ export interface Disbursement {
   disbursement_number?: string | null;
   disbursementNumber?: string | null;
   entity_id: string;
+  entity?: string;
   entityId?: string;
   entity_code?: string;
   entityCode?: string;

@@ -483,6 +483,47 @@ describe('Disbursement Auto-Select & Multi-User Realtime Sync Engine', () => {
   // 3. Multi-User Realtime Sync & RBAC Verification
   // =========================================================================
   describe('3. Multi-User Realtime Updates (Admin vs Non-Admin RBAC)', () => {
+    it.each([{ category: 'Government Fee' }, { workRequestId: 'another-wr' }, { search: 'unrelated' }])('does not insert a voucher into a mismatched filtered list (%j)', (filters) => {
+      const queryClient = new QueryClient();
+      const key = disbursementKeys.list('ATA', { ...filters, page: 1 });
+      queryClient.setQueryData(key, { data: [], meta: { total: 0 } });
+      handleRealtimePayload(queryClient, { table: 'disbursements' }, {
+        schema: 'public', table: 'disbursements', eventType: 'INSERT', old: null,
+        new: { id: 'filtered-insert', entity: 'ATA', entity_code: 'ATA', version: 1, lifecycle_version: 2, review_ready: true, status: 'Draft', category: 'Supplies', work_request_id: 'actual-wr', archived: false },
+      });
+      expect(queryClient.getQueryData<DisbursementListResponse>(key)?.data).toEqual([]);
+      queryClient.clear();
+    });
+
+    it('does not put legacy vouchers into lifecycle-v2 queues', () => {
+      const queryClient = new QueryClient();
+      const key = ['disbursements', 'all-for-queue', 'ATA', 'initial_requests'];
+      queryClient.setQueryData(key, { data: [], meta: { total: 0 } });
+      handleRealtimePayload(queryClient, { table: 'disbursements' }, {
+        schema: 'public', table: 'disbursements', eventType: 'INSERT', old: null,
+        new: { id: 'legacy-insert', entity: 'ATA', entity_code: 'ATA', version: 1, lifecycle_version: 1, review_ready: true, status: 'Draft', archived: false },
+      });
+      expect(queryClient.getQueryData<DisbursementListResponse>(key)?.data).toEqual([]);
+      queryClient.clear();
+    });
+
+    it('keeps cached ATA lists isolated from LTA inserts while the active view is ALL', () => {
+      const user = useSessionStore.getState().user!;
+      useSessionStore.getState().setSession({ user: { ...user, entities: ['ATA', 'LTA'] }, permissions: ['disbursement:view'], activeEntity: 'ALL' });
+      const queryClient = new QueryClient();
+      const ata = disbursementKeys.list('ATA', { page: 1 });
+      const lta = disbursementKeys.list('LTA', { page: 1 });
+      queryClient.setQueryData(ata, { data: [] });
+      queryClient.setQueryData(lta, { data: [] });
+      handleRealtimePayload(queryClient, { table: 'disbursements' }, {
+        schema: 'public', table: 'disbursements', eventType: 'INSERT', old: null,
+        new: { id: 'lta-consolidated-insert', entity: 'LTA', entity_code: 'LTA', version: 1, lifecycle_version: 2, status: 'Draft', archived: false },
+      });
+      expect(queryClient.getQueryData<DisbursementListResponse>(ata)?.data).toEqual([]);
+      expect(queryClient.getQueryData<DisbursementListResponse>(lta)?.data.map((row) => row.id)).toEqual(['lta-consolidated-insert']);
+      queryClient.clear();
+    });
+
     it('Admin user: prepends matching INSERT to all/drafts/queue cache, triggers active refetch, and does NOT pollute mismatched status tabs', () => {
       const queryClient = new QueryClient({
         defaultOptions: { queries: { retry: false } },
@@ -516,6 +557,7 @@ describe('Disbursement Auto-Select & Multi-User Realtime Sync Engine', () => {
 
       const incomingNewRecord = {
         id: 'disb-rt-new',
+        lifecycle_version: 2,
         disbursement_number: 'DISB-ATA-20261108-777',
         entity: 'ATA',
         entity_code: 'ATA',

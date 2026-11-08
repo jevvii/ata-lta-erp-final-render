@@ -41,24 +41,7 @@ import type {
   DisbursementCountsResponse,
 } from './types';
 
-function matchesQueuePredicate(item: Disbursement, queue: unknown): boolean {
-  const isArchived = Boolean(item.archived);
-  if (isArchived) return false;
-  const reviewReady = Boolean(item.reviewReady ?? (item as any).review_ready);
-  if (queue === 'initial_requests') {
-    return item.status === 'Draft' && reviewReady === true;
-  }
-  if (queue === 'ready_for_funding') {
-    return item.status === 'Approved';
-  }
-  if (queue === 'payment_releases') {
-    return item.status === 'Funded';
-  }
-  if (queue === 'needs_correction') {
-    return item.status === 'Draft' && reviewReady === false;
-  }
-  return true;
-}
+import { matchesDisbursementQueuePredicate as matchesQueuePredicate, matchesDisbursementEntity, matchesDisbursementList } from '../lib/cacheMatching';
 
 function pinAndBroadcastDisbursement(
   queryClient: QueryClient,
@@ -76,34 +59,19 @@ function pinAndBroadcastDisbursement(
   });
   for (const [key, value] of allLists) {
     if (value && typeof value === 'object' && Array.isArray(value.data)) {
+      const entityMatches = matchesDisbursementEntity(updated, key[2]);
+      const filters = key[3] as Record<string, unknown> | undefined;
+      const matchesFilters = entityMatches && matchesDisbursementList(updated, filters);
       const exists = value.data.some((d) => d?.id === updated.id);
       if (exists) {
         queryClient.setQueryData(key, {
           ...value,
-          data: value.data.map((d) => (d?.id === updated.id ? { ...d, ...updated } : d)),
+          data: matchesFilters
+            ? value.data.map((d) => d?.id === updated.id ? { ...d, ...updated } : d)
+            : value.data.filter((d) => d?.id !== updated.id),
         });
       } else {
-        const qKey = Array.isArray(key) ? key : [];
-        const entityKey = qKey[2] as string | undefined;
-        const filters = qKey[3] as Record<string, any> | undefined;
-
-        const itemEntity =
-          (updated as any).entity ||
-          updated.entity_code ||
-          updated.entityCode;
-
-        const entityMatches =
-          entityKey === 'ALL' ||
-          !itemEntity ||
-          entityKey === itemEntity;
-
-        const isArchived = Boolean(updated.archived);
-        const matchesArchive = !filters?.archived ? !isArchived : isArchived;
-        const matchesStatus = !filters?.status || filters.status === updated.status;
-        const matchesQueue = !filters?.queue || matchesQueuePredicate(updated, filters.queue);
-        const matchesPage = !filters?.page || Number(filters.page) === 1;
-
-        if (entityMatches && matchesArchive && matchesStatus && matchesQueue && matchesPage) {
+        if (matchesFilters) {
           queryClient.setQueryData(key, {
             ...value,
             data: [updated, ...value.data],
@@ -128,14 +96,7 @@ function pinAndBroadcastDisbursement(
       const qKey = Array.isArray(key) ? key : [];
       const entityKey = qKey[2] as string | undefined;
       const queueName = qKey[3] as string | undefined;
-      const itemEntity =
-        (updated as any).entity ||
-        updated.entity_code ||
-        updated.entityCode;
-      const entityMatches =
-        entityKey === 'ALL' ||
-        !itemEntity ||
-        entityKey === itemEntity;
+      const entityMatches = matchesDisbursementEntity(updated, entityKey);
 
       const matchesQueue = entityMatches && matchesQueuePredicate(updated, queueName);
       const exists = value.data.some((d) => d?.id === updated.id);
@@ -174,14 +135,7 @@ function pinAndBroadcastDisbursement(
       const qKey = Array.isArray(key) ? key : [];
       const entityKey = qKey[2] as string | undefined;
       const targetStatus = qKey[3] as string | undefined;
-      const itemEntity =
-        (updated as any).entity ||
-        updated.entity_code ||
-        updated.entityCode;
-      const entityMatches =
-        entityKey === 'ALL' ||
-        !itemEntity ||
-        entityKey === itemEntity;
+      const entityMatches = matchesDisbursementEntity(updated, entityKey);
 
       const matchesStatus =
         entityMatches &&
