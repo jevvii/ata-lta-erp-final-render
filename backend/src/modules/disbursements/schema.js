@@ -34,6 +34,49 @@ const calendarDateSchema = z
 
 const uuidOrEmptySchema = z.union([z.string().guid(), z.literal(''), z.null()]).optional();
 
+const httpExternalUrlSchema = z
+  .string()
+  .trim()
+  .url('External URL must be a valid URL')
+  .max(500, 'External URL cannot exceed 500 characters')
+  .refine((val) => /^https?:\/\//i.test(val), {
+    message: 'External receipt URL must use http:// or https://',
+  });
+
+const validateReceiptFieldSources = (data, ctx) => {
+  const s3Key =
+    typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim()
+      ? data.receiptS3Key.trim()
+      : null;
+  const extUrl =
+    typeof data.externalUrl === 'string' && data.externalUrl.trim()
+      ? data.externalUrl.trim()
+      : null;
+
+  if (s3Key && extUrl && s3Key !== extUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Cannot provide conflicting receiptS3Key and externalUrl; supply either an uploaded receipt key or an external URL',
+      path: ['externalUrl'],
+    });
+  }
+
+  if (
+    s3Key &&
+    /^[a-z][a-z0-9+.-]*:\/\//i.test(s3Key) &&
+    !/^https?:\/\//i.test(s3Key)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'External receipt URL must use http:// or https://',
+      path: ['receiptS3Key'],
+    });
+  }
+
+  return { s3Key, extUrl, effectiveKey: s3Key || extUrl };
+};
+
 /**
  * Schema for creating a disbursement.
  */
@@ -59,8 +102,8 @@ const createDisbursementBaseSchema = z
     linked_transmittal_id: uuidOrEmptySchema,
     dueDate: z.string().optional().nullable(),
     notes: z.string().max(2000).optional().nullable(),
-    receiptS3Key: z.string().max(2000).optional().nullable(),
-    externalUrl: z.string().url().max(2000).optional().nullable(),
+    receiptS3Key: z.string().max(500).optional().nullable(),
+    externalUrl: httpExternalUrlSchema.optional().nullable(),
     receiptFilename: z.string().max(255).optional().nullable(),
     status: z
       .never({
@@ -110,7 +153,7 @@ const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data,
   }
 
   // Enforce paired receipt metadata (R5 / F9)
-  const effectiveKey = data.externalUrl || data.receiptS3Key;
+  const { effectiveKey } = validateReceiptFieldSources(data, ctx);
   if (data.receiptFilename && !effectiveKey) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -193,6 +236,9 @@ const updateDisbursementSchema = createDisbursementBaseSchema
         path: ['expectedVersion'],
       });
     }
+
+    validateReceiptFieldSources(data, ctx);
+
     // Reject contradictory payload: clearing key while supplying filename
     if (data.receiptS3Key === null && !data.externalUrl && data.receiptFilename) {
       ctx.addIssue({

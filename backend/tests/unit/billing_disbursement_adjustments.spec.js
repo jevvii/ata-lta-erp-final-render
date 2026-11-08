@@ -29,8 +29,11 @@ const billingService = require('../../src/modules/billing/service');
 const disbursementService = require('../../src/modules/disbursements/service');
 const {
   createDisbursementSchema,
+  updateDisbursementSchema,
 } = require('../../src/modules/disbursements/schema');
 const storageService = require('../../src/services/storageService');
+const actualStorageService = jest.requireActual('../../src/services/storageService');
+const reservations = require('../../src/modules/disbursements/receiptReservationStore');
 
 describe('Billing & Disbursement Adjustments Verification', () => {
   const ENT_ATA_ID = 'ent-ata';
@@ -288,8 +291,12 @@ describe('Billing & Disbursement Adjustments Verification', () => {
   });
 
   describe('3. Disbursement External URL Receipt Support', () => {
-    it('validates externalUrl and receiptS3Key length up to 2000 chars in schema', () => {
-      const longUrl = 'https://drive.google.com/file/d/' + 'a'.repeat(500);
+    it('validates externalUrl and receiptS3Key length up to 500 chars in schema and rejects over 500 chars', () => {
+      // Exactly 500 characters URL
+      const prefix = 'https://drive.google.com/file/d/';
+      const valid500Url = prefix + 'a'.repeat(500 - prefix.length);
+      expect(valid500Url.length).toBe(500);
+
       const valid = createDisbursementSchema.safeParse({
         category: 'Supplies',
         description: 'Office stationery',
@@ -297,10 +304,40 @@ describe('Billing & Disbursement Adjustments Verification', () => {
         fundSource: 'Firm Fund',
         workRequestId: WR_ID,
         taskId: TASK_ID,
-        externalUrl: longUrl,
+        externalUrl: valid500Url,
         receiptFilename: 'google-drive-receipt.pdf',
       });
       expect(valid.success).toBe(true);
+
+      // Exceeds 500 characters
+      const tooLongUrl = prefix + 'a'.repeat(501 - prefix.length);
+      expect(tooLongUrl.length).toBe(501);
+      const invalidLength = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office stationery',
+        amount: 2500,
+        fundSource: 'Firm Fund',
+        workRequestId: WR_ID,
+        taskId: TASK_ID,
+        externalUrl: tooLongUrl,
+        receiptFilename: 'google-drive-receipt.pdf',
+      });
+      expect(invalidLength.success).toBe(false);
+
+      // Exceeds 500 characters in receiptS3Key
+      const tooLongKey = 'entities/ATA/receipts/' + 'x'.repeat(480);
+      expect(tooLongKey.length).toBe(502);
+      const invalidKeyLength = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office stationery',
+        amount: 2500,
+        fundSource: 'Firm Fund',
+        workRequestId: WR_ID,
+        taskId: TASK_ID,
+        receiptS3Key: tooLongKey,
+        receiptFilename: 'receipt.pdf',
+      });
+      expect(invalidKeyLength.success).toBe(false);
 
       const invalidUrl = createDisbursementSchema.safeParse({
         category: 'Supplies',
@@ -337,6 +374,220 @@ describe('Billing & Disbursement Adjustments Verification', () => {
         receiptFilename: 'receipt.pdf',
       });
       expect(missingKey.success).toBe(false);
+    });
+
+    it('rejects non-HTTP/HTTPS URLs in externalUrl or receiptS3Key in schemas', () => {
+      const baseDisb = {
+        category: 'Supplies',
+        description: 'Office stationery',
+        amount: 2500,
+        fundSource: 'Firm Fund',
+        workRequestId: WR_ID,
+        taskId: TASK_ID,
+        receiptFilename: 'receipt.pdf',
+      };
+
+      const invalidExternalUrls = [
+        'ftp://example.com/receipt.pdf',
+        'file:///home/user/receipt.pdf',
+        'mailto:billing@example.com',
+        'gopher://gopher.example.com/receipt',
+      ];
+
+      for (const invalidUrl of invalidExternalUrls) {
+        expect(createDisbursementSchema.safeParse({ ...baseDisb, externalUrl: invalidUrl }).success).toBe(false);
+        expect(updateDisbursementSchema.safeParse({ ...baseDisb, externalUrl: invalidUrl, expectedVersion: 1 }).success).toBe(false);
+      }
+
+      const invalidS3KeyUrls = [
+        'ftp://example.com/receipt.pdf',
+        'file:///home/user/receipt.pdf',
+        'gopher://gopher.example.com/receipt',
+      ];
+
+      for (const invalidUrl of invalidS3KeyUrls) {
+        // Also if passed as receiptS3Key with a non-http scheme
+        expect(createDisbursementSchema.safeParse({ ...baseDisb, receiptS3Key: invalidUrl }).success).toBe(false);
+        expect(updateDisbursementSchema.safeParse({ ...baseDisb, receiptS3Key: invalidUrl, expectedVersion: 1 }).success).toBe(false);
+      }
+    });
+
+    it('rejects conflicting receiptS3Key and externalUrl across schemas and service', async () => {
+      const conflictingData = {
+        category: 'Supplies',
+        description: 'Office stationery',
+        amount: 2500,
+        fundSource: 'Firm Fund',
+        workRequestId: WR_ID,
+        taskId: TASK_ID,
+        receiptS3Key: 'entities/ATA/receipts/receipt.pdf',
+        externalUrl: 'https://drive.google.com/receipt.pdf',
+        receiptFilename: 'receipt.pdf',
+      };
+
+      // createDisbursementSchema rejection
+      const createParsed = createDisbursementSchema.safeParse(conflictingData);
+      expect(createParsed.success).toBe(false);
+      expect(
+        createParsed.error.issues.some(
+          (i) => i.path.includes('externalUrl') && i.message.includes('Cannot provide conflicting')
+        )
+      ).toBe(true);
+
+      // updateDisbursementSchema rejection
+      const updateParsed = updateDisbursementSchema.safeParse({
+        ...conflictingData,
+        expectedVersion: 1,
+      });
+      expect(updateParsed.success).toBe(false);
+      expect(
+        updateParsed.error.issues.some(
+          (i) => i.path.includes('externalUrl') && i.message.includes('Cannot provide conflicting')
+        )
+      ).toBe(true);
+
+      // service.createDisbursement rejection
+      await expect(
+        disbursementService.createDisbursement({
+          entityId: ENT_ATA_ID,
+          entityCode: 'ATA',
+          userId: ADMIN_ID,
+          user: adminUser,
+          data: conflictingData,
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'CONFLICTING_RECEIPT_SOURCES',
+      });
+
+      // service.updateDisbursement rejection
+      const initial = await disbursementService.createDisbursement({
+        entityId: ENT_ATA_ID,
+        entityCode: 'ATA',
+        userId: ADMIN_ID,
+        user: adminUser,
+        data: {
+          category: 'Supplies',
+          description: 'Office stationery',
+          amount: 2500,
+          fundSource: 'Firm Fund',
+          workRequestId: WR_ID,
+          taskId: TASK_ID,
+        },
+      });
+
+      await expect(
+        disbursementService.updateDisbursement({
+          entityId: ENT_ATA_ID,
+          id: initial.id,
+          userId: ADMIN_ID,
+          user: adminUser,
+          data: {
+            ...conflictingData,
+            expectedVersion: initial.version,
+          },
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'CONFLICTING_RECEIPT_SOURCES',
+      });
+    });
+
+    it('falls back to receiptS3Key when externalUrl is null and claims/consumes reservation on create', async () => {
+      const s3Key = 'entities/ATA/receipts/null-fallback-create.pdf';
+      const uploadId = 'upload-null-fallback-create';
+      await reservations.createReservation({
+        uploadId,
+        objectKey: s3Key,
+        userId: ADMIN_ID,
+        entityId: ENT_ATA_ID,
+        filename: 'null-fallback.pdf',
+        byteSize: 1024,
+        mimeType: 'application/pdf',
+      });
+      await reservations.completeReservation(uploadId, {
+        userId: ADMIN_ID,
+        entityId: ENT_ATA_ID,
+      });
+
+      const created = await disbursementService.createDisbursement({
+        entityId: ENT_ATA_ID,
+        entityCode: 'ATA',
+        userId: ADMIN_ID,
+        user: adminUser,
+        data: {
+          category: 'Miscellaneous',
+          description: 'Client consultation expenses',
+          amount: 3200,
+          fundSource: 'Firm Fund',
+          workRequestId: WR_ID,
+          taskId: TASK_ID,
+          receiptS3Key: s3Key,
+          externalUrl: null,
+          receiptFilename: 'null-fallback.pdf',
+        },
+      });
+
+      expect(created.receipt_s3_key).toBe(s3Key);
+      expect(created.receipt_filename).toBe('null-fallback.pdf');
+      expect(created.external_url).toBeNull();
+      expect(created.externalUrl).toBeNull();
+
+      const reservation = await reservations.getReservation(uploadId);
+      expect(reservation.status).toBe('consumed');
+    });
+
+    it('falls back to receiptS3Key when externalUrl is null and claims/consumes reservation on update', async () => {
+      const initial = await disbursementService.createDisbursement({
+        entityId: ENT_ATA_ID,
+        entityCode: 'ATA',
+        userId: ADMIN_ID,
+        user: adminUser,
+        data: {
+          category: 'Miscellaneous',
+          description: 'Initial draft',
+          amount: 1000,
+          fundSource: 'Firm Fund',
+          workRequestId: WR_ID,
+          taskId: TASK_ID,
+        },
+      });
+
+      const s3Key = 'entities/ATA/receipts/null-fallback-update.pdf';
+      const uploadId = 'upload-null-fallback-update';
+      await reservations.createReservation({
+        uploadId,
+        objectKey: s3Key,
+        userId: ADMIN_ID,
+        entityId: ENT_ATA_ID,
+        filename: 'update-fallback.pdf',
+        byteSize: 2048,
+        mimeType: 'application/pdf',
+      });
+      await reservations.completeReservation(uploadId, {
+        userId: ADMIN_ID,
+        entityId: ENT_ATA_ID,
+      });
+
+      const updated = await disbursementService.updateDisbursement({
+        entityId: ENT_ATA_ID,
+        id: initial.id,
+        userId: ADMIN_ID,
+        user: adminUser,
+        data: {
+          receiptS3Key: s3Key,
+          externalUrl: null,
+          receiptFilename: 'update-fallback.pdf',
+          expectedVersion: initial.version,
+        },
+      });
+
+      expect(updated.receipt_s3_key).toBe(s3Key);
+      expect(updated.receipt_filename).toBe('update-fallback.pdf');
+      expect(updated.externalUrl).toBeNull();
+
+      const reservation = await reservations.getReservation(uploadId);
+      expect(reservation.status).toBe('consumed');
     });
 
     it('creates disbursement with externalUrl without claiming storage reservation', async () => {
@@ -505,6 +756,17 @@ describe('Billing & Disbursement Adjustments Verification', () => {
         contentType: 'text/html',
         expiresAt: null,
       });
+    });
+
+    it('storageService.getSignedDownloadUrl returns HTTP(S) URLs directly without Supabase storage call', async () => {
+      const httpsUrl = 'https://drive.google.com/file/d/abc123xyz/view';
+      const httpUrl = 'http://receipts.example.com/files/2026-11-invoice.pdf';
+
+      const resHttps = await actualStorageService.getSignedDownloadUrl({ path: httpsUrl });
+      expect(resHttps).toBe(httpsUrl);
+
+      const resHttp = await actualStorageService.getSignedDownloadUrl({ path: httpUrl });
+      expect(resHttp).toBe(httpUrl);
     });
   });
 });

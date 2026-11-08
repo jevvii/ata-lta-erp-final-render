@@ -76,6 +76,27 @@ const canAccountingViewDisbursement = (record, userId) => {
 
 const isExternalReceiptUrl = (val) => typeof val === 'string' && /^https?:\/\//i.test(val.trim());
 
+const resolveEffectiveReceiptKey = (data) => {
+  const s3Key =
+    typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim()
+      ? data.receiptS3Key.trim()
+      : null;
+  const extUrl =
+    typeof data.externalUrl === 'string' && data.externalUrl.trim()
+      ? data.externalUrl.trim()
+      : null;
+  if (s3Key && extUrl && s3Key !== extUrl) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail:
+        'Cannot provide conflicting receiptS3Key and externalUrl; supply either an uploaded receipt key or an external URL.',
+      code: 'CONFLICTING_RECEIPT_SOURCES',
+    });
+  }
+  return s3Key || extUrl || null;
+};
+
 /** Canonical status transitions */
 const VALID_TRANSITIONS = {
   approve: { from: ['Draft'], to: 'Approved' },
@@ -1057,14 +1078,7 @@ const createDisbursement = async ({ entityId, entityCode, userId, user, data }) 
 
   await validateReferenceScope(entityId, data, null, effectiveWrId);
 
-  const effectiveReceiptKey =
-    data.externalUrl !== undefined
-      ? data.externalUrl
-        ? data.externalUrl.trim()
-        : null
-      : data.receiptS3Key
-        ? data.receiptS3Key.trim()
-        : null;
+  const effectiveReceiptKey = resolveEffectiveReceiptKey(data);
 
   // Atomically claim receipt reservation if receiptS3Key is supplied (R4 / AC-4)
   let receiptClaim = null;
@@ -1671,12 +1685,7 @@ const updateDisbursement = async ({ entityId, id, userId, data, user, internal =
   if (data.notes !== undefined) updates.notes = data.notes;
 
   if (isReceiptKeyProvided || isReceiptFilenameProvided) {
-    const newKey =
-      data.externalUrl !== undefined
-        ? data.externalUrl
-          ? data.externalUrl.trim()
-          : null
-        : data.receiptS3Key;
+    const newKey = isReceiptKeyProvided ? resolveEffectiveReceiptKey(data) : undefined;
     const newFilename = data.receiptFilename;
 
     if (newKey && isExternalReceiptUrl(newKey)) {
@@ -2665,4 +2674,5 @@ module.exports = {
   isAccountingOnlyUser,
   canAccountingViewDisbursement,
   isExternalReceiptUrl,
+  resolveEffectiveReceiptKey,
 };
