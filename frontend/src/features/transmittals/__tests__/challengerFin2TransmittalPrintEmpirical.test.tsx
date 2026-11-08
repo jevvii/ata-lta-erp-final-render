@@ -165,7 +165,7 @@ describe('CHALLENGER FIN 2: Transmittal Print Empirical Verification Suite', () 
       expect(screen.getByText('DOCUMENT TRANSMITTAL FORM')).toBeInTheDocument();
 
       // Company Name
-      expect(screen.getByText('ATA BUSINESS CONSULTANCY SERVICES')).toBeInTheDocument();
+      expect(screen.getByText('ATA Business Consultancy Services')).toBeInTheDocument();
 
       // Verbatim Manila Address
       expect(
@@ -200,7 +200,7 @@ describe('CHALLENGER FIN 2: Transmittal Print Empirical Verification Suite', () 
       render(<TransmittalPrintModal transmittal={transmittal} isOpen={true} onClose={vi.fn()} />);
 
       // LTA Company Name
-      expect(screen.getByText('LTA BUSINESS CONSULTANCY SERVICES')).toBeInTheDocument();
+      expect(screen.getByText('LTA Business Management Corp')).toBeInTheDocument();
 
       // LTA TIN
       expect(screen.getByText('TIN: 345-678-901-000')).toBeInTheDocument();

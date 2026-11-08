@@ -140,8 +140,7 @@ export function InvoiceEditModal({
   const [dueDate, setDueDate] = useState(() =>
     invoice?.due_date ? invoice.due_date.slice(0, 10) : ''
   );
-  const [notes, setNotes] = useState(() => invoice?.notes || '');
-  const [terms, setTerms] = useState(() => invoice?.terms || '');
+  const [terms, setTerms] = useState(() => invoice?.terms || invoice?.notes || '');
   const [currentVersion, setCurrentVersion] = useState<number>(() =>
     typeof invoice?.version === 'number' && invoice.version > 0 ? invoice.version : 1
   );
@@ -231,8 +230,7 @@ export function InvoiceEditModal({
       setInvoiceNumber(invoice.invoice_number || '');
       setIssueDate(invoice.issue_date ? invoice.issue_date.slice(0, 10) : '');
       setDueDate(invoice.due_date ? invoice.due_date.slice(0, 10) : '');
-      setNotes(invoice.notes || '');
-      setTerms(invoice.terms || '');
+      setTerms(invoice.terms || invoice.notes || '');
       setCurrentVersion(
         typeof invoice.version === 'number' && invoice.version > 0 ? invoice.version : 1
       );
@@ -715,7 +713,7 @@ export function InvoiceEditModal({
       dueDate,
       lineItems: parsedLineItems,
       linkedDisbursementIds,
-      notes: notes.trim() || null,
+      notes: terms.trim() || null,
       terms: terms.trim() || null,
       expectedVersion: currentVersion,
     };
@@ -998,8 +996,9 @@ export function InvoiceEditModal({
               value={invoiceNumber}
               onChange={(e) => setInvoiceNumber(e.target.value)}
               placeholder="e.g. ATA-SI-2026-0042"
-              className="h-9 text-xs font-mono"
-              disabled={!canEditFinancials}
+              className="h-9 text-xs font-mono bg-[#F8FAFC] text-[#475569] cursor-not-allowed"
+              readOnly
+              disabled={true}
               required
               data-testid="input-edit-invoice-number"
             />
@@ -1302,38 +1301,21 @@ export function InvoiceEditModal({
           </>
         )}
         {/* 3. Notes & Terms */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E2E8F0]">
-          <div>
-            <label
-              htmlFor="edit-invoice-notes"
-              className="text-xs font-semibold text-[#1E293B] block mb-1"
-            >
-              Notes
-            </label>
-            <textarea
-              id="edit-invoice-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Notes to client..."
-              rows={2}
-              className="w-full text-xs rounded-[8px] border-[#E2E8F0] p-2 text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
-              data-testid="textarea-edit-notes"
-            />
-          </div>
+        <div className="pt-2 border-t border-[#E2E8F0]">
           <div>
             <label
               htmlFor="edit-invoice-terms"
               className="text-xs font-semibold text-[#1E293B] block mb-1"
             >
-              Payment Terms
+              NOTE
             </label>
             <textarea
               id="edit-invoice-terms"
               value={terms}
               onChange={(e) => setTerms(e.target.value)}
-              placeholder="e.g. Net 30"
+              placeholder="e.g. Payment due within 30 days..."
               rows={2}
-              disabled={!canEditFinancials}
+              disabled={!canEditFinancials && !inline}
               className="w-full text-xs rounded-[8px] border-[#E2E8F0] p-2 text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none disabled:bg-[#F8FAFC] disabled:cursor-not-allowed"
               data-testid="input-edit-terms"
             />
@@ -1353,7 +1335,7 @@ export function InvoiceEditModal({
           <Button
             type="submit"
             size="sm"
-            disabled={!canEditFinancials || Boolean(workRequestId && isTaskBlocked && selectedTaskId !== originTaskId)}
+            disabled={(!canEditFinancials && !inline) || Boolean(workRequestId && isTaskBlocked && selectedTaskId !== originTaskId)}
             className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-white shadow-2xs text-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="btn-save-invoice-edit"
           >

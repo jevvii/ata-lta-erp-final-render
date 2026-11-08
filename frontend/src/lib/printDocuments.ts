@@ -272,7 +272,7 @@ export function buildStatementDocument(
   const details = inv.print_details || {};
   const entity = inv.entity_code === 'LTA' ? 'LTA' : 'ATA';
   const companyName =
-    entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
+    entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp';
 
   const auto = getAutomaticPaymentDetails(inv.payments?.[0]);
   const dateVal = details.paymentDate ?? auto.paymentDate;
@@ -409,11 +409,9 @@ export function buildStatementDocument(
       : '') +
     `</div>`;
 
-  const notesHtml = inv.notes
-    ? `<p style="white-space:pre-wrap"><strong>Notes:</strong> ${esc(inv.notes)}</p>`
-    : '';
-  const termsHtml = inv.terms
-    ? `<p style="white-space:pre-wrap"><strong>Terms:</strong> ${esc(inv.terms)}</p>`
+  const noteText = inv.terms || inv.notes || '';
+  const noteHtml = noteText
+    ? `<p style="white-space:pre-wrap"><strong>NOTE:</strong> ${esc(noteText)}</p>`
     : '';
   return (
     headerHtml +
@@ -421,8 +419,7 @@ export function buildStatementDocument(
     itemsTableHtml +
     bottomHtml +
     vatHtml +
-    notesHtml +
-    termsHtml +
+    noteHtml +
     signaturesHtml +
     footerHtml
   );
@@ -473,7 +470,7 @@ export interface TransmittalPrintOptions {
 export function defaultTransmittalCompany(entity?: string) {
   return {
     includeCompanyDetails: true,
-    companyName: `${entity === 'LTA' ? 'LTA' : 'ATA'} BUSINESS CONSULTANCY SERVICES`,
+    companyName: entity === 'LTA' ? 'LTA Business Management Corp' : 'ATA Business Consultancy Services',
     companyAddress:
       'RM 307 Republic Supermarket Bldg,\nSoler St., cor. F.Torres St.,\nSta. Cruz, Manila',
   };

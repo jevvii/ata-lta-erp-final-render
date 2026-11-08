@@ -135,7 +135,7 @@ export function InvoiceDetailModal({
   useEffect(() => {
     if (invoice) {
       setAddressInput(invoice.address ?? invoice.clients?.address ?? '');
-      setNotesInput(invoice.notes || '');
+      setNotesInput(invoice.terms || invoice.notes || '');
     }
     setIsEditingAddress(false);
     setIsEditingNotes(false);
@@ -256,7 +256,7 @@ export function InvoiceDetailModal({
     try {
       await updateInvoiceAction(
         invoice.id,
-        { notes: notesInput, expectedVersion: invoice.version },
+        { notes: notesInput, terms: notesInput, expectedVersion: invoice.version },
         invoice.version,
         invoice.entity_id
       );
@@ -812,10 +812,10 @@ export function InvoiceDetailModal({
         )}
 
         {/* 5. Notes & Terms */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2 border-t border-[#E2E8F0]">
+        <div className="text-xs pt-2 border-t border-[#E2E8F0]">
           <div className="space-y-1">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-[#1E293B]">Invoice Notes:</span>
+              <span className="font-semibold text-[#1E293B]">NOTE:</span>
               {(canEdit || canRequest) && !isEditingNotes && (
                 <button
                   type="button"
@@ -833,7 +833,7 @@ export function InvoiceDetailModal({
                 <Input
                   value={notesInput}
                   onChange={(e) => setNotesInput(e.target.value)}
-                  placeholder="Notes..."
+                  placeholder="Note..."
                   className="h-8 text-xs"
                 />
                 <div className="flex items-center gap-1">
@@ -855,17 +855,10 @@ export function InvoiceDetailModal({
                 </div>
               </div>
             ) : (
-              <p className="text-[#475569] bg-[#F8FAFC] p-2 rounded-[8px] border-[#E2E8F0] min-h-[36px]">
-                {invoice.notes || 'No notes entered.'}
+              <p className="text-[#475569] bg-[#F8FAFC] p-2 rounded-[8px] border-[#E2E8F0] min-h-[36px] whitespace-pre-wrap">
+                {invoice.terms || invoice.notes || 'No note entered.'}
               </p>
             )}
-          </div>
-
-          <div className="space-y-1">
-            <span className="font-semibold text-[#1E293B]">Payment Terms:</span>
-            <p className="text-[#475569] bg-[#F8FAFC] p-2 rounded-[8px] border-[#E2E8F0] min-h-[36px]">
-              {invoice.terms || 'Standard 30-day payment terms apply.'}
-            </p>
           </div>
         </div>
 

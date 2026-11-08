@@ -40,7 +40,7 @@ export const DISBURSEMENT_STATUSES = [
  * Client validation schema for creating a disbursement record.
  * Strictly prohibits client-supplied initial status (Anti-Forgery Guard).
  */
-export const createDisbursementSchema = z.object({
+export const createDisbursementBaseSchema = z.object({
   category: z
     .string()
     .min(1, 'Category is required')
@@ -69,8 +69,9 @@ export const createDisbursementSchema = z.object({
   work_request_number: z.string().max(50).nullable().optional(),
   dueDate: z.string().nullable().optional(),
   notes: z.string().max(2000, 'Notes cannot exceed 2000 characters').nullable().optional(),
-  receiptS3Key: z.string().max(500, 'Receipt S3 key cannot exceed 500 characters').nullable().optional(),
+  receiptS3Key: z.string().max(2000, 'Receipt S3 key cannot exceed 2000 characters').nullable().optional(),
   receiptFilename: z.string().max(255, 'Receipt filename cannot exceed 255 characters').nullable().optional(),
+  externalUrl: z.string().url('Invalid external URL').max(2000, 'External URL cannot exceed 2000 characters').optional().nullable(),
   // Anti-forgery guard: status MUST NOT be set by the caller
   status: z
     .never({
@@ -79,10 +80,29 @@ export const createDisbursementSchema = z.object({
     .optional(),
 });
 
+export const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data, ctx) => {
+  const hasKey = Boolean(data.receiptS3Key || data.externalUrl);
+  if (data.receiptFilename && !hasKey) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'receiptS3Key or externalUrl is required when receiptFilename is provided',
+      path: ['receiptS3Key'],
+    });
+  }
+  if (hasKey && !data.receiptFilename) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'receiptFilename is required when a receipt attachment or link is provided',
+      path: ['receiptFilename'],
+    });
+  }
+});
+
 /**
  * Client validation schema for updating a disbursement.
  */
-export const updateDisbursementSchema = createDisbursementSchema.partial().extend({
+export const updateDisbursementSchema = createDisbursementBaseSchema.partial().extend({
+  externalUrl: z.string().url('Invalid external URL').max(2000, 'External URL cannot exceed 2000 characters').optional().nullable(),
   printDetails: z.object({
     requesterName: z.string().max(500).optional(), referenceNumber: z.string().max(500).optional(),
     submittedDate: z.string().max(500).optional(), workRequestName: z.string().max(500).optional(),

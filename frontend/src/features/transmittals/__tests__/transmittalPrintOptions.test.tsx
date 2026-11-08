@@ -76,7 +76,7 @@ describe('Transmittal company options and complete print manifest', () => {
     const { rerender } = render(<TransmittalPrintModal isOpen transmittal={transmittal} onClose={vi.fn()} />);
     fireEvent.change(screen.getByLabelText('Company Name'), { target: { value: 'Custom sender' } });
     rerender(<TransmittalPrintModal isOpen transmittal={{ ...transmittal, id: 'lta', entity_code: 'LTA' }} onClose={vi.fn()} />);
-    expect(screen.getByLabelText('Company Name')).toHaveValue('LTA BUSINESS CONSULTANCY SERVICES');
+    expect(screen.getByLabelText('Company Name')).toHaveValue('LTA Business Management Corp');
   });
 
   it.each(['Admin', 'Documentation'] as const)('exposes saved-content editing only to Admin (%s)', (role) => {

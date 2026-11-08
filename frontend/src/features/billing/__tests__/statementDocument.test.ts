@@ -39,11 +39,11 @@ describe('Canonical statement rendering', () => {
       }
       expect(branded).toContain(`${entity}-LOGO.jpg`);
       expect(branded).toContain(
-        entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.'
+        entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp'
       );
       expect(plain).not.toContain('<img');
-      expect(plain).not.toContain('ATA Business Consultancy');
-      expect(plain).not.toContain('LTA Business Management Corp.');
+      expect(plain).not.toContain('ATA Business Consultancy Services');
+      expect(plain).not.toContain('LTA Business Management Corp');
       expect(plain).toContain('STATEMENT');
       expect(plain).toContain('min-height:65px');
       expect(plain).toContain('Reyes &amp; Cruz');
@@ -205,5 +205,24 @@ describe('Canonical statement rendering', () => {
     expect(details.cash).toBe('');
     expect(details.checkNumber).toBe('CHK-LEGACY-ONLY');
     expect(details.bankBranch).toBe('');
+  });
+
+  it('renders consolidated NOTE section when terms or notes are provided and omits separate Notes/Terms', () => {
+    const withTerms = buildStatementDocument({
+      ...invoice,
+      terms: 'Net 30 days payable to bank.',
+      notes: 'Some secondary note.',
+    });
+    expect(withTerms).toContain('<strong>NOTE:</strong> Net 30 days payable to bank.');
+    expect(withTerms).not.toContain('<strong>Terms:</strong>');
+    expect(withTerms).not.toContain('<strong>Notes:</strong>');
+
+    const withNotesOnly = buildStatementDocument({
+      ...invoice,
+      terms: '',
+      notes: 'Please expedite delivery.',
+    });
+    expect(withNotesOnly).toContain('<strong>NOTE:</strong> Please expedite delivery.');
+    expect(withNotesOnly).not.toContain('<strong>Notes:</strong>');
   });
 });

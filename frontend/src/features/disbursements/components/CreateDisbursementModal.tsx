@@ -18,7 +18,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Upload, FileText, X, AlertCircle } from 'lucide-react';
+import { Upload, FileText, X, AlertCircle, Link as LinkIcon } from 'lucide-react';
+import { parseExternalUrl } from '@/features/documents/utils/googleDrive';
 import { useSessionStore } from '@/lib/session';
 import { DISBURSEMENT_CATEGORIES, FUND_SOURCES } from '../api/schemas';
 import {
@@ -180,6 +181,9 @@ export function CreateDisbursementModal({
   const [notes, setNotes] = useState('');
   const [receiptFilename, setReceiptFilename] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptMode, setReceiptMode] = useState<'file' | 'link'>('file');
+  const [externalUrl, setExternalUrl] = useState('');
+  const [externalFileName, setExternalFileName] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [customCategory, setCustomCategory] = useState('');
@@ -788,6 +792,17 @@ export function CreateDisbursementModal({
       }
     }
 
+    if (receiptMode === 'link' && externalUrl.trim()) {
+      try {
+        const parsed = new URL(externalUrl.trim());
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+          newErrors.receipt = 'External URL must start with http:// or https://';
+        }
+      } catch {
+        newErrors.receipt = 'Please enter a valid external URL (e.g. https://...)';
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -809,6 +824,9 @@ export function CreateDisbursementModal({
     setNotes('');
     setReceiptFile(null);
     setReceiptFilename('');
+    setReceiptMode('file');
+    setExternalUrl('');
+    setExternalFileName('');
     setUploadedReceipt(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
     setErrors({});
@@ -820,7 +838,10 @@ export function CreateDisbursementModal({
     if (!validate()) return;
 
     // Distinguish absent file selection from failed upload
-    const hasReceipt = Boolean(receiptFile || uploadedReceipt);
+    const hasReceipt =
+      receiptMode === 'link'
+        ? Boolean(externalUrl.trim())
+        : Boolean(receiptFile || uploadedReceipt);
     if (!hasReceipt) {
       setIsNoReceiptConfirmOpen(true);
       return;
@@ -856,9 +877,25 @@ export function CreateDisbursementModal({
 
     let resultingS3Key: string | null = null;
     let resultingFilename: string | null = null;
+    let resultingExternalUrl: string | null = null;
 
     try {
-      if (!bypassReceipt && (receiptFile || uploadedReceipt)) {
+      if (!bypassReceipt && receiptMode === 'link' && externalUrl.trim()) {
+        const urlStr = externalUrl.trim();
+        try {
+          const parsed = new URL(urlStr);
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            setErrors((prev) => ({ ...prev, receipt: 'External URL must start with http:// or https://' }));
+            return;
+          }
+        } catch {
+          setErrors((prev) => ({ ...prev, receipt: 'Please enter a valid external URL (e.g. https://...)' }));
+          return;
+        }
+        resultingS3Key = urlStr;
+        resultingFilename = externalFileName.trim() || 'External Receipt';
+        resultingExternalUrl = urlStr;
+      } else if (!bypassReceipt && receiptMode === 'file' && (receiptFile || uploadedReceipt)) {
         // Target entity validation before any upload network call (C1, R1, R4)
         if (activeEntity === 'ALL') {
           if (!capturedTarget.workRequestId) {
@@ -1042,6 +1079,7 @@ export function CreateDisbursementModal({
         notes: notes.trim() ? notes.trim() : null,
         receiptS3Key: resultingS3Key,
         receiptFilename: resultingS3Key !== null ? resultingFilename : null,
+        externalUrl: resultingExternalUrl,
       };
 
       creationStarted = true;
@@ -1533,91 +1571,185 @@ export function CreateDisbursementModal({
           </div>
 
           {/* Receipt Attachment */}
-          <div className="space-y-1">
-            <label className="text-xs font-semibold text-ink">Receipt Attachment</label>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-              disabled={isPending || isUploadingReceipt}
-              className="hidden"
-              onChange={(e) => {
-                if (isPending || isUploadingReceipt) return;
-                const file = e.target.files?.[0];
-                if (file) {
-                  handleSelectFile(file);
-                }
-              }}
-              data-testid="receipt-file-input"
-            />
-            <div
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onPaste={(e) => {
-                if (processClipboardData(e.clipboardData)) {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }
-              }}
-              onClick={() => {
-                if (isPending || isUploadingReceipt) return;
-                if (!receiptFile && !receiptFilename) {
-                  fileInputRef.current?.click();
-                }
-              }}
-              className={`border-2 border-dashed rounded-[6px] p-4 text-center transition-colors cursor-pointer ${
-                isDragging
-                  ? 'border-primary bg-canvas'
-                  : 'border-border hover:border-border bg-canvas/50'
-              }`}
-              data-testid="receipt-dropzone"
-            >
-              {receiptFile || receiptFilename ? (
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 truncate">
-                    <FileText className="h-4 w-4 text-ink shrink-0" />
-                    <span
-                      className="text-xs font-medium text-ink truncate"
-                      data-testid="receipt-attached-filename"
-                    >
-                      {receiptFile?.name || receiptFilename}
-                    </span>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={isPending || isUploadingReceipt}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (isPending || isUploadingReceipt) return;
-                      setReceiptFile(null);
-                      setReceiptFilename('');
-                      setUploadedReceipt(null);
-                      if (fileInputRef.current) fileInputRef.current.value = '';
-                      setErrors((prev) => {
-                        const copy = { ...prev };
-                        delete copy.receipt;
-                        return copy;
-                      });
-                    }}
-                    className="h-6 w-6 p-0 text-muted hover:text-muted cursor-pointer"
-                    data-testid="remove-receipt-btn"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-2">
-                  <Upload className="h-6 w-6 text-muted mb-1" />
-                  <p className="text-xs font-medium text-ink">
-                    Drag and drop receipt here, or browse
-                  </p>
-                  <p className="text-xs text-muted mt-0.5">PDF, PNG, JPG up to 10MB</p>
-                </div>
-              )}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-ink">Receipt Attachment</label>
+              <div className="flex items-center gap-1 bg-surface border border-border rounded p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setReceiptMode('file')}
+                  disabled={isPending || isUploadingReceipt}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                    receiptMode === 'file'
+                      ? 'bg-primary text-white font-semibold'
+                      : 'text-muted hover:text-ink'
+                  }`}
+                  data-testid="receipt-mode-file-btn"
+                >
+                  <Upload className="h-3 w-3" />
+                  File Upload
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReceiptMode('link')}
+                  disabled={isPending || isUploadingReceipt}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer flex items-center gap-1 ${
+                    receiptMode === 'link'
+                      ? 'bg-primary text-white font-semibold'
+                      : 'text-muted hover:text-ink'
+                  }`}
+                  data-testid="receipt-mode-link-btn"
+                >
+                  <LinkIcon className="h-3 w-3" />
+                  External Link
+                </button>
+              </div>
             </div>
+
+            {receiptMode === 'file' ? (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+                  disabled={isPending || isUploadingReceipt}
+                  className="hidden"
+                  onChange={(e) => {
+                    if (isPending || isUploadingReceipt) return;
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      handleSelectFile(file);
+                    }
+                  }}
+                  data-testid="receipt-file-input"
+                />
+                <div
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onPaste={(e) => {
+                    if (processClipboardData(e.clipboardData)) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }
+                  }}
+                  onClick={() => {
+                    if (isPending || isUploadingReceipt) return;
+                    if (!receiptFile && !receiptFilename) {
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  className={`border-2 border-dashed rounded-[6px] p-4 text-center transition-colors cursor-pointer ${
+                    isDragging
+                      ? 'border-primary bg-canvas'
+                      : 'border-border hover:border-border bg-canvas/50'
+                  }`}
+                  data-testid="receipt-dropzone"
+                >
+                  {receiptFile || receiptFilename ? (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 truncate">
+                        <FileText className="h-4 w-4 text-ink shrink-0" />
+                        <span
+                          className="text-xs font-medium text-ink truncate"
+                          data-testid="receipt-attached-filename"
+                        >
+                          {receiptFile?.name || receiptFilename}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={isPending || isUploadingReceipt}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isPending || isUploadingReceipt) return;
+                          setReceiptFile(null);
+                          setReceiptFilename('');
+                          setUploadedReceipt(null);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                          setErrors((prev) => {
+                            const copy = { ...prev };
+                            delete copy.receipt;
+                            return copy;
+                          });
+                        }}
+                        className="h-6 w-6 p-0 text-muted hover:text-muted cursor-pointer"
+                        data-testid="remove-receipt-btn"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-2">
+                      <Upload className="h-6 w-6 text-muted mb-1" />
+                      <p className="text-xs font-medium text-ink">
+                        Drag and drop receipt here, or browse
+                      </p>
+                      <p className="text-xs text-muted mt-0.5">PDF, PNG, JPG up to 10MB</p>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="space-y-2.5 p-3 rounded-[6px] border border-border bg-canvas/50">
+                <div className="space-y-1">
+                  <label htmlFor="disbursement-external-url" className="text-xs font-medium text-ink">
+                    External URL
+                  </label>
+                  <Input
+                    id="disbursement-external-url"
+                    type="url"
+                    value={externalUrl}
+                    onChange={(e) => {
+                      const nextUrl = e.target.value;
+                      setExternalUrl(nextUrl);
+                      if (errors.receipt) {
+                        setErrors((prev) => {
+                          const copy = { ...prev };
+                          delete copy.receipt;
+                          return copy;
+                        });
+                      }
+                      if (nextUrl.trim()) {
+                        const parsed = parseExternalUrl(nextUrl, externalFileName);
+                        if (parsed.isGoogleDrive && !externalFileName.trim()) {
+                          setExternalFileName('Google Drive Receipt');
+                        }
+                      }
+                    }}
+                    placeholder="https://drive.google.com/file/d/..."
+                    className="h-8 text-xs bg-surface"
+                    data-testid="disbursement-external-url-input"
+                  />
+                  {externalUrl.trim() && parseExternalUrl(externalUrl).isGoogleDrive && (
+                    <div
+                      className="flex items-center gap-1.5 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded p-1.5"
+                      data-testid="gdrive-preview-badge"
+                    >
+                      <span>Google Drive link detected — will be configured for inline preview</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <label htmlFor="disbursement-external-name" className="text-xs font-medium text-ink">
+                    Receipt / Document Name
+                  </label>
+                  <Input
+                    id="disbursement-external-name"
+                    type="text"
+                    value={externalFileName}
+                    onChange={(e) => setExternalFileName(e.target.value)}
+                    placeholder="e.g., Official Receipt - BIR"
+                    className="h-8 text-xs bg-surface"
+                    data-testid="disbursement-external-name-input"
+                  />
+                </div>
+              </div>
+            )}
+
             {errors.receipt && (
               <span className="text-xs text-red-600 block mt-1" data-testid="error-receipt">
                 {errors.receipt}
