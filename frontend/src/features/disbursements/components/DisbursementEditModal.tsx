@@ -321,19 +321,23 @@ export function DisbursementEditModal({
           payload.externalUrl = null;
         } else if (receiptMode === 'link') {
           if (externalUrl.trim()) {
+            if (externalUrl.trim().length > 500) {
+              setError('External URL cannot exceed 500 characters');
+              return;
+            }
             try {
               const parsed = new URL(externalUrl.trim());
               if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-                setError('External URL must start with http:// or https://');
+                setError('External receipt URL must use http:// or https://');
                 return;
               }
             } catch {
               setError('Please enter a valid external URL (e.g. https://...)');
               return;
             }
-            payload.receiptS3Key = externalUrl.trim();
             payload.externalUrl = externalUrl.trim();
             payload.receiptFilename = receiptFilename.trim() || 'External Receipt';
+            delete payload.receiptS3Key;
           } else {
             payload.receiptS3Key = null;
             payload.receiptFilename = null;
@@ -353,7 +357,7 @@ export function DisbursementEditModal({
           if (isStale()) return;
           payload.receiptS3Key = uploadResult.receiptS3Key;
           payload.receiptFilename = uploadResult.receiptFilename;
-          payload.externalUrl = null;
+          delete payload.externalUrl;
         }
       }
 

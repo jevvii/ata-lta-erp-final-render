@@ -36,6 +36,15 @@ export const DISBURSEMENT_STATUSES = [
   'Cancelled',
 ] as const;
 
+const httpExternalUrlSchema = z
+  .string()
+  .trim()
+  .url('Invalid external URL')
+  .max(500, 'External URL cannot exceed 500 characters')
+  .refine((val) => /^https?:\/\//i.test(val), {
+    message: 'External receipt URL must use http:// or https://',
+  });
+
 /**
  * Client validation schema for creating a disbursement record.
  * Strictly prohibits client-supplied initial status (Anti-Forgery Guard).
@@ -69,9 +78,9 @@ export const createDisbursementBaseSchema = z.object({
   work_request_number: z.string().max(50).nullable().optional(),
   dueDate: z.string().nullable().optional(),
   notes: z.string().max(2000, 'Notes cannot exceed 2000 characters').nullable().optional(),
-  receiptS3Key: z.string().max(2000, 'Receipt S3 key cannot exceed 2000 characters').nullable().optional(),
+  receiptS3Key: z.string().max(500, 'Receipt S3 key cannot exceed 500 characters').nullable().optional(),
   receiptFilename: z.string().max(255, 'Receipt filename cannot exceed 255 characters').nullable().optional(),
-  externalUrl: z.string().url('Invalid external URL').max(2000, 'External URL cannot exceed 2000 characters').optional().nullable(),
+  externalUrl: httpExternalUrlSchema.optional().nullable(),
   // Anti-forgery guard: status MUST NOT be set by the caller
   status: z
     .never({
@@ -81,7 +90,18 @@ export const createDisbursementBaseSchema = z.object({
 });
 
 export const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data, ctx) => {
-  const hasKey = Boolean(data.receiptS3Key || data.externalUrl);
+  const s3Key = typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim() ? data.receiptS3Key.trim() : null;
+  const extUrl = typeof data.externalUrl === 'string' && data.externalUrl.trim() ? data.externalUrl.trim() : null;
+
+  if (s3Key && extUrl && s3Key !== extUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cannot provide conflicting receiptS3Key and externalUrl',
+      path: ['externalUrl'],
+    });
+  }
+
+  const hasKey = Boolean(s3Key || extUrl);
   if (data.receiptFilename && !hasKey) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -101,18 +121,41 @@ export const createDisbursementSchema = createDisbursementBaseSchema.superRefine
 /**
  * Client validation schema for updating a disbursement.
  */
-export const updateDisbursementSchema = createDisbursementBaseSchema.partial().extend({
-  externalUrl: z.string().url('Invalid external URL').max(2000, 'External URL cannot exceed 2000 characters').optional().nullable(),
-  printDetails: z.object({
-    requesterName: z.string().max(500).optional(), referenceNumber: z.string().max(500).optional(),
-    submittedDate: z.string().max(500).optional(), workRequestName: z.string().max(500).optional(),
-    paymentDate: z.string().max(500).optional(), paymentMethod: z.string().max(500).optional(),
-    paymentReference: z.string().max(500).optional(), paymentBank: z.string().max(500).optional(),
-    preparedBy: z.string().max(500).optional(), approvedBy: z.string().max(500).optional(), releasedBy: z.string().max(500).optional(),
-  }).strict().optional(),
-  archived: z.boolean().optional(),
-  expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
-});
+export const updateDisbursementSchema = createDisbursementBaseSchema
+  .partial()
+  .extend({
+    externalUrl: httpExternalUrlSchema.optional().nullable(),
+    printDetails: z
+      .object({
+        requesterName: z.string().max(500).optional(),
+        referenceNumber: z.string().max(500).optional(),
+        submittedDate: z.string().max(500).optional(),
+        workRequestName: z.string().max(500).optional(),
+        paymentDate: z.string().max(500).optional(),
+        paymentMethod: z.string().max(500).optional(),
+        paymentReference: z.string().max(500).optional(),
+        paymentBank: z.string().max(500).optional(),
+        preparedBy: z.string().max(500).optional(),
+        approvedBy: z.string().max(500).optional(),
+        releasedBy: z.string().max(500).optional(),
+      })
+      .strict()
+      .optional(),
+    archived: z.boolean().optional(),
+    expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
+  })
+  .superRefine((data, ctx) => {
+    const s3Key = typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim() ? data.receiptS3Key.trim() : null;
+    const extUrl = typeof data.externalUrl === 'string' && data.externalUrl.trim() ? data.externalUrl.trim() : null;
+
+    if (s3Key && extUrl && s3Key !== extUrl) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Cannot provide conflicting receiptS3Key and externalUrl',
+        path: ['externalUrl'],
+      });
+    }
+  });
 
 /**
  * Client validation schema for rejecting a disbursement.

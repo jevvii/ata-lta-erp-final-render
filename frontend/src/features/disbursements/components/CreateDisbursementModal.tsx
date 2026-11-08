@@ -793,13 +793,17 @@ export function CreateDisbursementModal({
     }
 
     if (receiptMode === 'link' && externalUrl.trim()) {
-      try {
-        const parsed = new URL(externalUrl.trim());
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-          newErrors.receipt = 'External URL must start with http:// or https://';
+      if (externalUrl.trim().length > 500) {
+        newErrors.receipt = 'External URL cannot exceed 500 characters';
+      } else {
+        try {
+          const parsed = new URL(externalUrl.trim());
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            newErrors.receipt = 'External receipt URL must use http:// or https://';
+          }
+        } catch {
+          newErrors.receipt = 'Please enter a valid external URL (e.g. https://...)';
         }
-      } catch {
-        newErrors.receipt = 'Please enter a valid external URL (e.g. https://...)';
       }
     }
 
@@ -882,17 +886,21 @@ export function CreateDisbursementModal({
     try {
       if (!bypassReceipt && receiptMode === 'link' && externalUrl.trim()) {
         const urlStr = externalUrl.trim();
+        if (urlStr.length > 500) {
+          setErrors((prev) => ({ ...prev, receipt: 'External URL cannot exceed 500 characters' }));
+          return;
+        }
         try {
           const parsed = new URL(urlStr);
           if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-            setErrors((prev) => ({ ...prev, receipt: 'External URL must start with http:// or https://' }));
+            setErrors((prev) => ({ ...prev, receipt: 'External receipt URL must use http:// or https://' }));
             return;
           }
         } catch {
           setErrors((prev) => ({ ...prev, receipt: 'Please enter a valid external URL (e.g. https://...)' }));
           return;
         }
-        resultingS3Key = urlStr;
+        resultingS3Key = null;
         resultingFilename = externalFileName.trim() || 'External Receipt';
         resultingExternalUrl = urlStr;
       } else if (!bypassReceipt && receiptMode === 'file' && (receiptFile || uploadedReceipt)) {
@@ -1077,9 +1085,23 @@ export function CreateDisbursementModal({
         employeeId: currentUser?.id || null, // Locked to session user
         dueDate: dueDate ? dueDate : null,
         notes: notes.trim() ? notes.trim() : null,
-        receiptS3Key: resultingS3Key,
-        receiptFilename: resultingS3Key !== null ? resultingFilename : null,
-        externalUrl: resultingExternalUrl,
+        ...(resultingExternalUrl
+          ? {
+              externalUrl: resultingExternalUrl,
+              receiptFilename: resultingFilename,
+              receiptS3Key: undefined,
+            }
+          : resultingS3Key
+          ? {
+              receiptS3Key: resultingS3Key,
+              receiptFilename: resultingFilename,
+              externalUrl: undefined,
+            }
+          : {
+              receiptS3Key: null,
+              receiptFilename: null,
+              externalUrl: undefined,
+            }),
       };
 
       creationStarted = true;

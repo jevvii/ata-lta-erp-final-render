@@ -306,8 +306,8 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
       fireEvent.click(screen.getByTestId('submit-create-disbursement-btn'));
 
       await waitFor(() => expect(createdPayload).not.toBeNull());
-      expect(createdPayload!.receiptS3Key).toBe('https://drive.google.com/file/d/1234567890abcdef/view?usp=sharing');
       expect(createdPayload!.externalUrl).toBe('https://drive.google.com/file/d/1234567890abcdef/view?usp=sharing');
+      expect(createdPayload!.receiptS3Key).toBeUndefined();
       expect(createdPayload!.receiptFilename).toBe('BIR Official Receipt 2026');
     });
   });
@@ -362,8 +362,8 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
       fireEvent.click(screen.getByTestId('save-disbursement-edit'));
 
       await waitFor(() => expect(patchedPayload).not.toBeNull());
-      expect(patchedPayload!.receiptS3Key).toBe('https://example.com/receipt.pdf');
       expect(patchedPayload!.externalUrl).toBe('https://example.com/receipt.pdf');
+      expect(patchedPayload!.receiptS3Key).toBeUndefined();
       expect(patchedPayload!.receiptFilename).toBe('Scanned Vendor Invoice');
     });
   });
