@@ -473,9 +473,10 @@ export function TaskDetailModal({
   };
 
   const checklistReady = !isTaskError && !isTaskPlaceholder && liveTask?.id === task?.id && Array.isArray(liveTask?.checklist);
+  const isChecklistLoading = !checklistReady && (isTaskFetching || isTaskPlaceholder);
   const uncheckedChecklistCount = task?.checklist?.filter((item) => !item.completed).length ?? 0;
-  const checklistCompletionBlocked = !checklistReady || isTaskFetching || updateMutation.isPending || uncheckedChecklistCount > 0;
-  const checklistCompletionReason = !checklistReady || isTaskFetching
+  const checklistCompletionBlocked = !checklistReady || updateMutation.isPending || uncheckedChecklistCount > 0;
+  const checklistCompletionReason = !checklistReady
     ? 'Wait for the checklist to load successfully before completing this task.'
     : updateMutation.isPending
       ? 'Wait for checklist changes to finish saving.'
@@ -1160,11 +1161,6 @@ export function TaskDetailModal({
                   </Button>
                 </div>
               )}
-
-              {/* Task ID pill */}
-              <span className="font-mono text-[11px] font-medium text-[#64748B] bg-[#F1F5F9] px-2 py-0.5 rounded border border-[#E2E8F0] tabular-nums hidden sm:inline-block">
-                ID: {task.id.slice(0, 8)}
-              </span>
             </div>
           </DialogHeader>
 
@@ -1436,8 +1432,8 @@ export function TaskDetailModal({
                 items={task.checklist || []}
                 canEdit={canEditChecklist}
                 canComplete={canCompleteChecklist}
-                ready={!isTaskError && !isTaskPlaceholder && liveTask?.id === task.id && Array.isArray(liveTask.checklist)}
-                loading={isTaskFetching || isTaskPlaceholder}
+                ready={checklistReady}
+                loading={isChecklistLoading}
                 loadError={isTaskError}
                 disabled={isPhaseBlocked}
                 disabledReason={isPhaseBlocked ? phaseBlockedTooltip : undefined}
@@ -1878,7 +1874,7 @@ export function TaskDetailModal({
               {/* Top Group */}
               <div className="space-y-4">
                 {/* Blocker alert if completion is blocked */}
-                {task.status !== 'Completed' && canMutateStatus && (isPhaseBlocked || isPrereqBlocked || checklistCompletionBlocked) && (
+                {task.status !== 'Completed' && canMutateStatus && (isPhaseBlocked || isPrereqBlocked || (checklistReady && uncheckedChecklistCount > 0)) && (
                   <div className="text-[11px] text-[#92400E] bg-[#FFFBEB] border border-[#FDE68A] rounded-lg p-2.5 flex items-start gap-1.5 leading-snug">
                     <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#B45309] mt-0.5" />
                     <span>

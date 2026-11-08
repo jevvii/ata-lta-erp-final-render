@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { useSessionStore } from '@/lib/session';
@@ -763,6 +763,64 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
       const teamList = screen.getByTestId('assigned-team-list');
       expect(within(teamList).getByText('Unassigned')).toBeInTheDocument();
       expect(within(teamList).getByText('?')).toBeInTheDocument();
+    });
+
+    it('does not display top-right ID pill in DialogHeader and does not lock Mark Completed on background refetch', async () => {
+      let resolveSecondFetch: (val: unknown) => void = () => {};
+      let fetchCount = 0;
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/operations/work-requests/wr-888/tasks/task-777')) {
+          fetchCount++;
+          if (fetchCount === 1) {
+            return new Response(JSON.stringify({
+              data: { ...mockTask, checklist: [] },
+            }), { status: 200 });
+          }
+          // Subsequent fetch (simulating 8-second background poll)
+          await new Promise((resolve) => { resolveSecondFetch = resolve; });
+          return new Response(JSON.stringify({
+            data: { ...mockTask, checklist: [] },
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={{ ...mockTask, checklist: [] }}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // 1. Verify DialogHeader does not contain top-right "ID: ..." pill
+      const headerControls = screen.getByTestId('task-status-badge').parentElement?.parentElement;
+      expect(headerControls).not.toHaveTextContent(/ID:\s*task/i);
+
+      // 2. Initial load succeeds and Mark Completed is enabled
+      const markCompletedBtn = await screen.findByRole('button', { name: 'Mark Completed' });
+      await waitFor(() => expect(markCompletedBtn).toBeEnabled());
+
+      // 3. Trigger a background refetch (simulating the 8-second interval poll)
+      act(() => {
+        void queryClient.invalidateQueries({
+          queryKey: operationsKeys.taskDetail('wr-888', mockTask.id),
+        });
+      });
+
+      // While the background refetch is pending (isFetching === true), Mark Completed must NOT be disabled
+      // and "Wait for the checklist to load successfully" must NOT be displayed
+      expect(markCompletedBtn).toBeEnabled();
+      expect(screen.queryByText(/Wait for the checklist to load successfully/i)).not.toBeInTheDocument();
+
+      // Resolve the background refetch
+      resolveSecondFetch(null);
+      await waitFor(() => expect(markCompletedBtn).toBeEnabled());
+      expect(screen.queryByText(/Wait for the checklist to load successfully/i)).not.toBeInTheDocument();
     });
   });
 });
