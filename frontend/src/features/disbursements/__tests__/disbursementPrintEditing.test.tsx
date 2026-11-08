@@ -91,15 +91,15 @@ describe('Voucher print and admin edit controls', () => {
     fireEvent.click(screen.getByTestId('disbursement-generic-option'));
     expect(screen.queryByAltText('ATA Logo')).not.toBeInTheDocument();
     expect(screen.getByTestId('disbursement-a4-sheet')).toHaveTextContent(
-      'ATA Business Consultancy'
+      'ATA Business Consultancy Services'
     );
     fireEvent.click(screen.getByTestId('disbursement-company-option'));
     expect(screen.getByTestId('disbursement-a4-sheet')).not.toHaveTextContent(
-      'ATA Business Consultancy'
+      'ATA Business Consultancy Services'
     );
     fireEvent.click(screen.getByTestId('print-disbursement-button'));
     await waitFor(() => expect(print).toHaveBeenCalledOnce());
-    expect(write.mock.calls[0]![0]).not.toContain('ATA Business Consultancy');
+    expect(write.mock.calls[0]![0]).not.toContain('ATA Business Consultancy Services');
     open.mockReturnValue(popup as unknown as Window);
     fireEvent.click(screen.getByTestId('download-disbursement-pdf'));
     await waitFor(() => expect(popup.location.href).toBe('https://example.test/voucher.pdf'));

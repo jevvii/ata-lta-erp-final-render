@@ -164,7 +164,18 @@ export function DisbursementDetailBody({
     item?.receipt_filename ||
       item?.receiptFilename ||
       item?.receipt_s3_key ||
-      item?.receiptS3Key
+      item?.receiptS3Key ||
+      item?.external_url ||
+      item?.externalUrl
+  );
+  const isExternalReceipt = /^https?:\/\//i.test(
+    String(
+      item?.external_url ||
+        item?.externalUrl ||
+        item?.receipt_s3_key ||
+        item?.receiptS3Key ||
+        ''
+    ).trim()
   );
 
   const [activeTab, setActiveTab] = useState<DisbursementDetailTab>(() =>
@@ -213,7 +224,8 @@ export function DisbursementDetailBody({
       isOpen &&
       Boolean(item?.id) &&
       canFetchChildren &&
-      hasReceipt,
+      hasReceipt &&
+      !isExternalReceipt,
     entity: item?.entity_code || (item as unknown as { entityCode?: string })?.entityCode || undefined,
   });
 
@@ -649,9 +661,9 @@ export function DisbursementDetailBody({
                 {/* Tab 1: Attachment */}
                 <TabsContent value="attachment" data-testid="tab-content-attachment" className={cn(isDocked ? "mt-0 flex-1 min-h-0 overflow-y-auto flex flex-col p-1.5 data-[state=inactive]:hidden" : "mt-4 space-y-3 data-[state=inactive]:hidden")}>
                   <ReceiptViewer
-                    key={`${item.id}:${item.receipt_s3_key || item.receiptS3Key || item.receipt_filename || item.receiptFilename || ''}`}
+                    key={`${item.id}:${item.receipt_s3_key || item.receiptS3Key || item.external_url || item.externalUrl || item.receipt_filename || item.receiptFilename || ''}`}
                     receiptFileName={item.receipt_filename || item.receiptFilename}
-                    receiptS3Key={item.receipt_s3_key || item.receiptS3Key}
+                    receiptS3Key={item.receipt_s3_key || item.receiptS3Key || item.external_url || item.externalUrl}
                     receiptData={receiptData}
                     isLoadingReceipt={isLoadingReceipt}
                     isFetchingReceipt={isFetchingReceipt}

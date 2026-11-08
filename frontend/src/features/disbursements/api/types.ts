@@ -134,6 +134,8 @@ export interface Disbursement {
   receiptS3Key?: string | null;
   receipt_filename?: string | null;
   receiptFilename?: string | null;
+  external_url?: string | null;
+  externalUrl?: string | null;
   archived?: boolean;
   archived_at?: string | null;
   archivedAt?: string | null;
@@ -362,6 +364,8 @@ export interface CreateDisbursementInput {
   notes?: string | null;
   receiptS3Key?: string | null;
   receiptFilename?: string | null;
+  external_url?: string | null;
+  externalUrl?: string | null;
   /** Anti-forgery compile-time guard: explicitly forbidden */
   status?: never;
 }
@@ -391,6 +395,8 @@ export interface UpdateDisbursementInput {
   notes?: string | null;
   receiptS3Key?: string | null;
   receiptFilename?: string | null;
+  external_url?: string | null;
+  externalUrl?: string | null;
   archived?: boolean;
   expectedVersion?: number;
 }
@@ -502,6 +508,8 @@ export interface ReceiptUrlData {
   filename?: string;
   contentType?: string;
   expiresAt?: string;
+  isExternal?: boolean;
+  externalUrl?: string | null;
 }
 
 /**

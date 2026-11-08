@@ -1088,7 +1088,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       const { unmount } = render(
         <TransmittalPrintModal isOpen={true} onClose={vi.fn()} transmittal={baseTransmittal} />
       );
-      expect(screen.getByText('ATA BUSINESS CONSULTANCY SERVICES')).toBeInTheDocument();
+      expect(screen.getByText('ATA Business Consultancy Services')).toBeInTheDocument();
       expect(screen.getByText('TIN: 234-567-890-000')).toBeInTheDocument();
       unmount();
 
@@ -1100,7 +1100,7 @@ describe('CHALLENGER FIN 1 — Adversarial Stress Harness for Milestone 1 (W2-FI
       render(
         <TransmittalPrintModal isOpen={true} onClose={vi.fn()} transmittal={ltaTransmittal} />
       );
-      expect(screen.getByText('LTA BUSINESS CONSULTANCY SERVICES')).toBeInTheDocument();
+      expect(screen.getByText('LTA Business Management Corp')).toBeInTheDocument();
       expect(screen.getByText('TIN: 345-678-901-000')).toBeInTheDocument();
     });
 

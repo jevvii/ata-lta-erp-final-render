@@ -36,11 +36,76 @@ export const DISBURSEMENT_STATUSES = [
   'Cancelled',
 ] as const;
 
+const httpExternalUrlSchema = z
+  .string()
+  .trim()
+  .url('Invalid external URL')
+  .max(500, 'External URL cannot exceed 500 characters')
+  .refine((val) => /^https?:\/\//i.test(val), {
+    message: 'External receipt URL must use http:// or https://',
+  })
+  .refine(
+    (val) => {
+      try {
+        const u = new URL(val);
+        return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname);
+      } catch {
+        return false;
+      }
+    },
+    {
+      message: 'External receipt URL must be a valid http:// or https:// URL',
+    }
+  );
+
+export const validateReceiptFieldSources = (
+  data: { receiptS3Key?: string | null; externalUrl?: string | null },
+  ctx: z.RefinementCtx
+) => {
+  const s3Key =
+    typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim()
+      ? data.receiptS3Key.trim()
+      : null;
+  const extUrl =
+    typeof data.externalUrl === 'string' && data.externalUrl.trim()
+      ? data.externalUrl.trim()
+      : null;
+
+  if (s3Key && extUrl && s3Key !== extUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cannot provide conflicting receiptS3Key and externalUrl',
+      path: ['externalUrl'],
+    });
+  }
+
+  if (s3Key && /^[a-z][a-z0-9+.-]*:/i.test(s3Key)) {
+    if (!/^https?:\/\//i.test(s3Key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'External receipt URL must use http:// or https://',
+        path: ['receiptS3Key'],
+      });
+    } else {
+      const parseResult = httpExternalUrlSchema.safeParse(s3Key);
+      if (!parseResult.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'External receipt URL must be a valid http:// or https:// URL',
+          path: ['receiptS3Key'],
+        });
+      }
+    }
+  }
+
+  return { s3Key, extUrl, effectiveKey: s3Key || extUrl };
+};
+
 /**
  * Client validation schema for creating a disbursement record.
  * Strictly prohibits client-supplied initial status (Anti-Forgery Guard).
  */
-export const createDisbursementSchema = z.object({
+export const createDisbursementBaseSchema = z.object({
   category: z
     .string()
     .min(1, 'Category is required')
@@ -71,6 +136,7 @@ export const createDisbursementSchema = z.object({
   notes: z.string().max(2000, 'Notes cannot exceed 2000 characters').nullable().optional(),
   receiptS3Key: z.string().max(500, 'Receipt S3 key cannot exceed 500 characters').nullable().optional(),
   receiptFilename: z.string().max(255, 'Receipt filename cannot exceed 255 characters').nullable().optional(),
+  externalUrl: httpExternalUrlSchema.optional().nullable(),
   // Anti-forgery guard: status MUST NOT be set by the caller
   status: z
     .never({
@@ -79,20 +145,55 @@ export const createDisbursementSchema = z.object({
     .optional(),
 });
 
+export const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data, ctx) => {
+  const { s3Key, extUrl } = validateReceiptFieldSources(data, ctx);
+
+  const hasKey = Boolean(s3Key || extUrl);
+  if (data.receiptFilename && !hasKey) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'receiptS3Key or externalUrl is required when receiptFilename is provided',
+      path: ['receiptS3Key'],
+    });
+  }
+  if (hasKey && !data.receiptFilename) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'receiptFilename is required when a receipt attachment or link is provided',
+      path: ['receiptFilename'],
+    });
+  }
+});
+
 /**
  * Client validation schema for updating a disbursement.
  */
-export const updateDisbursementSchema = createDisbursementSchema.partial().extend({
-  printDetails: z.object({
-    requesterName: z.string().max(500).optional(), referenceNumber: z.string().max(500).optional(),
-    submittedDate: z.string().max(500).optional(), workRequestName: z.string().max(500).optional(),
-    paymentDate: z.string().max(500).optional(), paymentMethod: z.string().max(500).optional(),
-    paymentReference: z.string().max(500).optional(), paymentBank: z.string().max(500).optional(),
-    preparedBy: z.string().max(500).optional(), approvedBy: z.string().max(500).optional(), releasedBy: z.string().max(500).optional(),
-  }).strict().optional(),
-  archived: z.boolean().optional(),
-  expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
-});
+export const updateDisbursementSchema = createDisbursementBaseSchema
+  .partial()
+  .extend({
+    externalUrl: httpExternalUrlSchema.optional().nullable(),
+    printDetails: z
+      .object({
+        requesterName: z.string().max(500).optional(),
+        referenceNumber: z.string().max(500).optional(),
+        submittedDate: z.string().max(500).optional(),
+        workRequestName: z.string().max(500).optional(),
+        paymentDate: z.string().max(500).optional(),
+        paymentMethod: z.string().max(500).optional(),
+        paymentReference: z.string().max(500).optional(),
+        paymentBank: z.string().max(500).optional(),
+        preparedBy: z.string().max(500).optional(),
+        approvedBy: z.string().max(500).optional(),
+        releasedBy: z.string().max(500).optional(),
+      })
+      .strict()
+      .optional(),
+    archived: z.boolean().optional(),
+    expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
+  })
+  .superRefine((data, ctx) => {
+    validateReceiptFieldSources(data, ctx);
+  });
 
 /**
  * Client validation schema for rejecting a disbursement.

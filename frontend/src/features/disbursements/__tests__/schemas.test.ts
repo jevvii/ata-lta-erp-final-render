@@ -120,9 +120,153 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
         amount: 100,
         fundSource: 'Firm Fund',
         linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
       };
       const result = createDisbursementSchema.safeParse(longDescription);
       expect(result.success).toBe(false);
+    });
+
+    it('rejects externalUrl exceeding 500 characters', () => {
+      const longUrl = 'https://example.com/' + 'a'.repeat(490);
+      const result = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund',
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        externalUrl: longUrl,
+        receiptFilename: 'receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('External URL cannot exceed 500 characters'))).toBe(true);
+      }
+    });
+
+    it('rejects receiptS3Key exceeding 500 characters', () => {
+      const longKey = 'disbursements/' + 'x'.repeat(490);
+      const result = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund',
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        receiptS3Key: longKey,
+        receiptFilename: 'receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('Receipt S3 key cannot exceed 500 characters'))).toBe(true);
+      }
+    });
+
+    it('rejects non-HTTP/HTTPS externalUrl protocol', () => {
+      const result = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund',
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        externalUrl: 'ftp://example.com/receipt.pdf',
+        receiptFilename: 'receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('External receipt URL must use http:// or https://'))).toBe(true);
+      }
+    });
+
+    it('rejects conflicting non-empty receiptS3Key and externalUrl', () => {
+      const result = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund',
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        receiptS3Key: 'disbursements/receipt.pdf',
+        externalUrl: 'https://example.com/receipt.pdf',
+        receiptFilename: 'receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('Cannot provide conflicting receiptS3Key and externalUrl'))).toBe(true);
+      }
+    });
+
+    it('rejects malformed URLs or non-HTTP(S) schemes passed via receiptS3Key', () => {
+      const basePayload = {
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund' as const,
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        receiptFilename: 'receipt.pdf',
+      };
+
+      // Non-HTTP(S) scheme
+      const ftpResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'ftp://files.example.com/a.pdf',
+      });
+      expect(ftpResult.success).toBe(false);
+      if (!ftpResult.success) {
+        expect(
+          ftpResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must use http:// or https://' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: incomplete scheme 'https://'
+      const incompleteResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'https://',
+      });
+      expect(incompleteResult.success).toBe(false);
+      if (!incompleteResult.success) {
+        expect(
+          incompleteResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: spaces in host/path 'http://not a valid url'
+      const invalidUrlResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'http://not a valid url',
+      });
+      expect(invalidUrlResult.success).toBe(false);
+      if (!invalidUrlResult.success) {
+        expect(
+          invalidUrlResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+    });
+
+    it('accepts valid externalUrl with receiptFilename', () => {
+      const result = createDisbursementSchema.safeParse({
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund',
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        externalUrl: 'https://drive.google.com/file/d/12345/view',
+        receiptFilename: 'Google Drive Receipt',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.externalUrl).toBe('https://drive.google.com/file/d/12345/view');
+        expect(result.data.receiptFilename).toBe('Google Drive Receipt');
+      }
     });
   });
 
@@ -144,6 +288,105 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
         expectedVersion: -1,
       };
       expect(updateDisbursementSchema.safeParse(invalidVersion).success).toBe(false);
+    });
+
+    it('rejects externalUrl exceeding 500 characters', () => {
+      const longUrl = 'https://example.com/' + 'a'.repeat(490);
+      const result = updateDisbursementSchema.safeParse({
+        externalUrl: longUrl,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('External URL cannot exceed 500 characters'))).toBe(true);
+      }
+    });
+
+    it('rejects receiptS3Key exceeding 500 characters', () => {
+      const longKey = 'disbursements/' + 'x'.repeat(490);
+      const result = updateDisbursementSchema.safeParse({
+        receiptS3Key: longKey,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('Receipt S3 key cannot exceed 500 characters'))).toBe(true);
+      }
+    });
+
+    it('rejects non-HTTP/HTTPS externalUrl protocol', () => {
+      const result = updateDisbursementSchema.safeParse({
+        externalUrl: 'ftp://example.com/receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('External receipt URL must use http:// or https://'))).toBe(true);
+      }
+    });
+
+    it('rejects conflicting non-empty receiptS3Key and externalUrl', () => {
+      const result = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'disbursements/receipt.pdf',
+        externalUrl: 'https://example.com/receipt.pdf',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some((i) => i.message.includes('Cannot provide conflicting receiptS3Key and externalUrl'))).toBe(true);
+      }
+    });
+
+    it('rejects malformed URLs or non-HTTP(S) schemes passed via receiptS3Key', () => {
+      // Non-HTTP(S) scheme
+      const ftpResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'ftp://files.example.com/a.pdf',
+      });
+      expect(ftpResult.success).toBe(false);
+      if (!ftpResult.success) {
+        expect(
+          ftpResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must use http:// or https://' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: incomplete scheme 'https://'
+      const incompleteResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'https://',
+      });
+      expect(incompleteResult.success).toBe(false);
+      if (!incompleteResult.success) {
+        expect(
+          incompleteResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: spaces in host/path 'http://not a valid url'
+      const invalidUrlResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'http://not a valid url',
+      });
+      expect(invalidUrlResult.success).toBe(false);
+      if (!invalidUrlResult.success) {
+        expect(
+          invalidUrlResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+    });
+
+    it('accepts valid externalUrl or clearing receipt with nulls', () => {
+      const updateLink = updateDisbursementSchema.safeParse({
+        externalUrl: 'https://example.com/receipt.pdf',
+        receiptFilename: 'Receipt.pdf',
+      });
+      expect(updateLink.success).toBe(true);
+
+      const clearReceipt = updateDisbursementSchema.safeParse({
+        receiptS3Key: null,
+        externalUrl: null,
+        receiptFilename: null,
+      });
+      expect(clearReceipt.success).toBe(true);
     });
   });
 

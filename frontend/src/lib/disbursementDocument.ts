@@ -216,7 +216,7 @@ export function buildDisbursementDocument(
 ): string {
   const entity = (d.entity_code || d.entityCode) === 'LTA' ? 'LTA' : 'ATA';
   const company =
-    entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
+    entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp';
   const includeCompany = options.includeCompanyDetails !== false;
   const details = getDisbursementPrintDetails(d);
   const formatAmount = (n: number): string =>
