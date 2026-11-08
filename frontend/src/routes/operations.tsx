@@ -217,8 +217,8 @@ export default function OperationsPage() {
     const resolvedCode =
       tpl.entity === 'LTA' || tpl.entity === 'ATA'
         ? tpl.entity
-        : (tpl as any).entities?.code === 'LTA' || (tpl as any).entities?.code === 'ATA'
-          ? (tpl as any).entities.code
+        : tpl.entities?.code === 'LTA' || tpl.entities?.code === 'ATA'
+          ? tpl.entities.code
           : resolveEntityCodeFromUUID(tpl.entity_id) || 'ATA';
 
     return {
@@ -245,8 +245,8 @@ export default function OperationsPage() {
     const resolvedCode =
       editingOtherTemplate.entity === 'LTA' || editingOtherTemplate.entity === 'ATA'
         ? editingOtherTemplate.entity
-        : (editingOtherTemplate as any).entities?.code === 'LTA' || (editingOtherTemplate as any).entities?.code === 'ATA'
-          ? (editingOtherTemplate as any).entities.code
+        : editingOtherTemplate.entities?.code === 'LTA' || editingOtherTemplate.entities?.code === 'ATA'
+          ? editingOtherTemplate.entities.code
           : resolveEntityCodeFromUUID(editingOtherTemplate.entity_id) || 'ATA';
 
     return {

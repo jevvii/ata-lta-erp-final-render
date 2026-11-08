@@ -592,12 +592,14 @@ export default function DisbursementsPage() {
               setDetailCollapsed(false);
               try {
                 localStorage.setItem('disb.detailCollapsed', 'false');
-              } catch {}
+              } catch {
+                // Storage may be unavailable; the expanded pane remains in state.
+              }
             }
             const isPendingApprovalMatch =
               activeTab === 'pending-approvals' &&
               isAdmin &&
-              Boolean(created.reviewReady ?? (created as any).review_ready);
+              Boolean(created.reviewReady ?? created.review_ready);
             if (activeTab !== 'all' && activeTab !== 'drafts' && !isPendingApprovalMatch) {
               handleTabChange('all');
             }

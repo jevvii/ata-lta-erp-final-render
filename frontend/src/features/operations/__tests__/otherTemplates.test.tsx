@@ -555,6 +555,19 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       });
     });
 
+    it('does not offer another signed-in user a saved template draft', async () => {
+      localStorage.clear();
+      const { wrapper } = createHarness();
+      const first = render(<OtherTemplateModal isOpen template={null} onClose={vi.fn()} />, { wrapper });
+      fireEvent.change(screen.getByTestId('other-template-title-input'), { target: { value: 'Private account draft' } });
+      await waitFor(() => expect(['erp_other_template_draft_new', `erp_other_template_draft_new:${useSessionStore.getState().user?.id}`].some((key) => localStorage.getItem(key)?.includes('Private account draft'))).toBe(true), { timeout: 2500 });
+      first.unmount();
+      const previous = useSessionStore.getState();
+      useSessionStore.getState().setSession({ user: { ...previous.user!, id: 'another-admin-user' }, permissions: previous.permissions, activeEntity: previous.activeEntity });
+      render(<OtherTemplateModal isOpen template={null} onClose={vi.fn()} />, { wrapper });
+      expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
+    });
+
     it('saves draft to localStorage, displays draft-restore-banner on reopen, restores, discards, and prevents pointer-down dismissal', async () => {
       localStorage.clear();
       const { wrapper } = createHarness();
@@ -578,7 +591,7 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       // Wait for 1000ms debounce
       await waitFor(
         () => {
-          const stored = localStorage.getItem('erp_other_template_draft_new');
+          const stored = localStorage.getItem(`erp_other_template_draft_new:${useSessionStore.getState().user?.id}`);
           expect(stored).not.toBeNull();
           expect(stored).toContain('Draft Other Template Autosave');
         },
@@ -613,7 +626,7 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
       fireEvent.click(screen.getByTestId('discard-draft-btn'));
       expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
-      expect(localStorage.getItem('erp_other_template_draft_new')).toBeNull();
+      expect(localStorage.getItem(`erp_other_template_draft_new:${useSessionStore.getState().user?.id}`)).toBeNull();
       expect(screen.getByTestId('other-template-title-input')).toHaveValue('');
     });
 

@@ -685,7 +685,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
     // Wait for 1000ms debounce
     await waitFor(
       () => {
-        const stored = localStorage.getItem('erp_retainer_template_draft_new');
+        const stored = localStorage.getItem(`erp_retainer_template_draft_new:${useSessionStore.getState().user?.id}`);
         expect(stored).not.toBeNull();
         expect(stored).toContain('Draft Retainer Persistence Test');
       },
@@ -718,7 +718,7 @@ describe('Retainer Template Generation & Team Scoping Parity (Requirement R2)', 
     expect(screen.getByTestId('draft-restore-banner')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('discard-draft-btn'));
     expect(screen.queryByTestId('draft-restore-banner')).not.toBeInTheDocument();
-    expect(localStorage.getItem('erp_retainer_template_draft_new')).toBeNull();
+    expect(localStorage.getItem(`erp_retainer_template_draft_new:${useSessionStore.getState().user?.id}`)).toBeNull();
     expect(screen.getByTestId('template-name-input')).toHaveValue('');
   });
 

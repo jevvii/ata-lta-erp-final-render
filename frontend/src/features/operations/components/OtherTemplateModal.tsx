@@ -57,13 +57,20 @@ export interface OtherTemplateModalProps {
   onSuccess?: () => void;
 }
 
-export function OtherTemplateModal({
+export function OtherTemplateModal(props: OtherTemplateModalProps) {
+  const userId = useSessionStore((state) => state.user?.id);
+  return <OtherTemplateForm key={userId || 'signed-out'} {...props} />;
+}
+
+function OtherTemplateForm({
   template,
   isOpen,
   onClose,
   onSuccess,
 }: OtherTemplateModalProps) {
   const activeEntity = useSessionStore((state) => state.activeEntity);
+  const draftUserId = useSessionStore((state) => state.user?.id);
+  const draftStorageKey = `${DRAFT_STORAGE_KEY}:${draftUserId || 'signed-out'}`;
   const user = useSessionStore((state) => state.user);
   const canEditRetainers = usePermission('retainers:edit') || user?.role === 'Admin';
   const { createTemplate, updateTemplate, isPending } = useRetainerMutations();
@@ -115,8 +122,8 @@ export function OtherTemplateModal({
       const resolvedCode =
         template.entity === 'LTA' || template.entity === 'ATA'
           ? template.entity
-          : (template as any).entities?.code === 'LTA' || (template as any).entities?.code === 'ATA'
-            ? (template as any).entities.code
+          : template.entities?.code === 'LTA' || template.entities?.code === 'ATA'
+            ? template.entities.code
             : resolveEntityCodeFromUUID(template.entity_id) || 'ATA';
       setEntity(resolvedCode === 'LTA' ? 'LTA' : 'ATA');
       setTasks(
@@ -135,13 +142,13 @@ export function OtherTemplateModal({
     } else {
       // New template creation: check for existing draft
       try {
-        const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+        const saved = localStorage.getItem(draftStorageKey);
         if (saved) {
           const parsed = JSON.parse(saved);
           const hasContent = Boolean(
             parsed.title?.trim() ||
             parsed.description?.trim() ||
-            (parsed.tasks && parsed.tasks.some((t: any) => t.title?.trim() || (t.checklist && t.checklist.length > 0)))
+            (parsed.tasks && parsed.tasks.some((t: RetainerTemplateTask) => t.title?.trim() || (t.checklist && t.checklist.length > 0)))
           );
           if (hasContent) {
             setHasDraftBanner(true);
@@ -169,12 +176,12 @@ export function OtherTemplateModal({
         setErrors({});
       }
     }
-  }, [isOpen, templateId]);
+  }, [isOpen, templateId, draftStorageKey]);
 
   // Draft apply & discard
   const applyDraft = () => {
     try {
-      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+      const saved = localStorage.getItem(draftStorageKey);
       if (saved) {
         const parsed: OtherTemplateDraft = JSON.parse(saved);
         if (parsed.title !== undefined) setTitle(parsed.title);
@@ -191,7 +198,7 @@ export function OtherTemplateModal({
 
   const discardDraft = () => {
     try {
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(draftStorageKey);
     } catch {
       // ignore
     }
@@ -227,7 +234,7 @@ export function OtherTemplateModal({
           tasks,
           updatedAt: new Date().toISOString(),
         };
-        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        localStorage.setItem(draftStorageKey, JSON.stringify(draft));
         setHasDraftBanner(false);
       } catch {
         // ignore
@@ -235,7 +242,7 @@ export function OtherTemplateModal({
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [isOpen, isEditing, isDirty, hasDraftBanner, title, description, entity, tasks]);
+  }, [isOpen, isEditing, isDirty, hasDraftBanner, title, description, entity, tasks, draftStorageKey]);
 
   // Task Helpers
   const addTaskRow = () => {
@@ -475,7 +482,7 @@ export function OtherTemplateModal({
       } else {
         await createTemplate(payload);
         try {
-          localStorage.removeItem(DRAFT_STORAGE_KEY);
+          localStorage.removeItem(draftStorageKey);
         } catch {
           // ignore
         }

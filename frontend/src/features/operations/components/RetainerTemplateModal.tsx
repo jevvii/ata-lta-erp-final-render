@@ -75,7 +75,12 @@ interface RetainerTemplateDraft {
   updatedAt?: string;
 }
 
-export function RetainerTemplateModal({
+export function RetainerTemplateModal(props: RetainerTemplateModalProps) {
+  const userId = useSessionStore((state) => state.user?.id);
+  return <RetainerTemplateForm key={userId || 'signed-out'} {...props} />;
+}
+
+function RetainerTemplateForm({
   template,
   isOpen,
   onClose,
@@ -85,6 +90,8 @@ export function RetainerTemplateModal({
   const canEditRetainers = usePermission('retainers:edit');
   const { createTemplate, updateTemplate } = useRetainerMutations();
   const activeEntity = useSessionStore((s) => s.activeEntity);
+  const draftUserId = useSessionStore((state) => state.user?.id);
+  const draftStorageKey = `${DRAFT_STORAGE_KEY}:${draftUserId || 'signed-out'}`;
 
   const isEditing = Boolean(template);
   const templateId = template?.id;
@@ -114,7 +121,7 @@ export function RetainerTemplateModal({
   // Client query scoped to template's entity
   const { data: clientsData = [] } = useClients({ entity }, { enabled: isOpen });
   const clients: ClientSummary[] = useMemo(() => {
-    const rawList = Array.isArray(clientsData) ? clientsData : (clientsData as any)?.items ?? [];
+    const rawList = Array.isArray(clientsData) ? clientsData : [];
     return rawList.filter((c: ClientSummary) => !c.entity || c.entity === entity);
   }, [clientsData, entity]);
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
@@ -179,7 +186,7 @@ export function RetainerTemplateModal({
     } else {
       // New template creation: check for existing draft
       try {
-        const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+        const saved = localStorage.getItem(draftStorageKey);
         if (saved) {
           const parsed = JSON.parse(saved);
           const hasContent = Boolean(
@@ -187,7 +194,7 @@ export function RetainerTemplateModal({
             parsed.description?.trim() ||
             parsed.clientId ||
             parsed.pfAmount ||
-            (parsed.tasks && parsed.tasks.some((t: any) => t.title?.trim() || (t.checklist && t.checklist.length > 0)))
+            (parsed.tasks && parsed.tasks.some((t: RetainerTemplateTask) => t.title?.trim() || (t.checklist && t.checklist.length > 0)))
           );
           if (hasContent) {
             setHasDraftBanner(true);
@@ -223,12 +230,12 @@ export function RetainerTemplateModal({
         setErrors({});
       }
     }
-  }, [isOpen, templateId]);
+  }, [isOpen, templateId, draftStorageKey]);
 
   // Draft apply & discard
   const applyDraft = () => {
     try {
-      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+      const saved = localStorage.getItem(draftStorageKey);
       if (saved) {
         const parsed: RetainerTemplateDraft = JSON.parse(saved);
         if (parsed.name !== undefined) setName(parsed.name);
@@ -250,7 +257,7 @@ export function RetainerTemplateModal({
 
   const discardDraft = () => {
     try {
-      localStorage.removeItem(DRAFT_STORAGE_KEY);
+      localStorage.removeItem(draftStorageKey);
     } catch {
       // ignore
     }
@@ -299,7 +306,7 @@ export function RetainerTemplateModal({
           tasks,
           updatedAt: new Date().toISOString(),
         };
-        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        localStorage.setItem(draftStorageKey, JSON.stringify(draft));
         setHasDraftBanner(false);
       } catch {
         // ignore
@@ -321,6 +328,7 @@ export function RetainerTemplateModal({
     pfAmount,
     recurrence,
     tasks,
+    draftStorageKey,
   ]);
 
   // Task Helpers
@@ -543,7 +551,7 @@ export function RetainerTemplateModal({
           }
           const res = await createTemplate(payload);
           try {
-            localStorage.removeItem(DRAFT_STORAGE_KEY);
+            localStorage.removeItem(draftStorageKey);
           } catch {
             // ignore
           }
@@ -555,7 +563,7 @@ export function RetainerTemplateModal({
 
       if (!isEditing) {
         try {
-          localStorage.removeItem(DRAFT_STORAGE_KEY);
+          localStorage.removeItem(draftStorageKey);
         } catch {
           // ignore
         }

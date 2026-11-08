@@ -141,8 +141,8 @@ export function OtherTemplateGenerateModal({
   const selectedTemplateEntity = useMemo(() => {
     if (!selectedTemplate) return null;
     if (selectedTemplate.entity === 'ATA' || selectedTemplate.entity === 'LTA') return selectedTemplate.entity;
-    if ((selectedTemplate as any).entities?.code === 'ATA' || (selectedTemplate as any).entities?.code === 'LTA') {
-      return (selectedTemplate as any).entities.code;
+    if (selectedTemplate.entities?.code === 'ATA' || selectedTemplate.entities?.code === 'LTA') {
+      return selectedTemplate.entities.code;
     }
     return resolveEntityCodeFromUUID(selectedTemplate.entity_id);
   }, [selectedTemplate]);
@@ -191,10 +191,10 @@ export function OtherTemplateGenerateModal({
             : Array.isArray(t.defaultAssignees) && t.defaultAssignees.length > 0
             ? t.defaultAssignees
             : [
-                (t as any).assigneeId,
-                (t as any).assigned_to,
-                ...(Array.isArray((t as any).coAssignees) ? (t as any).coAssignees : []),
-                ...(Array.isArray((t as any).co_assignees) ? (t as any).co_assignees : []),
+                t.assigneeId,
+                t.assigned_to,
+                ...(Array.isArray(t.coAssignees) ? t.coAssignees : []),
+                ...(Array.isArray(t.co_assignees) ? t.co_assignees : []),
               ].filter((id): id is string => typeof id === 'string' && Boolean(id));
 
         const dependsOn =
