@@ -402,6 +402,7 @@ describe('Billing & Disbursement Adjustments Verification', () => {
       const invalidS3KeyUrls = [
         'ftp://example.com/receipt.pdf',
         'file:///home/user/receipt.pdf',
+        'mailto:billing@example.com',
         'gopher://gopher.example.com/receipt',
       ];
 
@@ -409,6 +410,107 @@ describe('Billing & Disbursement Adjustments Verification', () => {
         // Also if passed as receiptS3Key with a non-http scheme
         expect(createDisbursementSchema.safeParse({ ...baseDisb, receiptS3Key: invalidUrl }).success).toBe(false);
         expect(updateDisbursementSchema.safeParse({ ...baseDisb, receiptS3Key: invalidUrl, expectedVersion: 1 }).success).toBe(false);
+      }
+    });
+
+    it('rejects malformed HTTP(S) strings in receiptS3Key across schemas and service', async () => {
+      const baseDisb = {
+        category: 'Supplies',
+        description: 'Office stationery',
+        amount: 2500,
+        fundSource: 'Firm Fund',
+        workRequestId: WR_ID,
+        taskId: TASK_ID,
+        receiptFilename: 'receipt.pdf',
+      };
+
+      const malformedHttpUrls = [
+        'https://',
+        'http://',
+        'https://not a valid url',
+        'http://not a valid url',
+      ];
+
+      // Initial draft for updateDisbursement tests
+      const draftDisb = await disbursementService.createDisbursement({
+        entityId: ENT_ATA_ID,
+        entityCode: 'ATA',
+        userId: ADMIN_ID,
+        user: adminUser,
+        data: {
+          category: 'Supplies',
+          description: 'Office supplies for malformed url test',
+          amount: 1200,
+          fundSource: 'Firm Fund',
+          workRequestId: WR_ID,
+          taskId: TASK_ID,
+        },
+      });
+
+      for (const malformedUrl of malformedHttpUrls) {
+        // Zod createDisbursementSchema rejection with specific error message
+        const createParsed = createDisbursementSchema.safeParse({
+          ...baseDisb,
+          receiptS3Key: malformedUrl,
+        });
+        expect(createParsed.success).toBe(false);
+        expect(
+          createParsed.error.issues.some(
+            (i) =>
+              i.path.includes('receiptS3Key') &&
+              i.message.includes('External receipt URL must be a valid http:// or https:// URL')
+          )
+        ).toBe(true);
+
+        // Zod updateDisbursementSchema rejection with specific error message
+        const updateParsed = updateDisbursementSchema.safeParse({
+          ...baseDisb,
+          receiptS3Key: malformedUrl,
+          expectedVersion: 1,
+        });
+        expect(updateParsed.success).toBe(false);
+        expect(
+          updateParsed.error.issues.some(
+            (i) =>
+              i.path.includes('receiptS3Key') &&
+              i.message.includes('External receipt URL must be a valid http:// or https:// URL')
+          )
+        ).toBe(true);
+
+        // service.createDisbursement rejection
+        await expect(
+          disbursementService.createDisbursement({
+            entityId: ENT_ATA_ID,
+            entityCode: 'ATA',
+            userId: ADMIN_ID,
+            user: adminUser,
+            data: {
+              ...baseDisb,
+              receiptS3Key: malformedUrl,
+            },
+          })
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          code: 'INVALID_RECEIPT_URL',
+        });
+
+        // service.updateDisbursement rejection
+        await expect(
+          disbursementService.updateDisbursement({
+            entityId: ENT_ATA_ID,
+            id: draftDisb.id,
+            userId: ADMIN_ID,
+            user: adminUser,
+            data: {
+              receiptS3Key: malformedUrl,
+              receiptFilename: 'receipt.pdf',
+              expectedVersion: draftDisb.version,
+            },
+          })
+        ).rejects.toMatchObject({
+          statusCode: 400,
+          code: 'INVALID_RECEIPT_URL',
+        });
       }
     });
 

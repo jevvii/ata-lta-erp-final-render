@@ -41,7 +41,20 @@ const httpExternalUrlSchema = z
   .max(500, 'External URL cannot exceed 500 characters')
   .refine((val) => /^https?:\/\//i.test(val), {
     message: 'External receipt URL must use http:// or https://',
-  });
+  })
+  .refine(
+    (val) => {
+      try {
+        const u = new URL(val);
+        return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname);
+      } catch {
+        return false;
+      }
+    },
+    {
+      message: 'External receipt URL must be a valid http:// or https:// URL',
+    }
+  );
 
 const validateReceiptFieldSources = (data, ctx) => {
   const s3Key =
@@ -62,16 +75,32 @@ const validateReceiptFieldSources = (data, ctx) => {
     });
   }
 
-  if (
-    s3Key &&
-    /^[a-z][a-z0-9+.-]*:\/\//i.test(s3Key) &&
-    !/^https?:\/\//i.test(s3Key)
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'External receipt URL must use http:// or https://',
-      path: ['receiptS3Key'],
-    });
+  if (s3Key && (/^[a-z][a-z0-9+.-]*:/i.test(s3Key) || /^https?:\/\//i.test(s3Key))) {
+    if (!/^https?:\/\//i.test(s3Key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'External receipt URL must use http:// or https://',
+        path: ['receiptS3Key'],
+      });
+    } else {
+      const parsed = httpExternalUrlSchema.safeParse(s3Key);
+      let validHostname = false;
+      if (parsed.success) {
+        try {
+          const u = new URL(s3Key);
+          validHostname = Boolean(u.hostname);
+        } catch {
+          validHostname = false;
+        }
+      }
+      if (!parsed.success || !validHostname) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'External receipt URL must be a valid http:// or https:// URL',
+          path: ['receiptS3Key'],
+        });
+      }
+    }
   }
 
   return { s3Key, extUrl, effectiveKey: s3Key || extUrl };

@@ -74,7 +74,17 @@ const canAccountingViewDisbursement = (record, userId) => {
   );
 };
 
-const isExternalReceiptUrl = (val) => typeof val === 'string' && /^https?:\/\//i.test(val.trim());
+const isExternalReceiptUrl = (val) => {
+  if (typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  try {
+    const u = new URL(trimmed);
+    return Boolean((u.protocol === 'http:' || u.protocol === 'https:') && u.hostname);
+  } catch {
+    return false;
+  }
+};
 
 const resolveEffectiveReceiptKey = (data) => {
   const s3Key =
@@ -85,6 +95,7 @@ const resolveEffectiveReceiptKey = (data) => {
     typeof data.externalUrl === 'string' && data.externalUrl.trim()
       ? data.externalUrl.trim()
       : null;
+
   if (s3Key && extUrl && s3Key !== extUrl) {
     throw new AppError({
       statusCode: 400,
@@ -94,6 +105,25 @@ const resolveEffectiveReceiptKey = (data) => {
       code: 'CONFLICTING_RECEIPT_SOURCES',
     });
   }
+
+  if (s3Key && /^[a-z][a-z0-9+.-]*:/i.test(s3Key) && !isExternalReceiptUrl(s3Key)) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: 'External receipt URL must be a valid http:// or https:// URL.',
+      code: 'INVALID_RECEIPT_URL',
+    });
+  }
+
+  if (extUrl && !isExternalReceiptUrl(extUrl)) {
+    throw new AppError({
+      statusCode: 400,
+      title: 'Validation Error',
+      detail: 'External receipt URL must be a valid http:// or https:// URL.',
+      code: 'INVALID_RECEIPT_URL',
+    });
+  }
+
   return s3Key || extUrl || null;
 };
 
