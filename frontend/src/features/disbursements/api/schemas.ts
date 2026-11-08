@@ -43,7 +43,63 @@ const httpExternalUrlSchema = z
   .max(500, 'External URL cannot exceed 500 characters')
   .refine((val) => /^https?:\/\//i.test(val), {
     message: 'External receipt URL must use http:// or https://',
-  });
+  })
+  .refine(
+    (val) => {
+      try {
+        const u = new URL(val);
+        return (u.protocol === 'http:' || u.protocol === 'https:') && Boolean(u.hostname);
+      } catch {
+        return false;
+      }
+    },
+    {
+      message: 'External receipt URL must be a valid http:// or https:// URL',
+    }
+  );
+
+export const validateReceiptFieldSources = (
+  data: { receiptS3Key?: string | null; externalUrl?: string | null },
+  ctx: z.RefinementCtx
+) => {
+  const s3Key =
+    typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim()
+      ? data.receiptS3Key.trim()
+      : null;
+  const extUrl =
+    typeof data.externalUrl === 'string' && data.externalUrl.trim()
+      ? data.externalUrl.trim()
+      : null;
+
+  if (s3Key && extUrl && s3Key !== extUrl) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cannot provide conflicting receiptS3Key and externalUrl',
+      path: ['externalUrl'],
+    });
+  }
+
+  if (s3Key && /^[a-z][a-z0-9+.-]*:/i.test(s3Key)) {
+    if (!/^https?:\/\//i.test(s3Key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'External receipt URL must use http:// or https://',
+        path: ['receiptS3Key'],
+      });
+    } else {
+      const parseResult = httpExternalUrlSchema.safeParse(s3Key);
+      if (!parseResult.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'External receipt URL must be a valid http:// or https:// URL',
+          path: ['receiptS3Key'],
+        });
+      }
+    }
+  }
+
+  return { s3Key, extUrl, effectiveKey: s3Key || extUrl };
+};
 
 /**
  * Client validation schema for creating a disbursement record.
@@ -90,16 +146,7 @@ export const createDisbursementBaseSchema = z.object({
 });
 
 export const createDisbursementSchema = createDisbursementBaseSchema.superRefine((data, ctx) => {
-  const s3Key = typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim() ? data.receiptS3Key.trim() : null;
-  const extUrl = typeof data.externalUrl === 'string' && data.externalUrl.trim() ? data.externalUrl.trim() : null;
-
-  if (s3Key && extUrl && s3Key !== extUrl) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Cannot provide conflicting receiptS3Key and externalUrl',
-      path: ['externalUrl'],
-    });
-  }
+  const { s3Key, extUrl } = validateReceiptFieldSources(data, ctx);
 
   const hasKey = Boolean(s3Key || extUrl);
   if (data.receiptFilename && !hasKey) {
@@ -145,16 +192,7 @@ export const updateDisbursementSchema = createDisbursementBaseSchema
     expectedVersion: z.number().int().positive('Expected version must be a positive integer').optional(),
   })
   .superRefine((data, ctx) => {
-    const s3Key = typeof data.receiptS3Key === 'string' && data.receiptS3Key.trim() ? data.receiptS3Key.trim() : null;
-    const extUrl = typeof data.externalUrl === 'string' && data.externalUrl.trim() ? data.externalUrl.trim() : null;
-
-    if (s3Key && extUrl && s3Key !== extUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Cannot provide conflicting receiptS3Key and externalUrl',
-        path: ['externalUrl'],
-      });
-    }
+    validateReceiptFieldSources(data, ctx);
   });
 
 /**

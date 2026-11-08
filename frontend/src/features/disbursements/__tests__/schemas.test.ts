@@ -197,6 +197,60 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       }
     });
 
+    it('rejects malformed URLs or non-HTTP(S) schemes passed via receiptS3Key', () => {
+      const basePayload = {
+        category: 'Supplies',
+        description: 'Office supplies',
+        amount: 500,
+        fundSource: 'Firm Fund' as const,
+        linkedWorkRequestId: validUuid,
+        linkedTaskId: validUuid,
+        receiptFilename: 'receipt.pdf',
+      };
+
+      // Non-HTTP(S) scheme
+      const ftpResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'ftp://files.example.com/a.pdf',
+      });
+      expect(ftpResult.success).toBe(false);
+      if (!ftpResult.success) {
+        expect(
+          ftpResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must use http:// or https://' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: incomplete scheme 'https://'
+      const incompleteResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'https://',
+      });
+      expect(incompleteResult.success).toBe(false);
+      if (!incompleteResult.success) {
+        expect(
+          incompleteResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: spaces in host/path 'http://not a valid url'
+      const invalidUrlResult = createDisbursementSchema.safeParse({
+        ...basePayload,
+        receiptS3Key: 'http://not a valid url',
+      });
+      expect(invalidUrlResult.success).toBe(false);
+      if (!invalidUrlResult.success) {
+        expect(
+          invalidUrlResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+    });
+
     it('accepts valid externalUrl with receiptFilename', () => {
       const result = createDisbursementSchema.safeParse({
         category: 'Supplies',
@@ -276,6 +330,47 @@ describe('Disbursements Zod Validation Schemas (disbursements@2.0.0)', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues.some((i) => i.message.includes('Cannot provide conflicting receiptS3Key and externalUrl'))).toBe(true);
+      }
+    });
+
+    it('rejects malformed URLs or non-HTTP(S) schemes passed via receiptS3Key', () => {
+      // Non-HTTP(S) scheme
+      const ftpResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'ftp://files.example.com/a.pdf',
+      });
+      expect(ftpResult.success).toBe(false);
+      if (!ftpResult.success) {
+        expect(
+          ftpResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must use http:// or https://' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: incomplete scheme 'https://'
+      const incompleteResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'https://',
+      });
+      expect(incompleteResult.success).toBe(false);
+      if (!incompleteResult.success) {
+        expect(
+          incompleteResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
+      }
+
+      // Malformed URL: spaces in host/path 'http://not a valid url'
+      const invalidUrlResult = updateDisbursementSchema.safeParse({
+        receiptS3Key: 'http://not a valid url',
+      });
+      expect(invalidUrlResult.success).toBe(false);
+      if (!invalidUrlResult.success) {
+        expect(
+          invalidUrlResult.error.issues.some(
+            (i) => i.message === 'External receipt URL must be a valid http:// or https:// URL' && i.path.includes('receiptS3Key')
+          )
+        ).toBe(true);
       }
     });
 
