@@ -492,7 +492,7 @@ describe('Billing Presence & Optimistic Concurrency Control (Milestone 4 / Parce
       const editNotesBtn = screen.getByTestId('edit-notes-btn');
       fireEvent.click(editNotesBtn);
 
-      const notesInput = screen.getByPlaceholderText('Notes...');
+      const notesInput = screen.getByPlaceholderText('Note...');
       fireEvent.change(notesInput, { target: { value: 'Conflicting notes edit' } });
 
       const saveNotesBtn = screen.getByText('Save');

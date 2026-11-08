@@ -235,6 +235,7 @@ describe('Disbursements Data Layer & Zero Optimistic Updates Doctrine', () => {
       const initialRecord = {
         id: 'disb-1',
         description: 'Original expense description',
+        entity: 'ATA',
         amount: 450,
         status: 'Draft',
         version: 1,
@@ -323,6 +324,7 @@ describe('Disbursements Data Layer & Zero Optimistic Updates Doctrine', () => {
       const initialRecord = {
         id: 'disb-1',
         status: 'Pending',
+        entity: 'ATA',
         version: 1,
       };
       const approvedRecord = {
