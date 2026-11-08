@@ -847,4 +847,31 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(mockTables.retainer_templates.get(templateId).entity_id).toBe('ent-lta');
     });
   });
+  describe('Entity authorization on template writes', () => {
+    let ataOnly;
+    beforeEach(() => {
+      ataOnly = registerUser({ email: 'ata-only-manager@test.invalid', role: 'Manager', departments: ['Management'], entities: ['ATA'] });
+    });
+    it('denies an explicit target entity outside the caller entitlement on create', async () => {
+      await request(app).post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${ataOnly}`).set('X-Active-Entity', 'ATA')
+        .send({ name: 'Foreign template', entity: 'LTA', templateType: 'other', tasks: [{ title: 'Foreign task', phase: 'pre_processing' }] }).expect(403);
+      expect(mockTables.retainer_templates.size).toBe(0);
+    });
+    it('denies moving a template into an unauthorized target entity', async () => {
+      mockTables.retainer_templates.set('tpl-own', { id: 'tpl-own', entity_id: 'ent-ata', name: 'Own template', template_type: 'other' });
+      await request(app).put('/v1/operations/templates/tpl-own')
+        .set('Authorization', `Bearer ${ataOnly}`).set('X-Active-Entity', 'ATA')
+        .send({ name: 'Moved', entity: 'LTA' }).expect(403);
+      expect(mockTables.retainer_templates.get('tpl-own').entity_id).toBe('ent-ata');
+    });
+    it('does not allow claiming another entity template by moving it into the caller entity', async () => {
+      mockTables.retainer_templates.set('tpl-foreign', { id: 'tpl-foreign', entity_id: 'ent-lta', name: 'Foreign', template_type: 'other' });
+      await request(app).put('/v1/operations/templates/tpl-foreign')
+        .set('Authorization', `Bearer ${ataOnly}`).set('X-Active-Entity', 'ATA')
+        .send({ name: 'Claimed', entity: 'ATA' }).expect(404);
+      expect(mockTables.retainer_templates.get('tpl-foreign').name).toBe('Foreign');
+    });
+  });
+
 });

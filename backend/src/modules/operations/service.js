@@ -3649,18 +3649,15 @@ const listRetainerTemplates = async ({ entityId, type, user }) => {
   );
 };
 
-const createRetainerTemplate = async ({ entityId, userId, data }) => {
+const createRetainerTemplate = async ({ entityId, userId, data, user }) => {
   const templateType = data.templateType || data.template_type || 'retainer';
   const isOther = templateType === 'other';
 
-  let targetEntityId = entityId;
-  if (data.entity) {
-    try {
-      targetEntityId = await resolveEntityId(data.entity);
-    } catch {
-      targetEntityId = entityId;
-    }
+  const targetEntityId = data.entity ? await resolveEntityId(data.entity) : entityId;
+  if (!(await isUserEntitledToEntity(targetEntityId, user))) {
+    throw new AppError({ statusCode: 403, title: 'Forbidden', detail: 'No access to the template target entity' });
   }
+  await validateWorkRequestClientEntity(data.clientId || data.client_id, targetEntityId);
 
   const row = {
     entity_id: targetEntityId,
@@ -3700,7 +3697,14 @@ const createRetainerTemplate = async ({ entityId, userId, data }) => {
   };
 };
 
-const updateRetainerTemplate = async ({ entityId, id, data }) => {
+const updateRetainerTemplate = async ({ entityId, id, data, user }) => {
+  let sourceQuery = supabaseAdmin.from('retainer_templates').select('entity_id, client_id').eq('id', id).is('deleted_at', null);
+  if (!data.entity && entityId && entityId !== 'ALL') sourceQuery = sourceQuery.eq('entity_id', entityId);
+  const { data: existingTemplate, error: sourceError } = await sourceQuery.maybeSingle();
+  if (sourceError) throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to read retainer template' });
+  if (!existingTemplate || !(await isUserEntitledToEntity(existingTemplate.entity_id, user))) {
+    throw new AppError({ statusCode: 404, title: 'Not Found', detail: 'Retainer template not found' });
+  }
   const updates = { updated_at: new Date().toISOString() };
 
   if (data.templateType !== undefined) updates.template_type = data.templateType;
@@ -3719,20 +3723,22 @@ const updateRetainerTemplate = async ({ entityId, id, data }) => {
   else if (data.assigned_to !== undefined) updates.assigned_to = data.assigned_to;
   if (data.tasks !== undefined) updates.tasks = data.tasks;
 
-  if (data.entity) {
-    const targetEntityId = await resolveEntityId(data.entity);
-    updates.entity_id = targetEntityId;
+  const targetEntityId = data.entity ? await resolveEntityId(data.entity) : existingTemplate.entity_id;
+  if (!(await isUserEntitledToEntity(targetEntityId, user))) {
+    throw new AppError({ statusCode: 403, title: 'Forbidden', detail: 'No access to the template target entity' });
   }
+  await validateWorkRequestClientEntity(
+    updates.client_id !== undefined ? updates.client_id : existingTemplate.client_id,
+    targetEntityId
+  );
+  if (data.entity) updates.entity_id = targetEntityId;
 
-  let query = supabaseAdmin
+  const query = supabaseAdmin
     .from('retainer_templates')
     .update(updates)
     .eq('id', id)
+    .eq('entity_id', existingTemplate.entity_id)
     .is('deleted_at', null);
-
-  if (!data.entity && entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
 
   const { data: updated, error } = await query
     .select('*, entities(code), clients(name)')

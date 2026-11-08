@@ -507,13 +507,14 @@ const createRetainerTemplate = async (req, res, next) => {
       entityId,
       userId: req.user.id,
       data: payload,
+      user: req.user,
     });
 
     await auditService.log({
       action: 'retainer-template.created',
       table: 'retainer_templates',
       recordId: template.id,
-      entity: req.activeEntity,
+      entity: template.entity_id,
       userId: req.user.id,
       details: { name: template.name },
     });
@@ -532,13 +533,14 @@ const updateRetainerTemplate = async (req, res, next) => {
       entityId,
       id: req.params.templateId,
       data: payload,
+      user: req.user,
     });
 
     await auditService.log({
       action: 'retainer-template.updated',
       table: 'retainer_templates',
       recordId: template.id,
-      entity: req.activeEntity,
+      entity: template.entity_id,
       userId: req.user.id,
       details: { name: template.name },
     });
