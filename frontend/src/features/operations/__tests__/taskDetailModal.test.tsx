@@ -597,4 +597,99 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
     await waitFor(() => expect(screen.getByTestId('task-toggle-status-btn')).not.toBeDisabled());
     expect(screen.getByTestId('task-upload-doc-btn')).not.toBeDisabled();
   });
+
+  describe('Jira 2-Column Workspace Redesign & Interactive Cards', () => {
+    it('renders the Jira-style 2-column workspace layout with top breadcrumbs and right details sidebar', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // 1. Modal shell sizing
+      const modal = screen.getByTestId('task-detail-modal');
+      expect(modal.className).toContain('max-w-5xl');
+
+      // 2. Breadcrumbs
+      expect(screen.getByText('ATA')).toBeInTheDocument();
+      expect(screen.getByText('[wr-888]')).toBeInTheDocument();
+      expect(screen.getByText('Corporate Year-End Review')).toBeInTheDocument();
+
+      // 3. Left pane components
+      expect(screen.getByTestId('task-title')).toHaveTextContent('Audit Execution Task');
+      expect(screen.getByTestId('task-description')).toHaveTextContent('Perform compliance audit steps');
+      expect(screen.getByTestId('task-documents-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-linked-records-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-time-logged-section')).toBeInTheDocument();
+
+      // 4. Right sidebar components
+      expect(screen.getByTestId('task-status-badge')).toHaveTextContent('In Progress');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Lorein Wong');
+      expect(screen.getByTestId('task-close-btn')).toBeInTheDocument();
+    });
+
+    it('toggles collapsible attachments section and details card with aria-expanded attributes', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // Verify attachments toggle
+      const attachmentsToggle = screen.getByRole('button', { name: /Attachments/i });
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('linked-doc-item-doc-task-linked')).toBeInTheDocument();
+
+      fireEvent.click(attachmentsToggle);
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByTestId('linked-doc-item-doc-task-linked')).not.toBeInTheDocument();
+
+      fireEvent.click(attachmentsToggle);
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('linked-doc-item-doc-task-linked')).toBeInTheDocument();
+
+      // Verify details card toggle
+      const detailsToggle = screen.getByRole('button', { name: /Details/i });
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+
+      fireEvent.click(detailsToggle);
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByTestId('assigned-team-section')).not.toBeInTheDocument();
+
+      fireEvent.click(detailsToggle);
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+    });
+
+    it('renders attachment cards with preview thumbnail, category, and filename', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      const docCard = await screen.findByTestId('linked-doc-item-doc-task-linked');
+      expect(docCard).toBeInTheDocument();
+      expect(within(docCard).getByText('Audit Report.pdf')).toBeInTheDocument();
+      expect(within(docCard).getByText('FINANCIAL')).toBeInTheDocument();
+
+      // Preview eye button
+      const previewBtn = within(docCard).getByTitle('Preview Document');
+      expect(previewBtn).toBeInTheDocument();
+    });
+  });
 });

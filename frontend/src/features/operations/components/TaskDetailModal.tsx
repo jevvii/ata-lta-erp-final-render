@@ -7,7 +7,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,14 +23,11 @@ import {
   Clock,
   FileText,
   User,
-  Users,
   Plus,
   CheckCircle2,
   XCircle,
   AlertCircle,
-  FileQuestion,
   Eye,
-  Layers,
   Receipt,
   CreditCard,
   Send,
@@ -40,6 +37,8 @@ import {
   X,
   Pencil,
   Lock,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEntityRealtimeSync } from '@/lib/realtime';
@@ -361,6 +360,21 @@ export function TaskDetailModal({
   // Selected document for preview
   const [selectedDoc, setSelectedDoc] = useState<DmsDocument | null>(null);
 
+  // Collapsible sections state
+  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  const [detailsOpen, setDetailsOpen] = useState(true);
+
+  // Document date formatter for attachment cards
+  const formatDocDate = (doc: DmsDocument) => {
+    const rawDate = doc.created_at || doc.createdAt || (doc as unknown as { uploaded_at?: string }).uploaded_at;
+    if (!rawDate) return `${doc.category || 'General'} • Document`;
+    const d = new Date(rawDate);
+    if (isNaN(d.getTime())) return `${doc.category || 'General'} • Document`;
+    const dateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+    return `${dateStr}, ${timeStr}`;
+  };
+
   // Key state to reset select dropdowns after an action
   const [addSelectKey, setAddSelectKey] = useState(0);
   const [reassignSelectKey, setReassignSelectKey] = useState(0);
@@ -654,6 +668,11 @@ export function TaskDetailModal({
     });
   }, [task, currentAssigneeIds, teamList]);
 
+  // Non-lead co-assignees list for quick access and summary
+  const coAssignees = useMemo(() => {
+    return assignedTeamMembers.filter((m) => !m.isLead);
+  }, [assignedTeamMembers]);
+
   // Task Scoping Rules:
   // 1. Only assigned employee or Admin can mutate status, log time, upload docs (and rejected tasks locked)
   const canMutateStatus = !isCompletedWr && !isTaskRejectedState && canMutateTaskStatus(currentUser, task);
@@ -915,62 +934,53 @@ export function TaskDetailModal({
     <>
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
         <DialogContent
-          className="max-w-3xl max-h-[90vh] flex flex-col p-0 overflow-hidden rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
+          className="max-w-5xl w-[95vw] max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden bg-white border border-[#E2E8F0] shadow-xl rounded-xl"
           data-testid="task-detail-modal"
         >
-          {/* Header */}
-          <DialogHeader className="px-6 py-4 pr-14 border-b border-[#E2E8F0] bg-[#F8FAFC] flex flex-row flex-wrap gap-3 items-start justify-between">
-            <div className="space-y-1.5 pr-6">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  variant={workRequest?.entity === 'LTA' ? 'lta' : 'ata'}
-                  size="compact"
-                  className="rounded-[6px] text-xs"
-                >
-                  {workRequest?.entity || 'ATA'}
-                </Badge>
-                {(() => {
-                  const phaseInfo = getPhaseBadgeInfo(task.phase);
-                  const PHASES_ORDER = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
-                  const currentWrPhaseIndex = PHASES_ORDER.indexOf(workRequest?.phase || 'pre_processing');
-                  const taskPhaseIndex = PHASES_ORDER.indexOf(task.phase);
-                  const isTaskActivePhase = !workRequest?.phase || task.phase === workRequest.phase;
-                  const isTaskPastPhase = taskPhaseIndex < currentWrPhaseIndex;
+          {/* Top Breadcrumb & Context Header */}
+          <DialogHeader className="px-6 py-3.5 border-b border-[#E2E8F0] bg-[#F8FAFC] flex flex-row items-center justify-between gap-3 shrink-0 space-y-0 text-left">
+            {/* Left breadcrumb trail */}
+            <div className="flex flex-wrap items-center gap-2 min-w-0 pr-4">
+              {/* Entity badge */}
+              <Badge
+                variant={workRequest?.entity === 'LTA' ? 'lta' : 'ata'}
+                size="compact"
+                className="rounded-[6px] text-xs font-semibold shrink-0"
+              >
+                {workRequest?.entity || 'ATA'}
+              </Badge>
 
-                  return (
-                    <>
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-[6px] text-xs font-semibold border ${phaseInfo.badgeClass}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
-                        <phaseInfo.Icon className="w-3.5 h-3.5 shrink-0" />
-                        <span>{phaseInfo.label}</span>
-                      </span>
-                      {isTaskActivePhase ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#93C5FD]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
-                          <span>Active Phase</span>
-                        </span>
-                      ) : isTaskPastPhase ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#F0FDF4] text-[#166534] border border-[#BBF7D0]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
-                          <span>Phase Completed (Locked)</span>
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" />
-                          <span>Upcoming Phase (Locked)</span>
-                        </span>
-                      )}
-                    </>
-                  );
-                })()}
-                <Badge
-                  variant={task.status === 'Completed' ? 'success' : 'secondary'}
-                  size="compact"
-                  className="rounded-[6px] text-xs"
-                  data-testid="task-status-badge"
+              <span className="text-[#CBD5E1] text-xs select-none">/</span>
+
+              {/* Parent Work Request Breadcrumb */}
+              {workRequest ? (
+                <div
+                  className="flex items-center gap-1.5 text-xs text-[#475569] font-medium truncate max-w-[240px] sm:max-w-[320px]"
+                  title={`${workRequest.workRequestNumber || workRequest.work_request_number || (workRequest as unknown as { code?: string }).code || ''} ${workRequest.title}`}
                 >
-                  {task.status}
-                </Badge>
+                  <span className="sr-only">Work Request: </span>
+                  {(() => {
+                    const wrCode = (workRequest as unknown as { code?: string }).code || workRequest.workRequestNumber || workRequest.work_request_number || workRequest.id;
+                    return (
+                      <>
+                        {wrCode && (
+                          <span className="font-mono text-xs font-semibold text-[#475569] tabular-nums shrink-0 mr-1">
+                            [{wrCode}]
+                          </span>
+                        )}
+                        <span className="font-semibold text-[#1E293B] truncate">{workRequest.title}</span>
+                      </>
+                    );
+                  })()}
+                </div>
+              ) : (
+                <span className="font-mono text-xs text-[#64748B] tabular-nums shrink-0">{task.workRequestId}</span>
+              )}
+
+              <span className="text-[#CBD5E1] text-xs select-none">/</span>
+
+              {/* Task Type selector or badge */}
+              <div className="shrink-0">
                 {canEdit ? (
                   <TaskTypeSelect
                     value={localLinkType}
@@ -1001,1094 +1011,1256 @@ export function TaskDetailModal({
                     data-testid="task-detail-type-badge"
                   />
                 )}
-                {task.qaStatus === 'passed' || task.qaStatus === 'failed' ? (
-                  <Badge
-                    variant={task.qaStatus === 'passed' ? 'success' : 'destructive'}
-                    size="compact"
-                    className="rounded-[6px] text-xs"
-                  >
-                    QA: {task.qaStatus}
-                  </Badge>
-                ) : workRequest?.phase === 'quality_assurance' ? (
-                  <Badge
-                    variant="secondary"
-                    size="compact"
-                    className="rounded-[6px] text-xs bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]"
-                  >
-                    QA: Under Review
-                  </Badge>
-                ) : null}
-                {isTaskPendingState && (
-                  <Badge
-                    variant="outline"
-                    size="compact"
-                    className="rounded-[6px] text-xs bg-[#FFFBEB] text-[#92400E] border-[#FDE68A] flex items-center gap-1"
-                    data-testid="task-detail-approval-badge"
-                  >
-                    <Clock className="h-3 w-3" />
-                    <span>Pending Creation Approval</span>
-                  </Badge>
-                )}
-                {isTaskRejectedState && (
-                  <Badge
-                    variant="destructive"
-                    size="compact"
-                    className="rounded-[6px] text-xs bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5] flex items-center gap-1"
-                    data-testid="task-detail-approval-badge"
-                  >
-                    <XCircle className="h-3 w-3" />
-                    <span>Creation Rejected</span>
-                  </Badge>
-                )}
               </div>
-              <DialogTitle
-                className="text-lg font-bold text-[#1E293B] leading-tight"
-                data-testid="task-title"
-              >
-                {task.title}
-              </DialogTitle>
-              {workRequest && (
-                <p className="text-xs text-[#475569]">
-                  Work Request:{' '}
-                  {(() => {
-                    const wrCode = workRequest.workRequestNumber || workRequest.work_request_number;
-                    return (
-                      <>
-                        {wrCode && (
-                          <span className="font-mono text-xs font-semibold text-[#475569] mr-1.5 tabular-nums">
-                            [{wrCode}]
-                          </span>
-                        )}
-                        <span className="font-semibold text-[#1E293B]">{workRequest.title}</span>
-                      </>
-                    );
-                  })()}
-                </p>
+
+              {/* QA status pill */}
+              {task.qaStatus === 'passed' || task.qaStatus === 'failed' ? (
+                <Badge
+                  variant={task.qaStatus === 'passed' ? 'success' : 'destructive'}
+                  size="compact"
+                  className="rounded-[6px] text-xs font-semibold shrink-0"
+                >
+                  QA: {task.qaStatus}
+                </Badge>
+              ) : workRequest?.phase === 'quality_assurance' ? (
+                <Badge
+                  variant="secondary"
+                  size="compact"
+                  className="rounded-[6px] text-xs bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A] font-medium shrink-0"
+                >
+                  QA: Under Review
+                </Badge>
+              ) : null}
+
+              {/* Pending Creation Approval badge */}
+              {isTaskPendingState && (
+                <Badge
+                  variant="outline"
+                  size="compact"
+                  className="rounded-[6px] text-xs bg-[#FFFBEB] text-[#92400E] border-[#FDE68A] flex items-center gap-1 shrink-0"
+                  data-testid="task-detail-approval-badge"
+                >
+                  <Clock className="h-3 w-3" />
+                  <span>Pending Creation Approval</span>
+                </Badge>
+              )}
+
+              {/* Creation Rejected badge */}
+              {isTaskRejectedState && (
+                <Badge
+                  variant="destructive"
+                  size="compact"
+                  className="rounded-[6px] text-xs bg-[#FEF2F2] text-[#DC2626] border-[#FCA5A5] flex items-center gap-1 shrink-0"
+                  data-testid="task-detail-approval-badge"
+                >
+                  <XCircle className="h-3 w-3" />
+                  <span>Creation Rejected</span>
+                </Badge>
               )}
             </div>
 
-            {isTaskPendingState && canLeadReview && (
-              <div className="flex items-center gap-1.5 shrink-0" data-testid="task-detail-approval-controls">
-                <Button
-                  type="button"
-                  size="sm"
-                  className="text-xs font-bold gap-1 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF]"
-                  onClick={handleApproveTask}
-                  data-testid="task-detail-approve-btn"
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span>Approve Task</span>
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="text-xs font-bold gap-1 rounded-[6px] border-[#DC2626] text-[#DC2626] hover:bg-[#FEF2F2]"
-                  onClick={() => {
-                    rejectIntent.current = { taskId: task.id, wrId: task.workRequestId || effectiveWrId || '', version: task.version ?? 1 };
-                    setIsRejectModalOpen(true);
-                  }}
-                  data-testid="task-detail-reject-btn"
-                >
-                  <XCircle className="h-3.5 w-3.5" />
-                  <span>Reject Task</span>
-                </Button>
-              </div>
-            )}
+            {/* Right side controls */}
+            <div className="flex items-center gap-2.5 shrink-0 pr-8">
+              {/* Creation Review Approval Controls */}
+              {isTaskPendingState && canLeadReview && (
+                <div className="flex items-center gap-1.5" data-testid="task-detail-approval-controls">
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="text-xs font-bold gap-1 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF]"
+                    onClick={handleApproveTask}
+                    data-testid="task-detail-approve-btn"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <span>Approve Task</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="text-xs font-bold gap-1 rounded-[6px] border-[#DC2626] text-[#DC2626] hover:bg-[#FEF2F2]"
+                    onClick={() => {
+                      rejectIntent.current = { taskId: task.id, wrId: task.workRequestId || effectiveWrId || '', version: task.version ?? 1 };
+                      setIsRejectModalOpen(true);
+                    }}
+                    data-testid="task-detail-reject-btn"
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                    <span>Reject Task</span>
+                  </Button>
+                </div>
+              )}
 
-            {canMutateStatus && (
-              <div className="flex items-center gap-2 shrink-0">
-                {task.status !== 'In Progress' && task.status !== 'Completed' && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={isPhaseBlocked}
-                    title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
-                    onClick={() => handleSetTaskStatus('In Progress')}
-                    className="text-xs gap-1.5 rounded-[8px] border-[#E2E8F0] hover:bg-[#FFFFFF]"
-                    data-testid="task-status-inprogress-btn"
-                  >
-                    <Clock className="h-3.5 w-3.5" />
-                    Mark In Progress
-                  </Button>
-                )}
-                {task.status === 'Completed' ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={isPhaseBlocked}
-                    title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
-                    onClick={() => handleSetTaskStatus('In Progress')}
-                    className="text-xs shrink-0 gap-1.5 rounded-[8px] border-[#E2E8F0] hover:bg-[#FFFFFF]"
-                    data-testid="task-toggle-status-btn"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Mark In Progress
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="default"
-                    size="sm"
-                    disabled={isPhaseBlocked || isPrereqBlocked || checklistCompletionBlocked}
-                    title={
-                      isPhaseBlocked
-                        ? phaseBlockedTooltip
-                        : isPrereqBlocked
-                        ? prereqBlockedTooltip
-                        : checklistCompletionBlocked
-                        ? checklistCompletionReason
-                        : undefined
-                    }
-                    onClick={() => handleSetTaskStatus('Completed')}
-                    className="text-xs shrink-0 gap-1.5 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
-                    data-testid="task-toggle-status-btn"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Mark Completed
-                  </Button>
-                )}
-              </div>
-            )}
+              {/* Task ID pill */}
+              <span className="font-mono text-[11px] font-medium text-[#64748B] bg-[#F1F5F9] px-2 py-0.5 rounded border border-[#E2E8F0] tabular-nums hidden sm:inline-block">
+                ID: {task.id.slice(0, 8)}
+              </span>
+            </div>
           </DialogHeader>
 
-          {/* Modal Body: Scrollable */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#FFFFFF]">
-            {isTaskRejectedState && (
-              <div
-                className="p-3 bg-[#FEF2F2] border border-[#FCA5A5] rounded-[8px] space-y-2 text-xs"
-                data-testid="task-detail-rejection-banner"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 font-bold text-[#DC2626]">
-                    <Lock className="h-4 w-4" />
-                    <span>Task Creation Rejected</span>
-                  </div>
-                  {canResubmit && (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      className="h-7 text-xs font-semibold gap-1.5 rounded-[6px] border-[#1D4ED8] text-[#1D4ED8] hover:bg-[#EFF6FF]"
-                      onClick={() => setIsResubmitModalOpen(true)}
-                      data-testid="task-resubmit-btn"
-                    >
-                      <Pencil className="h-3 w-3" />
-                      <span>Edit & Resubmit Task</span>
-                    </Button>
-                  )}
-                </div>
-                <p className="text-[#991B1B] leading-relaxed">
-                  <span className="font-semibold">Reason: </span>
-                  {task.rejectionReason ?? (task as { rejection_reason?: string | null }).rejection_reason ?? 'No reason provided.'}
-                </p>
-                <div className="text-[11px] text-[#7F1D1D] flex items-center justify-between border-t border-[#FCA5A5]/60 pt-1.5">
-                  <span>This task is locked against status changes, time logging, checklists, and document uploads until resubmitted and approved.</span>
-                  {task.reviewedBy && <span>Reviewed by {task.reviewedBy}</span>}
-                </div>
-              </div>
-            )}
-            {isCompletedWr && (
-              <div
-                className="bg-[#F8FAFC] border-[#E2E8F0] text-[#1E293B] text-xs px-3 py-2 rounded-[6px] flex items-center gap-2"
-                data-testid="completed-wr-lock-banner"
-              >
-                <Lock className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                <span>Completed Work Request: Task records and attachments are finalized and locked.</span>
-              </div>
-            )}
-            {isPhaseBlocked && !isCompletedWr && (
-              <div
-                className="bg-[#FFFBEB] border border-[#FDE68A] text-[#92400E] text-xs px-3 py-2 rounded-[6px] flex items-center gap-2"
-                data-testid="phase-locked-banner"
-              >
-                <Lock className="h-3.5 w-3.5 text-[#D97706] shrink-0" />
-                <span>{phaseBlockedTooltip}</span>
-              </div>
-            )}
-
-            {/* 1. Meta Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(11rem,1.2fr)] lg:grid-cols-[minmax(0,1fr)_minmax(11rem,1.2fr)_minmax(0,1.2fr)_minmax(0,1fr)] gap-3.5 p-3.5 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-xs">
-              <div className="min-w-0">
-                <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
-                  Primary Assignee
-                </span>
-                <div
-                  className="flex items-center gap-1.5 font-medium text-[#1E293B] truncate min-w-0"
-                  data-testid="task-assignee"
+          {/* 2-Column Workspace Body */}
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] flex-1 min-h-0 overflow-y-auto lg:overflow-hidden">
+            {/* LEFT MAIN PANE */}
+            <div className="lg:overflow-y-auto p-6 space-y-6 bg-white min-w-0">
+              {/* 1. Title & Banners */}
+              <div className="space-y-3">
+                <DialogTitle
+                  className="text-xl font-bold text-[#0F172A] tracking-tight leading-snug"
+                  data-testid="task-title"
                 >
-                  <User className="h-3.5 w-3.5 text-[#475569] shrink-0" />
-                  <span className="truncate">{task.assigneeName || 'Unassigned'}</span>
-                </div>
-                {assignedTeamMembers.some((member) => !member.isLead) && (
-                  <div className="text-xs text-[#475569] mt-1" data-testid="task-co-assignees">
-                    <span className="font-medium">Co-assignees</span>
-                    <ul className="mt-0.5 space-y-0.5">
-                      {assignedTeamMembers.filter((member) => !member.isLead).map((member) => (
-                        <li key={member.id} className="break-words">{member.name}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
+                  {task.title}
+                </DialogTitle>
+                <DialogDescription className="sr-only">
+                  Work Request: {workRequest ? `${workRequest.workRequestNumber || workRequest.work_request_number || (workRequest as unknown as { code?: string }).code || ''} ${workRequest.title}` : task.workRequestId}
+                </DialogDescription>
 
-              <div className="min-w-0">
-                <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
-                  Due Date
-                </span>
-                <div className="flex items-center gap-1.5 font-medium text-[#1E293B] min-w-0 truncate">
-                  {canEdit ? (
-                    <div className="w-full min-w-0">
-                      <DateInput
-                        aria-label="Task due date"
-                        type="date"
-                        value={
-                          localDueDate
-                            ? localDueDate.includes('T')
-                              ? new Date(localDueDate).toISOString().split('T')[0]
-                              : localDueDate
-                            : ''
-                        }
-                        onValueChange={(value) => {
-                          const val = value || null;
-                          setLocalDueDate(val);
-                          if (task.workRequestId) {
-                            updateTask({
-                              workRequestId: task.workRequestId,
-                              taskId: task.id,
-                              data: { dueDate: val, expectedVersion: task.version },
-                            })
-                              .then((res) => {
-                                if (res && onTaskUpdated) {
-                                  onTaskUpdated(res as Task);
-                                }
-                              })
-                              .catch(() => {
-                                setLocalDueDate(task.dueDate ?? null);
-                              });
-                          }
-                        }}
-                        className="h-8 w-full text-xs tabular-nums bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]"
-                        data-testid="task-due-date-input"
-                      />
-                      {!localDueDate && <span className="sr-only">Not set</span>}
-                    </div>
-                  ) : (
-                    <span className="truncate">
-                      {localDueDate
-                        ? new Date(localDueDate).toLocaleDateString()
-                        : 'Not set'}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="min-w-0">
-                <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
-                  Phase Entered
-                </span>
-                <div className="flex items-center gap-1.5 font-medium text-[#1E293B] min-w-0 truncate">
-                  <Clock className="h-3.5 w-3.5 text-[#475569] shrink-0" />
-                  <span className="capitalize truncate">
-                    {task.phase?.replace('_', ' ')}
-                    {task.phaseEnteredAt ? (
-                      ` • ${new Date(task.phaseEnteredAt).toLocaleDateString()}`
-                    ) : (
-                      <span className="sr-only"> • N/A</span>
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              <div className="min-w-0">
-                <span className="text-xs uppercase font-bold text-[#475569] block mb-0.5">
-                  Total Logged Time
-                </span>
-                <div className="flex items-center gap-1.5 font-bold text-[#1E293B] min-w-0 truncate">
-                  <Clock className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                  <span className="truncate">{formatHours(totalMinutes)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* 2. Assigned Team & Co-Assignees */}
-            <div className="p-4 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] space-y-3" data-testid="assigned-team-section">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E2E8F0] pb-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 bg-[#F8FAFC] border-[#E2E8F0] text-[#1E293B] rounded-[6px]">
-                    <Users className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold tracking-normal text-[#1E293B] flex items-center gap-1.5">
-                      Assigned Team
-                      <span className="text-xs font-bold text-[#FFFFFF] bg-[#1D4ED8] px-1.5 py-0.5 rounded-[6px] tabular-nums" data-testid="assigned-team-count">
-                        {assignedTeamMembers.length}
-                      </span>
-                    </h4>
-                    <p className="text-xs text-[#475569]">
-                      Primary assignee and co-assignees working on this task
-                    </p>
-                  </div>
-                </div>
-
-                {canEdit && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Reassign Lead Select */}
-                    {scopedTeamList.length > 0 && (
-                      <div className="w-40 sm:w-44" data-testid="reassign-lead-container">
-                        <Select
-                          key={`reassign-${reassignSelectKey}`}
-                          onValueChange={(val) => handleSetLeadAssignee(val)}
+                {isTaskRejectedState && (
+                  <div
+                    className="p-3.5 bg-[#FEF2F2] border border-[#FCA5A5] rounded-lg space-y-2 text-xs"
+                    data-testid="task-detail-rejection-banner"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5 font-bold text-[#DC2626]">
+                        <Lock className="h-4 w-4" />
+                        <span>Task Creation Rejected</span>
+                      </div>
+                      {canResubmit && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          className="h-7 text-xs font-semibold gap-1.5 rounded-[6px] border-[#1D4ED8] text-[#1D4ED8] hover:bg-[#EFF6FF]"
+                          onClick={() => setIsResubmitModalOpen(true)}
+                          data-testid="task-resubmit-btn"
                         >
-                          <SelectTrigger
-                            className="h-7 text-xs bg-[#FFFFFF] hover:bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-[#1E293B]"
-                            data-testid="reassign-lead-select"
-                          >
-                            <SelectValue placeholder="Select Primary Assignee..." />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                            {scopedTeamList.map((m) => (
-                              <SelectItem key={m.id} value={m.id} className="text-xs">
-                                {m.name} {m.id === task.assigneeId ? '(Primary)' : `(${m.role})`}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-
-                    {/* Add Co-Assignee Select */}
-                    {availableTeamMembers.length > 0 ? (
-                      <div className="w-40 sm:w-44" data-testid="assign-employee-container">
-                        <Select
-                          key={`add-${addSelectKey}`}
-                          onValueChange={(val) => handleAddCoAssignee(val)}
-                        >
-                          <SelectTrigger
-                            className="h-7 text-xs bg-[#F8FAFC] hover:bg-[#E2E8F0] border-[#E2E8F0] rounded-[6px] text-[#1E293B] font-semibold"
-                            data-testid="assign-employee-select"
-                          >
-                            <SelectValue placeholder="+ Add Co-Assignee..." />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
-                            {availableTeamMembers.map((m) => (
-                              <SelectItem key={m.id} value={m.id} className="text-xs">
-                                {m.name} ({m.role})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    ) : (
-                      <div className="w-40 sm:w-44" data-testid="assign-employee-container">
-                        <Select disabled>
-                          <SelectTrigger
-                            className="h-7 text-xs bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-[#475569]"
-                            data-testid="assign-employee-select"
-                          >
-                            <SelectValue placeholder="All team assigned" />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" />
-                        </Select>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Members Chips / Cards */}
-              {assignedTeamMembers.length === 0 ? (
-                <div className="py-3 text-center text-xs text-[#475569] italic">
-                  No team members assigned yet. Use the dropdown above to assign a primary or co-assignee.
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-2 pt-1" data-testid="assigned-team-list">
-                  {assignedTeamMembers.map((member) => (
-                    <div
-                      key={member.id}
-                      className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-[8px] border text-xs ${
-                        member.isLead
-                          ? 'bg-[#F8FAFC] border-[#E2E8F0] text-[#1E293B]'
-                          : 'bg-[#FFFFFF] border-[#E2E8F0] text-[#1E293B]'
-                      }`}
-                      data-testid={`assignee-chip-${member.id}`}
-                    >
-                      <User className="h-3.5 w-3.5 text-[#1E293B]" />
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-xs">{member.name}</span>
-                        {member.isLead ? (
-                          <Badge size="compact" className="bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs font-semibold text-xs rounded-[6px]">
-                            Primary
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" size="compact" className="text-xs rounded-[8px] border-[#E2E8F0] text-[#475569]">
-                            {member.role === 'Admin' || member.name === 'Lorein Wong' ? 'Admin' : (member.role || 'Co-Assignee')}
-                          </Badge>
-                        )}
-                      </div>
-
-                      {canEdit && (
-                        <div className="flex items-center gap-1.5 ml-1 pl-1.5 border-l border-[#E2E8F0]">
-                          {!member.isLead && (
-                            <button
-                              type="button"
-                              onClick={() => handleSetLeadAssignee(member.id)}
-                              className="text-xs text-[#1E293B] hover:underline font-bold px-1"
-                              title="Make this member the primary assignee"
-                              data-testid={`make-lead-btn-${member.id}`}
-                            >
-                              Make Primary
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveAssignee(member.id)}
-                            className="text-[#475569] hover:text-[#DC2626] p-0.5 rounded-[6px] transition-colors"
-                            title={`Remove ${member.name}`}
-                            data-testid={`remove-assignee-btn-${member.id}`}
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
+                          <Pencil className="h-3 w-3" />
+                          <span>Edit & Resubmit Task</span>
+                        </Button>
                       )}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                    <p className="text-[#991B1B] leading-relaxed">
+                      <span className="font-semibold">Reason: </span>
+                      {task.rejectionReason ?? (task as { rejection_reason?: string | null }).rejection_reason ?? 'No reason provided.'}
+                    </p>
+                    <div className="text-[11px] text-[#7F1D1D] flex items-center justify-between border-t border-[#FCA5A5]/60 pt-1.5">
+                      <span>This task is locked against status changes, time logging, checklists, and document uploads until resubmitted and approved.</span>
+                      {task.reviewedBy && <span>Reviewed by {task.reviewedBy}</span>}
+                    </div>
+                  </div>
+                )}
 
-            {/* 3. Description / Requirements */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold tracking-normal text-[#475569]">
-                  Description & Instructions
-                </h4>
-                {!isCompletedWr && canEdit && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => { descriptionVersion.current = task.version ?? 1; setIsEditingDesc(!isEditingDesc); }}
-                    className="h-6 px-1.5 text-[#475569] hover:text-[#1E293B] gap-1 rounded-[6px]"
-                    title="Edit Task Description"
-                    data-testid="edit-task-description-btn"
+                {isCompletedWr && (
+                  <div
+                    className="bg-[#F8FAFC] border border-[#E2E8F0] text-[#1E293B] text-xs px-3.5 py-2.5 rounded-lg flex items-center gap-2"
+                    data-testid="completed-wr-lock-banner"
                   >
-                    <Pencil className="h-3 w-3" />
-                    <span className="text-xs">{isEditingDesc ? 'Cancel' : 'Edit'}</span>
-                  </Button>
+                    <Lock className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                    <span>Completed Work Request: Task records and attachments are finalized and locked.</span>
+                  </div>
+                )}
+
+                {isPhaseBlocked && !isCompletedWr && (
+                  <div
+                    className="bg-[#FFFBEB] border border-[#FDE68A] text-[#92400E] text-xs px-3.5 py-2.5 rounded-lg flex items-center gap-2"
+                    data-testid="phase-locked-banner"
+                  >
+                    <Lock className="h-3.5 w-3.5 text-[#D97706] shrink-0" />
+                    <span>{phaseBlockedTooltip}</span>
+                  </div>
                 )}
               </div>
 
-              {isEditingDesc ? (
-                <div className="space-y-2">
-                  <textarea
-                    value={descText}
-                    onChange={(e) => setDescText(e.target.value)}
-                    className="resize-none w-full p-2.5 border-[#E2E8F0] bg-[#FFFFFF] rounded-[6px] text-xs text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8] min-h-[80px]"
-                    placeholder="Enter task description or instructions..."
-                    data-testid="task-description-textarea"
-                  />
-                  <div className="flex items-center justify-end gap-2">
+              {/* 2. Description Section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-[#475569]">
+                    Description
+                  </h3>
+                  {!isCompletedWr && canEdit && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="xs"
                       onClick={() => {
-                        setDescText(task.description || '');
-                        setIsEditingDesc(false);
+                        descriptionVersion.current = task.version ?? 1;
+                        setIsEditingDesc(!isEditingDesc);
                       }}
-                      className="h-7 text-xs rounded-[8px] border-[#E2E8F0]"
-                      data-testid="cancel-edit-description-btn"
+                      className="h-6 px-2 text-[#475569] hover:text-[#1E293B] gap-1 rounded-[6px]"
+                      title="Edit Task Description"
+                      data-testid="edit-task-description-btn"
                     >
-                      Cancel
+                      <Pencil className="h-3 w-3" />
+                      <span className="text-xs font-medium">{isEditingDesc ? 'Cancel' : 'Edit'}</span>
                     </Button>
-                    <Button
-                      type="button"
-                      variant="default"
-                      size="xs"
-                      onClick={handleSaveDescription}
-                      disabled={isSavingDesc}
-                      className="h-7 text-xs rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
-                      data-testid="save-description-btn"
-                    >
-                      {isSavingDesc ? 'Saving...' : 'Save Changes'}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div
-                  className="p-3.5 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B] whitespace-pre-wrap leading-relaxed min-h-[60px]"
-                  data-testid="task-description"
-                >
-                  {task.description || (
-                    <span className="text-[#475569] italic">No description provided for this task.</span>
                   )}
                 </div>
-              )}
-            </div>
 
-            {/* Only a successful task read may drive a full checklist replacement. */}
-            <TaskChecklist
-              key={task.id}
-              items={task.checklist || []}
-              canEdit={canEditChecklist}
-              canComplete={canCompleteChecklist}
-              ready={!isTaskError && !isTaskPlaceholder && liveTask?.id === task.id && Array.isArray(liveTask.checklist)}
-              loading={isTaskFetching || isTaskPlaceholder}
-              loadError={isTaskError}
-              disabled={isPhaseBlocked}
-              disabledReason={isPhaseBlocked ? phaseBlockedTooltip : undefined}
-              onRetry={() => { void refetchTask(); }}
-              onChange={async (items) => {
-                if (isTaskError || isTaskPlaceholder || !Array.isArray(liveTask?.checklist) || !canEditChecklist || isPhaseBlocked) {
-                  throw new Error('Reload the checklist before making changes.');
-                }
-                const updated = await updateTask({
-                  workRequestId: task.workRequestId,
-                  taskId: task.id,
-                  data: { checklist: items.map(toChecklistInput), expectedVersion: task.version },
-                });
-                if (updated) onTaskUpdated?.(updated);
-              }}
-              onToggle={async (id, completed) => {
-                if (isTaskError || isTaskPlaceholder || !Array.isArray(liveTask?.checklist) || !canCompleteChecklist || isPhaseBlocked) {
-                  throw new Error('Reload the checklist before making changes.');
-                }
-                const updated = await updateTask({
-                  workRequestId: task.workRequestId, taskId: task.id,
-                  data: { checklistCompletions: [{ id, completed }], expectedVersion: task.version },
-                });
-                if (updated) onTaskUpdated?.(updated);
-              }}
-            />
-
-            {/* 4. Predecessors */}
-            {task.predecessors && task.predecessors.length > 0 && (
-              <div className="space-y-1.5">
-                <h4 className="text-xs font-bold tracking-normal text-[#475569] flex items-center gap-1.5">
-                  <Layers className="h-3.5 w-3.5" />
-                  Predecessors
-                </h4>
-                <div className="flex flex-wrap gap-1.5">
-                  {task.predecessors.map((pId) => {
-                    const detail = (task as unknown as { predecessorDetails?: Array<{ id: string; title: string; status: string }> })
-                      .predecessorDetails?.find((d) => d.id === pId);
-                    const predTask = siblingTasks.find((t) => t.id === pId);
-                    const title = detail?.title || predTask?.title || pId.slice(0, 8);
-                    const status = detail?.status || predTask?.status;
-
-                    return (
-                      <Badge key={pId} variant="outline" size="compact" className="text-xs rounded-[8px] border-[#E2E8F0] gap-1">
-                        <span className="font-semibold">{title}</span>
-                        {status && (
-                          <span className="text-xs text-[#475569]">({status})</span>
-                        )}
-                      </Badge>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* 5. Linked Documents Section */}
-            <div className="space-y-2.5" data-testid="task-documents-section">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold tracking-normal text-[#475569] flex items-center gap-1.5">
-                  <FileText className="h-3.5 w-3.5" />
-                  Linked Documents ({linkedDocs.length})
-                </h4>
-                {canUploadDoc && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    disabled={isPhaseBlocked || isPrereqBlocked}
-                    title={
-                      isPhaseBlocked
-                        ? phaseBlockedTooltip
-                        : isPrereqBlocked
-                          ? prereqBlockedTooltip
-                          : undefined
-                    }
-                    onClick={() => setIsUploadDocModalOpen(true)}
-                    className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                    data-testid="task-upload-doc-btn"
+                {isEditingDesc ? (
+                  <div className="space-y-2">
+                    <textarea
+                      value={descText}
+                      onChange={(e) => setDescText(e.target.value)}
+                      className="resize-none w-full p-3 border border-[#CBD5E1] bg-[#FFFFFF] rounded-lg text-xs text-[#1E293B] placeholder:text-[#64748B] focus:outline-none focus:ring-2 focus:ring-[#2563EB] min-h-[90px]"
+                      placeholder="Enter task description or instructions..."
+                      data-testid="task-description-textarea"
+                    />
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => {
+                          setDescText(task.description || '');
+                          setIsEditingDesc(false);
+                        }}
+                        className="h-7 text-xs rounded-[6px] border border-[#E2E8F0]"
+                        data-testid="cancel-edit-description-btn"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="default"
+                        size="xs"
+                        onClick={handleSaveDescription}
+                        disabled={isSavingDesc}
+                        className="h-7 text-xs rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs font-semibold"
+                        data-testid="save-description-btn"
+                      >
+                        {isSavingDesc ? 'Saving...' : 'Save Changes'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="p-3.5 bg-[#FFFFFF] border border-[#E2E8F0] rounded-lg text-xs text-[#1E293B] whitespace-pre-wrap leading-relaxed min-h-[60px]"
+                    data-testid="task-description"
                   >
-                    <Upload className="h-3 w-3" /> Upload Document
-                  </Button>
+                    {task.description || (
+                      <span className="text-[#64748B] italic">No description provided for this task.</span>
+                    )}
+                  </div>
                 )}
               </div>
 
-              {isLoadingDocs ? (
-                <div className="p-4 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0]">
-                  Loading linked documents...
+              {/* 3. Jira-Style Attachments Section (placed directly below Description) */}
+              <div className="space-y-2.5" data-testid="task-documents-section">
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setAttachmentsOpen(!attachmentsOpen)}
+                    aria-expanded={attachmentsOpen}
+                    className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#475569] hover:text-[#0F172A] transition-colors focus:outline-none"
+                  >
+                    {attachmentsOpen ? <ChevronDown className="h-4 w-4 text-[#64748B]" /> : <ChevronRight className="h-4 w-4 text-[#64748B]" />}
+                    <span>Attachments</span>
+                    <span className="ml-1 px-1.5 py-0.5 text-[11px] font-mono font-semibold rounded bg-[#F1F5F9] text-[#475569] tabular-nums">
+                      {linkedDocs.length}
+                    </span>
+                  </button>
+
+                  {canUploadDoc && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      disabled={isPhaseBlocked || isPrereqBlocked}
+                      title={
+                        isPhaseBlocked
+                          ? phaseBlockedTooltip
+                          : isPrereqBlocked
+                            ? prereqBlockedTooltip
+                            : undefined
+                      }
+                      onClick={() => setIsUploadDocModalOpen(true)}
+                      className="text-xs gap-1 rounded-[6px] border border-[#E2E8F0] hover:bg-[#F8FAFC] font-medium"
+                      data-testid="task-upload-doc-btn"
+                    >
+                      <Upload className="h-3 w-3" />
+                      <span>Upload Document</span>
+                    </Button>
+                  )}
                 </div>
-              ) : linkedDocs.length === 0 ? (
-                <div className="p-4 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] italic">
-                  No documents linked to this task.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {linkedDocs.map((doc) => {
-                    const docName = doc.fileName || doc.file_name || doc.originalName || 'Document';
-                    return (
-                      <div
-                        key={doc.id}
-                        onClick={() => setSelectedDoc(doc)}
-                        className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 cursor-pointer transition-colors"
-                        data-testid={`linked-doc-item-${doc.id}`}
-                      >
-                        <div className="flex items-center gap-2 truncate">
-                          <FileQuestion className="h-4 w-4 text-[#1E293B] shrink-0" />
-                          <div className="truncate">
-                            <span className="text-xs font-bold text-[#1E293B] block truncate">
-                              {docName}
-                            </span>
-                            <span className="text-xs text-[#475569] block">
-                              {doc.category || 'General'}
-                            </span>
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon-xs"
-                          className="shrink-0 text-[#475569] hover:text-[#1E293B] rounded-[6px]"
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
+
+                {attachmentsOpen && (
+                  <>
+                    {isLoadingDocs ? (
+                      <div className="p-4 text-center text-xs text-[#64748B] bg-[#F8FAFC] rounded-lg border border-[#E2E8F0]">
+                        Loading linked documents...
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                    ) : linkedDocs.length === 0 ? (
+                      <div className="p-5 text-center text-xs text-[#64748B] bg-[#F8FAFC] rounded-lg border border-dashed border-[#CBD5E1] italic">
+                        No documents linked to this task.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        {linkedDocs.map((doc) => {
+                          const docName = doc.fileName || doc.file_name || doc.originalName || doc.original_name || 'Document';
+                          return (
+                            <div
+                              key={doc.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => setSelectedDoc(doc)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSelectedDoc(doc);
+                                }
+                              }}
+                              className="border border-[#E2E8F0] rounded-lg overflow-hidden bg-white hover:border-[#CBD5E1] hover:shadow-sm transition-all group cursor-pointer text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
+                              data-testid={`linked-doc-item-${doc.id}`}
+                            >
+                              {/* Top Preview Area */}
+                              <div className="h-24 bg-[#F8FAFC] border-b border-[#E2E8F0] relative flex flex-col items-center justify-center p-3 overflow-hidden group-hover:bg-[#F1F5F9]/50 transition-colors">
+                                {/* Category pill */}
+                                <span className="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded bg-white/90 border border-[#E2E8F0] text-[#475569] shadow-2xs">
+                                  {doc.category || 'General'}
+                                </span>
 
-            {/* Linked Records Section (UAT2-7) */}
-            <div className="space-y-2.5" data-testid="task-linked-records-section">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-2">
-                <div className="flex items-center gap-2">
-                  <LinkIcon className="h-4 w-4 text-[#1E293B]" />
-                  <h4 className="text-xs font-bold tracking-normal text-[#1E293B]">
-                    Linked Records ({invoices.length + disbursements.length + transmittals.length})
-                  </h4>
-                </div>
+                                {/* Eye preview button */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDoc(doc);
+                                  }}
+                                  title="Preview Document"
+                                  className="absolute top-2 right-2 p-1 rounded-md bg-white/90 border border-[#E2E8F0] text-[#64748B] hover:text-[#0F172A] opacity-0 group-hover:opacity-100 transition-opacity shadow-2xs"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
 
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {canLinkInv && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={isInvoicePhaseBlocked || isPrereqBlocked}
-                      title={
-                        isInvoicePhaseBlocked
-                          ? invoicePhaseBlockedTooltip
-                          : isPrereqBlocked
-                            ? prereqBlockedTooltip
-                            : undefined
-                      }
-                      onClick={() => setIsInvoiceModalOpen(true)}
-                      className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                      data-testid="link-invoice-btn"
-                    >
-                      <Receipt className="h-3 w-3" /> + Invoice
-                    </Button>
-                  )}
-                  {canLinkDisb && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={isPhaseBlocked || isPrereqBlocked}
-                      title={
-                        isPhaseBlocked
-                          ? phaseBlockedTooltip
-                          : isPrereqBlocked
-                            ? prereqBlockedTooltip
-                            : undefined
-                      }
-                      onClick={() => setIsDisbursementModalOpen(true)}
-                      className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                      data-testid="link-disbursement-btn"
-                    >
-                      <CreditCard className="h-3 w-3" /> + Disbursement
-                    </Button>
-                  )}
-                  {canLinkTrans && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="xs"
-                      disabled={isPhaseBlocked || isPrereqBlocked}
-                      title={
-                        isPhaseBlocked
-                          ? phaseBlockedTooltip
-                          : isPrereqBlocked
-                            ? prereqBlockedTooltip
-                            : undefined
-                      }
-                      onClick={() => setIsTransmittalModalOpen(true)}
-                      className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                      data-testid="link-transmittal-btn"
-                    >
-                      <Send className="h-3 w-3" /> + Transmittal
-                    </Button>
-                  )}
-                </div>
+                                {/* Miniature document page representation */}
+                                <div className="w-12 h-14 bg-white rounded border border-[#E2E8F0] shadow-2xs flex flex-col items-center justify-center p-1.5 space-y-1">
+                                  <FileText className="w-5 h-5 text-[#2563EB]" />
+                                  <div className="w-8 h-0.5 bg-[#E2E8F0] rounded-full" />
+                                  <div className="w-6 h-0.5 bg-[#E2E8F0] rounded-full" />
+                                </div>
+                              </div>
+
+                              {/* Bottom Metadata Footer */}
+                              <div className="p-2.5 bg-white space-y-0.5">
+                                <p
+                                  className="text-xs font-semibold text-[#1E293B] truncate group-hover:text-[#2563EB] transition-colors"
+                                  title={docName}
+                                >
+                                  {docName}
+                                </p>
+                                <p className="text-[11px] text-[#64748B] font-mono tabular-nums truncate">
+                                  {formatDocDate(doc)}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
 
-              {isRelatedDenied ? (
-                <div
-                  className="p-3 text-center text-xs text-[#DC2626] bg-[#FEF2F2] rounded-[8px] border border-[#FCA5A5]"
-                  data-testid="linked-records-access-denied"
-                >
-                  Records cannot be loaded. You are not assigned to this project.
-                </div>
-              ) : invoices.length === 0 && disbursements.length === 0 && transmittals.length === 0 ? (
-                <div className="p-3 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] italic">
-                  No billing invoices, disbursements, or transmittals linked to this task.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {/* Invoices */}
-                  {invoices.length > 0 && (
-                    <div className="space-y-1.5">
-                      <span className="text-xs font-bold tracking-normal text-[#475569] block">
-                        Invoices ({invoices.length})
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {invoices.map((inv) => {
-                          const invTotal = inv.total != null ? inv.total : inv.amount;
-                          const clientName =
-                            inv.client_name ||
-                            inv.clientName ||
-                            inv.clients?.name ||
-                            workRequest?.clientName ||
-                            'Client';
+              {/* 4. Subtasks / Checklist Section */}
+              <TaskChecklist
+                key={task.id}
+                items={task.checklist || []}
+                canEdit={canEditChecklist}
+                canComplete={canCompleteChecklist}
+                ready={!isTaskError && !isTaskPlaceholder && liveTask?.id === task.id && Array.isArray(liveTask.checklist)}
+                loading={isTaskFetching || isTaskPlaceholder}
+                loadError={isTaskError}
+                disabled={isPhaseBlocked}
+                disabledReason={isPhaseBlocked ? phaseBlockedTooltip : undefined}
+                onRetry={() => { void refetchTask(); }}
+                onChange={async (items) => {
+                  if (isTaskError || isTaskPlaceholder || !Array.isArray(liveTask?.checklist) || !canEditChecklist || isPhaseBlocked) {
+                    throw new Error('Reload the checklist before making changes.');
+                  }
+                  const updated = await updateTask({
+                    workRequestId: task.workRequestId,
+                    taskId: task.id,
+                    data: { checklist: items.map(toChecklistInput), expectedVersion: task.version },
+                  });
+                  if (updated) onTaskUpdated?.(updated);
+                }}
+                onToggle={async (id, completed) => {
+                  if (isTaskError || isTaskPlaceholder || !Array.isArray(liveTask?.checklist) || !canCompleteChecklist || isPhaseBlocked) {
+                    throw new Error('Reload the checklist before making changes.');
+                  }
+                  const updated = await updateTask({
+                    workRequestId: task.workRequestId, taskId: task.id,
+                    data: { checklistCompletions: [{ id, completed }], expectedVersion: task.version },
+                  });
+                  if (updated) onTaskUpdated?.(updated);
+                }}
+              />
 
-                          return (
+              {/* 5. Linked Financial & Transmittal Records */}
+              <div className="space-y-2.5" data-testid="task-linked-records-section">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-2">
+                  <div className="flex items-center gap-2">
+                    <LinkIcon className="h-4 w-4 text-[#1E293B]" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-[#1E293B]">
+                      Linked Records ({invoices.length + disbursements.length + transmittals.length})
+                    </h4>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {canLinkInv && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={isInvoicePhaseBlocked || isPrereqBlocked}
+                        title={
+                          isInvoicePhaseBlocked
+                            ? invoicePhaseBlockedTooltip
+                            : isPrereqBlocked
+                              ? prereqBlockedTooltip
+                              : undefined
+                        }
+                        onClick={() => setIsInvoiceModalOpen(true)}
+                        className="text-xs gap-1 rounded-[6px] border border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                        data-testid="link-invoice-btn"
+                      >
+                        <Receipt className="h-3 w-3" /> + Invoice
+                      </Button>
+                    )}
+                    {canLinkDisb && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={isPhaseBlocked || isPrereqBlocked}
+                        title={
+                          isPhaseBlocked
+                            ? phaseBlockedTooltip
+                            : isPrereqBlocked
+                              ? prereqBlockedTooltip
+                              : undefined
+                        }
+                        onClick={() => setIsDisbursementModalOpen(true)}
+                        className="text-xs gap-1 rounded-[6px] border border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                        data-testid="link-disbursement-btn"
+                      >
+                        <CreditCard className="h-3 w-3" /> + Disbursement
+                      </Button>
+                    )}
+                    {canLinkTrans && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        disabled={isPhaseBlocked || isPrereqBlocked}
+                        title={
+                          isPhaseBlocked
+                            ? phaseBlockedTooltip
+                            : isPrereqBlocked
+                              ? prereqBlockedTooltip
+                              : undefined
+                        }
+                        onClick={() => setIsTransmittalModalOpen(true)}
+                        className="text-xs gap-1 rounded-[6px] border border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                        data-testid="link-transmittal-btn"
+                      >
+                        <Send className="h-3 w-3" /> + Transmittal
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {isRelatedDenied ? (
+                  <div
+                    className="p-3 text-center text-xs text-[#DC2626] bg-[#FEF2F2] rounded-[8px] border border-[#FCA5A5]"
+                    data-testid="linked-records-access-denied"
+                  >
+                    Records cannot be loaded. You are not assigned to this project.
+                  </div>
+                ) : invoices.length === 0 && disbursements.length === 0 && transmittals.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-[#64748B] bg-[#F8FAFC] rounded-[8px] border border-[#E2E8F0] italic">
+                    No billing invoices, disbursements, or transmittals linked to this task.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {/* Invoices */}
+                    {invoices.length > 0 && (
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                          Invoices ({invoices.length})
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {invoices.map((inv) => {
+                            const invTotal = inv.total != null ? inv.total : inv.amount;
+                            const clientName =
+                              inv.client_name ||
+                              inv.clientName ||
+                              inv.clients?.name ||
+                              workRequest?.clientName ||
+                              'Client';
+
+                            return (
+                              <a
+                                key={inv.id}
+                                href={`/billing?invoiceId=${inv.id}`}
+                                className="p-2.5 bg-[#FFFFFF] border border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
+                                data-testid={`linked-invoice-${inv.id}`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <Receipt className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                                  <div className="truncate">
+                                    <span className="font-bold text-[#1E293B] block truncate">
+                                      {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
+                                    </span>
+                                    <span className="text-xs text-[#475569] block">
+                                      {clientName}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {invTotal != null && (
+                                    <span className="tabular-nums text-xs font-bold text-[#1E293B] font-mono">
+                                      ₱{Number(invTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                    </span>
+                                  )}
+                                  {inv.status && (
+                                    <Badge
+                                      variant={inv.status === 'Paid' ? 'success' : inv.status === 'Draft' ? 'secondary' : 'outline'}
+                                      size="compact"
+                                      className="text-xs rounded-[6px]"
+                                    >
+                                      {inv.status}
+                                    </Badge>
+                                  )}
+                                  <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                </div>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Disbursements */}
+                    {disbursements.length > 0 && (
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                          Disbursements ({disbursements.length})
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {disbursements.map((d) => {
+                            const disbNo = d.disbursement_number || d.disbursementNumber;
+                            return (
+                              <a
+                                key={d.id}
+                                href={`/disbursements?disbursementId=${d.id}`}
+                                className="p-2.5 bg-[#FFFFFF] border border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
+                                data-testid={`linked-disbursement-${d.id}`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <CreditCard className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                                  <div className="truncate">
+                                    {disbNo && (
+                                      <span className="font-mono text-xs font-medium text-[#475569] tabular-nums block truncate">
+                                        {disbNo}
+                                      </span>
+                                    )}
+                                    <span className="font-bold text-[#1E293B] block truncate">
+                                      {d.category || 'Disbursement'}
+                                    </span>
+                                    <span className="text-xs text-[#475569] block truncate">
+                                      {d.description || 'No description'}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {d.amount != null && (
+                                    <span className="tabular-nums text-xs font-bold text-[#1E293B] font-mono">
+                                      ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                    </span>
+                                  )}
+                                  <ExternalLink className="h-3 w-3 text-[#475569]" />
+                                </div>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Transmittals */}
+                    {transmittals.length > 0 && (
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-bold tracking-normal text-[#475569] block">
+                          Transmittals ({transmittals.length})
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {transmittals.map((t) => (
                             <a
-                              key={inv.id}
-                              href={`/billing?invoiceId=${inv.id}`}
-                              className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
-                              data-testid={`linked-invoice-${inv.id}`}
+                              key={t.id}
+                              href={`/transmittals?transmittalId=${t.id}`}
+                              className="p-2.5 bg-[#FFFFFF] border border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
+                              data-testid={`linked-transmittal-${t.id}`}
                             >
                               <div className="flex items-center gap-2 truncate">
-                                <Receipt className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
+                                <Send className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
                                 <div className="truncate">
                                   <span className="font-bold text-[#1E293B] block truncate">
-                                    {inv.invoice_number || inv.invoiceNumber || 'Invoice'}
+                                    {t.tracking_number || t.trackingNumber || 'Transmittal'}
                                   </span>
-                                  <span className="text-xs text-[#475569] block">
-                                    {clientName}
+                                  <span className="text-xs text-[#475569] block truncate">
+                                    {t.recipient_name || t.recipientName || 'Recipient'}
                                   </span>
                                 </div>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                {invTotal != null && (
-                                  <span className="tabular-nums text-xs font-bold text-[#1E293B]">
-                                    ₱{Number(invTotal).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                )}
-                                {inv.status && (
-                                  <Badge
-                                    variant={inv.status === 'Paid' ? 'success' : inv.status === 'Draft' ? 'secondary' : 'outline'}
-                                    size="compact"
-                                    className="text-xs rounded-[6px]"
-                                  >
-                                    {inv.status}
+                                {t.status && (
+                                  <Badge variant="outline" size="compact" className="text-xs rounded-[8px] border-[#E2E8F0]">
+                                    {t.status}
                                   </Badge>
                                 )}
                                 <ExternalLink className="h-3 w-3 text-[#475569]" />
                               </div>
                             </a>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Disbursements */}
-                  {disbursements.length > 0 && (
-                    <div className="space-y-1.5">
-                      <span className="text-xs font-bold tracking-normal text-[#475569] block">
-                        Disbursements ({disbursements.length})
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {disbursements.map((d) => {
-                          const disbNo = d.disbursement_number || d.disbursementNumber;
-                          return (
-                            <a
-                              key={d.id}
-                              href={`/disbursements?disbursementId=${d.id}`}
-                              className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
-                              data-testid={`linked-disbursement-${d.id}`}
-                            >
-                              <div className="flex items-center gap-2 truncate">
-                                <CreditCard className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                                <div className="truncate">
-                                  {disbNo && (
-                                    <span className="font-mono text-xs font-medium text-[#475569] tabular-nums block truncate">
-                                      {disbNo}
-                                    </span>
-                                  )}
-                                  <span className="font-bold text-[#1E293B] block truncate">
-                                    {d.category || 'Disbursement'}
-                                  </span>
-                                  <span className="text-xs text-[#475569] block truncate">
-                                    {d.description || 'No description'}
-                                  </span>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {d.amount != null && (
-                                  <span className="tabular-nums text-xs font-bold text-[#1E293B]">
-                                    ₱{Number(d.amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                                  </span>
-                                )}
-                                <ExternalLink className="h-3 w-3 text-[#475569]" />
-                              </div>
-                            </a>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Transmittals */}
-                  {transmittals.length > 0 && (
-                    <div className="space-y-1.5">
-                      <span className="text-xs font-bold tracking-normal text-[#475569] block">
-                        Transmittals ({transmittals.length})
-                      </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {transmittals.map((t) => (
-                          <a
-                            key={t.id}
-                            href={`/transmittals?transmittalId=${t.id}`}
-                            className="p-2.5 bg-[#FFFFFF] border-[#E2E8F0] hover:bg-[#F8FAFC] rounded-[6px] flex items-center justify-between gap-2 text-xs transition-colors"
-                            data-testid={`linked-transmittal-${t.id}`}
-                          >
-                            <div className="flex items-center gap-2 truncate">
-                              <Send className="h-3.5 w-3.5 text-[#1E293B] shrink-0" />
-                              <div className="truncate">
-                                <span className="font-bold text-[#1E293B] block truncate">
-                                  {t.tracking_number || t.trackingNumber || 'Transmittal'}
-                                </span>
-                                <span className="text-xs text-[#475569] block truncate">
-                                  {t.recipient_name || t.recipientName || 'Recipient'}
-                                </span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              {t.status && (
-                                <Badge variant="outline" size="compact" className="text-xs rounded-[8px] border-[#E2E8F0]">
-                                  {t.status}
-                                </Badge>
-                              )}
-                              <ExternalLink className="h-3 w-3 text-[#475569]" />
-                            </div>
-                          </a>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 6. Time Logged Summary & Quick Log Entry */}
-            <div className="space-y-3 tabular-nums" data-testid="task-time-logged-section">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] pb-2">
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-[#1E293B]" />
-                  <h4 className="text-xs font-bold tracking-normal text-[#1E293B]">
-                    Time Logged ({formatHours(totalMinutes)})
-                  </h4>
-                </div>
-
-                {canLogTime && !showLogForm && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="xs"
-                    disabled={isPhaseBlocked}
-                    title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
-                    onClick={() => setShowLogForm(true)}
-                    className="text-xs gap-1 rounded-[8px] border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                    data-testid="open-log-time-btn"
-                  >
-                    <Plus className="h-3 w-3" /> Log Time
-                  </Button>
-                )}
-              </div>
-
-              {/* Quick Log Time Form */}
-              {canLogTime && showLogForm && (
-                <form
-                  onSubmit={handleLogTimeSubmit}
-                  className="p-4 bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] space-y-3 text-xs"
-                  data-testid="log-time-form"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#1E293B] tracking-normal">Record Time Spent</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowLogForm(false)}
-                      className="text-[#475569] hover:text-[#1E293B] text-xs underline"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  {logError && (
-                    <div className="p-2 bg-[#FFFFFF] border-2 border-[#FCA5A5] text-[#DC2626] text-xs flex items-center gap-1.5 font-bold">
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                      <span>{logError}</span>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
-                        Date
-                      </label>
-                      <DateInput
-                        aria-label="Time log date"
-                        type="date"
-                        max={workDate()}
-                        value={logDate}
-                        onValueChange={(value) => setLogDate(value)}
-                        className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]"
-                        required
-                        data-testid="log-time-date-input"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
-                        Duration (Minutes)
-                      </label>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Input
-                          type="number"
-                          aria-label="Duration in minutes"
-                          min={1}
-                          max={1440}
-                          step={1}
-                          value={logMinutes}
-                          onChange={(e) => setLogMinutes(e.target.value)}
-                          className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] w-24"
-                          required
-                          data-testid="log-time-minutes-input"
-                        />
-                        <div className="flex items-center gap-1">
-                          {[15, 30, 60, 120].map((preset) => (
-                            <button
-                              key={preset}
-                              type="button"
-                              onClick={() => setLogMinutes(String(preset))}
-                              className={`px-2 py-0.5 rounded-[6px] text-xs  border transition-colors ${
-                                Number(logMinutes) === preset
-                                  ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs border-[#E2E8F0] font-bold'
-                                  : 'bg-[#FFFFFF] text-[#1E293B] border-[#E2E8F0] hover:bg-[#E2E8F0]'
-                              }`}
-                            >
-                              {preset}m
-                            </button>
                           ))}
                         </div>
                       </div>
-                    </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 6. Activity / Work Log Section */}
+              <div className="space-y-3" data-testid="task-time-logged-section">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E2E8F0] pb-2">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-[#1E293B]" />
+                    <h4 className="text-xs font-bold tracking-normal text-[#1E293B]">
+                      Time Logged ({formatHours(totalMinutes)})
+                    </h4>
                   </div>
 
-                  <div>
-                    <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
-                      Work Note / Activity Description
-                    </label>
-                    <Input
-                      type="text"
-                      placeholder="e.g., Reviewed and indexed source document"
-                      value={logNote}
-                      onChange={(e) => setLogNote(e.target.value)}
-                      className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px]"
-                      data-testid="log-time-note-input"
-                    />
-                  </div>
-
-                  <div className="flex justify-end gap-2 pt-1">
+                  {canLogTime && !showLogForm && (
                     <Button
                       type="button"
-                      variant="ghost"
+                      variant="outline"
                       size="xs"
-                      onClick={() => setShowLogForm(false)}
-                      className="text-xs rounded-[8px] border-[#E2E8F0]"
+                      disabled={isPhaseBlocked}
+                      title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
+                      onClick={() => setShowLogForm(true)}
+                      className="text-xs gap-1 rounded-[6px] border border-[#CBD5E1] hover:bg-[#F8FAFC] font-medium"
+                      data-testid="open-log-time-btn"
                     >
-                      Cancel
+                      <Plus className="h-3 w-3" /> Log Time
                     </Button>
-                    <Button
-                      type="submit"
-                      size="xs"
-                      disabled={createTimeEntryMutation.isPending}
-                      className="text-xs font-semibold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
-                      data-testid="log-time-submit-btn"
-                    >
-                      {createTimeEntryMutation.isPending ? 'Saving...' : 'Save Time Entry'}
-                    </Button>
-                  </div>
-                </form>
-              )}
+                  )}
+                </div>
 
-              {/* Time Entries List */}
-              {timeEntryError && <p role="alert" className="text-xs text-[#DC2626]">{timeEntryError}</p>}
-              {isLoadingTime ? (
-                <div className="p-3 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0]">
-                  Loading time entries...
-                </div>
-              ) : timeEntries.length === 0 ? (
-                <div className="p-3 text-center text-xs text-[#475569] bg-[#F8FAFC] rounded-[8px] border-[#E2E8F0] italic">
-                  No time recorded on this task yet. Click &quot;Log Time&quot; to add duration.
-                </div>
-              ) : (
-                <div className="border-[#E2E8F0] rounded-[6px] overflow-hidden bg-[#FFFFFF]">
-                  <div className="divide-y divide-[#CBD5E1] max-h-48 overflow-y-auto">
-                    {timeEntries.map((entry) => (
-                      <TaskTimeEntry
-                        key={entry.id}
-                        onDeleteError={setTimeEntryError}
-                        entry={{ ...entry,
-                          userName: entry.userName || (entry.userId === currentUser?.id ? currentUser.name : null),
-                          userRole: entry.userRole || (entry.userId === currentUser?.id ? currentUser.role : null),
-                        }}
-                        canManage={hasPermission(permissions, 'timelog:edit_all') ||
-                          (entry.userId === currentUser?.id && hasPermission(permissions, 'timelog:edit_own'))}
+                {/* Quick Log Time Form */}
+                {canLogTime && showLogForm && (
+                  <form
+                    onSubmit={handleLogTimeSubmit}
+                    className="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[6px] space-y-3 text-xs"
+                    data-testid="log-time-form"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#1E293B] tracking-normal">Record Time Spent</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowLogForm(false)}
+                        className="text-[#475569] hover:text-[#1E293B] text-xs underline"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    {logError && (
+                      <div className="p-2 bg-[#FFFFFF] border-2 border-[#FCA5A5] text-[#DC2626] text-xs flex items-center gap-1.5 font-bold">
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                        <span>{logError}</span>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
+                          Date
+                        </label>
+                        <DateInput
+                          aria-label="Time log date"
+                          type="date"
+                          max={workDate()}
+                          value={logDate}
+                          onValueChange={(value) => setLogDate(value)}
+                          className="h-8 text-xs bg-[#FFFFFF] border-[#CBD5E1] rounded-[6px]"
+                          required
+                          data-testid="log-time-date-input"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
+                          Duration (Minutes)
+                        </label>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Input
+                            type="number"
+                            aria-label="Duration in minutes"
+                            min={1}
+                            max={1440}
+                            step={1}
+                            value={logMinutes}
+                            onChange={(e) => setLogMinutes(e.target.value)}
+                            className="h-8 text-xs bg-[#FFFFFF] border-[#CBD5E1] rounded-[6px] w-24"
+                            required
+                            data-testid="log-time-minutes-input"
+                          />
+                          <div className="flex items-center gap-1">
+                            {[15, 30, 60, 120].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => setLogMinutes(String(preset))}
+                                className={`px-2 py-0.5 rounded-[6px] text-xs border transition-colors ${
+                                  Number(logMinutes) === preset
+                                    ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs border-[#1D4ED8] font-bold'
+                                    : 'bg-[#FFFFFF] text-[#1E293B] border-[#CBD5E1] hover:bg-[#E2E8F0]'
+                                }`}
+                              >
+                                {preset}m
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold uppercase text-[#475569] block mb-1">
+                        Work Note / Activity Description
+                      </label>
+                      <Input
+                        type="text"
+                        placeholder="e.g., Reviewed and indexed source document"
+                        value={logNote}
+                        onChange={(e) => setLogNote(e.target.value)}
+                        className="h-8 text-xs bg-[#FFFFFF] border-[#CBD5E1] rounded-[6px]"
+                        data-testid="log-time-note-input"
                       />
-                    ))}
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setShowLogForm(false)}
+                        className="text-xs rounded-[6px] border border-[#E2E8F0]"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        size="xs"
+                        disabled={createTimeEntryMutation.isPending}
+                        className="text-xs font-semibold rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
+                        data-testid="log-time-submit-btn"
+                      >
+                        {createTimeEntryMutation.isPending ? 'Saving...' : 'Save Time Entry'}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Time Entries List */}
+                {timeEntryError && <p role="alert" className="text-xs text-[#DC2626]">{timeEntryError}</p>}
+                {isLoadingTime ? (
+                  <div className="p-3 text-center text-xs text-[#64748B] bg-[#F8FAFC] rounded-[8px] border border-[#E2E8F0]">
+                    Loading time entries...
                   </div>
+                ) : timeEntries.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-[#64748B] bg-[#F8FAFC] rounded-[8px] border border-[#E2E8F0] italic">
+                    No time recorded on this task yet. Click &quot;Log Time&quot; to add duration.
+                  </div>
+                ) : (
+                  <div className="border border-[#E2E8F0] rounded-[6px] overflow-hidden bg-[#FFFFFF]">
+                    <div className="divide-y divide-[#CBD5E1] max-h-48 overflow-y-auto">
+                      {timeEntries.map((entry) => (
+                        <TaskTimeEntry
+                          key={entry.id}
+                          onDeleteError={setTimeEntryError}
+                          entry={{
+                            ...entry,
+                            userName: entry.userName || (entry.userId === currentUser?.id ? currentUser.name : null),
+                            userRole: entry.userRole || (entry.userId === currentUser?.id ? currentUser.role : null),
+                          }}
+                          canManage={hasPermission(permissions, 'timelog:edit_all') ||
+                            (entry.userId === currentUser?.id && hasPermission(permissions, 'timelog:edit_own'))}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* RIGHT DETAILS SIDEBAR */}
+            <div className="bg-[#F8FAFC] border-t lg:border-t-0 lg:border-l border-[#E2E8F0] lg:overflow-y-auto p-5 space-y-4 flex flex-col justify-between min-w-0">
+              {/* Top Group */}
+              <div className="space-y-4">
+                {/* 1. Status & Workflow Action Bar */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#475569]">Status</span>
+                    <Badge
+                      variant={task.status === 'Completed' ? 'success' : 'secondary'}
+                      size="compact"
+                      className="rounded-[6px] text-xs font-semibold"
+                      data-testid="task-status-badge"
+                    >
+                      {task.status}
+                    </Badge>
+                  </div>
+
+                  {canMutateStatus && (
+                    <div className="space-y-1.5 pt-1">
+                      {task.status !== 'In Progress' && task.status !== 'Completed' && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isPhaseBlocked}
+                          title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
+                          onClick={() => handleSetTaskStatus('In Progress')}
+                          className="w-full text-xs font-medium gap-1.5 rounded-[6px] border border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#1E293B]"
+                          data-testid="task-status-inprogress-btn"
+                        >
+                          <Clock className="h-3.5 w-3.5 text-[#64748B]" />
+                          <span>Mark In Progress</span>
+                        </Button>
+                      )}
+                      {task.status === 'Completed' ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isPhaseBlocked}
+                          title={isPhaseBlocked ? phaseBlockedTooltip : undefined}
+                          onClick={() => handleSetTaskStatus('In Progress')}
+                          className="w-full text-xs font-medium gap-1.5 rounded-[6px] border border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#1E293B]"
+                          data-testid="task-toggle-status-btn"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5 text-[#16A34A]" />
+                          <span>Mark In Progress</span>
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          disabled={isPhaseBlocked || isPrereqBlocked || checklistCompletionBlocked}
+                          title={
+                            isPhaseBlocked
+                              ? phaseBlockedTooltip
+                              : isPrereqBlocked
+                              ? prereqBlockedTooltip
+                              : checklistCompletionBlocked
+                              ? checklistCompletionReason
+                              : undefined
+                          }
+                          onClick={() => handleSetTaskStatus('Completed')}
+                          className="w-full text-xs font-bold gap-1.5 rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
+                          data-testid="task-toggle-status-btn"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <span>Mark Completed</span>
+                        </Button>
+                      )}
+
+                      {/* Inline blocker hint if completion is blocked */}
+                      {task.status !== 'Completed' && (isPhaseBlocked || isPrereqBlocked || checklistCompletionBlocked) && (
+                        <p className="text-[11px] text-[#92400E] bg-[#FFFBEB] border border-[#FDE68A] rounded p-1.5 leading-snug">
+                          {isPhaseBlocked
+                            ? phaseBlockedTooltip
+                            : isPrereqBlocked
+                            ? prereqBlockedTooltip
+                            : checklistCompletionReason}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {/* 2. Collapsible Details Card */}
+                <div className="bg-white border border-[#E2E8F0] rounded-lg overflow-hidden shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsOpen(!detailsOpen)}
+                    aria-expanded={detailsOpen}
+                    className="w-full px-4 py-2.5 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between text-left hover:bg-[#F1F5F9] transition-colors focus:outline-none"
+                  >
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#475569]">Details</span>
+                    {detailsOpen ? <ChevronDown className="h-3.5 w-3.5 text-[#64748B]" /> : <ChevronRight className="h-3.5 w-3.5 text-[#64748B]" />}
+                  </button>
+
+                  {detailsOpen && (
+                    <div className="p-4 space-y-4 text-xs">
+                      {/* Assigned Team Section */}
+                      <div className="space-y-3" data-testid="assigned-team-section">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-[#475569]">Assigned Team</span>
+                          <span
+                            className="text-[11px] font-bold text-[#FFFFFF] bg-[#1D4ED8] px-1.5 py-0.5 rounded tabular-nums"
+                            data-testid="assigned-team-count"
+                          >
+                            {assignedTeamMembers.length}
+                          </span>
+                        </div>
+
+                        {/* Primary Assignee row */}
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                            Primary Assignee
+                          </span>
+                          <div
+                            className="flex items-center gap-2 p-1.5 rounded-md bg-[#F8FAFC] border border-[#E2E8F0]"
+                            data-testid="task-assignee"
+                          >
+                            <User className="h-3.5 w-3.5 text-[#475569] shrink-0" />
+                            <span className="font-semibold text-[#1E293B] truncate flex-1">
+                              {task.assigneeName || 'Unassigned'}
+                            </span>
+                            {task.assigneeName && (
+                              <Badge size="compact" className="bg-[#1D4ED8] text-[#FFFFFF] text-[10px] font-semibold rounded shrink-0">
+                                Lead
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Co-Assignees summary container */}
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                            Co-Assignees
+                          </span>
+                          <div className="p-1.5 rounded-md bg-[#F8FAFC] border border-[#E2E8F0]" data-testid="task-co-assignees">
+                            {coAssignees.length > 0 ? (
+                              <ul className="space-y-1">
+                                {coAssignees.map((member) => (
+                                  <li key={member.id} className="break-words font-medium text-[#1E293B]">
+                                    {member.name}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <span className="text-[#64748B] italic">None</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reassign Lead Select & Add Co-Assignee Controls */}
+                        {canEdit && (
+                          <div className="space-y-2 pt-1 border-t border-[#E2E8F0]">
+                            {/* Reassign Lead Select */}
+                            {scopedTeamList.length > 0 && (
+                              <div className="space-y-1" data-testid="reassign-lead-container">
+                                <label className="text-[11px] font-medium text-[#64748B] block">Reassign Lead</label>
+                                <Select
+                                  key={`reassign-${reassignSelectKey}`}
+                                  onValueChange={(val) => handleSetLeadAssignee(val)}
+                                >
+                                  <SelectTrigger
+                                    className="h-7 text-xs bg-[#FFFFFF] hover:bg-[#F8FAFC] border-[#CBD5E1] rounded-[6px] text-[#1E293B] w-full"
+                                    data-testid="reassign-lead-select"
+                                  >
+                                    <SelectValue placeholder="Select Primary Assignee..." />
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                                    {scopedTeamList.map((m) => (
+                                      <SelectItem key={m.id} value={m.id} className="text-xs">
+                                        {m.name} {m.id === task.assigneeId ? '(Primary)' : `(${m.role})`}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            )}
+
+                            {/* Add Co-Assignee Select */}
+                            <div className="space-y-1" data-testid="assign-employee-container">
+                              <label className="text-[11px] font-medium text-[#64748B] block">Add Co-Assignee</label>
+                              {availableTeamMembers.length > 0 ? (
+                                <Select
+                                  key={`add-${addSelectKey}`}
+                                  onValueChange={(val) => handleAddCoAssignee(val)}
+                                >
+                                  <SelectTrigger
+                                    className="h-7 text-xs bg-[#F8FAFC] hover:bg-[#E2E8F0] border-[#CBD5E1] rounded-[6px] text-[#1E293B] font-semibold w-full"
+                                    data-testid="assign-employee-select"
+                                  >
+                                    <SelectValue placeholder="+ Add Co-Assignee..." />
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                                    {availableTeamMembers.map((m) => (
+                                      <SelectItem key={m.id} value={m.id} className="text-xs">
+                                        {m.name} ({m.role})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Select disabled>
+                                  <SelectTrigger
+                                    className="h-7 text-xs bg-[#F8FAFC] border-[#E2E8F0] rounded-[6px] text-[#64748B] w-full"
+                                    data-testid="assign-employee-select"
+                                  >
+                                    <SelectValue placeholder="All team assigned" />
+                                  </SelectTrigger>
+                                  <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]" />
+                                </Select>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Members Chips List */}
+                        {assignedTeamMembers.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 pt-1" data-testid="assigned-team-list">
+                            {assignedTeamMembers.map((member) => (
+                              <div
+                                key={member.id}
+                                className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-xs ${
+                                  member.isLead
+                                    ? 'bg-[#EFF6FF] border-[#BFDBFE] text-[#1E293B]'
+                                    : 'bg-white border-[#E2E8F0] text-[#1E293B]'
+                                }`}
+                                data-testid={`assignee-chip-${member.id}`}
+                              >
+                                <User className="h-3 w-3 text-[#64748B]" />
+                                <span className="font-medium text-xs truncate max-w-[120px]">{member.name}</span>
+                                {member.isLead ? (
+                                  <Badge size="compact" className="bg-[#1D4ED8] text-[#FFFFFF] text-[10px] font-semibold rounded px-1 py-0">
+                                    Primary
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" size="compact" className="text-[10px] rounded border-[#CBD5E1] text-[#64748B] px-1 py-0">
+                                    {member.role === 'Admin' || member.name === 'Lorein Wong' ? 'Admin' : (member.role || 'Co-Assignee')}
+                                  </Badge>
+                                )}
+
+                                {canEdit && (
+                                  <div className="flex items-center gap-1 ml-0.5 pl-1 border-l border-[#E2E8F0]">
+                                    {!member.isLead && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSetLeadAssignee(member.id)}
+                                        className="text-[10px] text-[#1D4ED8] hover:underline font-bold"
+                                        title="Make this member the primary assignee"
+                                        data-testid={`make-lead-btn-${member.id}`}
+                                      >
+                                        Make Primary
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveAssignee(member.id)}
+                                      className="text-[#64748B] hover:text-[#DC2626] p-0.5 rounded transition-colors"
+                                      title={`Remove ${member.name}`}
+                                      data-testid={`remove-assignee-btn-${member.id}`}
+                                    >
+                                      <X className="h-2.5 w-2.5" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Due Date row */}
+                      <div className="space-y-1 border-t border-[#E2E8F0] pt-3">
+                        <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                          Due Date
+                        </span>
+                        <div className="font-medium text-[#1E293B]">
+                          {canEdit ? (
+                            <div className="w-full min-w-0">
+                              <DateInput
+                                aria-label="Task due date"
+                                type="date"
+                                value={
+                                  localDueDate
+                                    ? localDueDate.includes('T')
+                                      ? new Date(localDueDate).toISOString().split('T')[0]
+                                      : localDueDate
+                                    : ''
+                                }
+                                onValueChange={(value) => {
+                                  const val = value || null;
+                                  setLocalDueDate(val);
+                                  if (task.workRequestId) {
+                                    updateTask({
+                                      workRequestId: task.workRequestId,
+                                      taskId: task.id,
+                                      data: { dueDate: val, expectedVersion: task.version },
+                                    })
+                                      .then((res) => {
+                                        if (res && onTaskUpdated) {
+                                          onTaskUpdated(res as Task);
+                                        }
+                                      })
+                                      .catch(() => {
+                                        setLocalDueDate(task.dueDate ?? null);
+                                      });
+                                  }
+                                }}
+                                className="h-8 w-full text-xs font-mono tabular-nums bg-[#FFFFFF] border-[#CBD5E1] rounded-[6px]"
+                                data-testid="task-due-date-input"
+                              />
+                              {!localDueDate && <span className="sr-only">Not set</span>}
+                            </div>
+                          ) : (
+                            <span className="font-mono tabular-nums text-xs">
+                              {localDueDate
+                                ? new Date(localDueDate).toLocaleDateString()
+                                : 'Not set'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Phase & Phase Status */}
+                      <div className="space-y-1.5 border-t border-[#E2E8F0] pt-3">
+                        <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                          Phase & Lifecycle
+                        </span>
+                        {(() => {
+                          const phaseInfo = getPhaseBadgeInfo(task.phase);
+                          const PHASES_ORDER = ['pre_processing', 'processing', 'quality_assurance', 'completion'];
+                          const currentWrPhaseIndex = PHASES_ORDER.indexOf(workRequest?.phase || 'pre_processing');
+                          const taskPhaseIndex = PHASES_ORDER.indexOf(task.phase);
+                          const isTaskActivePhase = !workRequest?.phase || task.phase === workRequest.phase;
+                          const isTaskPastPhase = taskPhaseIndex < currentWrPhaseIndex;
+
+                          return (
+                            <div className="space-y-1.5">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[6px] text-xs font-semibold border ${phaseInfo.badgeClass}`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${phaseInfo.dotClass}`} />
+                                  <phaseInfo.Icon className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{phaseInfo.label}</span>
+                                </span>
+
+                                {isTaskActivePhase ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#93C5FD]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
+                                    <span>Active Phase</span>
+                                  </span>
+                                ) : isTaskPastPhase ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#F0FDF4] text-[#166534] border border-[#BBF7D0]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
+                                    <span>Phase Completed (Locked)</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px] text-xs font-medium bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" />
+                                    <span>Upcoming Phase (Locked)</span>
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="text-[11px] text-[#64748B] font-mono tabular-nums flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-[#94A3B8]" />
+                                {task.phaseEnteredAt ? (
+                                  <span>Entered: {new Date(task.phaseEnteredAt).toLocaleDateString()}</span>
+                                ) : (
+                                  <span className="sr-only"> • N/A</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Parent Work Request */}
+                      <div className="space-y-1 border-t border-[#E2E8F0] pt-3">
+                        <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                          Parent Work Request
+                        </span>
+                        <p className="text-xs text-[#1E293B]">
+                          {workRequest ? (
+                            <span className="font-medium text-[#475569]">{workRequest.clientName || 'Parent Workspace'}</span>
+                          ) : (
+                            <span className="font-mono tabular-nums">{task.workRequestId}</span>
+                          )}
+                        </p>
+                      </div>
+
+                      {/* Predecessors */}
+                      {task.predecessors && task.predecessors.length > 0 && (
+                        <div className="space-y-1.5 border-t border-[#E2E8F0] pt-3">
+                          <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                            Prerequisites ({task.predecessors.length})
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {task.predecessors.map((pId) => {
+                              const detail = (task as unknown as { predecessorDetails?: Array<{ id: string; title: string; status: string }> })
+                                .predecessorDetails?.find((d) => d.id === pId);
+                              const predTask = siblingTasks.find((t) => t.id === pId);
+                              const title = detail?.title || predTask?.title || pId.slice(0, 8);
+                              const isDone = (detail?.status || predTask?.status) === 'Completed';
+
+                              return (
+                                <Badge key={pId} variant="outline" size="compact" className="text-xs rounded border-[#CBD5E1] gap-1 font-normal">
+                                  <span>{isDone ? '✓' : '⏳'}</span>
+                                  <span className="font-medium truncate max-w-[140px]">{title}</span>
+                                </Badge>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Total Logged Time */}
+                      <div className="space-y-1 border-t border-[#E2E8F0] pt-3">
+                        <span className="text-[11px] font-semibold text-[#64748B] uppercase tracking-wider block">
+                          Total Logged Time
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5 text-[#2563EB]" />
+                          <span className="font-mono font-bold text-[#0F172A] tabular-nums text-sm">
+                            {formatHours(totalMinutes)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Bottom Sidebar Footer */}
+              <div className="pt-4 border-t border-[#E2E8F0] flex items-center justify-between gap-2 shrink-0">
+                <div className="text-[11px] font-mono text-[#64748B] tabular-nums truncate">
+                  <span title={`Task ID: ${task.id}`}>ID: {task.id.slice(0, 8)}...</span>
+                  {task.phaseEnteredAt && (
+                    <span className="ml-2 hidden sm:inline">
+                      Phase: {new Date(task.phaseEnteredAt).toLocaleDateString()}
+                    </span>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={onClose}
+                  className="text-xs rounded-[6px] border border-[#CBD5E1] bg-white hover:bg-[#F1F5F9] text-[#1E293B] shrink-0 font-medium"
+                  data-testid="task-close-btn"
+                >
+                  Close
+                </Button>
+              </div>
             </div>
           </div>
-
-          {/* Footer */}
-          <DialogFooter className="px-6 py-3 border-t border-[#E2E8F0] bg-[#F8FAFC] flex items-center justify-between">
-            <span className="text-xs text-[#475569]">
-              Task ID: {task.id}
-            </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="text-xs rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#E2E8F0] text-[#1E293B]"
-              data-testid="task-close-btn"
-            >
-              Close
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
