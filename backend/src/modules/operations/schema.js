@@ -205,6 +205,7 @@ const taskTemplateSchema = z.object({
 });
 
 const retainerTemplateBaseSchema = z.object({
+  entity: z.enum(['ATA', 'LTA']).optional(),
   title: z.string().min(1).max(255).optional(),
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),

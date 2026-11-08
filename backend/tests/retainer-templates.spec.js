@@ -4,7 +4,7 @@
  * Verifies:
  * - RBAC Permission Matrix (AC-1 / R1):
  *   - Managers can view templates and generate work requests (retainers:use)
- *   - Managers receive 403 on create/update/delete (retainers:edit)
+ *   - Managers can create/update/delete (role-specific retainers:edit grant)
  *   - Admins can create, update, delete, view, and generate (retainers:use + retainers:edit)
  *   - Operations/Accounting staff receive 403 on all template routes
  * - Template Generation Pipeline (AC-2 / R2):
@@ -58,7 +58,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       entities: ['ATA', 'LTA'],
     });
 
-    // 2. Manager (has retainers:use, lacks retainers:edit)
+    // 2. Manager (has retainers:use and role-specific retainers:edit)
     managerId = '22222222-2222-4222-8222-222222222222';
     managerToken = registerUser({
       id: managerId,
@@ -111,6 +111,23 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
   });
 
   describe('1. RBAC Permission Matrix (AC-1 / R1)', () => {
+    it('does not grant template editing from Management department membership alone', async () => {
+      const departmentOnlyToken = registerUser({
+        name: 'Management Staff',
+        email: 'management-staff@ata-lta.ph',
+        role: 'Staff',
+        departments: ['Management'],
+        entities: ['ATA'],
+      });
+      await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${departmentOnlyToken}`)
+        .set('X-Active-Entity', 'ATA')
+        .send({ name: 'Unauthorized template', clientId: testClient.id })
+        .expect(403);
+      expect(mockTables.retainer_templates.size).toBe(0);
+    });
+
     it('allows Admin to create a retainer template (201 Created)', async () => {
       const res = await request(app)
         .post('/v1/operations/templates')
@@ -138,7 +155,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.data.recurrence).toBe('annual');
     });
 
-    it('rejects Manager attempting to create a retainer template with 403 Forbidden', async () => {
+    it('allows Manager to create a retainer template with role-specific retainers:edit', async () => {
       const res = await request(app)
         .post('/v1/operations/templates')
         .set('Authorization', `Bearer ${managerToken}`)
@@ -148,11 +165,11 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           clientId: testClient.id,
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(201);
+      expect(res.body.data.name).toBe('Manager Created Retainer');
     });
 
-    it('rejects Manager attempting to create on /retainer-templates alias with 403 Forbidden', async () => {
+    it('allows Manager to create on /retainer-templates alias', async () => {
       const res = await request(app)
         .post('/v1/operations/retainer-templates')
         .set('Authorization', `Bearer ${managerToken}`)
@@ -162,8 +179,8 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           clientId: testClient.id,
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(201);
+      expect(res.body.data.name).toBe('Manager Created Retainer');
     });
 
     it('rejects Operations staff attempting to create a template with 403 Forbidden', async () => {
@@ -179,7 +196,7 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.title).toMatch(/forbidden/i);
     });
 
-    it('rejects Manager attempting to update a template with 403 Forbidden', async () => {
+    it('allows Manager to update a template', async () => {
       const templateId = 'tpl-update-test';
       mockTables.retainer_templates.set(templateId, {
         id: templateId,
@@ -196,11 +213,11 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
           name: 'Manager Updated Name',
         });
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(200);
+      expect(res.body.data.name).toBe('Manager Updated Name');
     });
 
-    it('rejects Manager attempting to delete a template with 403 Forbidden', async () => {
+    it('allows Manager to delete a template', async () => {
       const templateId = 'tpl-delete-test';
       mockTables.retainer_templates.set(templateId, {
         id: templateId,
@@ -214,8 +231,8 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
         .set('Authorization', `Bearer ${managerToken}`)
         .set('X-Active-Entity', 'ATA');
 
-      expect(res.status).toBe(403);
-      expect(res.body.title).toMatch(/forbidden/i);
+      expect(res.status).toBe(204);
+      expect(mockTables.retainer_templates.get(templateId).deleted_at).toBeTruthy();
     });
 
     it('allows Manager and Admin to list templates (200 OK)', async () => {
@@ -706,6 +723,128 @@ describe('Parcel P0-E: Retainer Templates & Recurrence', () => {
       expect(res.body.data.title).toBe('Ad-hoc Retainer');
       expect(res.body.data.generation).toBeDefined();
       expect(res.body.data.generation.period_label).toBeNull();
+    });
+  });
+
+  describe('6. Retainer Templates Entity Resolution & Multi-Entity Scoping', () => {
+    it('creates an LTA retainer template in ALL mode without clientId under ent-lta', async () => {
+      const res = await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${adminToken}`)
+        // Note: X-Active-Entity header omitted -> ALL mode
+        .send({
+          name: 'LTA Retainer Without Client',
+          entity: 'LTA',
+          priority: 'Normal',
+          schedule: 'Monthly',
+          pfAmount: 25000,
+          recurrence: 'none',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.name).toBe('LTA Retainer Without Client');
+      expect(res.body.data.entity).toBe('LTA');
+
+      const stored = mockTables.retainer_templates.get(res.body.data.id);
+      expect(stored).toBeDefined();
+      expect(stored.entity_id).toBe('ent-lta');
+    });
+
+    it('creates a retainer template defaulting to LTA when X-Active-Entity: LTA is provided', async () => {
+      const res = await request(app)
+        .post('/v1/operations/templates')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('X-Active-Entity', 'LTA')
+        .send({
+          name: 'Explicit Header LTA Retainer',
+          priority: 'High',
+          recurrence: 'none',
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data).toBeDefined();
+      expect(res.body.data.name).toBe('Explicit Header LTA Retainer');
+      expect(res.body.data.entity).toBe('LTA');
+
+      const stored = mockTables.retainer_templates.get(res.body.data.id);
+      expect(stored).toBeDefined();
+      expect(stored.entity_id).toBe('ent-lta');
+    });
+
+    it('updates, generates, and deletes an LTA retainer template in ALL mode resolving ent-lta from retainer_templates', async () => {
+      const ltaTemplateId = 'tpl-lta-all-resolution';
+      mockTables.retainer_templates.set(ltaTemplateId, {
+        id: ltaTemplateId,
+        entity_id: 'ent-lta',
+        name: 'LTA Template All Resolution',
+        description: 'Template scoped under LTA',
+        priority: 'Normal',
+        recurrence: 'none',
+        assigned_to: managerId,
+        tasks: [{ title: 'LTA Task 1', phase: 'pre_processing' }],
+      });
+
+      // 1. Update in ALL mode (no X-Active-Entity, no entity in body)
+      const updateRes = await request(app)
+        .put(`/v1/operations/templates/${ltaTemplateId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        // Note: X-Active-Entity omitted -> ALL mode
+        .send({
+          name: 'LTA Template Updated In ALL Mode',
+        });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.data.name).toBe('LTA Template Updated In ALL Mode');
+      expect(updateRes.body.data.entity).toBe('LTA');
+      expect(mockTables.retainer_templates.get(ltaTemplateId).entity_id).toBe('ent-lta');
+
+      // 2. Generate in ALL mode (no X-Active-Entity, no entity in body)
+      const genRes = await request(app)
+        .post(`/v1/operations/templates/${ltaTemplateId}/generate`)
+        .set('Authorization', `Bearer ${managerToken}`)
+        // Note: X-Active-Entity omitted -> ALL mode
+        .send({
+          overrides: {
+            dueDate: '2026-12-31',
+          },
+        });
+
+      expect(genRes.status).toBe(201);
+      expect(genRes.body.data.id).toBeDefined();
+      expect(genRes.body.data.title).toBe('LTA Template Updated In ALL Mode');
+      expect(genRes.body.data.entity_id || genRes.body.data.entity).toMatch(/ent-lta|LTA/);
+
+      // 3. Delete in ALL mode (no X-Active-Entity)
+      const delRes = await request(app)
+        .delete(`/v1/operations/templates/${ltaTemplateId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+        // Note: X-Active-Entity omitted -> ALL mode
+
+      expect(delRes.status).toBe(204);
+      expect(mockTables.retainer_templates.get(ltaTemplateId).deleted_at).toBeDefined();
+    });
+
+    it('allows updating a template entity across entities when entity is provided in body', async () => {
+      const templateId = 'tpl-switch-entity';
+      mockTables.retainer_templates.set(templateId, {
+        id: templateId,
+        entity_id: 'ent-ata',
+        name: 'Switch Entity Template',
+        recurrence: 'none',
+      });
+
+      const updateRes = await request(app)
+        .put(`/v1/operations/templates/${templateId}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({
+          entity: 'LTA',
+          name: 'Switched to LTA',
+        });
+
+      expect(updateRes.status).toBe(200);
+      expect(updateRes.body.data.entity).toBe('LTA');
+      expect(mockTables.retainer_templates.get(templateId).entity_id).toBe('ent-lta');
     });
   });
 });
