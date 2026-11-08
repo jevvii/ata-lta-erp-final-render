@@ -643,7 +643,7 @@ describe('UAT Wave 2: Operations Linkage, Assignee Controls, and Modals', () => 
 
     // Meta Grid shows lead assignee
     expect(await screen.findByTestId('task-assignee')).toHaveTextContent('Maria Santos');
-    expect(screen.getByTestId('task-co-assignees')).toBeInTheDocument();
+    expect(screen.getByTestId('assigned-team-list')).toBeVisible();
 
     // Dedicated Assigned Team section shows count 3
     expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
