@@ -191,7 +191,7 @@ function buildStatementDocument(inv, options = {}) {
   const details = inv.print_details || {};
   const entity = inv.entity_code === 'LTA' ? 'LTA' : 'ATA';
   const companyName =
-    entity === 'ATA' ? 'ATA Business Consultancy' : 'LTA Business Management Corp.';
+    entity === 'ATA' ? 'ATA Business Consultancy Services' : 'LTA Business Management Corp';
   const auto = getAutomaticPaymentDetails(inv.payments?.[0]);
   const dateVal = details.paymentDate ?? auto.paymentDate;
   const cashVal = details.cash ?? auto.cash;
@@ -302,11 +302,9 @@ function buildStatementDocument(inv, options = {}) {
       ? `<div class="footer-text">customer's copy</div>`
       : '') +
     `</div>`;
-  const notesHtml = inv.notes
-    ? `<p style="white-space:pre-wrap"><strong>Notes:</strong> ${esc(inv.notes)}</p>`
-    : '';
-  const termsHtml = inv.terms
-    ? `<p style="white-space:pre-wrap"><strong>Terms:</strong> ${esc(inv.terms)}</p>`
+  const noteText = inv.terms || inv.notes || '';
+  const noteHtml = noteText
+    ? `<p style="white-space:pre-wrap"><strong>NOTE:</strong> ${esc(noteText)}</p>`
     : '';
   return (
     headerHtml +
@@ -314,8 +312,7 @@ function buildStatementDocument(inv, options = {}) {
     itemsTableHtml +
     bottomHtml +
     vatHtml +
-    notesHtml +
-    termsHtml +
+    noteHtml +
     signaturesHtml +
     footerHtml
   );
