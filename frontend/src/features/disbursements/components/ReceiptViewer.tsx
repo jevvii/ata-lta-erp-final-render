@@ -211,7 +211,7 @@ export function ReceiptViewer({
 
   return (
     <div
-      className={cn('flex flex-col gap-1.5 w-full', isPdf ? 'flex-1 min-h-0 h-full' : 'shrink-0')}
+      className={cn('flex flex-col gap-1.5 w-full', isPdf || isGoogleDrive ? 'flex-1 min-h-0 h-full' : 'shrink-0')}
       data-testid="receipt-viewer-container"
     >
       {/* Loading signed URL status */}
@@ -407,7 +407,7 @@ export function ReceiptViewer({
               </div>
               <iframe
                 src={parsedExternal.previewUrl}
-                className={cn('w-full flex-1 border-0', !isDocked && 'min-h-[70vh]')}
+                className={cn('w-full flex-1 border-0', isDocked ? 'min-h-0 h-full' : 'min-h-[70vh]')}
                 title={`Google Drive Preview: ${fileName}`}
                 data-testid="receipt-gdrive-frame"
                 allow="autoplay"

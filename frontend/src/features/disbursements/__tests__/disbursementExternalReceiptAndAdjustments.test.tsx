@@ -198,6 +198,28 @@ describe('Disbursement External Link Receipts & Adjustments', () => {
       const iframe = screen.getByTestId('receipt-gdrive-frame');
       expect(iframe).toBeInTheDocument();
       expect(iframe).toHaveAttribute('src', 'https://drive.google.com/file/d/1234567890abcdef/preview');
+
+      // Verify height classes for docked Google Drive preview (aligned with PDF)
+      const container = screen.getByTestId('receipt-viewer-container');
+      expect(container.className).toContain('flex-1 min-h-0 h-full');
+      expect(iframe.className).toContain('min-h-0 h-full');
+    });
+
+    it('applies min-h-[70vh] on receipt-gdrive-frame when isDocked is false', () => {
+      const gdriveUrl = 'https://drive.google.com/file/d/1234567890abcdef/view?usp=sharing';
+      render(
+        <ReceiptViewer
+          receiptS3Key={gdriveUrl}
+          receiptFileName="BIR Official Receipt.pdf"
+          onRefetchReceiptUrl={vi.fn()}
+          isDocked={false}
+        />
+      );
+
+      const container = screen.getByTestId('receipt-viewer-container');
+      expect(container.className).toContain('flex-1 min-h-0 h-full');
+      const iframe = screen.getByTestId('receipt-gdrive-frame');
+      expect(iframe.className).toContain('min-h-[70vh]');
     });
 
     it('passes external_url to DocumentViewerModal when opening modal preview', async () => {
