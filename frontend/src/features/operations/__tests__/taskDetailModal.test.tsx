@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import { useSessionStore } from '@/lib/session';
@@ -596,5 +596,231 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
     expect(screen.getByText('Active Phase')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('task-toggle-status-btn')).not.toBeDisabled());
     expect(screen.getByTestId('task-upload-doc-btn')).not.toBeDisabled();
+  });
+
+  describe('Jira 2-Column Workspace Redesign & Interactive Cards', () => {
+    it('renders the Jira-style 2-column workspace layout with top breadcrumbs and right details sidebar', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // 1. Modal shell sizing
+      const modal = screen.getByTestId('task-detail-modal');
+      expect(modal.className).toContain('max-w-5xl');
+
+      // 2. Breadcrumbs
+      expect(screen.getByText('ATA')).toBeInTheDocument();
+      expect(screen.getByText('[wr-888]')).toBeInTheDocument();
+      expect(screen.getByText('Corporate Year-End Review')).toBeInTheDocument();
+
+      // 3. Left pane components
+      expect(screen.getByTestId('task-title')).toHaveTextContent('Audit Execution Task');
+      expect(screen.getByTestId('task-description')).toHaveTextContent('Perform compliance audit steps');
+      expect(screen.getByTestId('task-documents-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-linked-records-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-time-logged-section')).toBeInTheDocument();
+
+      // 4. Right sidebar components
+      expect(screen.getByTestId('task-status-badge')).toHaveTextContent('In Progress');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Lorein Wong');
+      expect(screen.getByTestId('task-close-btn')).toBeInTheDocument();
+    });
+
+    it('toggles collapsible attachments section and details card with aria-expanded attributes', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // Verify attachments toggle
+      const attachmentsToggle = screen.getByRole('button', { name: /Attachments/i });
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('linked-doc-item-doc-task-linked')).toBeInTheDocument();
+
+      fireEvent.click(attachmentsToggle);
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByTestId('linked-doc-item-doc-task-linked')).not.toBeInTheDocument();
+
+      fireEvent.click(attachmentsToggle);
+      expect(attachmentsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('linked-doc-item-doc-task-linked')).toBeInTheDocument();
+
+      // Verify details card toggle
+      const detailsToggle = screen.getByRole('button', { name: /Details/i });
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+
+      fireEvent.click(detailsToggle);
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByTestId('assigned-team-section')).not.toBeInTheDocument();
+
+      fireEvent.click(detailsToggle);
+      expect(detailsToggle).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
+    });
+
+    it('renders attachment cards with preview thumbnail, category, and filename', async () => {
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={mockTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      const docCard = await screen.findByTestId('linked-doc-item-doc-task-linked');
+      expect(docCard).toBeInTheDocument();
+      expect(within(docCard).getByText('Audit Report.pdf')).toBeInTheDocument();
+      expect(within(docCard).getByText('FINANCIAL')).toBeInTheDocument();
+
+      // Preview eye button
+      const previewBtn = within(docCard).getByTitle('Preview Document');
+      expect(previewBtn).toBeInTheDocument();
+    });
+
+    it('renders status badge and status action buttons in the top header bar and unified team list in details', async () => {
+      const taskWithAssignees: Task = {
+        ...mockTask,
+        assigneeId: 'user-admin',
+        assigneeName: 'Lorein Wong',
+        assignees: ['user-admin', 'co-one'],
+        taskAssignees: [
+          { taskId: mockTask.id, userId: 'co-one', userName: 'Ben Cruz', assignedBy: null, assignedAt: null },
+        ],
+      };
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={taskWithAssignees}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // Status badge and toggle button in top header bar
+      const statusBadge = screen.getByTestId('task-status-badge');
+      expect(statusBadge).toHaveTextContent('In Progress');
+      const toggleBtn = screen.getByTestId('task-toggle-status-btn');
+      expect(toggleBtn).toBeInTheDocument();
+      expect(toggleBtn).toHaveTextContent('Mark Completed');
+
+      // Unified Assigned Team list
+      const teamSection = screen.getByTestId('assigned-team-section');
+      expect(within(teamSection).getByTestId('assigned-team-count')).toHaveTextContent('2');
+
+      const teamList = screen.getByTestId('assigned-team-list');
+      expect(within(teamList).getByTestId('assignee-chip-user-admin')).toBeInTheDocument();
+      expect(within(teamList).getByTestId('assignee-chip-co-one')).toBeInTheDocument();
+
+      // Primary assignee has Lead badge
+      const leadChip = within(teamList).getByTestId('assignee-chip-user-admin');
+      expect(leadChip).toHaveTextContent('Lorein Wong');
+      expect(within(leadChip).getByText('Lead')).toBeInTheDocument();
+
+      // Co-assignee has Make Lead button and Remove button
+      const coChip = within(teamList).getByTestId('assignee-chip-co-one');
+      expect(coChip).toHaveTextContent('Ben Cruz');
+      expect(within(coChip).getByTestId('make-lead-btn-co-one')).toHaveTextContent('Make Lead');
+      expect(within(coChip).getByTestId('remove-assignee-btn-co-one')).toBeInTheDocument();
+    });
+
+    it('renders clean empty state with UserAvatar when no team members are assigned', async () => {
+      const unassignedTask: Task = {
+        ...mockTask,
+        assigneeId: null,
+        assigneeName: null,
+        assignees: [],
+        taskAssignees: [],
+      };
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={unassignedTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Unassigned');
+      const teamList = screen.getByTestId('assigned-team-list');
+      expect(within(teamList).getByText('Unassigned')).toBeInTheDocument();
+      expect(within(teamList).getByText('?')).toBeInTheDocument();
+    });
+
+    it('does not display top-right ID pill in DialogHeader and does not lock Mark Completed on background refetch', async () => {
+      let resolveSecondFetch: (val: unknown) => void = () => {};
+      let fetchCount = 0;
+
+      vi.mocked(global.fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.endsWith('/operations/work-requests/wr-888/tasks/task-777')) {
+          fetchCount++;
+          if (fetchCount === 1) {
+            return new Response(JSON.stringify({
+              data: { ...mockTask, checklist: [] },
+            }), { status: 200 });
+          }
+          // Subsequent fetch (simulating 8-second background poll)
+          await new Promise((resolve) => { resolveSecondFetch = resolve; });
+          return new Response(JSON.stringify({
+            data: { ...mockTask, checklist: [] },
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={{ ...mockTask, checklist: [] }}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // 1. Verify DialogHeader does not contain top-right "ID: ..." pill
+      const headerControls = screen.getByTestId('task-status-badge').parentElement?.parentElement;
+      expect(headerControls).not.toHaveTextContent(/ID:\s*task/i);
+
+      // 2. Initial load succeeds and Mark Completed is enabled
+      const markCompletedBtn = await screen.findByRole('button', { name: 'Mark Completed' });
+      await waitFor(() => expect(markCompletedBtn).toBeEnabled());
+
+      // 3. Trigger a background refetch (simulating the 8-second interval poll)
+      act(() => {
+        void queryClient.invalidateQueries({
+          queryKey: operationsKeys.taskDetail('wr-888', mockTask.id),
+        });
+      });
+
+      // While the background refetch is pending (isFetching === true), Mark Completed must NOT be disabled
+      // and "Wait for the checklist to load successfully" must NOT be displayed
+      expect(markCompletedBtn).toBeEnabled();
+      expect(screen.queryByText(/Wait for the checklist to load successfully/i)).not.toBeInTheDocument();
+
+      // Resolve the background refetch
+      resolveSecondFetch(null);
+      await waitFor(() => expect(markCompletedBtn).toBeEnabled());
+      expect(screen.queryByText(/Wait for the checklist to load successfully/i)).not.toBeInTheDocument();
+    });
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vite
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { PhaseKanbanBoard } from '../components/PhaseKanbanBoard';
+import { PhaseKanbanBoard, getTaskAssignees } from '../components/PhaseKanbanBoard';
 import { RerouteModal } from '../components/RerouteModal';
 import { useSessionStore } from '@/lib/session';
 import { useBlockingModalStore } from '../components/BlockingActionModal';
@@ -1065,6 +1065,216 @@ describe('Phase Kanban Board & Routing Features (Milestone 3)', () => {
     const qaBadge = await screen.findByTestId('qa-status-badge-task-1');
     expect(qaBadge).toHaveTextContent('Under Review');
     expect(qaBadge).not.toHaveTextContent('Failed');
+  });
+
+  describe('Adaptive Hybrid UserAvatar & Dynamic Multi-Assignee Compaction', () => {
+    it('resolves and sorts assignees with getTaskAssignees correctly', () => {
+      const teamList = [
+        { id: 'u-lead', name: 'Maria Santos', role: 'Manager' },
+        { id: 'u-staff-b', name: 'Ben Cruz', role: 'Staff' },
+        { id: 'u-staff-a', name: 'Ana Reyes', role: 'Staff' },
+      ];
+
+      const task = {
+        id: 'task-test',
+        workRequestId: 'wr-101',
+        title: 'Multi Assignee Test',
+        phase: 'pre_processing' as const,
+        status: 'In Progress' as const,
+        boardOrder: 1000,
+        assigneeId: 'u-lead',
+        assigneeName: 'Maria Santos',
+        assignees: ['u-staff-b', 'u-lead', 'u-staff-a'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      } as unknown as Task;
+
+      const assignees = getTaskAssignees(task, teamList);
+      expect(assignees).toHaveLength(3);
+      // Lead is always first
+      expect(assignees[0]).toEqual({
+        id: 'u-lead',
+        name: 'Maria Santos',
+        avatarUrl: null,
+        isLead: true,
+      });
+      // Remaining co-assignees are alphabetically sorted (Ana before Ben)
+      expect(assignees[1]).toEqual({
+        id: 'u-staff-a',
+        name: 'Ana Reyes',
+        avatarUrl: null,
+        isLead: false,
+      });
+      expect(assignees[2]).toEqual({
+        id: 'u-staff-b',
+        name: 'Ben Cruz',
+        avatarUrl: null,
+        isLead: false,
+      });
+    });
+
+    it('renders single assignee with UserAvatar initials and full name on the task card', async () => {
+      const { wrapper } = createTestHarness();
+      const singleTask = {
+        ...mockPreTasks[0]!,
+        assigneeId: 'u-lead-1',
+        assigneeName: 'Maria Santos',
+        assignees: ['u-lead-1'],
+      };
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests?')) {
+          return new Response(JSON.stringify({ data: [mockWorkRequests[0]!] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101/tasks')) {
+          return new Response(JSON.stringify({ data: [singleTask] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101')) {
+          return new Response(JSON.stringify({ data: mockWorkRequests[0]! }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(JSON.stringify({ data: [{ id: 'u-lead-1', name: 'Maria Santos' }] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+      const container = await screen.findByTestId('task-card-assignees-task-1');
+      expect(container).toHaveAttribute('title', 'Maria Santos (Lead)');
+      expect(container).toHaveTextContent('MS');
+      expect(container).toHaveTextContent('Maria Santos');
+      expect(screen.queryByTestId('task-card-assignee-label-task-1')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('task-card-assignee-overflow-task-1')).not.toBeInTheDocument();
+    });
+
+    it('renders 2 assignees with stacked UserAvatars and "First1, First2" label', async () => {
+      const { wrapper } = createTestHarness();
+      const twoAssigneesTask = {
+        ...mockPreTasks[0]!,
+        assigneeId: 'u-lead-1',
+        assigneeName: 'Maria Santos',
+        assignees: ['u-lead-1', 'u-staff-1'],
+      };
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests?')) {
+          return new Response(JSON.stringify({ data: [mockWorkRequests[0]!] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101/tasks')) {
+          return new Response(JSON.stringify({ data: [twoAssigneesTask] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101')) {
+          return new Response(JSON.stringify({ data: mockWorkRequests[0]! }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(JSON.stringify({
+            data: [
+              { id: 'u-lead-1', name: 'Maria Santos' },
+              { id: 'u-staff-1', name: 'Juan Dela Cruz' },
+            ],
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+      const container = await screen.findByTestId('task-card-assignees-task-1');
+      expect(container).toHaveAttribute('title', 'Maria Santos (Lead), Juan Dela Cruz');
+      expect(container).toHaveTextContent('MS');
+      expect(container).toHaveTextContent('JC');
+
+      const label = screen.getByTestId('task-card-assignee-label-task-1');
+      expect(label).toHaveTextContent('Maria, Juan');
+      expect(container).toHaveTextContent('Maria Santos, Juan Dela Cruz');
+      expect(screen.queryByTestId('task-card-assignee-overflow-task-1')).not.toBeInTheDocument();
+    });
+
+    it('renders 4 assignees with 3 stacked UserAvatars, "+1" overflow pill, and "LeadFirst +3" label', async () => {
+      const { wrapper } = createTestHarness();
+      const fourAssigneesTask = {
+        ...mockPreTasks[0]!,
+        assigneeId: 'u-lead-1',
+        assigneeName: 'Maria Santos',
+        assignees: ['u-lead-1', 'u-staff-1', 'u-staff-2', 'u-staff-3'],
+      };
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests?')) {
+          return new Response(JSON.stringify({ data: [mockWorkRequests[0]!] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101/tasks')) {
+          return new Response(JSON.stringify({ data: [fourAssigneesTask] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101')) {
+          return new Response(JSON.stringify({ data: mockWorkRequests[0]! }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(JSON.stringify({
+            data: [
+              { id: 'u-lead-1', name: 'Maria Santos' },
+              { id: 'u-staff-1', name: 'Ana Reyes' },
+              { id: 'u-staff-2', name: 'Ben Cruz' },
+              { id: 'u-staff-3', name: 'Carlos Diaz' },
+            ],
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+      const container = await screen.findByTestId('task-card-assignees-task-1');
+      expect(container).toHaveAttribute('title', 'Maria Santos (Lead), Ana Reyes, Ben Cruz, Carlos Diaz');
+
+      // Top 3 avatars (Maria, Ana, Ben)
+      expect(container).toHaveTextContent('MS');
+      expect(container).toHaveTextContent('AR');
+      expect(container).toHaveTextContent('BC');
+
+      // Overflow pill (+1)
+      const overflowPill = screen.getByTestId('task-card-assignee-overflow-task-1');
+      expect(overflowPill).toHaveTextContent('+1');
+
+      // Dynamic compaction label (LeadFirst +3)
+      const label = screen.getByTestId('task-card-assignee-label-task-1');
+      expect(label).toHaveTextContent('Maria +3');
+    });
+
+    it('renders clean unassigned state when task has 0 assignees', async () => {
+      const { wrapper } = createTestHarness();
+      const unassignedTask = {
+        ...mockPreTasks[0]!,
+        assigneeId: null,
+        assigneeName: null,
+        assignees: [],
+      };
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests?')) {
+          return new Response(JSON.stringify({ data: [mockWorkRequests[0]!] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101/tasks')) {
+          return new Response(JSON.stringify({ data: [unassignedTask] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-101')) {
+          return new Response(JSON.stringify({ data: mockWorkRequests[0]! }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      render(<PhaseKanbanBoard initialWorkRequestId="wr-101" />, { wrapper });
+
+      const container = await screen.findByTestId('task-card-assignees-task-1');
+      expect(container).toHaveAttribute('title', 'Unassigned');
+      expect(container).toHaveTextContent('?');
+      expect(container).toHaveTextContent('Unassigned');
+    });
   });
 });
 

@@ -547,4 +547,249 @@ describe('WorkRequestSidePeek Enhanced Notion-like Features', () => {
     expect(untrackSpy).toHaveBeenCalled();
     expect(removeChannelSpy).toHaveBeenCalledWith(channel);
   });
+
+  describe('Tasks Breakdown Adaptive Hybrid UserAvatar Display', () => {
+    const taskZero: Task = {
+      ...mockTask,
+      id: 'task-zero',
+      title: 'Task With Zero Assignees',
+      assigneeId: null,
+      assigneeName: null,
+      assignees: [],
+    };
+
+    const taskOne: Task = {
+      ...mockTask,
+      id: 'task-one',
+      title: 'Task With Single Assignee',
+      assigneeId: 'user-emp-1',
+      assigneeName: 'Alice Staff',
+      assignees: ['user-emp-1'],
+    };
+
+    const taskTwo: Task = {
+      ...mockTask,
+      id: 'task-two',
+      title: 'Task With Two Assignees',
+      assigneeId: 'user-emp-1',
+      assigneeName: 'Alice Staff',
+      assignees: ['user-emp-1', 'user-emp-2'],
+      assigneeDetails: [
+        { userId: 'user-emp-1', userName: 'Alice Staff' },
+        { userId: 'user-emp-2', userName: 'Bob Smith' },
+      ],
+    };
+
+    const taskFour: Task = {
+      ...mockTask,
+      id: 'task-four',
+      title: 'Task With Four Assignees',
+      assigneeId: 'user-emp-1',
+      assigneeName: 'Alice Staff',
+      assignees: ['user-emp-1', 'user-emp-2', 'user-emp-3', 'user-emp-4'],
+      assigneeDetails: [
+        { userId: 'user-emp-1', userName: 'Alice Staff' },
+        { userId: 'user-emp-2', userName: 'Bob Smith' },
+        { userId: 'user-emp-3', userName: 'Carlos Diaz' },
+        { userId: 'user-emp-4', userName: 'Diana Prince' },
+      ],
+    };
+
+    it('renders 0 assignees as "?" avatar and "Unassigned" text', async () => {
+      useSessionStore.getState().setSession({
+        user: userAdmin,
+        permissions: ['workflow:view', 'workflow:edit'],
+        activeEntity: 'ATA',
+      });
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests/wr-peek-1/tasks')) {
+          return new Response(JSON.stringify({ data: [taskZero] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-peek-1')) {
+          return new Response(JSON.stringify({ data: { ...mockWr, tasks: [taskZero] } }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(JSON.stringify({ data: [] }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      const { wrapper } = createTestHarness();
+      render(
+        <WorkRequestSidePeek isOpen={true} workRequestId="wr-peek-1" onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('side-peek-task-assignees-task-zero')).toBeInTheDocument();
+      });
+
+      const container = screen.getByTestId('side-peek-task-assignees-task-zero');
+      expect(container).toHaveAttribute('title', 'Unassigned');
+
+      const label = screen.getByTestId('side-peek-task-assignee-label-task-zero');
+      expect(label).toHaveTextContent('Unassigned');
+      expect(label).toHaveClass('italic');
+      expect(container).toHaveTextContent('?');
+    });
+
+    it('renders 1 assignee as Lead UserAvatar and full name label', async () => {
+      useSessionStore.getState().setSession({
+        user: userAdmin,
+        permissions: ['workflow:view', 'workflow:edit'],
+        activeEntity: 'ATA',
+      });
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests/wr-peek-1/tasks')) {
+          return new Response(JSON.stringify({ data: [taskOne] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-peek-1')) {
+          return new Response(JSON.stringify({ data: { ...mockWr, tasks: [taskOne] } }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: 'user-emp-1', name: 'Alice Staff', role: 'Staff' }],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      const { wrapper } = createTestHarness();
+      render(
+        <WorkRequestSidePeek isOpen={true} workRequestId="wr-peek-1" onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('side-peek-task-assignees-task-one')).toBeInTheDocument();
+      });
+
+      const container = screen.getByTestId('side-peek-task-assignees-task-one');
+      expect(container).toHaveAttribute('title', 'Alice Staff (Lead)');
+
+      const label = screen.getByTestId('side-peek-task-assignee-label-task-one');
+      expect(label).toHaveTextContent('Alice Staff');
+      expect(container).toHaveTextContent('AS');
+    });
+
+    it('renders 2 assignees as stacked avatars and "First1, First2" label with accessible sr-only text', async () => {
+      useSessionStore.getState().setSession({
+        user: userAdmin,
+        permissions: ['workflow:view', 'workflow:edit'],
+        activeEntity: 'ATA',
+      });
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests/wr-peek-1/tasks')) {
+          return new Response(JSON.stringify({ data: [taskTwo] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-peek-1')) {
+          return new Response(JSON.stringify({ data: { ...mockWr, tasks: [taskTwo] } }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 'user-emp-1', name: 'Alice Staff', role: 'Staff' },
+                { id: 'user-emp-2', name: 'Bob Smith', role: 'Staff' },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      const { wrapper } = createTestHarness();
+      render(
+        <WorkRequestSidePeek isOpen={true} workRequestId="wr-peek-1" onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('side-peek-task-assignees-task-two')).toBeInTheDocument();
+      });
+
+      const container = screen.getByTestId('side-peek-task-assignees-task-two');
+      expect(container).toHaveAttribute('title', 'Alice Staff (Lead), Bob Smith');
+
+      const label = screen.getByTestId('side-peek-task-assignee-label-task-two');
+      expect(label).toHaveTextContent('Alice, Bob');
+
+      // Both avatars present
+      expect(container).toHaveTextContent('AS');
+      expect(container).toHaveTextContent('BS');
+
+      // Accessible full names
+      const srOnly = container.querySelector('.sr-only');
+      expect(srOnly).toHaveTextContent('Alice Staff, Bob Smith');
+    });
+
+    it('renders 4 assignees as 3 stacked avatars, +1 overflow badge, and "LeadFirst +3" label', async () => {
+      useSessionStore.getState().setSession({
+        user: userAdmin,
+        permissions: ['workflow:view', 'workflow:edit'],
+        activeEntity: 'ATA',
+      });
+
+      vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/operations/work-requests/wr-peek-1/tasks')) {
+          return new Response(JSON.stringify({ data: [taskFour] }), { status: 200 });
+        }
+        if (url.includes('/operations/work-requests/wr-peek-1')) {
+          return new Response(JSON.stringify({ data: { ...mockWr, tasks: [taskFour] } }), { status: 200 });
+        }
+        if (url.includes('/me/team')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: 'user-emp-1', name: 'Alice Staff', role: 'Staff' },
+                { id: 'user-emp-2', name: 'Bob Smith', role: 'Staff' },
+                { id: 'user-emp-3', name: 'Carlos Diaz', role: 'Staff' },
+                { id: 'user-emp-4', name: 'Diana Prince', role: 'Staff' },
+              ],
+            }),
+            { status: 200 }
+          );
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+
+      const { wrapper } = createTestHarness();
+      render(
+        <WorkRequestSidePeek isOpen={true} workRequestId="wr-peek-1" onClose={vi.fn()} />,
+        { wrapper }
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('side-peek-task-assignees-task-four')).toBeInTheDocument();
+      });
+
+      const container = screen.getByTestId('side-peek-task-assignees-task-four');
+      expect(container).toHaveAttribute(
+        'title',
+        'Alice Staff (Lead), Bob Smith, Carlos Diaz, Diana Prince'
+      );
+
+      const label = screen.getByTestId('side-peek-task-assignee-label-task-four');
+      expect(label).toHaveTextContent('Alice +3');
+
+      // Overflow pill
+      const overflowBadge = screen.getByTestId('side-peek-task-assignee-overflow-task-four');
+      expect(overflowBadge).toHaveTextContent('+1');
+
+      // Accessible full names
+      const srOnly = container.querySelector('.sr-only');
+      expect(srOnly).toHaveTextContent('Alice Staff, Bob Smith, Carlos Diaz, Diana Prince');
+    });
+  });
 });

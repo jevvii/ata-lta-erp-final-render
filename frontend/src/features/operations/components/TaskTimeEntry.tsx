@@ -72,7 +72,7 @@ export function TaskTimeEntry({ entry, canManage, onDeleteError }: {
   };
 
   return (
-    <div className="p-2.5 space-y-2 text-xs hover:bg-[#F8FAFC] transition-colors" data-testid={`time-entry-item-${entry.id}`}>
+    <div className="p-3 space-y-2 text-xs hover:bg-[#F8FAFC] transition-colors" data-testid={`time-entry-item-${entry.id}`}>
       <div className="flex items-start gap-2.5">
         <UserAvatar
           userId={entry.userId}
@@ -80,23 +80,23 @@ export function TaskTimeEntry({ entry, canManage, onDeleteError }: {
           avatarUrl={entry.userAvatarUrl}
           size="sm"
           shape="circle"
-          className="h-7 w-7 text-[10px]"
+          className="h-7 w-7 text-[10px] shrink-0"
         />
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0 break-words">
               <span className="font-bold text-[#1E293B]">{name}</span>
-              <span className="block text-[#475569]">{entry.userRole || 'Role unavailable'}</span>
+              <span className="block text-[11px] text-[#64748B]">{entry.userRole || 'Role unavailable'}</span>
             </div>
-            <Badge variant="outline" size="compact" className="shrink-0 text-xs rounded-[8px] border-[#E2E8F0]">
+            <Badge variant="outline" size="compact" className="shrink-0 text-xs font-mono font-semibold rounded-[6px] border-[#CBD5E1] bg-[#F8FAFC] text-[#1E293B] tabular-nums">
               {entry.durationMinutes} min
             </Badge>
           </div>
-          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[#475569]">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[#64748B] font-mono tabular-nums">
             <span>Work date: <time dateTime={entry.entryDate}>{entry.entryDate}</time></span>
             <span>Logged: <time dateTime={entry.createdAt}>{loggedTimestamp(entry.createdAt)}</time></span>
           </div>
-          {entry.note && <p className="text-[#475569] whitespace-pre-wrap break-words">{entry.note}</p>}
+          {entry.note && <p className="text-[#334155] whitespace-pre-wrap break-words text-xs leading-relaxed bg-[#F8FAFC] p-2 rounded border border-[#E2E8F0]">{entry.note}</p>}
           {canManage && !editing && !confirmDelete && (
             <div className="flex gap-3 pt-1">
               <button type="button" disabled={pending} className="text-[#475569] hover:text-[#1E293B] underline disabled:opacity-50"

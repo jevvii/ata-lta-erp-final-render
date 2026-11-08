@@ -73,13 +73,33 @@ export function TaskChecklist({
   };
 
   return (
-    <section className="space-y-2" aria-label="Task checklist" aria-busy={loading || saving}>
-      <h4 className="flex items-center gap-1.5 text-xs font-bold text-[#475569]">
-        <CheckSquare className="h-3.5 w-3.5" />
-        {ready && !loadError
-          ? `Checklist (${items.filter((item) => item.completed).length}/${items.length})`
-          : 'Checklist'}
-      </h4>
+    <section className="space-y-2.5" aria-label="Task checklist" aria-busy={loading || saving}>
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="flex items-center gap-1.5 text-xs font-bold text-[#475569]">
+          <CheckSquare className="h-3.5 w-3.5 text-[#64748B]" />
+          <span>
+            {ready && !loadError
+              ? `Checklist (${items.filter((item) => item.completed).length}/${items.length})`
+              : 'Checklist'}
+          </span>
+        </h4>
+        {ready && !loadError && items.length > 0 && (
+          <span className="text-[11px] font-mono font-semibold text-[#64748B] tabular-nums">
+            {Math.round((items.filter((item) => item.completed).length / items.length) * 100)}%
+          </span>
+        )}
+      </div>
+
+      {ready && !loadError && items.length > 0 && (
+        <div className="w-full bg-[#E2E8F0] h-1.5 rounded-full overflow-hidden">
+          <div
+            className="bg-[#2563EB] h-full transition-all duration-300 rounded-full"
+            style={{
+              width: `${(items.filter((item) => item.completed).length / items.length) * 100}%`,
+            }}
+          />
+        </div>
+      )}
 
       {loadError || (!loading && !ready) ? (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-[#CBD5E1] p-3 text-xs text-[#475569]">

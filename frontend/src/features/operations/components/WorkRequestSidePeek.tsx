@@ -59,6 +59,8 @@ import {
   isTaskRejected,
   isTaskPendingApproval,
   canResubmitTask,
+  getTaskAssignees,
+  getFirstName,
 } from '../lib/taskScope';
 import { getPhaseBadgeInfo, getStatusBadgeInfo } from '../lib/statusBadges';
 import { TaskTypeBadge } from '../lib/taskTypes';
@@ -72,6 +74,7 @@ import {
   isConcurrencyConflictError,
 } from '@/components/common/ConflictResolutionModal';
 import { PresenceAvatars } from '@/components/common/PresenceAvatars';
+import { UserAvatar } from '@/components/common/UserAvatar';
 import { operationsKeys } from '../api/queryKeys';
 import type { ApiError } from '@/lib/api';
 import {
@@ -302,9 +305,11 @@ export function WorkRequestSidePeek({
   // Fetch team directory for name resolution (UAT2-5)
   const { data: rawTeam } = useTeam();
   const teamList = useMemo(() => {
-    if (Array.isArray(rawTeam)) return rawTeam;
+    if (Array.isArray(rawTeam)) {
+      return rawTeam as Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }>;
+    }
     if (rawTeam && typeof rawTeam === 'object' && 'data' in rawTeam && Array.isArray((rawTeam as { data: unknown[] }).data)) {
-      return (rawTeam as { data: Array<{ id: string; name: string }> }).data;
+      return (rawTeam as { data: Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }> }).data;
     }
     return [];
   }, [rawTeam]);
@@ -987,16 +992,111 @@ export function WorkRequestSidePeek({
                                           <span>Upcoming Phase (Locked)</span>
                                         </span>
                                       )}
-                                      {(task.assigneeName || task.assigneeId) && (
-                                        <>
-                                          <span>•</span>
-                                          <span className="font-medium text-[#1E293B]">
-                                            {task.assigneeName
-                                              ? resolveUserName(task.assigneeName)
-                                              : resolveUserName(task.assigneeId)}
-                                          </span>
-                                        </>
-                                      )}
+                                      {(() => {
+                                        const taskAssignees = getTaskAssignees(task, teamList);
+                                        const a0 = taskAssignees[0];
+                                        const a1 = taskAssignees[1];
+                                        return (
+                                          <>
+                                            <span>•</span>
+                                            <div
+                                              className="inline-flex items-center gap-1.5 min-w-0"
+                                              data-testid={`side-peek-task-assignees-${task.id}`}
+                                              title={
+                                                taskAssignees.length > 0
+                                                  ? taskAssignees.map((a) => `${a.name}${a.isLead ? ' (Lead)' : ''}`).join(', ')
+                                                  : 'Unassigned'
+                                              }
+                                            >
+                                              {taskAssignees.length === 0 && (
+                                                <>
+                                                  <UserAvatar name="?" size="xs" shape="circle" className="h-5 w-5 text-[9px] shrink-0 opacity-70" />
+                                                  <span className="truncate text-[#64748B] italic" data-testid={`side-peek-task-assignee-label-${task.id}`}>
+                                                    Unassigned
+                                                  </span>
+                                                </>
+                                              )}
+                                              {taskAssignees.length === 1 && a0 && (
+                                                <>
+                                                  <UserAvatar
+                                                    userId={a0.id}
+                                                    name={a0.name}
+                                                    avatarUrl={a0.avatarUrl}
+                                                    size="xs"
+                                                    shape="circle"
+                                                    className="h-5 w-5 text-[9px] shrink-0"
+                                                    title={`${a0.name} (Lead)`}
+                                                  />
+                                                  <span className="truncate font-medium text-[#1E293B]" data-testid={`side-peek-task-assignee-label-${task.id}`}>
+                                                    {a0.name}
+                                                  </span>
+                                                </>
+                                              )}
+                                              {taskAssignees.length === 2 && a0 && a1 && (
+                                                <>
+                                                  <div className="flex items-center -space-x-1.5 shrink-0">
+                                                    <UserAvatar
+                                                      userId={a0.id}
+                                                      name={a0.name}
+                                                      avatarUrl={a0.avatarUrl}
+                                                      size="xs"
+                                                      shape="circle"
+                                                      ring
+                                                      className="h-5 w-5 text-[9px]"
+                                                      title={`${a0.name} (Lead)`}
+                                                    />
+                                                    <UserAvatar
+                                                      userId={a1.id}
+                                                      name={a1.name}
+                                                      avatarUrl={a1.avatarUrl}
+                                                      size="xs"
+                                                      shape="circle"
+                                                      ring
+                                                      className="h-5 w-5 text-[9px]"
+                                                      title={a1.name}
+                                                    />
+                                                  </div>
+                                                  <span className="truncate font-medium text-[#1E293B]" data-testid={`side-peek-task-assignee-label-${task.id}`}>
+                                                    {getFirstName(a0.name)}, {getFirstName(a1.name)}
+                                                  </span>
+                                                  <span className="sr-only">{taskAssignees.map((a) => a.name).join(', ')}</span>
+                                                </>
+                                              )}
+                                              {taskAssignees.length >= 3 && a0 && (
+                                                <>
+                                                  <div className="flex items-center -space-x-1.5 shrink-0">
+                                                    {taskAssignees.slice(0, 3).map((a) => (
+                                                      <UserAvatar
+                                                        key={a.id}
+                                                        userId={a.id}
+                                                        name={a.name}
+                                                        avatarUrl={a.avatarUrl}
+                                                        size="xs"
+                                                        shape="circle"
+                                                        ring
+                                                        className="h-5 w-5 text-[9px]"
+                                                        title={`${a.name}${a.isLead ? ' (Lead)' : ''}`}
+                                                      />
+                                                    ))}
+                                                    {taskAssignees.length > 3 && (
+                                                      <span
+                                                        className="h-5 min-w-[20px] px-1 rounded-full border-[1.5px] border-white bg-[#F1F5F9] text-[#0F172A] text-[9px] font-bold font-mono flex items-center justify-center shadow-2xs shrink-0"
+                                                        data-testid={`side-peek-task-assignee-overflow-${task.id}`}
+                                                      >
+                                                        +{taskAssignees.length - 3}
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  <span className="truncate font-medium text-[#1E293B]" data-testid={`side-peek-task-assignee-label-${task.id}`}>
+                                                    {getFirstName(a0.name)} +{taskAssignees.length - 1}
+                                                  </span>
+                                                  <span className="sr-only">{taskAssignees.map((a) => a.name).join(', ')}</span>
+                                                </>
+                                              )}
+                                            </div>
+                                          </>
+                                        );
+                                      })()}
                                       {hasChecklist && (
                                         <>
                                           <span>•</span>
@@ -1531,6 +1631,7 @@ export function WorkRequestSidePeek({
           onClose={() => setSelectedTask(null)}
           task={selectedTask}
           workRequest={workRequest}
+          onTaskUpdated={(updated) => setSelectedTask(updated)}
         />
       )}
 

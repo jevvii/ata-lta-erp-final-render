@@ -7,7 +7,6 @@ import {
   RotateCcw,
   Send,
   ArrowRight,
-  User,
   Calendar,
   Layers,
   CheckSquare,
@@ -19,6 +18,8 @@ import {
   Clock,
   Pencil,
 } from 'lucide-react';
+import { UserAvatar } from '@/components/common/UserAvatar';
+import { useTeam } from '../api/useTeam';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -72,6 +73,9 @@ import {
   isTaskRejected,
   isTaskPendingApproval,
   canResubmitTask,
+  getTaskAssignees,
+  getFirstName,
+  type TaskAssigneeInfo,
 } from '../lib/taskScope';
 import type {
   Phase,
@@ -97,6 +101,8 @@ interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
   searchParams: URLSearchParams;
   setSearchParams: (setter: (prev: URLSearchParams) => URLSearchParams) => void;
 }
+
+export { getTaskAssignees, getFirstName, type TaskAssigneeInfo };
 
 function PhaseKanbanBoardInner({
   initialWorkRequestId,
@@ -129,6 +135,16 @@ function PhaseKanbanBoardInner({
         wr.creationApprovalStatus !== 'rejected'
     );
   }, [rawRequests]);
+
+  // Team Directory for Task Assignee Resolution
+  const { data: rawTeam } = useTeam();
+  const teamList = useMemo(() => {
+    if (Array.isArray(rawTeam)) return rawTeam;
+    if (rawTeam && typeof rawTeam === 'object' && 'data' in rawTeam && Array.isArray((rawTeam as { data: unknown[] }).data)) {
+      return (rawTeam as { data: Array<{ id: string; name: string; role?: string; avatarUrl?: string | null }> }).data;
+    }
+    return [];
+  }, [rawTeam]);
 
   const [selectedWrId, setSelectedWrId] = useState<string>(() => {
     return searchParams.get('wrId') || initialWorkRequestId || '';
@@ -316,6 +332,7 @@ function PhaseKanbanBoardInner({
         recLatest.qa_status !== recSelected.qa_status ||
         latest.assigneeId !== selectedTask.assigneeId ||
         latest.assigneeName !== selectedTask.assigneeName ||
+        JSON.stringify(latest.assignees ?? []) !== JSON.stringify(selectedTask.assignees ?? []) ||
         latest.title !== selectedTask.title ||
         latest.description !== selectedTask.description ||
         latest.dueDate !== selectedTask.dueDate ||
@@ -856,6 +873,7 @@ function PhaseKanbanBoardInner({
                   </div>
                 ) : (
                   phaseTasks.map((task) => {
+                    const taskAssignees = getTaskAssignees(task, teamList);
                     const isRejected = isTaskRejected(task);
                     const isPendingApproval = isTaskPendingApproval(task);
                     const canLeadReview = canReviewTaskCreation(currentUser, task, activeWr);
@@ -1017,14 +1035,120 @@ function PhaseKanbanBoardInner({
 
                         {/* Task Meta Footer */}
                         <div className="flex items-center justify-between pt-1 border-t border-[#E2E8F0] text-xs text-[#475569]">
-                          <div className="flex items-center gap-1 truncate max-w-32">
-                            <User className="h-3 w-3 text-[#475569] shrink-0" />
-                            <span className="truncate">
-                              {task.assigneeName || 'Unassigned'}
-                            </span>
+                          <div
+                            className="flex items-center gap-1.5 min-w-0 flex-1 pr-2"
+                            title={
+                              taskAssignees.length > 0
+                                ? taskAssignees.map((a) => `${a.name}${a.isLead ? ' (Lead)' : ''}`).join(', ')
+                                : 'Unassigned'
+                            }
+                            data-testid={`task-card-assignees-${task.id}`}
+                          >
+                            {taskAssignees.length === 0 && (
+                              <>
+                                <UserAvatar name="?" size="xs" shape="circle" className="h-5 w-5 text-[9px] shrink-0 opacity-70" />
+                                <span className="truncate text-[#64748B] italic">Unassigned</span>
+                              </>
+                            )}
+
+                            {taskAssignees.length === 1 && (() => {
+                              const lead = taskAssignees[0]!;
+                              return (
+                                <>
+                                  <UserAvatar
+                                    userId={lead.id}
+                                    name={lead.name}
+                                    avatarUrl={lead.avatarUrl}
+                                    size="xs"
+                                    shape="circle"
+                                    className="h-5 w-5 text-[9px] shrink-0"
+                                    title={`${lead.name}${lead.isLead ? ' (Lead)' : ''}`}
+                                  />
+                                  <span className="truncate font-medium text-[#1E293B]">{lead.name}</span>
+                                </>
+                              );
+                            })()}
+
+                            {taskAssignees.length === 2 && (() => {
+                              const a1 = taskAssignees[0]!;
+                              const a2 = taskAssignees[1]!;
+                              return (
+                                <>
+                                  <div className="flex items-center -space-x-1.5 shrink-0">
+                                    <UserAvatar
+                                      userId={a1.id}
+                                      name={a1.name}
+                                      avatarUrl={a1.avatarUrl}
+                                      size="xs"
+                                      shape="circle"
+                                      ring
+                                      className="h-5 w-5 text-[9px]"
+                                      title={`${a1.name}${a1.isLead ? ' (Lead)' : ''}`}
+                                    />
+                                    <UserAvatar
+                                      userId={a2.id}
+                                      name={a2.name}
+                                      avatarUrl={a2.avatarUrl}
+                                      size="xs"
+                                      shape="circle"
+                                      ring
+                                      className="h-5 w-5 text-[9px]"
+                                      title={`${a2.name}${a2.isLead ? ' (Lead)' : ''}`}
+                                    />
+                                  </div>
+                                  <span
+                                    className="truncate font-medium text-[#1E293B]"
+                                    data-testid={`task-card-assignee-label-${task.id}`}
+                                  >
+                                    {getFirstName(a1.name)}, {getFirstName(a2.name)}
+                                  </span>
+                                  <span className="sr-only">{taskAssignees.map((a) => a.name).join(', ')}</span>
+                                </>
+                              );
+                            })()}
+
+                            {taskAssignees.length >= 3 && (() => {
+                              const lead = taskAssignees[0]!;
+                              const visibleAvatars = taskAssignees.slice(0, 3);
+                              const overflowCount = taskAssignees.length - 3;
+                              return (
+                                <>
+                                  <div className="flex items-center -space-x-1.5 shrink-0">
+                                    {visibleAvatars.map((a) => (
+                                      <UserAvatar
+                                        key={a.id}
+                                        userId={a.id}
+                                        name={a.name}
+                                        avatarUrl={a.avatarUrl}
+                                        size="xs"
+                                        shape="circle"
+                                        ring
+                                        className="h-5 w-5 text-[9px]"
+                                        title={`${a.name}${a.isLead ? ' (Lead)' : ''}`}
+                                      />
+                                    ))}
+                                    {overflowCount > 0 && (
+                                      <span
+                                        className="h-5 min-w-[20px] px-1 rounded-full border-[1.5px] border-white bg-[#F1F5F9] text-[#0F172A] text-[9px] font-bold font-mono flex items-center justify-center shadow-2xs shrink-0"
+                                        data-testid={`task-card-assignee-overflow-${task.id}`}
+                                      >
+                                        +{overflowCount}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span
+                                    className="truncate font-medium text-[#1E293B]"
+                                    data-testid={`task-card-assignee-label-${task.id}`}
+                                  >
+                                    {getFirstName(lead.name)} +{taskAssignees.length - 1}
+                                  </span>
+                                  <span className="sr-only">{taskAssignees.map((a) => a.name).join(', ')}</span>
+                                </>
+                              );
+                            })()}
                           </div>
                           {task.dueDate && (
-                            <div className="flex items-center gap-1 tabular-nums">
+                            <div className="flex items-center gap-1 tabular-nums shrink-0">
                               <Calendar className="h-3 w-3 text-[#475569]" />
                               <span>{new Date(task.dueDate).toLocaleDateString()}</span>
                             </div>
