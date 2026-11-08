@@ -596,7 +596,7 @@ describe('Kanban & Task Detail Modal Reactive Binding (M5 Empirical Challenger)'
       });
 
       expect(screen.getByTestId('task-assignee')).toHaveTextContent('Primary Lead');
-      expect(screen.getByTestId('task-co-assignees')).toBeInTheDocument();
+      expect(screen.getByTestId('assigned-team-list')).toBeInTheDocument();
     });
 
     it('3C: Unversioned initial task safely adopts live server versioned state', async () => {

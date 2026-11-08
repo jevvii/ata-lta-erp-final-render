@@ -75,7 +75,6 @@ import {
   canResubmitTask,
   getTaskAssignees,
   getFirstName,
-  type TaskAssigneeInfo,
 } from '../lib/taskScope';
 import type {
   Phase,
@@ -101,8 +100,6 @@ interface PhaseKanbanBoardInnerProps extends PhaseKanbanBoardProps {
   searchParams: URLSearchParams;
   setSearchParams: (setter: (prev: URLSearchParams) => URLSearchParams) => void;
 }
-
-export { getTaskAssignees, getFirstName, type TaskAssigneeInfo };
 
 function PhaseKanbanBoardInner({
   initialWorkRequestId,

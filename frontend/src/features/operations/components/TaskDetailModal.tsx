@@ -669,11 +669,6 @@ export function TaskDetailModal({
     });
   }, [task, currentAssigneeIds, teamList]);
 
-  // Non-lead co-assignees list for quick access and summary
-  const coAssignees = useMemo(() => {
-    return assignedTeamMembers.filter((m) => !m.isLead);
-  }, [assignedTeamMembers]);
-
   // Task Scoping Rules:
   // 1. Only assigned employee or Admin can mutate status, log time, upload docs (and rejected tasks locked)
   const canMutateStatus = !isCompletedWr && !isTaskRejectedState && canMutateTaskStatus(currentUser, task);
@@ -939,7 +934,7 @@ export function TaskDetailModal({
           data-testid="task-detail-modal"
         >
           {/* Top Breadcrumb & Context Header */}
-          <DialogHeader className="px-6 py-3.5 border-b border-[#E2E8F0] bg-[#F8FAFC] flex flex-row items-center justify-between gap-3 shrink-0 space-y-0 text-left">
+          <DialogHeader className="px-6 py-3.5 border-b border-[#E2E8F0] bg-[#F8FAFC] flex flex-row flex-wrap items-center justify-between gap-3 shrink-0 space-y-0 text-left">
             {/* Left breadcrumb trail */}
             <div className="flex flex-wrap items-center gap-2 min-w-0 pr-4">
               {/* Entity badge */}
@@ -1061,9 +1056,9 @@ export function TaskDetailModal({
             </div>
 
             {/* Right side controls */}
-            <div className="flex items-center gap-2 shrink-0 pr-8">
+            <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full pr-8">
               {/* Status Badge & Workflow Action Buttons */}
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Badge
                   variant={task.status === 'Completed' ? 'success' : 'secondary'}
                   size="compact"
@@ -1074,7 +1069,7 @@ export function TaskDetailModal({
                 </Badge>
 
                 {canMutateStatus && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     {task.status !== 'In Progress' && task.status !== 'Completed' && (
                       <Button
                         type="button"
@@ -1316,7 +1311,7 @@ export function TaskDetailModal({
                     type="button"
                     onClick={() => setAttachmentsOpen(!attachmentsOpen)}
                     aria-expanded={attachmentsOpen}
-                    className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#475569] hover:text-[#0F172A] transition-colors focus:outline-none"
+                    className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#475569] hover:text-[#0F172A] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
                   >
                     {attachmentsOpen ? <ChevronDown className="h-4 w-4 text-[#64748B]" /> : <ChevronRight className="h-4 w-4 text-[#64748B]" />}
                     <span>Attachments</span>
@@ -1893,7 +1888,7 @@ export function TaskDetailModal({
                     type="button"
                     onClick={() => setDetailsOpen(!detailsOpen)}
                     aria-expanded={detailsOpen}
-                    className="w-full px-4 py-2.5 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between text-left hover:bg-[#F1F5F9] transition-colors focus:outline-none"
+                    className="w-full px-4 py-2.5 bg-[#F8FAFC] border-b border-[#E2E8F0] flex items-center justify-between text-left hover:bg-[#F1F5F9] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2563EB]"
                   >
                     <span className="text-xs font-bold uppercase tracking-wider text-[#475569]">Details</span>
                     {detailsOpen ? <ChevronDown className="h-3.5 w-3.5 text-[#64748B]" /> : <ChevronRight className="h-3.5 w-3.5 text-[#64748B]" />}
@@ -1903,22 +1898,6 @@ export function TaskDetailModal({
                     <div className="p-4 space-y-4 text-xs">
                       {/* Assigned Team Section */}
                       <div className="space-y-3" data-testid="assigned-team-section">
-                        {/* Hidden test contracts to satisfy exact textContent assertions */}
-                        <div className="sr-only" data-testid="task-assignee">
-                          {task.assigneeName || 'Unassigned'}
-                        </div>
-                        <div className="sr-only" data-testid="task-co-assignees">
-                          {coAssignees.length > 0 ? (
-                            <ul>
-                              {coAssignees.map((member) => (
-                                <li key={member.id}>{member.name}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            'None'
-                          )}
-                        </div>
-
                         {/* Visible Header Row */}
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-[#475569]">Assigned Team</span>
@@ -1935,7 +1914,7 @@ export function TaskDetailModal({
                           {assignedTeamMembers.length === 0 ? (
                             <div className="flex items-center gap-2 p-2 rounded-md bg-[#F8FAFC] border border-[#E2E8F0]">
                               <UserAvatar name="?" size="xs" shape="circle" className="h-6 w-6 text-[10px] shrink-0" />
-                              <span className="text-xs text-[#64748B] italic">Unassigned</span>
+                              <span className="text-xs text-[#64748B] italic" data-testid="task-assignee">Unassigned</span>
                             </div>
                           ) : (
                             <div className="space-y-1.5">
@@ -1954,7 +1933,7 @@ export function TaskDetailModal({
                                       className="h-6 w-6 text-[10px] shrink-0"
                                     />
                                     <div className="min-w-0 flex-1 flex items-center gap-1.5">
-                                      <span className="font-semibold text-xs text-[#1E293B] truncate">{member.name}</span>
+                                      <span className="font-semibold text-xs text-[#1E293B] truncate" data-testid={member.isLead ? 'task-assignee' : undefined}>{member.name}</span>
                                       {member.isLead ? (
                                         <Badge size="compact" className="bg-[#1D4ED8] text-[#FFFFFF] text-[10px] font-semibold rounded px-1.5 py-0 shrink-0">
                                           Lead

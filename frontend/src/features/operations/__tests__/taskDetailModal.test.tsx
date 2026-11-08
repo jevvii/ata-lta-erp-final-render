@@ -247,11 +247,11 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
       [key]: ['co-one', 'co-two'].map((userId, index) => ({ taskId: mockTask.id, userId,
         assignedBy: null, assignedAt: null, userName: ['Twinkle Marquez', 'Alexandra Long Surname'][index] })) };
     render(<TaskDetailModal isOpen onClose={vi.fn()} task={task} workRequest={mockWr} />, { wrapper });
-    const summary = screen.getByTestId('task-co-assignees');
+    const summary = screen.getByTestId('assigned-team-list');
     expect(within(summary).getByText('Twinkle Marquez')).toBeInTheDocument();
     expect(within(summary).getByText('Alexandra Long Surname')).toBeInTheDocument();
-    expect(within(summary).getAllByRole('listitem')).toHaveLength(2);
-    expect(summary).not.toHaveTextContent('Lorein Wong');
+    expect(within(summary).getAllByTestId(/^assignee-chip-/)).toHaveLength(3);
+    expect(within(summary).getByText('Lorein Wong')).toBeVisible();
     expect(screen.queryByText(/\+2 co-assignees/)).not.toBeInTheDocument();
   });
 
@@ -629,7 +629,7 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
       // 4. Right sidebar components
       expect(screen.getByTestId('task-status-badge')).toHaveTextContent('In Progress');
       expect(screen.getByTestId('assigned-team-section')).toBeInTheDocument();
-      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Lorein Wong');
+      expect(within(screen.getByTestId('assigned-team-list')).getByText('Lorein Wong')).toBeVisible();
       expect(screen.getByTestId('task-close-btn')).toBeInTheDocument();
     });
 
@@ -759,7 +759,7 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
         { wrapper }
       );
 
-      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Unassigned');
+      expect(within(screen.getByTestId('assigned-team-list')).getByText('Unassigned')).toBeVisible();
       const teamList = screen.getByTestId('assigned-team-list');
       expect(within(teamList).getByText('Unassigned')).toBeInTheDocument();
       expect(within(teamList).getByText('?')).toBeInTheDocument();

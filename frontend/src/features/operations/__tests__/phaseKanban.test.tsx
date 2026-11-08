@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vite
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { PhaseKanbanBoard, getTaskAssignees } from '../components/PhaseKanbanBoard';
+import { PhaseKanbanBoard } from '../components/PhaseKanbanBoard';
+import { getTaskAssignees } from '../lib/taskScope';
 import { RerouteModal } from '../components/RerouteModal';
 import { useSessionStore } from '@/lib/session';
 import { useBlockingModalStore } from '../components/BlockingActionModal';
