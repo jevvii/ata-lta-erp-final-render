@@ -586,6 +586,24 @@ export default function DisbursementsPage() {
       <CreateDisbursementModal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={(created) => {
+          if (created?.id) {
+            if (detailCollapsed) {
+              setDetailCollapsed(false);
+              try {
+                localStorage.setItem('disb.detailCollapsed', 'false');
+              } catch {}
+            }
+            const isPendingApprovalMatch =
+              activeTab === 'pending-approvals' &&
+              isAdmin &&
+              Boolean(created.reviewReady ?? (created as any).review_ready);
+            if (activeTab !== 'all' && activeTab !== 'drafts' && !isPendingApprovalMatch) {
+              handleTabChange('all');
+            }
+            setSelectedDisbursementId(created.id);
+          }
+        }}
       />
 
       {/* Mobile/Tablet (<1024px) Detail Drawer */}

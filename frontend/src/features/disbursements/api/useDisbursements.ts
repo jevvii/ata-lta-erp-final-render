@@ -44,11 +44,7 @@ import type {
 function matchesQueuePredicate(item: Disbursement, queue: unknown): boolean {
   const isArchived = Boolean(item.archived);
   if (isArchived) return false;
-  const lv = item.lifecycle_version ?? item.lifecycleVersion;
-  if (lv !== 2) return false;
-  const hasVer = typeof item.version === 'number' && item.version > 0;
-  if (!hasVer) return false;
-  const reviewReady = item.review_ready ?? item.reviewReady;
+  const reviewReady = Boolean(item.reviewReady ?? (item as any).review_ready);
   if (queue === 'initial_requests') {
     return item.status === 'Draft' && reviewReady === true;
   }
@@ -80,11 +76,45 @@ function pinAndBroadcastDisbursement(
   });
   for (const [key, value] of allLists) {
     if (value && typeof value === 'object' && Array.isArray(value.data)) {
-      if (value.data.some((d) => d?.id === updated.id)) {
+      const exists = value.data.some((d) => d?.id === updated.id);
+      if (exists) {
         queryClient.setQueryData(key, {
           ...value,
           data: value.data.map((d) => (d?.id === updated.id ? { ...d, ...updated } : d)),
         });
+      } else {
+        const qKey = Array.isArray(key) ? key : [];
+        const entityKey = qKey[2] as string | undefined;
+        const filters = qKey[3] as Record<string, any> | undefined;
+
+        const itemEntity =
+          (updated as any).entity ||
+          updated.entity_code ||
+          updated.entityCode;
+
+        const entityMatches =
+          entityKey === 'ALL' ||
+          !itemEntity ||
+          entityKey === itemEntity;
+
+        const isArchived = Boolean(updated.archived);
+        const matchesArchive = !filters?.archived ? !isArchived : isArchived;
+        const matchesStatus = !filters?.status || filters.status === updated.status;
+        const matchesQueue = !filters?.queue || matchesQueuePredicate(updated, filters.queue);
+        const matchesPage = !filters?.page || Number(filters.page) === 1;
+
+        if (entityMatches && matchesArchive && matchesStatus && matchesQueue && matchesPage) {
+          queryClient.setQueryData(key, {
+            ...value,
+            data: [updated, ...value.data],
+            meta: value.meta
+              ? {
+                  ...value.meta,
+                  total: value.meta.total !== undefined ? value.meta.total + 1 : value.data.length + 1,
+                }
+              : value.meta,
+          });
+        }
       }
     }
   }
@@ -95,8 +125,19 @@ function pinAndBroadcastDisbursement(
   });
   for (const [key, value] of allQueueLists) {
     if (value && typeof value === 'object' && Array.isArray(value.data)) {
-      const queueName = Array.isArray(key) ? key[3] : undefined;
-      const matchesQueue = matchesQueuePredicate(updated, queueName);
+      const qKey = Array.isArray(key) ? key : [];
+      const entityKey = qKey[2] as string | undefined;
+      const queueName = qKey[3] as string | undefined;
+      const itemEntity =
+        (updated as any).entity ||
+        updated.entity_code ||
+        updated.entityCode;
+      const entityMatches =
+        entityKey === 'ALL' ||
+        !itemEntity ||
+        entityKey === itemEntity;
+
+      const matchesQueue = entityMatches && matchesQueuePredicate(updated, queueName);
       const exists = value.data.some((d) => d?.id === updated.id);
       if (exists) {
         const nextData = matchesQueue
@@ -105,14 +146,21 @@ function pinAndBroadcastDisbursement(
         queryClient.setQueryData(key, {
           ...value,
           data: nextData,
-          meta: value.meta ? { ...value.meta, total: nextData.length } : value.meta,
+          meta: value.meta
+            ? { ...value.meta, total: value.meta.total !== undefined ? nextData.length : value.meta.total }
+            : value.meta,
         });
       } else if (matchesQueue) {
         const nextData = [updated, ...value.data];
         queryClient.setQueryData(key, {
           ...value,
           data: nextData,
-          meta: value.meta ? { ...value.meta, total: nextData.length } : value.meta,
+          meta: value.meta
+            ? {
+                ...value.meta,
+                total: value.meta.total !== undefined ? value.meta.total + 1 : nextData.length,
+              }
+            : value.meta,
         });
       }
     }
@@ -123,8 +171,22 @@ function pinAndBroadcastDisbursement(
   });
   for (const [key, value] of allStatusLists) {
     if (value && typeof value === 'object' && Array.isArray(value.data)) {
-      const targetStatus = Array.isArray(key) ? key[3] : undefined;
-      const matchesStatus = !updated.archived && (!targetStatus || updated.status === targetStatus);
+      const qKey = Array.isArray(key) ? key : [];
+      const entityKey = qKey[2] as string | undefined;
+      const targetStatus = qKey[3] as string | undefined;
+      const itemEntity =
+        (updated as any).entity ||
+        updated.entity_code ||
+        updated.entityCode;
+      const entityMatches =
+        entityKey === 'ALL' ||
+        !itemEntity ||
+        entityKey === itemEntity;
+
+      const matchesStatus =
+        entityMatches &&
+        !updated.archived &&
+        (!targetStatus || updated.status === targetStatus);
       const exists = value.data.some((d) => d?.id === updated.id);
       if (exists) {
         const nextData = matchesStatus
@@ -133,14 +195,21 @@ function pinAndBroadcastDisbursement(
         queryClient.setQueryData(key, {
           ...value,
           data: nextData,
-          meta: value.meta ? { ...value.meta, total: nextData.length } : value.meta,
+          meta: value.meta
+            ? { ...value.meta, total: value.meta.total !== undefined ? nextData.length : value.meta.total }
+            : value.meta,
         });
       } else if (matchesStatus) {
         const nextData = [updated, ...value.data];
         queryClient.setQueryData(key, {
           ...value,
           data: nextData,
-          meta: value.meta ? { ...value.meta, total: nextData.length } : value.meta,
+          meta: value.meta
+            ? {
+                ...value.meta,
+                total: value.meta.total !== undefined ? value.meta.total + 1 : nextData.length,
+              }
+            : value.meta,
         });
       }
     }
@@ -466,7 +535,8 @@ export function useCreateDisbursement() {
       });
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
+      pinAndBroadcastDisbursement(queryClient, created);
       queryClient.invalidateQueries({ queryKey: disbursementKeys.all });
       queryClient.invalidateQueries({
         queryKey: disbursementKeys.counts(activeEntity),

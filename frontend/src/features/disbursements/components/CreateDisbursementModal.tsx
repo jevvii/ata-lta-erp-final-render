@@ -43,7 +43,7 @@ import { useTransmittals } from '@/features/transmittals/api/useTransmittals';
 import { formatAutoDetectedClientDisplay } from '@/features/clients/lib/clientSelectUtils';
 import type { ClientSummary } from '@/features/operations/api/useClients';
 import type { WorkRequest, Task } from '@/features/operations/api/types';
-import type { CreateDisbursementInput, FundSource } from '../api/types';
+import type { Disbursement, CreateDisbursementInput, FundSource } from '../api/types';
 import { useLiveModalContext } from '../lib/useLiveModalContext';
 
 /**
@@ -65,7 +65,7 @@ export interface CreateDisbursementModalProps {
   isOpen?: boolean;
   open?: boolean;
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (created?: Disbursement) => void;
   prefill?: FinancialPrefill;
   defaultWorkRequestId?: string;
   defaultClientId?: string;
@@ -1106,7 +1106,7 @@ export function CreateDisbursementModal({
 
       creationStarted = true;
       markPendingCreate(pendingCreateKey, true);
-      await createWithBlocking(
+      const created = await createWithBlocking(
         payload,
         capturedTarget.entity ? { entity: capturedTarget.entity } : undefined
       );
@@ -1114,7 +1114,7 @@ export function CreateDisbursementModal({
       if (!isCurrent()) return;
       resetForm();
       onClose();
-      if (onSuccess) onSuccess();
+      if (onSuccess) onSuccess(created);
     } catch (error) {
       if (creationStarted) {
         // A validation/permission conflict is a proven rejection. A network/5xx/timeout
@@ -1787,6 +1787,7 @@ export function CreateDisbursementModal({
               onClick={onClose}
               disabled={isPending || isUploadingReceipt || needsCreateReview}
               className="text-xs"
+              data-testid="cancel-create-disbursement-btn"
             >
               Cancel
             </Button>
