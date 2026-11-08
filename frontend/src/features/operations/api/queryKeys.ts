@@ -62,4 +62,9 @@ export const operationsKeys = {
     [...operationsKeys.all, 'groundWorkers', entity] as const,
   standardTaskTemplates: () =>
     [...operationsKeys.all, 'standardTaskTemplates'] as const,
+  team: () => ['me', 'team'] as const,
+};
+
+export const teamKeys = {
+  all: ['me', 'team'] as const,
 };

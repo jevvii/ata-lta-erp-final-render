@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { AlertTriangle, Layers, Calendar } from 'lucide-react';
+import { AlertCircle, Layers, Calendar } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
 import {
@@ -29,7 +29,8 @@ import {
   type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import { ClientSelectOptionContent, ClientSelectSearchHeader } from '@/components/ui/client-select-option';
-import { useTeam } from '../api/useTeam';
+import { useTeam, type TeamMember } from '../api/useTeam';
+import { useUsersList } from '@/features/admin/api/useUsers';
 import { AssignerSelect } from './AssignerSelect';
 import { TaskTypeBadge } from '../lib/taskTypes';
 import { runBlockingAction } from './BlockingActionModal';
@@ -87,7 +88,33 @@ export function RetainerGenerateModal({
   const { data: clients = [] } = useClients(undefined, { enabled: isOpen });
   const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
   const sortedClients = useMemo(() => sortClients(clients, clientSort), [clients, clientSort]);
+
   const { data: team = [] } = useTeam();
+  const { data: usersData = [] } = useUsersList({ enabled: isOpen });
+
+  // Merge team and usersData into a consolidated staff directory
+  const mergedStaff = useMemo(() => {
+    const map = new Map<string, TeamMember>();
+    for (const m of team) {
+      if (m && m.id) {
+        map.set(m.id.toLowerCase(), m);
+      }
+    }
+    for (const u of usersData) {
+      if (u && u.id && !map.has(u.id.toLowerCase())) {
+        map.set(u.id.toLowerCase(), {
+          id: u.id,
+          name: u.name || u.email,
+          email: u.email,
+          role: u.role || 'Staff',
+          departments: u.departments || [],
+          entities: u.entities || [],
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [team, usersData]);
+
   const { generateFromTemplate } = useRetainerMutations();
   const activeEntity = useSessionStore((state) => state.activeEntity);
 
@@ -157,23 +184,71 @@ export function RetainerGenerateModal({
     );
   }, [selectedTemplate]);
 
+  // ID normalizer for case-insensitive and trimmed ID matching
+  const normId = (id: string | null | undefined) => String(id || '').trim().toLowerCase();
+
+  // Project team IDs derived directly from assignedTo and coAssignees
+  const projectTeamIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (assignedTo) {
+      ids.add(assignedTo);
+      ids.add(normId(assignedTo));
+    }
+    for (const id of coAssignees) {
+      if (id) {
+        ids.add(id);
+        ids.add(normId(id));
+      }
+    }
+    return ids;
+  }, [assignedTo, coAssignees]);
+
   // Project Team Members strictly: Manager (assignedTo) + Co-Assignees
   const projectTeam = useMemo(() => {
-    return team.filter(
-      (m) => (assignedTo && m.id === assignedTo) || coAssignees.includes(m.id)
-    );
-  }, [team, assignedTo, coAssignees]);
+    const governanceIds = [assignedTo, ...coAssignees].filter(Boolean) as string[];
+    const result: TeamMember[] = [];
+    const seen = new Set<string>();
 
-  const projectTeamIds = useMemo(() => {
-    return new Set(projectTeam.map((m) => m.id));
-  }, [projectTeam]);
+    for (const gid of governanceIds) {
+      const nid = normId(gid);
+      if (seen.has(nid)) continue;
+      seen.add(nid);
+
+      const found = mergedStaff.find((m) => normId(m.id) === nid || m.id === gid);
+      if (found) {
+        result.push(found);
+      } else {
+        result.push({
+          id: gid,
+          name: gid,
+          email: '',
+          role: gid === assignedTo ? 'Manager' : 'Staff',
+        });
+      }
+    }
+    return result;
+  }, [assignedTo, coAssignees, mergedStaff]);
 
   // Check for any tasks assigned to members outside the project team
   const unmappedTasks = useMemo(() => {
-    return blueprintTasks.filter((t) =>
-      t.assignees.some((id) => !projectTeamIds.has(id))
+    return blueprintTasks.filter(
+      (t) =>
+        t.assignees.length > 0 &&
+        t.assignees.some((id) => !projectTeamIds.has(id) && !projectTeamIds.has(normId(id)))
     );
   }, [blueprintTasks, projectTeamIds]);
+
+  // Automatically clear assignee blocker error as soon as all unmapped tasks are resolved
+  useEffect(() => {
+    if (
+      error ===
+      'All task assignees must belong to the selected project team. Please update unmapped assignees.'
+    ) {
+      if (unmappedTasks.length === 0) {
+        setError(null);
+      }
+    }
+  }, [unmappedTasks.length, error]);
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -256,8 +331,10 @@ export function RetainerGenerateModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
+        className="max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden bg-white border-[#E2E8F0] text-[#0F172A] shadow-xl p-6 space-y-4 rounded-[12px] border"
         data-testid="retainer-generate-modal"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight text-[#1E293B]">
@@ -268,7 +345,7 @@ export function RetainerGenerateModal({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleGenerate} className="space-y-4">
+        <form onSubmit={handleGenerate} className="space-y-4 min-w-0 max-w-full overflow-x-hidden">
           {/* Template Selection */}
           <div className="space-y-1">
             <label className="text-xs tracking-normal text-[#475569] block">
@@ -442,7 +519,7 @@ export function RetainerGenerateModal({
               Team Governance
             </h4>
             <AssignerSelect
-              availableStaff={team}
+              availableStaff={mergedStaff}
               primaryAssigneeId={assignedTo}
               selectedCoAssigneeIds={coAssignees}
               managerOnlyPrimary={true}
@@ -478,23 +555,37 @@ export function RetainerGenerateModal({
 
               <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {blueprintTasks.map((task, idx) => {
-                  const isUnmapped = task.assignees.some((id) => !projectTeamIds.has(id));
+                  const isUnmapped =
+                    task.assignees.length > 0 &&
+                    task.assignees.some((id) => !projectTeamIds.has(id) && !projectTeamIds.has(normId(id)));
                   const unmappedMember = isUnmapped
-                    ? team.find((m) => task.assignees.includes(m.id))
+                    ? mergedStaff.find((m) => task.assignees.some((id) => m.id === id || normId(m.id) === normId(id)))
                     : null;
                   const unmappedName = unmappedMember?.name || (isUnmapped ? task.assignees[0] : null);
+
+                  const matchedMember = projectTeam.find(
+                    (m) =>
+                      task.assignees[0] &&
+                      (m.id === task.assignees[0] || normId(m.id) === normId(task.assignees[0]))
+                  );
+                  const selectValue =
+                    task.assignees[0] && (projectTeamIds.has(task.assignees[0]) || projectTeamIds.has(normId(task.assignees[0])))
+                      ? (matchedMember ? matchedMember.id : task.assignees[0])
+                      : isUnmapped
+                      ? '__unmapped__'
+                      : 'unassigned';
 
                   return (
                     <div
                       key={task.local_id || idx}
                       data-testid={`blueprint-task-${task.local_id}`}
-                      className={`p-2.5 rounded-[8px] border text-xs  space-y-1.5 ${
+                      className={`p-3 rounded-lg border space-y-2 transition-colors min-w-0 max-w-full overflow-hidden text-xs ${
                         isUnmapped
                           ? 'bg-[#FFFFFF] border-[#FCA5A5]'
                           : 'bg-[#FFFFFF] border-[#E2E8F0]'
                       }`}
                     >
-                      <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center justify-between gap-2 min-w-0">
                         <div className="flex items-center gap-2 min-w-0 flex-1">
                           <span className="text-xs text-[#475569] shrink-0">
                             #{idx + 1}
@@ -503,7 +594,7 @@ export function RetainerGenerateModal({
                             value={task.requiredLinkType}
                             data-testid={`retainer-generate-task-type-${task.local_id || idx}`}
                           />
-                          <span className="font-semibold text-[#1E293B] truncate" title={task.title}>
+                          <span className="font-semibold text-[#1E293B] truncate min-w-0 flex-1" title={task.title}>
                             {task.title}
                           </span>
                         </div>
@@ -515,24 +606,21 @@ export function RetainerGenerateModal({
                         </Badge>
                       </div>
 
-                      <div className="flex items-center justify-between gap-3 pt-1">
-                        <div className="text-xs text-[#475569] truncate">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#64748B] min-w-0">
                           {task.depends_on && (
-                            <span>
-                              Prerequisite: <span className="">{task.depends_on}</span>
+                            <span className="truncate">
+                              Prerequisite: <span className="font-medium text-[#1E293B]">{task.depends_on}</span>
                             </span>
+                          )}
+                          {task.dueDate && (
+                            <span>Due: {new Date(task.dueDate).toLocaleDateString()}</span>
                           )}
                         </div>
 
-                        <div className="w-48 shrink-0">
+                        <div className="flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-[220px]">
                           <Select
-                            value={
-                              task.assignees[0] && projectTeamIds.has(task.assignees[0])
-                                ? task.assignees[0]
-                                : isUnmapped
-                                ? '__unmapped__'
-                                : 'unassigned'
-                            }
+                            value={selectValue}
                             onValueChange={(val) => {
                               if (!val || val === '__unmapped__') return;
                               const newAssignees = val === 'unassigned' ? [] : [val];
@@ -547,7 +635,7 @@ export function RetainerGenerateModal({
                             }}
                           >
                             <SelectTrigger
-                              className="h-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B]"
+                              className="w-44 sm:w-48 max-w-full min-w-0 text-xs py-1 h-7 truncate [&>span]:truncate bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B]"
                               data-testid={`task-assignee-select-${task.local_id}`}
                             >
                               <SelectValue placeholder="— Unassigned —" />
@@ -571,11 +659,14 @@ export function RetainerGenerateModal({
 
                       {isUnmapped && (
                         <div
-                          className="text-xs text-[#FFFFFF] bg-[#DC2626] p-2 rounded-[6px] flex items-center gap-1.5"
+                          className="flex items-start gap-1.5 text-[11px] text-[#DC2626] font-medium pt-0.5 min-w-0 break-words"
                           data-testid={`unmapped-assignee-alert-${task.local_id}`}
                         >
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#FFFFFF]" />
-                          <span>
+                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span
+                            className="min-w-0 break-words flex-1"
+                            data-testid={`unmapped-assignee-alert-${idx}`}
+                          >
                             Template default assignee {unmappedName ? `"${unmappedName}" ` : ''}is not in the assigned team. Please select an assignee from the team or add them to Team Members.
                           </span>
                         </div>
@@ -608,9 +699,9 @@ export function RetainerGenerateModal({
               size="sm"
               disabled={!templateId}
               data-testid="generate-submit-btn"
-              className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs tabular-nums text-xs tracking-normal disabled:bg-[#F8FAFC] disabled:text-[#475569]/50"
+              className="bg-[#1D4ED8] hover:bg-[#1E40AF] text-[#FFFFFF] rounded-[8px] text-xs tracking-normal shadow-2xs font-medium"
             >
-              Generate Work Requests
+              Generate Work Request
             </Button>
           </DialogFooter>
         </form>

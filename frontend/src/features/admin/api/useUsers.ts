@@ -5,6 +5,7 @@ import { isConcurrencyConflictError } from '@/components/common/ConflictResoluti
 import { useSessionStore } from '@/lib/session';
 import { registerLocalMutation } from '@/lib/realtime';
 import { broadcastEntityChange } from '@/lib/tabSync';
+import { operationsKeys } from '@/features/operations/api/queryKeys';
 import { adminKeys } from './queryKeys';
 import type { AdminUser, CreateUserInput, UpdateUserInput } from './types';
 
@@ -112,6 +113,8 @@ export async function createUserAction(
         queryClient.setQueryData(adminKeys.userDetail(created.id), created);
         void queryClient.invalidateQueries({ queryKey: adminKeys.allUsers() });
         void queryClient.invalidateQueries({ queryKey: adminKeys.audit() });
+        void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
+        void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
       }
 
       broadcastEntityChange({
@@ -126,6 +129,8 @@ export async function createUserAction(
       adminKeys.allUsers(),
       adminKeys.users(activeEntity),
       adminKeys.audit(),
+      ['me', 'team'],
+      operationsKeys.all,
     ],
   });
 }
@@ -186,6 +191,8 @@ export async function updateUserAction(
           queryClient.setQueryData(adminKeys.userDetail(id), updated);
           void queryClient.invalidateQueries({ queryKey: adminKeys.allUsers() });
           void queryClient.invalidateQueries({ queryKey: adminKeys.audit() });
+          void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
         }
 
         broadcastEntityChange({
@@ -201,6 +208,8 @@ export async function updateUserAction(
         adminKeys.users(activeEntity),
         adminKeys.userDetail(id),
         adminKeys.audit(),
+        ['me', 'team'],
+        operationsKeys.all,
       ],
     });
   } catch (err) {
@@ -275,6 +284,8 @@ export async function disableUserAction(
           );
           void queryClient.invalidateQueries({ queryKey: adminKeys.allUsers() });
           void queryClient.invalidateQueries({ queryKey: adminKeys.audit() });
+          void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
+          void queryClient.invalidateQueries({ queryKey: operationsKeys.all });
         }
 
         broadcastEntityChange({
@@ -288,6 +299,8 @@ export async function disableUserAction(
         adminKeys.users(activeEntity),
         adminKeys.userDetail(id),
         adminKeys.audit(),
+        ['me', 'team'],
+        operationsKeys.all,
       ],
     });
   } catch (err) {

@@ -11,9 +11,11 @@ export interface TeamMember {
   avatarUrl?: string | null;
 }
 
+export const TEAM_QUERY_KEY = ['me', 'team'] as const;
+
 export function useTeam() {
   return useQuery<TeamMember[], ApiError>({
-    queryKey: ['me', 'team'],
+    queryKey: TEAM_QUERY_KEY,
     queryFn: async () => {
       const res = await apiRequest<{ data: TeamMember[] }>('/me/team');
       return res.data;

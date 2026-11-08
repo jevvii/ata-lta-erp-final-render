@@ -130,6 +130,8 @@ describe('InvoiceEditModal Component (R4 / D3)', () => {
 
     expect(screen.getByTestId('invoice-edit-modal')).toBeInTheDocument();
     expect(screen.getByTestId('input-edit-invoice-number')).toHaveValue('ATA-SI-2026-0042');
+    expect(screen.getByTestId('input-edit-invoice-number')).toBeDisabled();
+    expect(screen.getByTestId('input-edit-invoice-number')).toHaveAttribute('readonly');
     // DateInput displays formatted locale date (en-US MM/DD/YYYY)
     expect(screen.getByTestId('input-edit-issue-date')).toHaveValue('10/17/2026');
     expect(screen.getByTestId('input-edit-due-date')).toHaveValue('11/17/2026');
@@ -289,7 +291,7 @@ describe('InvoiceEditModal Component (R4 / D3)', () => {
     );
 
     // Update note and first item
-    fireEvent.change(screen.getByTestId('textarea-edit-notes'), {
+    fireEvent.change(screen.getByTestId('input-edit-terms'), {
       target: { value: 'Updated note for revised draft invoice' },
     });
     fireEvent.change(screen.getByTestId('line-item-desc-0'), {
@@ -435,7 +437,7 @@ describe('InvoiceEditModal Component (R4 / D3)', () => {
       wrapper,
     });
 
-    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Updated audit notes' } });
+    fireEvent.change(screen.getByLabelText('NOTE'), { target: { value: 'Updated audit notes' } });
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));
 
     await waitFor(() => expect(payload).not.toBeNull());
@@ -473,7 +475,7 @@ describe('InvoiceEditModal Component (R4 / D3)', () => {
       wrapper,
     });
 
-    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'Updated notes' } });
+    fireEvent.change(screen.getByLabelText('NOTE'), { target: { value: 'Updated notes' } });
     fireEvent.click(screen.getByTestId('btn-save-invoice-edit'));
 
     await waitFor(() => expect(payload).not.toBeNull());

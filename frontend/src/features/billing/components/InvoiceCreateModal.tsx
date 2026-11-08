@@ -109,7 +109,6 @@ export function InvoiceCreateModal({
     d.setDate(d.getDate() + 30);
     return d.toISOString().slice(0, 10);
   });
-  const [notes, setNotes] = useState('');
   const [terms, setTerms] = useState('Payment due within 30 days of invoice date.');
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -219,7 +218,7 @@ export function InvoiceCreateModal({
       setLinkedTransmittalId('');
       setLinkedDisbursementIds([]);
       setInvoiceNumber('');
-      setNotes('');
+      setTerms('Payment due within 30 days of invoice date.');
       setClientSearch('');
       setClientSort(DEFAULT_CLIENT_SORT);
       setFormError(null);
@@ -615,8 +614,8 @@ export function InvoiceCreateModal({
       dueDate,
       status: 'Draft' as const,
       lineItems: parsedLineItems,
-      notes: notes.trim() || null,
-      terms: terms.trim() || null,
+      notes: terms.trim() || undefined,
+      terms: terms.trim() || undefined,
     };
 
     const validation = createInvoiceSchema.safeParse(payload);
@@ -1178,37 +1177,20 @@ export function InvoiceCreateModal({
           </div>
 
           {/* 3. Notes & Terms */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#E2E8F0]">
-            <div>
-              <label
-                htmlFor="create-invoice-notes"
-                className="text-xs font-semibold text-[#1E293B] block mb-1"
-              >
-                Notes
-              </label>
-              <Input
-                id="create-invoice-notes"
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Optional notes to client..."
-                className="h-9 text-xs"
-                data-testid="input-notes"
-              />
-            </div>
+          <div className="pt-2 border-t border-[#E2E8F0]">
             <div>
               <label
                 htmlFor="create-invoice-terms"
                 className="text-xs font-semibold text-[#1E293B] block mb-1"
               >
-                Payment Terms
+                NOTE
               </label>
               <Input
                 id="create-invoice-terms"
                 type="text"
                 value={terms}
                 onChange={(e) => setTerms(e.target.value)}
-                placeholder="e.g. Net 30"
+                placeholder="e.g. Payment due within 30 days of invoice date."
                 className="h-9 text-xs"
                 data-testid="input-terms"
               />

@@ -7,6 +7,7 @@ import {
   X,
   CheckSquare,
   FileText,
+  GripVertical,
 } from 'lucide-react';
 import {
   Dialog,
@@ -30,6 +31,7 @@ import { parseTaskDelimiterInput } from '../hooks/useTokenizer';
 import { TaskTypeSelect } from '../lib/taskTypes';
 import { usePermission } from '@/lib/permissions';
 import { useSessionStore } from '@/lib/session';
+import { resolveEntityCodeFromUUID } from '@/lib/realtime';
 import type {
   RetainerTemplate,
   RetainerTemplateTask,
@@ -37,6 +39,16 @@ import type {
   CreateRetainerTemplateInput,
   CreatablePhase,
 } from '../api/types';
+
+export const DRAFT_STORAGE_KEY = 'erp_other_template_draft_new';
+
+export interface OtherTemplateDraft {
+  title: string;
+  description: string;
+  entity: 'ATA' | 'LTA';
+  tasks: RetainerTemplateTask[];
+  updatedAt: string;
+}
 
 export interface OtherTemplateModalProps {
   template: RetainerTemplate | null;
@@ -51,11 +63,17 @@ export function OtherTemplateModal({
   onClose,
   onSuccess,
 }: OtherTemplateModalProps) {
+  const activeEntity = useSessionStore((state) => state.activeEntity);
   const user = useSessionStore((state) => state.user);
   const canEditRetainers = usePermission('retainers:edit') || user?.role === 'Admin';
   const { createTemplate, updateTemplate, isPending } = useRetainerMutations();
 
   const isEditing = Boolean(template);
+  const templateId = template?.id;
+
+  const [isDirty, setIsDirty] = useState(false);
+  const [hasDraftBanner, setHasDraftBanner] = useState(false);
+  const [entity, setEntity] = useState<'ATA' | 'LTA'>(activeEntity === 'LTA' ? 'LTA' : 'ATA');
 
   // Form State strictly: Title, Description, Tasks
   const [title, setTitle] = useState('');
@@ -63,6 +81,9 @@ export function OtherTemplateModal({
   const [tasks, setTasks] = useState<RetainerTemplateTask[]>([]);
   const taskTitleInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [focusNewTaskIndex, setFocusNewTaskIndex] = useState<number | null>(null);
+  const [draggedTaskIndex, setDraggedTaskIndex] = useState<number | null>(null);
+  const [dragOverTaskIndex, setDragOverTaskIndex] = useState<number | null>(null);
+  const [dragEnabledIndex, setDragEnabledIndex] = useState<number | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -78,10 +99,26 @@ export function OtherTemplateModal({
     }
   }, [focusNewTaskIndex, tasks.length]);
 
+  // Synchronize entity if activeEntity changes and creating new template
   useEffect(() => {
-    if (template) {
+    if (!isEditing && activeEntity !== 'ALL') {
+      setEntity(activeEntity === 'LTA' ? 'LTA' : 'ATA');
+    }
+  }, [activeEntity, isEditing]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (isEditing && template) {
       setTitle(template.title || template.name || '');
       setDescription(template.description || '');
+      const resolvedCode =
+        template.entity === 'LTA' || template.entity === 'ATA'
+          ? template.entity
+          : (template as any).entities?.code === 'LTA' || (template as any).entities?.code === 'ATA'
+            ? (template as any).entities.code
+            : resolveEntityCodeFromUUID(template.entity_id) || 'ATA';
+      setEntity(resolvedCode === 'LTA' ? 'LTA' : 'ATA');
       setTasks(
         (template.tasks || []).map((t, idx) => ({
           ...t,
@@ -93,28 +130,118 @@ export function OtherTemplateModal({
         }))
       );
       setErrors({});
+      setIsDirty(false);
+      setHasDraftBanner(false);
     } else {
-      setTitle('');
-      setDescription('');
-      setTasks([
-        {
-          local_id: 'task_1',
-          title: '',
-          description: '',
-          phase: 'pre_processing',
-          depends_on_local_id: null,
-          requiredLinkType: null,
-          checklist: [],
-        },
-      ]);
-      setErrors({});
+      // New template creation: check for existing draft
+      try {
+        const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          const hasContent = Boolean(
+            parsed.title?.trim() ||
+            parsed.description?.trim() ||
+            (parsed.tasks && parsed.tasks.some((t: any) => t.title?.trim() || (t.checklist && t.checklist.length > 0)))
+          );
+          if (hasContent) {
+            setHasDraftBanner(true);
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      if (!isDirty) {
+        setTitle('');
+        setDescription('');
+        setEntity(activeEntity === 'LTA' ? 'LTA' : 'ATA');
+        setTasks([
+          {
+            local_id: 'task_1',
+            title: '',
+            description: '',
+            phase: 'pre_processing',
+            depends_on_local_id: null,
+            requiredLinkType: null,
+            checklist: [],
+          },
+        ]);
+        setErrors({});
+      }
     }
-  }, [template, isOpen]);
+  }, [isOpen, templateId]);
+
+  // Draft apply & discard
+  const applyDraft = () => {
+    try {
+      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) {
+        const parsed: OtherTemplateDraft = JSON.parse(saved);
+        if (parsed.title !== undefined) setTitle(parsed.title);
+        if (parsed.description !== undefined) setDescription(parsed.description);
+        if (parsed.entity) setEntity(parsed.entity);
+        if (Array.isArray(parsed.tasks) && parsed.tasks.length > 0) setTasks(parsed.tasks);
+        setIsDirty(true);
+      }
+    } catch {
+      // ignore
+    }
+    setHasDraftBanner(false);
+  };
+
+  const discardDraft = () => {
+    try {
+      localStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    setHasDraftBanner(false);
+    setTitle('');
+    setDescription('');
+    setEntity(activeEntity === 'LTA' ? 'LTA' : 'ATA');
+    setTasks([
+      {
+        local_id: 'task_1',
+        title: '',
+        description: '',
+        phase: 'pre_processing',
+        depends_on_local_id: null,
+        requiredLinkType: null,
+        checklist: [],
+      },
+    ]);
+    setErrors({});
+    setIsDirty(false);
+  };
+
+  // Debounced auto-save draft (1000ms)
+  useEffect(() => {
+    if (!isOpen || isEditing || !isDirty || hasDraftBanner) return;
+
+    const timer = setTimeout(() => {
+      try {
+        const draft: OtherTemplateDraft = {
+          title,
+          description,
+          entity,
+          tasks,
+          updatedAt: new Date().toISOString(),
+        };
+        localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+        setHasDraftBanner(false);
+      } catch {
+        // ignore
+      }
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [isOpen, isEditing, isDirty, hasDraftBanner, title, description, entity, tasks]);
 
   // Task Helpers
   const addTaskRow = () => {
     const nextIdx = tasks.length + 1;
     const newTaskIndex = tasks.length;
+    setIsDirty(true);
     setTasks([
       ...tasks,
       {
@@ -151,6 +278,7 @@ export function OtherTemplateModal({
         ...target,
         checklist: [...currentList, newItem],
       };
+      setIsDirty(true);
       setTasks(updated);
     }
   };
@@ -169,6 +297,7 @@ export function OtherTemplateModal({
       if (item) {
         currentList[itemIndex] = { ...item, [field]: val };
         updated[taskIndex] = { ...target, checklist: currentList };
+        setIsDirty(true);
         setTasks(updated);
       }
     }
@@ -180,6 +309,7 @@ export function OtherTemplateModal({
     if (target) {
       const currentList = (target.checklist || []).filter((_, i) => i !== itemIndex);
       updated[taskIndex] = { ...target, checklist: currentList };
+      setIsDirty(true);
       setTasks(updated);
     }
   };
@@ -189,6 +319,7 @@ export function OtherTemplateModal({
     const removedId = tasks[index]?.local_id;
     const newTasks = tasks.filter((_, i) => i !== index);
     // Clear dependencies referencing removed task
+    setIsDirty(true);
     setTasks(
       newTasks.map((t) =>
         t.depends_on_local_id === removedId
@@ -207,6 +338,7 @@ export function OtherTemplateModal({
     const target = updated[index];
     if (target) {
       updated[index] = { ...target, [field]: val };
+      setIsDirty(true);
       setTasks(updated);
     }
   };
@@ -233,7 +365,48 @@ export function OtherTemplateModal({
       ...splitTasks,
       ...tasks.slice(index + 1),
     ];
+    setIsDirty(true);
     setTasks(nextTasks);
+  };
+
+  const handleMoveTask = (fromIndex: number, toIndex: number) => {
+    if (
+      Number.isNaN(fromIndex) ||
+      Number.isNaN(toIndex) ||
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= tasks.length ||
+      toIndex >= tasks.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+
+    const reordered = [...tasks];
+    const [moved] = reordered.splice(fromIndex, 1);
+    if (!moved) return;
+    reordered.splice(toIndex, 0, moved);
+
+    const cleanedReordered = reordered.map((t, currentIdx) => {
+      const depId = t.depends_on_local_id || t.dependsOnLocalId || null;
+      if (!depId) return t;
+
+      const depIdx = reordered.findIndex(
+        (cand) => (cand.local_id || cand.localId) === depId
+      );
+
+      if (depIdx === -1 || depIdx >= currentIdx) {
+        return {
+          ...t,
+          depends_on_local_id: null,
+          ...(t.dependsOnLocalId !== undefined ? { dependsOnLocalId: null } : {}),
+        };
+      }
+      return t;
+    });
+
+    setIsDirty(true);
+    setTasks(cleanedReordered);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -268,6 +441,7 @@ export function OtherTemplateModal({
       name: trimmedTitle,
       title: trimmedTitle,
       description: description.trim() || null,
+      entity,
       templateType: 'other',
       template_type: 'other',
       clientId: null,
@@ -300,6 +474,12 @@ export function OtherTemplateModal({
         await updateTemplate({ id: template.id, data: payload });
       } else {
         await createTemplate(payload);
+        try {
+          localStorage.removeItem(DRAFT_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+        setIsDirty(false);
       }
 
       if (onSuccess) onSuccess();
@@ -313,7 +493,12 @@ export function OtherTemplateModal({
   if (!canEditRetainers) {
     return (
       <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-w-md p-6 rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float" data-testid="unauthorized-other-template-modal">
+        <DialogContent
+          className="max-w-md p-6 rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float overflow-x-hidden"
+          data-testid="unauthorized-other-template-modal"
+          onPointerDownOutside={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle className="text-base font-semibold tracking-tight text-[#1E293B]">
               Access Restricted
@@ -335,8 +520,10 @@ export function OtherTemplateModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-3xl p-6 max-h-[90vh] overflow-y-auto rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
+        className="max-w-3xl p-6 max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
         data-testid="other-template-modal"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight text-[#1E293B]">
@@ -347,7 +534,96 @@ export function OtherTemplateModal({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} noValidate className="space-y-4 pt-2">
+        <form onSubmit={handleSubmit} noValidate className="space-y-4 pt-2 min-w-0 max-w-full overflow-x-hidden">
+          {/* Draft Restore Alert Banner */}
+          {hasDraftBanner && (
+            <div
+              className="px-4 py-2 bg-[#FEF2F2] border-b border-[#FCA5A5] rounded-[8px] flex items-center justify-between text-xs text-[#DC2626]"
+              data-testid="draft-restore-banner"
+            >
+              <span>You have an unsaved draft from a previous session.</span>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={applyDraft}
+                  data-testid="restore-draft-btn"
+                  className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] text-[#1E293B] text-xs uppercase"
+                >
+                  Restore
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={discardDraft}
+                  data-testid="discard-draft-btn"
+                  className="rounded-[6px] text-[#DC2626] hover:bg-[#DC2626]/20 text-xs uppercase"
+                >
+                  Discard
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Operating Entity Scoping Bar (visible only when activeEntity === 'ALL') */}
+          {activeEntity === 'ALL' && (
+            <div className="flex items-center justify-between p-3 rounded-lg border border-[#E2E8F0] bg-[#F8FAFC]">
+              <div className="space-y-0.5">
+                <span className="text-xs tracking-normal font-bold text-[#1E293B] block">
+                  Operating Entity
+                </span>
+                <span className="text-xs text-[#475569]">
+                  Select ATA or LTA entity for this template
+                </span>
+              </div>
+              <div
+                className="flex border border-[#E2E8F0] divide-x divide-[#CBD5E1] bg-[#FFFFFF] rounded-[6px] overflow-hidden"
+                data-testid="other-template-entity-toggle"
+              >
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-testid="other-template-entity-ata"
+                  onClick={() => {
+                    if (entity !== 'ATA') {
+                      setEntity('ATA');
+                      setIsDirty(true);
+                    }
+                  }}
+                  className={`h-7 px-3 text-xs tracking-normal font-bold rounded-none ${
+                    entity === 'ATA'
+                      ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF]'
+                      : 'text-[#475569] hover:bg-[#F8FAFC]'
+                  }`}
+                >
+                  ATA
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-testid="other-template-entity-lta"
+                  onClick={() => {
+                    if (entity !== 'LTA') {
+                      setEntity('LTA');
+                      setIsDirty(true);
+                    }
+                  }}
+                  className={`h-7 px-3 text-xs tracking-normal font-bold rounded-none ${
+                    entity === 'LTA'
+                      ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF]'
+                      : 'text-[#475569] hover:bg-[#F8FAFC]'
+                  }`}
+                >
+                  LTA
+                </Button>
+              </div>
+            </div>
+          )}
+
           {errors.form && (
             <div className="p-2.5 bg-[#FFFFFF] border-[#FCA5A5] rounded-[6px] text-xs text-[#DC2626]">
               {errors.form}
@@ -365,6 +641,7 @@ export function OtherTemplateModal({
               value={title}
               onChange={(e) => {
                 setTitle(e.target.value);
+                setIsDirty(true);
                 if (errors.title) setErrors((prev) => ({ ...prev, title: '' }));
               }}
               className="h-9 bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-xs text-[#1E293B] placeholder:text-[#475569]"
@@ -382,7 +659,10 @@ export function OtherTemplateModal({
               rows={2}
               placeholder="Provide workflow context or operational instructions..."
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setIsDirty(true);
+              }}
               className="resize-none w-full rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-2 text-xs text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
               data-testid="other-template-description-input"
             />
@@ -430,11 +710,75 @@ export function OtherTemplateModal({
                 return (
                   <div
                     key={task.local_id || idx}
-                    className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] p-3 shadow-none space-y-2.5"
+                    draggable={tasks.length > 1 && (dragEnabledIndex === null || dragEnabledIndex === idx)}
+                    onDragStart={(e) => {
+                      const target = e.target as HTMLElement;
+                      if (
+                        target.tagName === 'INPUT' ||
+                        target.tagName === 'TEXTAREA' ||
+                        target.tagName === 'SELECT' ||
+                        (target.tagName === 'BUTTON' && !target.closest(`[data-testid="task-drag-handle-${idx}"]`))
+                      ) {
+                        e.preventDefault();
+                        return;
+                      }
+                      setDraggedTaskIndex(idx);
+                      e.dataTransfer?.setData('text/plain', String(idx));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (draggedTaskIndex !== null && draggedTaskIndex !== idx) {
+                        setDragOverTaskIndex(idx);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverTaskIndex === idx) {
+                        setDragOverTaskIndex(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const fromIdx = draggedTaskIndex ?? Number(e.dataTransfer?.getData('text/plain'));
+                      handleMoveTask(fromIdx, idx);
+                      setDraggedTaskIndex(null);
+                      setDragOverTaskIndex(null);
+                      setDragEnabledIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTaskIndex(null);
+                      setDragOverTaskIndex(null);
+                      setDragEnabledIndex(null);
+                    }}
+                    className={`rounded-[8px] border bg-[#FFFFFF] p-3 shadow-none space-y-2.5 transition-colors ${
+                      draggedTaskIndex === idx ? 'opacity-60' : ''
+                    } ${
+                      dragOverTaskIndex === idx && draggedTaskIndex !== idx
+                        ? 'border-[#1D4ED8] bg-[#F8FAFC] ring-1 ring-[#1D4ED8]'
+                        : 'border-[#E2E8F0]'
+                    }`}
                     data-testid={`task-row-${idx}`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2 flex-1">
+                        {/* Drag Handle */}
+                        {tasks.length > 1 && (
+                          <button
+                            type="button"
+                            draggable={true}
+                            onMouseDown={() => setDragEnabledIndex(idx)}
+                            onMouseUp={() => setDragEnabledIndex(null)}
+                            onDragStart={(e) => {
+                              setDraggedTaskIndex(idx);
+                              e.dataTransfer?.setData('text/plain', String(idx));
+                            }}
+                            className="cursor-grab active:cursor-grabbing text-[#94A3B8] hover:text-[#475569] p-0.5 rounded-[4px] shrink-0 select-none focus:outline-none"
+                            aria-label={`Drag to reorder task ${idx + 1}`}
+                            title="Drag to reorder task"
+                            data-testid={`task-drag-handle-${idx}`}
+                          >
+                            <GripVertical className="h-4 w-4" />
+                          </button>
+                        )}
                         <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] bg-[#1D4ED8] text-xs font-bold text-[#FFFFFF]">
                           {idx + 1}
                         </span>
@@ -581,15 +925,30 @@ export function OtherTemplateModal({
                         <div className="space-y-1.5 bg-[#F8FAFC] p-2 rounded-[8px] border-[#E2E8F0]">
                           {task.checklist.map((item, ci) => (
                             <div key={item.id || ci} className="flex items-center gap-2 text-xs">
+                              {/* Completion Checkbox */}
+                              <input
+                                type="checkbox"
+                                checked={Boolean(item.completed)}
+                                onChange={(e) => {
+                                  setIsDirty(true);
+                                  updateChecklistItem(idx, ci, 'completed', e.target.checked);
+                                }}
+                                data-testid={`other-template-checklist-checkbox-${idx}-${ci}`}
+                                className="h-3.5 w-3.5 rounded border-[#CBD5E1] text-[#1E293B] focus:ring-[#1E293B] cursor-pointer shrink-0"
+                              />
+
                               {/* Text input */}
                               <input
                                 type="text"
                                 value={item.text}
-                                onChange={(e) =>
-                                  updateChecklistItem(idx, ci, 'text', e.target.value)
-                                }
+                                onChange={(e) => {
+                                  setIsDirty(true);
+                                  updateChecklistItem(idx, ci, 'text', e.target.value);
+                                }}
                                 placeholder="Checklist item or document requirement..."
-                                className="flex-1 text-xs border-[#E2E8F0] rounded-[6px] px-2 py-1 bg-[#FFFFFF] text-[#1E293B] placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]"
+                                className={`flex-1 text-xs border-[#E2E8F0] rounded-[6px] px-2 py-1 bg-[#FFFFFF] ${
+                                  item.completed ? 'line-through text-[#94A3B8]' : 'text-[#1E293B]'
+                                } placeholder:text-[#475569] focus:outline-none focus:ring-1 focus:ring-[#1D4ED8]`}
                                 data-testid={`checklist-item-input-${idx}-${ci}`}
                               />
 

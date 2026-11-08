@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Layers, Calendar, Search, AlertTriangle, ArrowUpDown } from 'lucide-react';
+import { Layers, Calendar, Search, AlertTriangle, ArrowUpDown, AlertCircle } from 'lucide-react';
 import { useRetainerTemplates, useRetainerMutations } from '../api/useRetainers';
 import { useClients } from '../api/useClients';
 import {
@@ -31,7 +31,9 @@ import {
   type ClientSortOption,
 } from '@/features/clients/lib/clientSelectUtils';
 import { ClientSelectOptionContent } from '@/components/ui/client-select-option';
-import { useTeam } from '../api/useTeam';
+import { useTeam, type TeamMember } from '../api/useTeam';
+import { useUsersList } from '@/features/admin/api/useUsers';
+import { resolveEntityCodeFromUUID } from '@/lib/realtime';
 import { AssignerSelect } from './AssignerSelect';
 import { TaskTypeBadge } from '../lib/taskTypes';
 import { runBlockingAction } from './BlockingActionModal';
@@ -90,6 +92,31 @@ export function OtherTemplateGenerateModal({
     useRetainerTemplates({ enabled: isOpen, type: 'other' });
   const { data: clients = [] } = useClients(undefined, { enabled: isOpen });
   const { data: team = [] } = useTeam();
+  const { data: usersData = [] } = useUsersList({ enabled: isOpen });
+
+  // Merge team and usersData into a consolidated staff directory
+  const mergedStaff = useMemo(() => {
+    const map = new Map<string, TeamMember>();
+    for (const m of team) {
+      if (m && m.id) {
+        map.set(m.id.toLowerCase(), m);
+      }
+    }
+    for (const u of usersData) {
+      if (u && u.id && !map.has(u.id.toLowerCase())) {
+        map.set(u.id.toLowerCase(), {
+          id: u.id,
+          name: u.name || u.email,
+          email: u.email,
+          role: u.role || 'Staff',
+          departments: u.departments || [],
+          entities: u.entities || [],
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [team, usersData]);
+
   const { generateFromTemplate } = useRetainerMutations();
   const activeEntity = useSessionStore((state) => state.activeEntity);
 
@@ -110,6 +137,33 @@ export function OtherTemplateGenerateModal({
   }, [preselectedTemplateId, otherTemplates, templateId]);
 
   const selectedTemplate = otherTemplates.find((t) => t.id === templateId);
+
+  const selectedTemplateEntity = useMemo(() => {
+    if (!selectedTemplate) return null;
+    if (selectedTemplate.entity === 'ATA' || selectedTemplate.entity === 'LTA') return selectedTemplate.entity;
+    if ((selectedTemplate as any).entities?.code === 'ATA' || (selectedTemplate as any).entities?.code === 'LTA') {
+      return (selectedTemplate as any).entities.code;
+    }
+    return resolveEntityCodeFromUUID(selectedTemplate.entity_id);
+  }, [selectedTemplate]);
+
+  // Scoped clients by selected template entity
+  const scopedClients = useMemo(() => {
+    if (selectedTemplateEntity === 'ATA' || selectedTemplateEntity === 'LTA') {
+      return clients.filter((c) => !c.entity || c.entity === selectedTemplateEntity);
+    }
+    return clients;
+  }, [clients, selectedTemplateEntity]);
+
+  // Reset clientId if selected client is not allowed for the template entity
+  useEffect(() => {
+    if (clientId && scopedClients.length > 0) {
+      const isAllowed = scopedClients.some((c) => c.id === clientId);
+      if (!isAllowed) {
+        setClientId('');
+      }
+    }
+  }, [selectedTemplateEntity, scopedClients, clientId]);
 
   // Sync template description and tasks when selected
   useEffect(() => {
@@ -136,7 +190,12 @@ export function OtherTemplateGenerateModal({
             ? t.default_assignees
             : Array.isArray(t.defaultAssignees) && t.defaultAssignees.length > 0
             ? t.defaultAssignees
-            : [];
+            : [
+                (t as any).assigneeId,
+                (t as any).assigned_to,
+                ...(Array.isArray((t as any).coAssignees) ? (t as any).coAssignees : []),
+                ...(Array.isArray((t as any).co_assignees) ? (t as any).co_assignees : []),
+              ].filter((id): id is string => typeof id === 'string' && Boolean(id));
 
         const dependsOn =
           t.depends_on ??
@@ -162,33 +221,81 @@ export function OtherTemplateGenerateModal({
     );
   }, [selectedTemplate]);
 
-  const duplicateClientIds = useMemo(() => getDuplicateClientIds(clients), [clients]);
+  const duplicateClientIds = useMemo(() => getDuplicateClientIds(scopedClients), [scopedClients]);
 
   // Search filter and sort for clients
   const filteredClients = useMemo(() => {
     const list = clientSearch.trim()
-      ? clients.filter((c) => matchesClientSearch(c, clientSearch))
-      : clients;
+      ? scopedClients.filter((c) => matchesClientSearch(c, clientSearch))
+      : scopedClients;
     return sortClients(list, clientSort);
-  }, [clients, clientSearch, clientSort]);
+  }, [scopedClients, clientSearch, clientSort]);
+
+  // ID normalizer for case-insensitive and trimmed ID matching
+  const normId = (id: string | null | undefined) => String(id || '').trim().toLowerCase();
+
+  // Project team IDs derived directly from assignedTo and coAssignees
+  const projectTeamIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (assignedTo) {
+      ids.add(assignedTo);
+      ids.add(normId(assignedTo));
+    }
+    for (const id of coAssignees) {
+      if (id) {
+        ids.add(id);
+        ids.add(normId(id));
+      }
+    }
+    return ids;
+  }, [assignedTo, coAssignees]);
 
   // Project Team Members strictly: Manager (assignedTo) + Co-Assignees
   const projectTeam = useMemo(() => {
-    return team.filter(
-      (m) => (assignedTo && m.id === assignedTo) || coAssignees.includes(m.id)
-    );
-  }, [team, assignedTo, coAssignees]);
+    const governanceIds = [assignedTo, ...coAssignees].filter(Boolean) as string[];
+    const result: TeamMember[] = [];
+    const seen = new Set<string>();
 
-  const projectTeamIds = useMemo(() => {
-    return new Set(projectTeam.map((m) => m.id));
-  }, [projectTeam]);
+    for (const gid of governanceIds) {
+      const nid = normId(gid);
+      if (seen.has(nid)) continue;
+      seen.add(nid);
+
+      const found = mergedStaff.find((m) => normId(m.id) === nid || m.id === gid);
+      if (found) {
+        result.push(found);
+      } else {
+        result.push({
+          id: gid,
+          name: gid,
+          email: '',
+          role: gid === assignedTo ? 'Manager' : 'Staff',
+        });
+      }
+    }
+    return result;
+  }, [assignedTo, coAssignees, mergedStaff]);
 
   // Check for any tasks assigned to members outside the project team
   const unmappedTasks = useMemo(() => {
-    return blueprintTasks.filter((t) =>
-      t.assignees.some((id) => !projectTeamIds.has(id))
+    return blueprintTasks.filter(
+      (t) =>
+        t.assignees.length > 0 &&
+        t.assignees.some((id) => !projectTeamIds.has(id) && !projectTeamIds.has(normId(id)))
     );
   }, [blueprintTasks, projectTeamIds]);
+
+  // Automatically clear assignee blocker error as soon as all unmapped tasks are resolved
+  useEffect(() => {
+    if (
+      error ===
+      'All task assignees must belong to the selected project team. Please update unmapped assignees.'
+    ) {
+      if (unmappedTasks.length === 0) {
+        setError(null);
+      }
+    }
+  }, [unmappedTasks.length, error]);
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,8 +386,10 @@ export function OtherTemplateGenerateModal({
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
-        className="max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
+        className="max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[12px] border-[#E2E8F0] bg-[#FFFFFF] shadow-float"
         data-testid="other-template-generate-modal"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader>
           <DialogTitle className="text-base font-semibold tracking-tight text-[#1E293B] flex items-center gap-2">
@@ -292,14 +401,14 @@ export function OtherTemplateGenerateModal({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleGenerate} className="space-y-4">
+        <form onSubmit={handleGenerate} className="space-y-4 min-w-0 max-w-full overflow-x-hidden">
           {error && (
             <div
               className="p-3 bg-[#FFFFFF] border-[#FCA5A5] rounded-[6px] flex items-center gap-2 text-xs tabular-nums text-[#DC2626]"
               data-testid="generate-error-banner"
             >
               <AlertTriangle className="h-4 w-4 shrink-0 text-[#DC2626]" />
-              <span>{error}</span>
+              <span data-testid="generate-error">{error}</span>
             </div>
           )}
 
@@ -396,7 +505,7 @@ export function OtherTemplateGenerateModal({
               </SelectTrigger>
               <SelectContent data-radix-select-viewport="" className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
                 {(() => {
-                  const selectedClient = clients.find((c) => c.id === clientId);
+                  const selectedClient = scopedClients.find((c) => c.id === clientId);
                   const selectedIsFilteredOut = selectedClient && !filteredClients.some((c) => c.id === selectedClient.id);
 
                   return (
@@ -508,7 +617,7 @@ export function OtherTemplateGenerateModal({
             </div>
 
             <AssignerSelect
-              availableStaff={team}
+              availableStaff={mergedStaff}
               primaryAssigneeId={assignedTo}
               selectedCoAssigneeIds={coAssignees}
               managerOnlyPrimary={true}
@@ -532,43 +641,144 @@ export function OtherTemplateGenerateModal({
 
           {/* 6. Blueprint Tasks Scoping Preview */}
           {blueprintTasks.length > 0 && (
-            <div className="space-y-2 pt-2 border-t border-[#E2E8F0]">
+            <div className="space-y-2 pt-2 border-t border-[#E2E8F0]" data-testid="task-blueprint-preview">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold tracking-normal text-[#1E293B]">
-                  Task Blueprint Scoping ({blueprintTasks.length} tasks)
-                </span>
-                {unmappedTasks.length > 0 && (
+                <label className="text-xs tracking-normal text-[#475569] flex items-center gap-1.5">
+                  <Layers className="h-3.5 w-3.5 text-[#475569]" />
+                  <span>Task Blueprint Scoping ({blueprintTasks.length} tasks)</span>
+                </label>
+                {unmappedTasks.length > 0 ? (
                   <Badge variant="destructive" size="compact" className="rounded-[6px] text-xs">
                     {unmappedTasks.length} unmapped assignee{unmappedTasks.length !== 1 ? 's' : ''}
                   </Badge>
+                ) : (
+                  <span className="text-xs text-[#475569]">
+                    Assignees strictly scoped to project team
+                  </span>
                 )}
               </div>
 
-              <div className="max-h-40 overflow-y-auto space-y-1.5 divide-y divide-[#CBD5E1] border-[#E2E8F0] rounded-[6px] p-2 bg-[#FFFFFF]">
-                {blueprintTasks.map((t, idx) => (
-                  <div
-                    key={t.local_id || idx}
-                    className="flex items-center justify-between text-xs py-1"
-                  >
-                    <div className="flex items-center gap-1.5 truncate">
-                      <span className="text-[#475569] text-xs">#{idx + 1}</span>
-                      <TaskTypeBadge
-                        value={t.requiredLinkType}
-                        data-testid={`other-generate-task-type-${t.local_id || idx}`}
-                      />
-                      <span className="font-semibold text-[#1E293B] truncate">{t.title}</span>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {blueprintTasks.map((task, idx) => {
+                  const isUnmapped =
+                    task.assignees.length > 0 &&
+                    task.assignees.some((id) => !projectTeamIds.has(id) && !projectTeamIds.has(normId(id)));
+                  const unmappedMember = isUnmapped
+                    ? mergedStaff.find((m) => task.assignees.some((id) => m.id === id || normId(m.id) === normId(id)))
+                    : null;
+                  const unmappedName = unmappedMember?.name || (isUnmapped ? task.assignees[0] : null);
+
+                  const matchedMember = projectTeam.find(
+                    (m) =>
+                      task.assignees[0] &&
+                      (m.id === task.assignees[0] || normId(m.id) === normId(task.assignees[0]))
+                  );
+                  const selectValue =
+                    task.assignees[0] && (projectTeamIds.has(task.assignees[0]) || projectTeamIds.has(normId(task.assignees[0])))
+                      ? (matchedMember ? matchedMember.id : task.assignees[0])
+                      : isUnmapped
+                      ? '__unmapped__'
+                      : 'unassigned';
+
+                  return (
+                    <div
+                      key={task.local_id || idx}
+                      data-testid={`blueprint-task-${task.local_id}`}
+                      className={`p-3 rounded-lg border space-y-2 transition-colors min-w-0 max-w-full overflow-hidden text-xs ${
+                        isUnmapped
+                          ? 'bg-[#FFFFFF] border-[#FCA5A5]'
+                          : 'bg-[#FFFFFF] border-[#E2E8F0]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <span className="text-xs text-[#475569] shrink-0">
+                            #{idx + 1}
+                          </span>
+                          <TaskTypeBadge
+                            value={task.requiredLinkType}
+                            data-testid={`other-generate-task-type-${task.local_id || idx}`}
+                          />
+                          <span className="font-semibold text-[#1E293B] truncate min-w-0 flex-1" title={task.title}>
+                            {task.title}
+                          </span>
+                        </div>
+                        <Badge
+                          variant={task.phase === 'processing' ? 'default' : 'secondary'}
+                          className="text-xs shrink-0 rounded-[6px] uppercase"
+                        >
+                          {task.phase === 'processing' ? 'Processing' : 'Pre-Processing'}
+                        </Badge>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-[10px] text-[#64748B] min-w-0">
+                          {task.depends_on && (
+                            <span className="truncate">
+                              Prerequisite: <span className="font-medium text-[#1E293B]">{task.depends_on}</span>
+                            </span>
+                          )}
+                          {task.dueDate && (
+                            <span>Due: {new Date(task.dueDate).toLocaleDateString()}</span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-[220px]">
+                          <Select
+                            value={selectValue}
+                            onValueChange={(val) => {
+                              if (!val || val === '__unmapped__') return;
+                              const newAssignees = val === 'unassigned' ? [] : [val];
+                              setBlueprintTasks((prev) =>
+                                prev.map((t) =>
+                                  t.local_id === task.local_id
+                                    ? { ...t, assignees: newAssignees }
+                                    : t
+                                )
+                              );
+                              if (error) setError(null);
+                            }}
+                          >
+                            <SelectTrigger
+                              className="w-44 sm:w-48 max-w-full min-w-0 text-xs py-1 h-7 truncate [&>span]:truncate bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B]"
+                              data-testid={`task-assignee-select-${task.local_id}`}
+                            >
+                              <SelectValue placeholder="— Unassigned —" />
+                            </SelectTrigger>
+                            <SelectContent className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF]">
+                              {isUnmapped && (
+                                <SelectItem value="__unmapped__" disabled className="text-xs text-[#DC2626]">
+                                  ⚠️ Unmapped ({unmappedName || 'Template Default'})
+                                </SelectItem>
+                              )}
+                              <SelectItem value="unassigned" className="text-xs">— Unassigned —</SelectItem>
+                              {projectTeam.map((m) => (
+                                <SelectItem key={m.id} value={m.id} className="text-xs">
+                                  {m.name} ({m.role})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {isUnmapped && (
+                        <div
+                          className="flex items-start gap-1.5 text-[11px] text-[#DC2626] font-medium pt-0.5 min-w-0 break-words"
+                          data-testid={`unmapped-assignee-alert-${task.local_id}`}
+                        >
+                          <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                          <span
+                            className="min-w-0 break-words flex-1"
+                            data-testid={`unmapped-assignee-alert-${idx}`}
+                          >
+                            Template default assignee {unmappedName ? `"${unmappedName}" ` : ''}is not in the assigned team. Please select an assignee from the team or add them to Team Members.
+                          </span>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <Badge
-                        variant={t.phase === 'processing' ? 'secondary' : 'default'}
-                        size="compact"
-                        className="text-xs rounded-[6px]"
-                      >
-                        {t.phase === 'processing' ? 'Processing' : 'Pre-Proc'}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

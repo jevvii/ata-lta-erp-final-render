@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { DocumentViewerModal } from '@/features/documents/components/DocumentViewerModal';
+import { parseExternalUrl } from '@/features/documents/utils/googleDrive';
 import type { DmsDocument } from '@/features/documents/api/types';
 import type { ReceiptUrlData } from '../api/types';
 import { receiptDisplayName } from '../lib/receiptDisplayName';
@@ -52,12 +53,47 @@ export function ReceiptViewer({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  const hasReceipt = Boolean(receiptFileName || receiptS3Key);
+  const fileName = receiptDisplayName(receiptFileName || receiptData?.filename);
+
+  const isExternalUrl = Boolean(
+    (receiptS3Key && /^https?:\/\//i.test(receiptS3Key)) ||
+    (receiptData?.url && /^https?:\/\//i.test(receiptData.url))
+  );
+
+  const effectiveUrl =
+    (receiptS3Key && /^https?:\/\//i.test(receiptS3Key))
+      ? (receiptData?.url || receiptS3Key)
+      : (receiptData?.url || '');
+
+  const parsedExternal = parseExternalUrl(effectiveUrl || '', fileName);
+  const isGoogleDrive = Boolean(parsedExternal.isGoogleDrive && parsedExternal.previewUrl);
+
+  const isPdf = !isGoogleDrive && Boolean(
+    receiptData?.contentType?.toLowerCase().includes('pdf') ||
+      parsedExternal.detectedMimeType?.includes('pdf') ||
+      /\.pdf$/i.test(fileName)
+  );
+
+  const isImage = !isGoogleDrive && Boolean(
+    receiptData?.contentType?.toLowerCase().startsWith('image/') ||
+      parsedExternal.detectedMimeType?.startsWith('image/') ||
+      /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName)
+  );
+
+  const unavailable = receiptData?.status === 'unavailable';
+  const canView = Boolean(effectiveUrl && !isReceiptError && !unavailable);
+
   const handleDownload = async (e: React.MouseEvent) => {
     e.preventDefault();
-    if (!receiptData?.url || isDownloading) return;
+    if (!effectiveUrl || isDownloading) return;
+    if (parsedExternal.isGoogleDrive) {
+      window.open(parsedExternal.originalUrl || effectiveUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
     setIsDownloading(true);
     try {
-      const response = await fetch(receiptData.url);
+      const response = await fetch(effectiveUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch file: ${response.statusText}`);
       }
@@ -76,7 +112,7 @@ export function ReceiptViewer({
       }, 100);
     } catch {
       const fallbackLink = document.createElement('a');
-      fallbackLink.href = receiptData.url;
+      fallbackLink.href = effectiveUrl;
       fallbackLink.download = fileName || 'receipt';
       fallbackLink.target = '_blank';
       fallbackLink.rel = 'noopener noreferrer';
@@ -92,36 +128,21 @@ export function ReceiptViewer({
     setImageLoadError(false);
     setZoom(100);
     setRotation(0);
-  }, [receiptData?.url]);
-
-  const hasReceipt = Boolean(receiptFileName || receiptS3Key);
-  const fileName = receiptDisplayName(receiptFileName || receiptData?.filename);
-
-  const isPdf = Boolean(
-    receiptData?.contentType?.toLowerCase().includes('pdf') ||
-      /\.pdf$/i.test(fileName)
-  );
-
-  const isImage = Boolean(
-    receiptData?.contentType?.toLowerCase().startsWith('image/') ||
-      /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(fileName)
-  );
-
-  const unavailable = receiptData?.status === 'unavailable';
-  const canView = Boolean(receiptData?.url && !isReceiptError && !unavailable);
+  }, [effectiveUrl]);
 
   const documentForModal = useMemo<DmsDocument | null>(() => {
-    if (!receiptData?.url) return null;
+    if (!effectiveUrl) return null;
     return {
       id: '',
       file_name: fileName,
       original_name: fileName,
-      content_type: receiptData.contentType || (isPdf ? 'application/pdf' : 'image/jpeg'),
+      content_type: receiptData?.contentType || (isPdf ? 'application/pdf' : 'image/jpeg'),
       category: 'RECEIPT',
       document_lifecycle: 'stored',
       status: 'active',
       archived: false,
       storage_path: receiptS3Key || null,
+      external_url: isExternalUrl ? effectiveUrl : null,
       uploader_id: '',
       entity_id: '',
       description: null,
@@ -135,14 +156,14 @@ export function ReceiptViewer({
       comments: [],
       versions: [],
     } as unknown as DmsDocument;
-  }, [receiptData?.url, receiptData?.contentType, fileName, isPdf, receiptS3Key, workRequestTitle]);
+  }, [effectiveUrl, receiptData?.contentType, fileName, isPdf, receiptS3Key, isExternalUrl, workRequestTitle]);
 
   const pdfViewerUrl = useMemo(() => {
-    if (!receiptData?.url) return '';
-    const baseUrl = receiptData.url.split('#')[0] || receiptData.url;
+    if (!effectiveUrl) return '';
+    const baseUrl = effectiveUrl.split('#')[0] || effectiveUrl;
     const fragment = zoom === 100 ? 'view=Fit' : `zoom=${zoom}`;
     return `${baseUrl}#${fragment}`;
-  }, [receiptData?.url, zoom]);
+  }, [effectiveUrl, zoom]);
 
   const handleZoomIn = () => {
     setZoom((prev) => {
@@ -190,11 +211,11 @@ export function ReceiptViewer({
 
   return (
     <div
-      className={cn('flex flex-col gap-1.5 w-full', isPdf ? 'flex-1 min-h-0 h-full' : 'shrink-0')}
+      className={cn('flex flex-col gap-1.5 w-full', isPdf || isGoogleDrive ? 'flex-1 min-h-0 h-full' : 'shrink-0')}
       data-testid="receipt-viewer-container"
     >
       {/* Loading signed URL status */}
-      {(isLoadingReceipt || (isFetchingReceipt && !receiptData?.url)) && (
+      {(isLoadingReceipt || (isFetchingReceipt && !effectiveUrl)) && (
         <p role="status" className="text-xs text-muted">
           Loading receipt…
         </p>
@@ -232,7 +253,7 @@ export function ReceiptViewer({
       )}
 
       {/* Receipt URL available — render rich viewer with labeled toolbar and inline preview */}
-      {canView && receiptData?.url && (
+      {canView && effectiveUrl && (
         <>
           {/* Compact Viewer Toolbar */}
           <div
@@ -314,7 +335,7 @@ export function ReceiptViewer({
             </Button>
 
             <a
-              href={receiptData.url}
+              href={parsedExternal.originalUrl || effectiveUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="h-6 px-1 sm:px-1.5 text-[11px] font-medium text-ink bg-surface border-border rounded-[4px] hover:bg-hover inline-flex items-center gap-0.5 cursor-pointer transition-colors shrink-0 whitespace-nowrap"
@@ -327,7 +348,7 @@ export function ReceiptViewer({
             </a>
 
             <a
-              href={receiptData.url}
+              href={parsedExternal.originalUrl || effectiveUrl}
               download={fileName}
               onClick={handleDownload}
               target="_blank"
@@ -364,7 +385,35 @@ export function ReceiptViewer({
           </div>
 
           {/* Document Well */}
-          {isImage ? (
+          {isGoogleDrive ? (
+            <div
+              className={cn(
+                'w-full bg-viewer-bg rounded-[4px] border border-border overflow-hidden flex flex-col',
+                isDocked ? 'flex-1 min-h-0 h-full' : 'flex-1 min-h-[70vh]'
+              )}
+              data-testid="receipt-preview-viewport"
+            >
+              <div className="flex items-center justify-between px-3 py-1.5 bg-sidebar border-b border-border text-xs shrink-0">
+                <span className="font-medium text-ink">Google Drive Receipt Preview</span>
+                <a
+                  href={parsedExternal.originalUrl || effectiveUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline inline-flex items-center gap-1 font-medium text-[11px]"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  <span>Open in Google Drive</span>
+                </a>
+              </div>
+              <iframe
+                src={parsedExternal.previewUrl}
+                className={cn('w-full flex-1 border-0', isDocked ? 'min-h-0 h-full' : 'min-h-[70vh]')}
+                title={`Google Drive Preview: ${fileName}`}
+                data-testid="receipt-gdrive-frame"
+                allow="autoplay"
+              />
+            </div>
+          ) : isImage ? (
             <div
               className="w-full h-auto bg-viewer-bg rounded-[4px] border border-border p-1.5 overflow-x-auto flex items-start justify-center relative overscroll-contain"
               data-testid="receipt-preview-viewport"
@@ -400,7 +449,7 @@ export function ReceiptViewer({
                 </div>
               ) : (
                 <img
-                  src={receiptData.url}
+                  src={effectiveUrl}
                   alt={fileName}
                   onError={() => setImageLoadError(true)}
                   style={{
@@ -444,7 +493,7 @@ export function ReceiptViewer({
                     Your browser does not support inline PDF previews.
                   </p>
                   <a
-                    href={receiptData.url}
+                    href={effectiveUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"
@@ -469,7 +518,7 @@ export function ReceiptViewer({
               </div>
               <div className="flex items-center gap-2 pt-2">
                 <a
-                  href={receiptData.url}
+                  href={effectiveUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="min-h-[40px] px-3 text-xs font-medium text-ink bg-surface border border-border rounded-[6px] hover:bg-hover inline-flex items-center gap-1.5 cursor-pointer"
@@ -489,7 +538,7 @@ export function ReceiptViewer({
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           document={documentForModal}
-          previewUrl={receiptData?.url}
+          previewUrl={effectiveUrl}
           attachmentOnly={true}
           onRefreshPreview={onRefetchReceiptUrl}
           isRefreshingPreview={isFetchingReceipt}

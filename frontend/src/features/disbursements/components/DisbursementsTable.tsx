@@ -83,7 +83,9 @@ export function DisbursementsTable({
 
   const [internalSelectedId, setInternalSelectedId] = useState<string | null>(null);
   const activeSelectedId = selectedId !== undefined ? selectedId : internalSelectedId;
-  const rowRefs = useRef<(HTMLTableRowElement | null)[]>([]);
+  const rowRefs = useRef<((HTMLTableRowElement | null)[] & { get?: (id: string) => HTMLTableRowElement | undefined })>([]);
+  const rowIdMap = useRef<Map<string, HTMLTableRowElement>>(new Map());
+  rowRefs.current.get = (id: string) => rowIdMap.current.get(id);
 
   const handleSelectRow = (id: string) => {
     setInternalSelectedId(id);
@@ -189,6 +191,15 @@ export function DisbursementsTable({
       }
     }
   }, [disbursements, activeEntity, isLoading, selectedId, onSelectDisbursement]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    setInternalSelectedId(selectedId);
+    if (page > 1 && !disbursements.some((d) => d.id === selectedId)) {
+      setPage(1);
+    }
+    rowRefs.current.get?.(selectedId)?.scrollIntoView?.({ block: 'nearest' });
+  }, [selectedId, page, disbursements]);
 
   const [focusedIndex, setFocusedIndex] = useState<number>(() => {
     return selectedIndex !== -1 ? selectedIndex : 0;
@@ -371,7 +382,7 @@ export function DisbursementsTable({
             }}
           >
             <SelectTrigger
-              className="h-6 text-[11px] bg-white border border-border rounded px-2 text-muted min-w-[140px] max-w-[220px]"
+              className="h-6 text-[11px] bg-surface border border-border rounded px-2 text-text-secondary min-w-[140px] max-w-[220px]"
               data-testid="filter-client-select"
               title="Filter by Client"
             >
@@ -644,6 +655,11 @@ export function DisbursementsTable({
                       key={item.id}
                       ref={(el) => {
                         rowRefs.current[index] = el;
+                        if (el) {
+                          rowIdMap.current.set(item.id, el);
+                        } else {
+                          rowIdMap.current.delete(item.id);
+                        }
                       }}
                       tabIndex={isTabbable ? 0 : -1}
                       role="row"

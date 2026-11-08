@@ -744,6 +744,7 @@ export interface CreateRetainerTemplateInput {
   description?: string | null;
   template_type?: TemplateType;
   templateType?: TemplateType;
+  entity?: 'ATA' | 'LTA';
   clientId?: string | null;
   client_id?: string | null;
   schedule?: string | null;

@@ -145,6 +145,11 @@ export function getDefaultListRootKey(table: string): readonly unknown[] {
   }
 }
 
+export const TABLE_QUERY_KEY_MAP: Record<string, readonly (readonly unknown[])[]> = {
+  users: [['admin', 'users'], ['me', 'team']],
+  user_departments: [['admin', 'users'], ['me', 'team']],
+};
+
 // ============================================================================
 // Model Normalization Engine (Spec SPEC-REALTIME-SYNC-001 §4 Parcel 2)
 // ============================================================================
@@ -470,6 +475,105 @@ export function normalizeCdcClient(record: Record<string, unknown>): Record<stri
 }
 
 /**
+ * Normalizes PostgreSQL CDC disbursements records into unified objects with both
+ * camelCase and snake_case properties.
+ */
+export function normalizeCdcDisbursement(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  if (!record || typeof record !== 'object') return record;
+  const out = { ...record };
+  let hasChange = false;
+
+  // work_request_id <-> linkedWorkRequestId (also linked_work_request_id)
+  const wrId =
+    record.work_request_id ??
+    record.linked_work_request_id ??
+    record.linkedWorkRequestId;
+  if (wrId !== undefined) {
+    if (out.linkedWorkRequestId !== wrId) {
+      out.linkedWorkRequestId = wrId;
+      hasChange = true;
+    }
+    if (out.work_request_id !== wrId) {
+      out.work_request_id = wrId;
+      hasChange = true;
+    }
+    if (out.linked_work_request_id !== wrId) {
+      out.linked_work_request_id = wrId;
+      hasChange = true;
+    }
+  }
+
+  // task_id <-> linkedTaskId (also linked_task_id)
+  const taskId =
+    record.task_id ??
+    record.linked_task_id ??
+    record.linkedTaskId;
+  if (taskId !== undefined) {
+    if (out.linkedTaskId !== taskId) {
+      out.linkedTaskId = taskId;
+      hasChange = true;
+    }
+    if (out.task_id !== taskId) {
+      out.task_id = taskId;
+      hasChange = true;
+    }
+    if (out.linked_task_id !== taskId) {
+      out.linked_task_id = taskId;
+      hasChange = true;
+    }
+  }
+
+  // client_id <-> clientId
+  if (record.client_id !== undefined && record.clientId === undefined) {
+    out.clientId = record.client_id;
+    hasChange = true;
+  } else if (record.clientId !== undefined && record.client_id === undefined) {
+    out.client_id = record.clientId;
+    hasChange = true;
+  }
+
+  // employee_id <-> employeeId
+  if (record.employee_id !== undefined && record.employeeId === undefined) {
+    out.employeeId = record.employee_id;
+    hasChange = true;
+  } else if (record.employeeId !== undefined && record.employee_id === undefined) {
+    out.employee_id = record.employeeId;
+    hasChange = true;
+  }
+
+  // fund_source <-> fundSource
+  if (record.fund_source !== undefined && record.fundSource === undefined) {
+    out.fundSource = record.fund_source;
+    hasChange = true;
+  } else if (record.fundSource !== undefined && record.fund_source === undefined) {
+    out.fund_source = record.fundSource;
+    hasChange = true;
+  }
+
+  // due_date <-> dueDate
+  if (record.due_date !== undefined && record.dueDate === undefined) {
+    out.dueDate = record.due_date;
+    hasChange = true;
+  } else if (record.dueDate !== undefined && record.due_date === undefined) {
+    out.due_date = record.dueDate;
+    hasChange = true;
+  }
+
+  // review_ready <-> reviewReady
+  if (record.review_ready !== undefined && record.reviewReady === undefined) {
+    out.reviewReady = record.review_ready;
+    hasChange = true;
+  } else if (record.reviewReady !== undefined && record.review_ready === undefined) {
+    out.review_ready = record.reviewReady;
+    hasChange = true;
+  }
+
+  return hasChange ? out : record;
+}
+
+/**
  * Ensures snake_case <-> camelCase fields for persistent item numbers are preserved/mapped cleanly
  * across all domain records:
  * - audit_number <-> auditNumber
@@ -587,6 +691,9 @@ export function normalizeCdcPayload(
     case 'clients':
       normalized = normalizeCdcClient(record);
       break;
+    case 'disbursements':
+      normalized = normalizeCdcDisbursement(record);
+      break;
     default:
       normalized = record;
       break;
@@ -612,6 +719,30 @@ export function isTaskListOfTargetWr(qKey: unknown, targetWrId: string): boolean
     qKey.includes('tasks') &&
     qKey.includes(targetWrId)
   );
+}
+
+/**
+ * Evaluates whether a disbursement CDC record matches a specific queue predicate.
+ */
+export function matchesDisbursementQueuePredicate(
+  record: Record<string, unknown>,
+  queue: unknown
+): boolean {
+  if (Boolean(record.archived)) return false;
+  const reviewReady = Boolean(record.reviewReady ?? record.review_ready);
+  if (queue === 'initial_requests') {
+    return record.status === 'Draft' && reviewReady === true;
+  }
+  if (queue === 'needs_correction') {
+    return record.status === 'Draft' && reviewReady === false;
+  }
+  if (queue === 'ready_for_funding') {
+    return record.status === 'Approved';
+  }
+  if (queue === 'payment_releases') {
+    return record.status === 'Funded';
+  }
+  return true;
 }
 
 /**
@@ -967,6 +1098,7 @@ function invalidateCounts(queryClient: QueryClient, table: string): void {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit', 'count'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'team'] });
       break;
     case 'audit_logs':
       void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
@@ -1678,6 +1810,41 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
         for (const [qKey, listData] of matchingQueries) {
           if (!listData) continue;
 
+          // Scoped matcher for disbursements: filter-aware cache prepend
+          if (options.table === 'disbursements' && Array.isArray(qKey) && qKey[0] === 'disbursements') {
+            if (qKey[1] === 'all-for-status') {
+              const targetStatus = qKey[3] as string | undefined;
+              if (Boolean(payloadObj.new.archived) || (targetStatus && payloadObj.new.status !== targetStatus)) {
+                continue;
+              }
+            } else if (qKey[1] === 'all-for-queue') {
+              const queueName = qKey[3] as string | undefined;
+              if (Boolean(payloadObj.new.archived) || !matchesDisbursementQueuePredicate(payloadObj.new, queueName)) {
+                continue;
+              }
+            } else if (qKey[1] === 'list') {
+              const filters = qKey[3] as Record<string, any> | undefined;
+              if (filters && typeof filters === 'object') {
+                const isArchived = Boolean(payloadObj.new.archived);
+                if (filters.archived === true && !isArchived) {
+                  continue;
+                }
+                if (!filters.archived && isArchived) {
+                  continue;
+                }
+                if (filters.status && payloadObj.new.status !== filters.status) {
+                  continue;
+                }
+                if (filters.queue && !matchesDisbursementQueuePredicate(payloadObj.new, filters.queue)) {
+                  continue;
+                }
+                if (filters.page && Number(filters.page) > 1) {
+                  continue;
+                }
+              }
+            }
+          }
+
           // Scoped matcher for tasks: only prepend to matching parent work request query
           if (options.table === 'tasks') {
             // Guard: Never prepend task records to work request list queries
@@ -1756,21 +1923,55 @@ export function handleRealtimePayload<T = Record<string, unknown>>(
       }
     }
 
-    if (
-      payloadObj.new &&
-      (options.table === 'disbursements' || options.table === 'invoices') &&
-      Boolean(
-        payloadObj.new.linked_invoice_id ||
-          payloadObj.new.linkedInvoiceId ||
-          payloadObj.new.linked_transmittal_id ||
-          payloadObj.new.linkedTransmittalId
-      )
-    ) {
-      if (detailKey) {
-        void queryClient.invalidateQueries({ queryKey: detailKey });
-      }
-      if (listRootKey) {
-        void queryClient.invalidateQueries({ queryKey: listRootKey });
+    if (payloadObj.new) {
+      if (options.table === 'disbursements') {
+        const hasRelationalFields = Boolean(
+          payloadObj.new.work_request_id ||
+            payloadObj.new.workRequestId ||
+            payloadObj.new.linked_work_request_id ||
+            payloadObj.new.linkedWorkRequestId ||
+            payloadObj.new.client_id ||
+            payloadObj.new.clientId ||
+            payloadObj.new.task_id ||
+            payloadObj.new.taskId ||
+            payloadObj.new.linked_task_id ||
+            payloadObj.new.linkedTaskId ||
+            payloadObj.new.employee_id ||
+            payloadObj.new.employeeId
+        );
+        const hasCrossModuleLinks = Boolean(
+          payloadObj.new.linked_invoice_id ||
+            payloadObj.new.linkedInvoiceId ||
+            payloadObj.new.linked_transmittal_id ||
+            payloadObj.new.linkedTransmittalId
+        );
+
+        if (hasRelationalFields || hasCrossModuleLinks) {
+          if (detailKey) {
+            void queryClient.invalidateQueries({ queryKey: detailKey });
+          }
+        }
+
+        if (hasCrossModuleLinks) {
+          if (listRootKey) {
+            void queryClient.invalidateQueries({ queryKey: listRootKey });
+          }
+        }
+      } else if (
+        options.table === 'invoices' &&
+        Boolean(
+          payloadObj.new.linked_invoice_id ||
+            payloadObj.new.linkedInvoiceId ||
+            payloadObj.new.linked_transmittal_id ||
+            payloadObj.new.linkedTransmittalId
+        )
+      ) {
+        if (detailKey) {
+          void queryClient.invalidateQueries({ queryKey: detailKey });
+        }
+        if (listRootKey) {
+          void queryClient.invalidateQueries({ queryKey: listRootKey });
+        }
       }
     }
   } else {
