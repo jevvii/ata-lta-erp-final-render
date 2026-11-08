@@ -691,5 +691,78 @@ describe('TaskDetailModal Document Linking & Query Invalidation', () => {
       const previewBtn = within(docCard).getByTitle('Preview Document');
       expect(previewBtn).toBeInTheDocument();
     });
+
+    it('renders status badge and status action buttons in the top header bar and unified team list in details', async () => {
+      const taskWithAssignees: Task = {
+        ...mockTask,
+        assigneeId: 'user-admin',
+        assigneeName: 'Lorein Wong',
+        assignees: ['user-admin', 'co-one'],
+        taskAssignees: [
+          { taskId: mockTask.id, userId: 'co-one', userName: 'Ben Cruz', assignedBy: null, assignedAt: null },
+        ],
+      };
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={taskWithAssignees}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      // Status badge and toggle button in top header bar
+      const statusBadge = screen.getByTestId('task-status-badge');
+      expect(statusBadge).toHaveTextContent('In Progress');
+      const toggleBtn = screen.getByTestId('task-toggle-status-btn');
+      expect(toggleBtn).toBeInTheDocument();
+      expect(toggleBtn).toHaveTextContent('Mark Completed');
+
+      // Unified Assigned Team list
+      const teamSection = screen.getByTestId('assigned-team-section');
+      expect(within(teamSection).getByTestId('assigned-team-count')).toHaveTextContent('2');
+
+      const teamList = screen.getByTestId('assigned-team-list');
+      expect(within(teamList).getByTestId('assignee-chip-user-admin')).toBeInTheDocument();
+      expect(within(teamList).getByTestId('assignee-chip-co-one')).toBeInTheDocument();
+
+      // Primary assignee has Lead badge
+      const leadChip = within(teamList).getByTestId('assignee-chip-user-admin');
+      expect(leadChip).toHaveTextContent('Lorein Wong');
+      expect(within(leadChip).getByText('Lead')).toBeInTheDocument();
+
+      // Co-assignee has Make Lead button and Remove button
+      const coChip = within(teamList).getByTestId('assignee-chip-co-one');
+      expect(coChip).toHaveTextContent('Ben Cruz');
+      expect(within(coChip).getByTestId('make-lead-btn-co-one')).toHaveTextContent('Make Lead');
+      expect(within(coChip).getByTestId('remove-assignee-btn-co-one')).toBeInTheDocument();
+    });
+
+    it('renders clean empty state with UserAvatar when no team members are assigned', async () => {
+      const unassignedTask: Task = {
+        ...mockTask,
+        assigneeId: null,
+        assigneeName: null,
+        assignees: [],
+        taskAssignees: [],
+      };
+
+      render(
+        <TaskDetailModal
+          isOpen={true}
+          onClose={vi.fn()}
+          task={unassignedTask}
+          workRequest={mockWr}
+        />,
+        { wrapper }
+      );
+
+      expect(screen.getByTestId('task-assignee')).toHaveTextContent('Unassigned');
+      const teamList = screen.getByTestId('assigned-team-list');
+      expect(within(teamList).getByText('Unassigned')).toBeInTheDocument();
+      expect(within(teamList).getByText('?')).toBeInTheDocument();
+    });
   });
 });
