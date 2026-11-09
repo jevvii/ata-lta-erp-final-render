@@ -168,6 +168,22 @@ export default function OperationsPage() {
   const [templateToDelete, setTemplateToDelete] = useState<RetainerTemplate | null>(null);
   const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
 
+  const templateScope = JSON.stringify([user?.id, activeEntity, canAccessRetainerTemplates, canUseRetainers, canEditRetainers]);
+  const [templateModalScope, setTemplateModalScope] = useState(templateScope);
+  const isTemplateScopeCurrent = templateModalScope === templateScope;
+
+  useEffect(() => {
+    if (isTemplateScopeCurrent) return;
+    setViewingTemplate(null);
+    setTemplateToDelete(null);
+    setOpenActionMenuId(null);
+    setEditingTemplate(null);
+    setEditingOtherTemplate(null);
+    setIsTemplateModalOpen(false);
+    setIsOtherTemplateModalOpen(false);
+    setTemplateModalScope(templateScope);
+  }, [templateScope, isTemplateScopeCurrent]);
+
   const { deleteTemplate } = useRetainerMutations();
 
   useEffect(() => {
@@ -185,7 +201,7 @@ export default function OperationsPage() {
   }, [openActionMenuId]);
 
   const handleConfirmDelete = async () => {
-    if (!templateToDelete) return;
+    if (!templateToDelete || !isTemplateScopeCurrent || !canEditRetainers) return;
     const target = templateToDelete;
     try {
       await runBlockingAction({
@@ -943,7 +959,7 @@ export default function OperationsPage() {
       )}
 
       <RetainerTemplateModal
-        isOpen={isTemplateModalOpen}
+        isOpen={isTemplateScopeCurrent && isTemplateModalOpen}
         template={editingAdminTemplate}
         onClose={() => {
           setIsTemplateModalOpen(false);
@@ -956,7 +972,7 @@ export default function OperationsPage() {
       />
 
       <OtherTemplateModal
-        isOpen={isOtherTemplateModalOpen}
+        isOpen={isTemplateScopeCurrent && isOtherTemplateModalOpen}
         template={normalizedEditingOtherTemplate}
         onClose={() => {
           setIsOtherTemplateModalOpen(false);
@@ -969,7 +985,7 @@ export default function OperationsPage() {
       />
 
       <TemplateDetailModal
-        isOpen={Boolean(viewingTemplate)}
+        isOpen={isTemplateScopeCurrent && Boolean(viewingTemplate)}
         template={viewingTemplate}
         onClose={() => setViewingTemplate(null)}
         onEdit={(tpl) => {
@@ -988,7 +1004,7 @@ export default function OperationsPage() {
       />
 
       <Dialog
-        open={Boolean(templateToDelete)}
+        open={isTemplateScopeCurrent && Boolean(templateToDelete)}
         onOpenChange={(open) => {
           if (!open) setTemplateToDelete(null);
         }}

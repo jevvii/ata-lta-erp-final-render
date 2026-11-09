@@ -446,6 +446,10 @@ export interface RetainerTemplateTask {
 export type TemplateType = 'retainer' | 'other';
 
 export interface RetainerTemplate {
+  assigned_to?: string | null;
+  assignedTo?: string | null;
+  client_name?: string | null;
+  clients?: { name?: string } | null;
   entities?: { code?: string } | null;
   id: string;
   entity_id: string;

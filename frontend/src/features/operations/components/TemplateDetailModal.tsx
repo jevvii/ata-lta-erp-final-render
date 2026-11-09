@@ -54,8 +54,8 @@ export function TemplateDetailModal({
     if (!template) return 'ATA';
     return (
       (template.entity && template.entity.length <= 4 ? template.entity : undefined) ||
-      ((template as any).entities?.code && (template as any).entities.code.length <= 4
-        ? (template as any).entities.code
+      (template.entities?.code && template.entities.code.length <= 4
+        ? template.entities.code
         : undefined) ||
       resolveEntityCodeFromUUID(template.entity_id) ||
       'ATA'
@@ -68,13 +68,13 @@ export function TemplateDetailModal({
   );
 
   const clients = useMemo(() => {
-    return Array.isArray(clientsData) ? clientsData : (clientsData as any)?.items ?? [];
+    return Array.isArray(clientsData) ? clientsData : [];
   }, [clientsData]);
 
   const { data: users = [] } = useUsersList({ enabled: isOpen });
   const { data: teamMembers = [] } = useTeam();
 
-  const assignedManagerId = (template as any)?.assigned_to || (template as any)?.assignedTo;
+  const assignedManagerId = template?.assigned_to || template?.assignedTo;
   const managerName = useMemo(() => {
     if (!assignedManagerId) return 'Unassigned';
     const foundUser = users.find((u) => u.id === assignedManagerId);
@@ -84,12 +84,12 @@ export function TemplateDetailModal({
     return 'Unassigned';
   }, [assignedManagerId, users, teamMembers]);
 
-  const rawClient = (template as any)?.client_name || (template as any)?.clients?.name;
+  const rawClient = template?.client_name || template?.clients?.name;
   const clientId = template?.client_id || template?.clientId;
   const clientName = useMemo(() => {
     if (rawClient) return rawClient;
     if (!clientId) return 'All / Unspecified';
-    const found = clients.find((c: any) => c.id === clientId);
+    const found = clients.find((c) => c.id === clientId);
     return found?.name || 'All / Unspecified';
   }, [rawClient, clientId, clients]);
 
@@ -127,8 +127,7 @@ export function TemplateDetailModal({
       task.assignees ||
       task.default_assignees ||
       task.defaultAssignees ||
-      (task.assigneeId ? [task.assigneeId] : []) ||
-      ((task as any).assigned_to ? [(task as any).assigned_to] : []);
+      (task.assigneeId ? [task.assigneeId] : task.assigned_to ? [task.assigned_to] : []);
     if (!rawList || rawList.length === 0) return [];
     return rawList
       .map((id) => {
@@ -329,9 +328,7 @@ export function TemplateDetailModal({
                           <div className="space-y-1 pl-1">
                             {task.checklist.map((item, itemIdx) => {
                               const isDoc =
-                                item.category === 'document' ||
-                                (item as any).type === 'document' ||
-                                (item as any).category === 'Doc';
+                                item.category === 'document';
                               return (
                                 <div
                                   key={item.id || itemIdx}
@@ -353,7 +350,7 @@ export function TemplateDetailModal({
                                           : 'text-[#1E293B]'
                                       }
                                     >
-                                      {item.text || (item as any).label || (item as any).title}
+                                      {item.text}
                                     </span>
                                   </div>
                                   <div>

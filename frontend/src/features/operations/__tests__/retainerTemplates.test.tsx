@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -203,6 +203,22 @@ describe('Retainer Templates Engine & Details Modal Tests', () => {
     expect(screen.getByText('Monthly Accounting & Tax Retainer')).toBeInTheDocument();
     expect(screen.getByTestId('edit-template-btn-tpl-ret-1')).toBeInTheDocument();
     expect(screen.getByTestId('template-actions-menu-btn-tpl-ret-1')).toBeInTheDocument();
+  });
+
+  it.each(['entity', 'user', 'permission'] as const)('closes template details and deletion confirmation when %s changes', async (scope) => {
+    const { queryClient } = createHarness();
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/operations?tab=templates']}><OperationsPage /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByTestId('template-card-tpl-ret-1'));
+    fireEvent.click(await screen.findByTestId('detail-delete-template-btn'));
+    expect(screen.getByTestId('delete-template-confirm-modal')).toBeInTheDocument();
+    act(() => {
+      if (scope === 'entity') useSessionStore.getState().setActiveEntity('LTA');
+      if (scope === 'user') useSessionStore.setState({ user: { ...useSessionStore.getState().user!, id: 'another-manager' } });
+      if (scope === 'permission') useSessionStore.setState({ permissions: new Set(['workflow:view', 'retainers:use']) });
+    });
+    await waitFor(() => expect(screen.queryByTestId('delete-template-confirm-modal')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('template-detail-modal')).not.toBeInTheDocument();
+    expect(vi.mocked(global.fetch).mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(0);
   });
 
   it('opens template-detail-modal when clicking Retainer Template card and displays metadata, tasks, checklist', async () => {

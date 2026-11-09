@@ -354,6 +354,15 @@ describe('Retainer & Other Templates Delete Scoping & Resolution', () => {
     });
   });
 
+  it.each(['X-Active-Entity', 'X-Entity'])('rejects a single-entity manager selecting LTA through %s', async (header) => {
+    const token = registerUser({ id: '44444444-4444-4444-8444-444444444444', email: 'ata-manager@example.invalid', name: 'ATA Manager', role: 'Manager', departments: ['Management'], entities: ['ATA'] });
+    mockTables.retainer_templates.set('foreign-template', { id: 'foreign-template', entity_id: 'ent-lta', deleted_at: null });
+    const res = await request(app).delete('/v1/operations/templates/foreign-template')
+      .set('Authorization', `Bearer ${token}`).set(header, 'LTA');
+    expect(res.status).toBe(403);
+    expect(mockTables.retainer_templates.get('foreign-template').deleted_at).toBeNull();
+  });
+
   describe('4. RBAC Authorization Guard', () => {
     it('rejects staff without retainers:edit with 403 Forbidden', async () => {
       const templateId = 'tpl-rbac-guard';
