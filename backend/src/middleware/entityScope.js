@@ -10,7 +10,7 @@ const VALID_ENTITIES = ['ATA', 'LTA', 'ALL'];
 const entityScope = async (req, res, next) => {
   try {
     const userEntities = (req.user?.entities || []).map((e) => e.toUpperCase());
-    let requested = (req.headers['x-active-entity'] || '').toUpperCase();
+    let requested = (req.headers['x-active-entity'] || req.headers['x-entity'] || '').toUpperCase();
 
     const hasBoth =
       userEntities.includes('ALL') ||

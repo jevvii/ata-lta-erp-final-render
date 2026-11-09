@@ -3765,13 +3765,14 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
   let query = supabaseAdmin
     .from('retainer_templates')
     .update({ deleted_at: new Date().toISOString() })
-    .eq('id', id);
+    .eq('id', id)
+    .is('deleted_at', null);
 
   if (entityId && entityId !== 'ALL') {
     query = query.eq('entity_id', entityId);
   }
 
-  const { error } = await query;
+  const { data, error } = await query.select('id').maybeSingle();
 
   if (error) {
     throw new AppError({
@@ -3781,7 +3782,7 @@ const deleteRetainerTemplate = async ({ entityId, id }) => {
     });
   }
 
-  return true;
+  return Boolean(data?.id);
 };
 
 const generateRetainerTemplate = async ({ entityId, templateId, user, data = {} }) => {
