@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -153,6 +153,13 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
       }
 
       if (u.includes('/operations/templates') && !u.includes('/generate')) {
+        if (opts?.method === 'DELETE') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ data: null }),
+          });
+        }
         if (opts?.method === 'POST') {
           const body = JSON.parse(opts.body as string);
           return Promise.resolve({
@@ -272,13 +279,17 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
         'Generate from Other Template'
       );
 
-      // Check template card contents: Name, Description, Task count pill, Edit, Delete, Generate
+      // Check template card contents: Name, Description, Task count pill, Edit, Three-dots menu, Delete, Generate
       expect(await screen.findByText('SEC Charter Amendment')).toBeInTheDocument();
       expect(
         screen.getByText('Procedure for corporate charter and by-laws amendments')
       ).toBeInTheDocument();
       expect(screen.getByTestId('task-count-pill-tpl-other-1')).toHaveTextContent('2 tasks');
       expect(screen.getByTestId('edit-other-template-btn-tpl-other-1')).toBeInTheDocument();
+      expect(
+        screen.getByTestId('other-template-actions-menu-btn-tpl-other-1')
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('other-template-actions-menu-btn-tpl-other-1'));
       expect(screen.getByTestId('delete-other-template-btn-tpl-other-1')).toBeInTheDocument();
       expect(screen.getByTestId('generate-card-other-template-btn-tpl-other-1')).toBeInTheDocument();
     });
@@ -841,6 +852,216 @@ describe('Other Templates Engine & Tab Feature Tests', () => {
         const calls = vi.mocked(global.fetch).mock.calls;
         const genCall = calls.find((c) => String(c[0]).includes('/generate'));
         expect(genCall).toBeDefined();
+      });
+    });
+  });
+
+  describe('4. Template View Details Modal & Delete Actions', () => {
+    it('opens template-detail-modal when clicking an Other Template card with full blueprint details', async () => {
+      const { queryClient } = createHarness();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/operations?tab=other-templates']}>
+            <OperationsPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      // Card is rendered
+      const card = await screen.findByTestId('other-template-card-tpl-other-1');
+      expect(card).toBeInTheDocument();
+
+      // Click card to open Details view
+      fireEvent.click(card);
+
+      const modal = await screen.findByTestId('template-detail-modal');
+      expect(modal).toBeInTheDocument();
+
+      // Template title & badges
+      expect(within(modal).getByText('SEC Charter Amendment')).toBeInTheDocument();
+      expect(within(modal).getByText('Other Template')).toBeInTheDocument();
+      expect(
+        within(modal).getByText('Procedure for corporate charter and by-laws amendments')
+      ).toBeInTheDocument();
+
+      // Task Blueprints
+      expect(within(modal).getByText('Task Blueprints (2)')).toBeInTheDocument();
+      expect(within(modal).getAllByText('Draft Board Resolution').length).toBeGreaterThanOrEqual(1);
+      expect(within(modal).getByText('File Documents with SEC')).toBeInTheDocument();
+      expect(within(modal).getByText('Pre-Processing')).toBeInTheDocument();
+      expect(within(modal).getByText('Processing')).toBeInTheDocument();
+
+      // Action buttons for retainers:edit user
+      expect(screen.getByTestId('detail-edit-template-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('detail-delete-template-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('detail-close-template-btn')).toBeInTheDocument();
+
+      // Close modal
+      fireEvent.click(screen.getByTestId('detail-close-template-btn'));
+      await waitFor(() => {
+        expect(screen.queryByTestId('template-detail-modal')).not.toBeInTheDocument();
+      });
+    });
+
+    it('hides Edit and Delete actions in template-detail-modal for users without retainers:edit permission', async () => {
+      useSessionStore.getState().setSession({
+        user: {
+          id: 'u-viewer-1',
+          email: 'viewer@ata-lta.ph',
+          name: 'Vivian Viewer',
+          role: 'Staff',
+          departments: ['Operations'],
+          entities: ['ATA'],
+        },
+        permissions: ['workflow:view', 'retainers:use'], // NO retainers:edit
+        activeEntity: 'ATA',
+      });
+
+      const { queryClient } = createHarness();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/operations?tab=other-templates']}>
+            <OperationsPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      const card = await screen.findByTestId('other-template-card-tpl-other-1');
+      fireEvent.click(card);
+
+      const modal = await screen.findByTestId('template-detail-modal');
+      expect(modal).toBeInTheDocument();
+
+      // Edit and Delete buttons should NOT be visible
+      expect(screen.queryByTestId('detail-edit-template-btn')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('detail-delete-template-btn')).not.toBeInTheDocument();
+
+      // Close button is visible
+      expect(screen.getByTestId('detail-close-template-btn')).toBeInTheDocument();
+    });
+
+    it('triggers Edit modal when clicking Edit inside template-detail-modal', async () => {
+      const { queryClient } = createHarness();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/operations?tab=other-templates']}>
+            <OperationsPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      const card = await screen.findByTestId('other-template-card-tpl-other-1');
+      fireEvent.click(card);
+
+      expect(await screen.findByTestId('template-detail-modal')).toBeInTheDocument();
+
+      // Click Edit
+      fireEvent.click(screen.getByTestId('detail-edit-template-btn'));
+
+      // Detail modal closes, Edit modal opens with prefilled title
+      await waitFor(() => {
+        expect(screen.queryByTestId('template-detail-modal')).not.toBeInTheDocument();
+      });
+      const editModal = await screen.findByTestId('other-template-modal');
+      expect(editModal).toBeInTheDocument();
+      expect(within(editModal).getByText(/Edit Other Template:/)).toBeInTheDocument();
+      expect(screen.getByTestId('other-template-submit-btn')).toHaveTextContent(
+        'Update Other Template'
+      );
+      expect(screen.getByTestId('other-template-delete-btn')).toBeInTheDocument();
+    });
+
+    it('triggers Delete Confirmation modal and calls DELETE when deleting from template-detail-modal', async () => {
+      const { queryClient } = createHarness();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/operations?tab=other-templates']}>
+            <OperationsPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      const card = await screen.findByTestId('other-template-card-tpl-other-1');
+      fireEvent.click(card);
+
+      expect(await screen.findByTestId('template-detail-modal')).toBeInTheDocument();
+
+      // Click Delete inside details modal
+      fireEvent.click(screen.getByTestId('detail-delete-template-btn'));
+
+      // Delete confirmation modal appears
+      const confirmModal = await screen.findByTestId('delete-template-confirm-modal');
+      expect(confirmModal).toBeInTheDocument();
+      expect(screen.getByText(/Are you sure you want to delete/)).toBeInTheDocument();
+      expect(screen.getByText('"SEC Charter Amendment"')).toBeInTheDocument();
+
+      // Confirm deletion
+      fireEvent.click(screen.getByTestId('confirm-delete-template-btn'));
+
+      await waitFor(() => {
+        const calls = vi.mocked(global.fetch).mock.calls;
+        const deleteCall = calls.find(
+          (c) =>
+            String(c[0]).includes('/operations/templates/tpl-other-1') &&
+            c[1]?.method === 'DELETE'
+        );
+        expect(deleteCall).toBeDefined();
+      });
+
+      // Modals should close
+      await waitFor(() => {
+        expect(screen.queryByTestId('delete-template-confirm-modal')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('template-detail-modal')).not.toBeInTheDocument();
+      });
+    });
+
+    it('triggers Delete Confirmation modal and calls DELETE via three-dots menu on template card', async () => {
+      const { queryClient } = createHarness();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/operations?tab=other-templates']}>
+            <OperationsPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      // Card is rendered
+      expect(await screen.findByTestId('other-template-card-tpl-other-1')).toBeInTheDocument();
+
+      // Action menu button
+      const menuBtn = screen.getByTestId('other-template-actions-menu-btn-tpl-other-1');
+      fireEvent.click(menuBtn);
+
+      const deleteBtn = await screen.findByTestId('delete-other-template-btn-tpl-other-1');
+      expect(deleteBtn).toBeInTheDocument();
+
+      // Click Delete in menu
+      fireEvent.click(deleteBtn);
+
+      // Confirm modal opens
+      expect(await screen.findByTestId('delete-template-confirm-modal')).toBeInTheDocument();
+
+      // Cancel first
+      fireEvent.click(screen.getByTestId('cancel-delete-template-btn'));
+      await waitFor(() => {
+        expect(screen.queryByTestId('delete-template-confirm-modal')).not.toBeInTheDocument();
+      });
+
+      // Re-open and confirm
+      fireEvent.click(screen.getByTestId('other-template-actions-menu-btn-tpl-other-1'));
+      fireEvent.click(screen.getByTestId('delete-other-template-btn-tpl-other-1'));
+      expect(await screen.findByTestId('delete-template-confirm-modal')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId('confirm-delete-template-btn'));
+
+      await waitFor(() => {
+        const calls = vi.mocked(global.fetch).mock.calls;
+        const deleteCall = calls.find(
+          (c) =>
+            String(c[0]).includes('/operations/templates/tpl-other-1') &&
+            c[1]?.method === 'DELETE'
+        );
+        expect(deleteCall).toBeDefined();
       });
     });
   });
