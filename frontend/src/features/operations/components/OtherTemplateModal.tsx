@@ -55,6 +55,7 @@ export interface OtherTemplateModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: () => void;
+  onDelete?: (template: RetainerTemplate) => void;
 }
 
 export function OtherTemplateModal({
@@ -62,6 +63,7 @@ export function OtherTemplateModal({
   isOpen,
   onClose,
   onSuccess,
+  onDelete,
 }: OtherTemplateModalProps) {
   const activeEntity = useSessionStore((state) => state.activeEntity);
   const user = useSessionStore((state) => state.user);
@@ -1029,30 +1031,47 @@ export function OtherTemplateModal({
             </Button>
           </div>
 
-          <DialogFooter className="pt-4 border-t border-[#E2E8F0]">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] text-xs tracking-normal"
-              data-testid="other-template-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              disabled={isPending}
-              className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs tracking-normal disabled:bg-[#F8FAFC] disabled:text-[#475569]/50"
-              data-testid="other-template-submit-btn"
-            >
-              {isPending
-                ? 'Saving...'
-                : isEditing
-                  ? 'Update Other Template'
-                  : 'Create Other Template'}
-            </Button>
+          <DialogFooter className="pt-4 border-t border-[#E2E8F0] flex items-center justify-between sm:justify-between w-full">
+            {isEditing && template && onDelete ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onDelete(template)}
+                className="rounded-[8px] border-[#DC2626]/30 text-[#DC2626] hover:bg-[#DC2626]/10 text-xs tracking-normal mr-auto cursor-pointer"
+                data-testid="other-template-delete-btn"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1 text-[#DC2626]" />
+                Delete Template
+              </Button>
+            ) : (
+              <div />
+            )}
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+                className="rounded-[8px] border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] text-xs tracking-normal cursor-pointer"
+                data-testid="other-template-cancel-btn"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isPending}
+                className="rounded-[6px] bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs text-xs tracking-normal disabled:bg-[#F8FAFC] disabled:text-[#475569]/50 cursor-pointer"
+                data-testid="other-template-submit-btn"
+              >
+                {isPending
+                  ? 'Saving...'
+                  : isEditing
+                    ? 'Update Other Template'
+                    : 'Create Other Template'}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>

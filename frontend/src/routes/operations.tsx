@@ -15,9 +15,20 @@ import {
   Columns,
   Layers,
   Briefcase,
+  MoreVertical,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Forbidden } from '@/components/common/Forbidden';
 import { WorkRequestList } from '@/features/operations/components/WorkRequestList';
@@ -29,7 +40,8 @@ import { RetainerGenerateModal } from '@/features/operations/components/Retainer
 import { RetainerTemplateModal } from '@/features/operations/components/RetainerTemplateModal';
 import { OtherTemplateModal } from '@/features/operations/components/OtherTemplateModal';
 import { OtherTemplateGenerateModal } from '@/features/operations/components/OtherTemplateGenerateModal';
-import { BlockingActionModal } from '@/features/operations/components/BlockingActionModal';
+import { TemplateDetailModal } from '@/features/operations/components/TemplateDetailModal';
+import { BlockingActionModal, runBlockingAction } from '@/features/operations/components/BlockingActionModal';
 import { useWorkRequestCounts } from '@/features/operations/api/useWorkRequests';
 import { useRetainerTemplates, useRetainerMutations } from '@/features/operations/api/useRetainers';
 import { operationsKeys } from '@/features/operations/api/queryKeys';
@@ -152,8 +164,55 @@ export default function OperationsPage() {
   const [editingOtherTemplate, setEditingOtherTemplate] = useState<RetainerTemplate | null>(null);
   const [isOtherGenerateModalOpen, setIsOtherGenerateModalOpen] = useState(false);
   const [generateOtherTemplateId, setGenerateOtherTemplateId] = useState<string | null>(null);
+  const [viewingTemplate, setViewingTemplate] = useState<RetainerTemplate | null>(null);
+  const [templateToDelete, setTemplateToDelete] = useState<RetainerTemplate | null>(null);
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
 
   const { deleteTemplate } = useRetainerMutations();
+
+  useEffect(() => {
+    if (!openActionMenuId) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('[data-actions-menu]')) {
+        setOpenActionMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openActionMenuId]);
+
+  const handleConfirmDelete = async () => {
+    if (!templateToDelete) return;
+    const target = templateToDelete;
+    try {
+      await runBlockingAction({
+        title: 'Deleting Template',
+        message: `Deleting template "${target.name || target.title}"...`,
+        actionName: 'Delete Template',
+        apiCall: async () => {
+          await deleteTemplate(target.id);
+        },
+        invalidateQueries: [operationsKeys.templates()],
+      });
+      setTemplateToDelete(null);
+      if (viewingTemplate?.id === target.id) {
+        setViewingTemplate(null);
+      }
+      if (editingTemplate?.id === target.id) {
+        setIsTemplateModalOpen(false);
+        setEditingTemplate(null);
+      }
+      if (editingOtherTemplate?.id === target.id) {
+        setIsOtherTemplateModalOpen(false);
+        setEditingOtherTemplate(null);
+      }
+    } catch {
+      // Handled by runBlockingAction
+    }
+  };
 
   // Top-level CDC Subscriptions across all Operations views (List & Board)
   useEntityRealtimeSync({
@@ -578,7 +637,8 @@ export default function OperationsPage() {
                 return (
                   <div
                     key={tpl.id}
-                    className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
+                    onClick={() => setViewingTemplate(tpl)}
+                    className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors cursor-pointer"
                     data-testid={`template-card-${tpl.id}`}
                   >
                     <div className="flex items-start justify-between">
@@ -587,7 +647,8 @@ export default function OperationsPage() {
                         {canEditRetainers && (
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setEditingTemplate(tpl);
                               setIsTemplateModalOpen(true);
                             }}
@@ -601,6 +662,39 @@ export default function OperationsPage() {
                           <Badge variant={entityCode === 'LTA' ? 'lta' : 'ata'} size="compact">
                             {entityCode}
                           </Badge>
+                        )}
+                        {canEditRetainers && (
+                          <div className="relative inline-block" data-actions-menu>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenActionMenuId((prev) => (prev === tpl.id ? null : tpl.id));
+                              }}
+                              className="p-1 rounded text-[#475569] hover:text-[#1E293B] hover:bg-[#E2E8F0]/60 transition-colors cursor-pointer"
+                              data-testid={`template-actions-menu-btn-${tpl.id}`}
+                              aria-label="Template actions"
+                            >
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
+                            {openActionMenuId === tpl.id && (
+                              <div className="absolute right-0 top-full mt-1 w-32 bg-[#FFFFFF] border border-[#E2E8F0] rounded-md shadow-md py-1 z-20">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenActionMenuId(null);
+                                    setTemplateToDelete(tpl);
+                                  }}
+                                  className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#DC2626] hover:bg-[#F8FAFC] transition-colors cursor-pointer"
+                                  data-testid={`delete-template-btn-${tpl.id}`}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-[#DC2626]" />
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -700,7 +794,8 @@ export default function OperationsPage() {
                     return (
                       <div
                         key={tpl.id}
-                        className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors"
+                        onClick={() => setViewingTemplate(tpl)}
+                        className="p-4 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2 hover:border-slate-300 transition-colors cursor-pointer"
                         data-testid={`other-template-card-${tpl.id}`}
                       >
                         <div className="flex items-start justify-between">
@@ -725,7 +820,8 @@ export default function OperationsPage() {
                             <>
                               <button
                                 type="button"
-                                onClick={() => {
+                                onClick={(e) => {
+                                  e.stopPropagation();
                                   setEditingOtherTemplate(tpl);
                                   setIsOtherTemplateModalOpen(true);
                                 }}
@@ -734,24 +830,44 @@ export default function OperationsPage() {
                               >
                                 Edit
                               </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  if (confirm(`Delete template "${tpl.name || tpl.title}"?`)) {
-                                    await deleteTemplate(tpl.id);
-                                  }
-                                }}
-                                className="text-xs font-medium hover:underline px-1 text-[#DC2626]"
-                                data-testid={`delete-other-template-btn-${tpl.id}`}
-                              >
-                                Delete
-                              </button>
+                              <div className="relative inline-block" data-actions-menu>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenActionMenuId((prev) => (prev === tpl.id ? null : tpl.id));
+                                  }}
+                                  className="p-1 rounded text-[#475569] hover:text-[#1E293B] hover:bg-[#E2E8F0]/60 transition-colors cursor-pointer"
+                                  data-testid={`other-template-actions-menu-btn-${tpl.id}`}
+                                  aria-label="Other template actions"
+                                >
+                                  <MoreVertical className="h-3.5 w-3.5" />
+                                </button>
+                                {openActionMenuId === tpl.id && (
+                                  <div className="absolute right-0 bottom-full mb-1 w-32 bg-[#FFFFFF] border border-[#E2E8F0] rounded-md shadow-md py-1 z-20">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setOpenActionMenuId(null);
+                                        setTemplateToDelete(tpl);
+                                      }}
+                                      className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#DC2626] hover:bg-[#F8FAFC] transition-colors cursor-pointer"
+                                      data-testid={`delete-other-template-btn-${tpl.id}`}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 text-[#DC2626]" />
+                                      Delete
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                             </>
                           )}
                           {canUseRetainers && (
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setGenerateOtherTemplateId(tpl.id);
                                 setIsOtherGenerateModalOpen(true);
                               }}
@@ -836,6 +952,7 @@ export default function OperationsPage() {
         onSuccess={() => {
           queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
         }}
+        onDelete={(tpl) => setTemplateToDelete(tpl)}
       />
 
       <OtherTemplateModal
@@ -848,7 +965,74 @@ export default function OperationsPage() {
         onSuccess={() => {
           queryClient.invalidateQueries({ queryKey: operationsKeys.templates() });
         }}
+        onDelete={(tpl) => setTemplateToDelete(tpl)}
       />
+
+      <TemplateDetailModal
+        isOpen={Boolean(viewingTemplate)}
+        template={viewingTemplate}
+        onClose={() => setViewingTemplate(null)}
+        onEdit={(tpl) => {
+          setViewingTemplate(null);
+          if (tpl.template_type === 'other' || tpl.templateType === 'other') {
+            setEditingOtherTemplate(tpl);
+            setIsOtherTemplateModalOpen(true);
+          } else {
+            setEditingTemplate(tpl);
+            setIsTemplateModalOpen(true);
+          }
+        }}
+        onDelete={(tpl) => {
+          setTemplateToDelete(tpl);
+        }}
+      />
+
+      <Dialog
+        open={Boolean(templateToDelete)}
+        onOpenChange={(open) => {
+          if (!open) setTemplateToDelete(null);
+        }}
+      >
+        <DialogContent
+          className="max-w-md bg-[#FFFFFF] border border-[#E2E8F0] p-6 rounded-xl shadow-lg"
+          data-testid="delete-template-confirm-modal"
+        >
+          <DialogHeader className="flex flex-row items-start gap-3 space-y-0 pb-2">
+            <div className="p-2 rounded-full bg-[#DC2626]/10 text-[#DC2626] shrink-0">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div className="space-y-1">
+              <DialogTitle className="text-base font-semibold text-[#1E293B]">
+                Delete Template
+              </DialogTitle>
+              <DialogDescription className="text-xs text-[#475569]">
+                Are you sure you want to delete <span className="font-semibold text-[#1E293B]">"{templateToDelete?.name || templateToDelete?.title}"</span>? Existing generated work requests are unaffected, but this action cannot be undone.
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+          <DialogFooter className="pt-4 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setTemplateToDelete(null)}
+              className="text-xs h-8 border-[#E2E8F0] text-[#1E293B] hover:bg-[#F8FAFC] cursor-pointer"
+              data-testid="cancel-delete-template-btn"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={handleConfirmDelete}
+              className="text-xs h-8 bg-[#DC2626] text-[#FFFFFF] hover:bg-[#B91C1C] shadow-2xs font-semibold cursor-pointer"
+              data-testid="confirm-delete-template-btn"
+            >
+              Delete Template
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {isOtherGenerateModalOpen && (
         <OtherTemplateGenerateModal

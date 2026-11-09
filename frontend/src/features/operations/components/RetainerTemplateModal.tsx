@@ -58,6 +58,7 @@ export interface RetainerTemplateModalProps {
   onClose: () => void;
   onSuccess?: () => void;
   defaultClientId?: string | null;
+  onDelete?: (template: RetainerTemplate) => void;
 }
 
 const DRAFT_STORAGE_KEY = 'erp_retainer_template_draft_new';
@@ -81,6 +82,7 @@ export function RetainerTemplateModal({
   onClose,
   onSuccess,
   defaultClientId = null,
+  onDelete,
 }: RetainerTemplateModalProps) {
   const canEditRetainers = usePermission('retainers:edit');
   const { createTemplate, updateTemplate } = useRetainerMutations();
@@ -1317,25 +1319,42 @@ export function RetainerTemplateModal({
             </Button>
           </div>
 
-          <DialogFooter className="pt-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onClose}
-              className="text-xs h-9"
-              data-testid="template-modal-cancel-btn"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              className="text-xs h-9 bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs"
-              data-testid="template-modal-submit-btn"
-            >
-              {isEditing ? 'Save Template Changes' : 'Create Retainer Template'}
-            </Button>
+          <DialogFooter className="pt-2 flex items-center justify-between sm:justify-between w-full">
+            {isEditing && template && onDelete ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onDelete(template)}
+                className="text-xs h-9 border-[#DC2626]/30 text-[#DC2626] hover:bg-[#DC2626]/10 mr-auto cursor-pointer"
+                data-testid="template-modal-delete-btn"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1 text-[#DC2626]" />
+                Delete Template
+              </Button>
+            ) : (
+              <div />
+            )}
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onClose}
+                className="text-xs h-9 cursor-pointer"
+                data-testid="template-modal-cancel-btn"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="text-xs h-9 bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs cursor-pointer"
+                data-testid="template-modal-submit-btn"
+              >
+                {isEditing ? 'Save Template Changes' : 'Create Retainer Template'}
+              </Button>
+            </div>
           </DialogFooter>
         </form>
       </DialogContent>
