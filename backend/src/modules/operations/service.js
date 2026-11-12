@@ -776,33 +776,7 @@ const listWorkRequests = async ({
     query = query.in('id', concernedWrIds);
   }
 
-  const { data, error } = await query;
-  if (error) {
-    throw new AppError({
-      statusCode: 500,
-      title: 'Database Error',
-      detail: 'Unable to list work requests',
-    });
-  }
-
-  let allData = Array.isArray(data) ? [...data] : [];
-  if (Array.isArray(data) && data.length === 1000 && typeof query.range === 'function') {
-    let pageOffset = 1000;
-    let hasMoreWr = true;
-    while (hasMoreWr) {
-      const { data: pageData, error: pageErr } = await query.range(pageOffset, pageOffset + 999);
-      if (pageErr || !pageData || pageData.length === 0) {
-        hasMoreWr = false;
-        break;
-      }
-      allData = allData.concat(pageData);
-      if (pageData.length < 1000) {
-        hasMoreWr = false;
-        break;
-      }
-      pageOffset += 1000;
-    }
-  }
+  const allData = await fetchInPages(() => query);
 
   let visibleRows = allData;
   if (entityId === 'ALL' && user) {

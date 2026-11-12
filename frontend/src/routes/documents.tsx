@@ -101,7 +101,6 @@ export default function DocumentsPage() {
       clientId: client !== 'all' ? client : undefined,
       workRequestId: workRequest !== 'all' ? workRequest : undefined,
       uploaderId: employee !== 'all' ? employee : undefined,
-      dueDate: dueDate !== 'all' ? dueDate : undefined,
       page: hasSecondaryFilters ? 1 : (limit === 'all' ? 1 : page),
       limit: hasSecondaryFilters ? 'all' : limit,
     },

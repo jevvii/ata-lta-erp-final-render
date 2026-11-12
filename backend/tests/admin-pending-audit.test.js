@@ -325,7 +325,7 @@ describe('/v1/admin pending approvals and audit', () => {
     });
 
     const res = await request(app)
-      .get('/v1/admin/audit?limit=200')
+      .get('/v1/admin/audit?limit=10001')
       .set('Authorization', `Bearer ${token}`)
       .set('X-Active-Entity', 'ATA')
       .expect(400);

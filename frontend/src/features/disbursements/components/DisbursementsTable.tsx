@@ -95,6 +95,7 @@ export function DisbursementsTable({
 
   // Active query
   const isAll = pageSize === 'all';
+  const hasLocalFilters = Boolean(selectedEmployee || (selectedDueDate && selectedDueDate !== 'all'));
   const queryFilters = useMemo(() => {
     const filters: {
       search?: string;
@@ -110,8 +111,8 @@ export function DisbursementsTable({
       dueDate?: string;
       workRequestId?: string;
     } = {
-      page: isAll ? 1 : page,
-      limit: pageSize,
+      page: isAll || hasLocalFilters ? 1 : page,
+      limit: hasLocalFilters ? 'all' : pageSize,
       archived: false,
     };
 
@@ -125,8 +126,6 @@ export function DisbursementsTable({
     if (selectedFundSource) filters.fundSource = selectedFundSource;
     if (queueFilter) filters.queue = queueFilter;
     if (selectedClient) filters.clientId = selectedClient;
-    if (selectedEmployee) filters.employeeId = selectedEmployee;
-    if (selectedDueDate && selectedDueDate !== 'all') filters.dueDate = selectedDueDate;
     if (selectedWorkRequest) filters.workRequestId = selectedWorkRequest;
 
     return filters;
@@ -138,18 +137,17 @@ export function DisbursementsTable({
     selectedFundSource,
     queueFilter,
     selectedClient,
-    selectedEmployee,
-    selectedDueDate,
     selectedWorkRequest,
     page,
     pageSize,
     isAll,
+    hasLocalFilters,
   ]);
 
   const { data: response, isLoading, isFetching, isError, error, refetch } = useDisbursementsList(queryFilters);
   const rawDisbursements = useMemo(() => response?.data ?? [], [response]);
 
-  const disbursements = useMemo(() => {
+  const filteredDisbursements = useMemo(() => {
     return rawDisbursements.filter((d) => {
       if (selectedWorkRequest) {
         const wrId = d.linked_work_request_id || d.linkedWorkRequestId;
@@ -183,7 +181,11 @@ export function DisbursementsTable({
     selectedEmployee,
     selectedDueDate,
   ]);
-  const total = response?.meta?.total ?? disbursements.length;
+  const disbursements = useMemo(() => {
+    if (!hasLocalFilters || pageSize === 'all') return filteredDisbursements;
+    return filteredDisbursements.slice((page - 1) * pageSize, page * pageSize);
+  }, [filteredDisbursements, hasLocalFilters, page, pageSize]);
+  const total = hasLocalFilters ? filteredDisbursements.length : (response?.meta?.total ?? disbursements.length);
 
   const selectedIndex = useMemo(
     () => disbursements.findIndex((d) => d.id === activeSelectedId),

@@ -1482,35 +1482,8 @@ const getAuditLogs = async (params = {}) => {
   let total = 0;
 
   if (isAll || searchTerm) {
-    const q = query.order('created_at', { ascending });
-    const { data, error } = await q;
-    if (error) {
-      throw new AppError({
-        statusCode: 500,
-        title: 'Database Error',
-        detail: 'Unable to list audit logs',
-      });
-    }
-    let allData = Array.isArray(data) ? [...data] : [];
-    if (Array.isArray(data) && data.length === 1000 && typeof query.range === 'function') {
-      let pageOffset = 1000;
-      let hasMoreAudit = true;
-      while (hasMoreAudit) {
-        const { data: pageData, error: pageErr } = await query
-          .order('created_at', { ascending })
-          .range(pageOffset, pageOffset + 999);
-        if (pageErr || !pageData || pageData.length === 0) {
-          hasMoreAudit = false;
-          break;
-        }
-        allData = allData.concat(pageData);
-        if (pageData.length < 1000) {
-          hasMoreAudit = false;
-          break;
-        }
-        pageOffset += 1000;
-      }
-    }
+    query.order('created_at', { ascending });
+    const allData = await fetchInPages(() => query);
 
     if (searchTerm) {
       const matchedUserIds = await resolveMatchingUserIdsForSearch(searchTerm);

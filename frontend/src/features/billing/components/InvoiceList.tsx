@@ -113,6 +113,7 @@ export function InvoiceList({
 
   const effectiveStatus = statusFilter === 'Approved' ? 'Sent' : statusFilter;
   const isAll = pageSize === 'all';
+  const hasLocalFilters = employeeFilter !== 'all' || dueDateFilter !== 'all';
   const { data: invoicesResponse, isLoading } = useInvoices({
     status: effectiveStatus,
     clientId: clientFilter !== 'all' ? clientFilter : undefined,
@@ -120,26 +121,14 @@ export function InvoiceList({
       workRequestFilter !== 'all' && workRequestFilter !== 'ALL'
         ? workRequestFilter
         : undefined,
-    workRequestTitle:
-      workRequestFilter !== 'all' && workRequestFilter !== 'ALL'
-        ? workRequestFilter
-        : undefined,
-    employee:
-      employeeFilter !== 'all' && employeeFilter !== 'ALL'
-        ? employeeFilter
-        : undefined,
-    dueDate:
-      dueDateFilter !== 'all' && dueDateFilter !== ''
-        ? dueDateFilter
-        : undefined,
     search: debouncedSearch || undefined,
     archived: false,
-    page: isAll ? 1 : page,
-    limit: pageSize,
+    page: isAll || hasLocalFilters ? 1 : page,
+    limit: hasLocalFilters ? 'all' : pageSize,
   });
 
   const rawInvoices = useMemo(() => invoicesResponse?.data || [], [invoicesResponse?.data]);
-  const invoices = useMemo(() => {
+  const filteredInvoices = useMemo(() => {
     return rawInvoices.filter((inv) => {
       if (workRequestFilter !== 'all') {
         const wrId = inv.work_request_id || inv.work_request?.id;
@@ -162,7 +151,11 @@ export function InvoiceList({
       return true;
     });
   }, [rawInvoices, workRequestFilter, employeeFilter, dueDateFilter, teamData]);
-  const totalCount = invoicesResponse?.meta?.total || 0;
+  const invoices = useMemo(() => {
+    if (!hasLocalFilters || pageSize === 'all') return filteredInvoices;
+    return filteredInvoices.slice((page - 1) * pageSize, page * pageSize);
+  }, [filteredInvoices, hasLocalFilters, page, pageSize]);
+  const totalCount = hasLocalFilters ? filteredInvoices.length : (invoicesResponse?.meta?.total || 0);
   const totalPages = isAll
     ? 1
     : Math.max(1, Math.ceil(totalCount / (typeof pageSize === 'number' && pageSize > 0 ? pageSize : 1)));

@@ -451,8 +451,7 @@ const tableQuery = (table) => {
       return builder;
     },
     range: (from, to) => {
-      if (!builder._postFilters) builder._postFilters = [];
-      builder._postFilters.push((result) => result.slice(from, to + 1));
+      builder._postFilters = [(result) => result.slice(from, to + 1)];
       return builder;
     },
     gt: (column, value) => {
@@ -702,7 +701,7 @@ const tableQuery = (table) => {
       const result = execute();
       const response = { data: result, error: null };
       if (countOptions) {
-        response.count = result.length;
+        response.count = op === 'select' ? applyFilters().length : result.length;
         if (countOptions.head) {
           response.data = null;
         }

@@ -269,6 +269,19 @@ const applyDisbursementInvoiceLinks = async ({
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
+// Keep ID lookups below URL/row limits when View All expands the invoice set.
+const loadInvoiceRelations = async (table, columns, ids) => {
+  const rows = [];
+  for (let offset = 0; offset < ids.length; offset += 200) {
+    const { data, error } = await supabaseAdmin.from(table).select(columns).in('id', ids.slice(offset, offset + 200));
+    if (error) {
+      throw new AppError({ statusCode: 500, title: 'Database Error', detail: 'Unable to load invoice relations' });
+    }
+    rows.push(...(data || []));
+  }
+  return rows;
+};
+
 const enrichInvoices = async (rows) => {
   if (!rows || rows.length === 0) return [];
 
@@ -283,28 +296,17 @@ const enrichInvoices = async (rows) => {
   let transmittalMap = new Map();
 
   if (wrIds.length > 0) {
-    const { data: wrData } = await supabaseAdmin
-      .from('work_requests')
-      .select('id, title, work_order_number, work_request_number, created_by')
-      .in('id', wrIds);
-
-    const wrs = wrData || [];
+    const wrs = await loadInvoiceRelations('work_requests', 'id, title, work_order_number, work_request_number, created_by', wrIds);
     const creatorUserIds = [...new Set(wrs.map((w) => w.created_by).filter(Boolean))];
     if (creatorUserIds.length > 0) {
-      const { data: usersData } = await supabaseAdmin
-        .from('users')
-        .select('id, name, email')
-        .in('id', creatorUserIds);
+      const usersData = await loadInvoiceRelations('users', 'id, name, email', creatorUserIds);
       userMap = new Map((usersData || []).map((u) => [u.id, u]));
     }
     wrMap = new Map(wrs.map((w) => [w.id, w]));
   }
 
   if (transmittalIds.length > 0) {
-    const { data: trData } = await supabaseAdmin
-      .from('transmittals')
-      .select('id, tracking_number, status, recipient_name')
-      .in('id', transmittalIds);
+    const trData = await loadInvoiceRelations('transmittals', 'id, tracking_number, status, recipient_name', transmittalIds);
     transmittalMap = new Map((trData || []).map((t) => [t.id, t]));
   }
 

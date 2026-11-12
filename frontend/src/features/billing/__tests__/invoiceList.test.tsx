@@ -233,6 +233,19 @@ describe('InvoiceList Component', () => {
     vi.clearAllMocks();
   });
 
+  it('filters relative due dates across all authorized rows before displaying a page', async () => {
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
+    const { wrapper } = createHarness();
+    render(<InvoiceList />, { wrapper });
+    await screen.findByTestId('due-date-filter-select');
+    fireEvent.click(screen.getByTestId('due-date-filter-select'));
+    fireEvent.click(await screen.findByRole('option', { name: 'No Due Date' }));
+    await waitFor(() => {
+      const calls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url)).filter((url) => url.includes('/invoices?'));
+      expect(calls.some((url) => url.includes('limit=all') && !url.includes('dueDate='))).toBe(true);
+    });
+  });
+
   it('renders invoice list with stats bar and correct calculated totals', async () => {
     const { wrapper } = createHarness();
     render(<InvoiceList />, { wrapper });
