@@ -31,9 +31,18 @@ const listRequests = async (req, res, next) => {
       filters: validated,
       user: req.user,
     });
+    const isAll =
+      String(validated.limit).toLowerCase() === 'all' ||
+      validated.limit === 0 ||
+      validated.limit === '0';
     res.json({
       data: result.data,
-      meta: { total: result.count, page: validated.page, limit: validated.limit },
+      meta: {
+        total: result.count,
+        page: isAll ? 1 : validated.page,
+        limit: isAll ? result.count : validated.limit,
+        totalPages: isAll ? 1 : (Math.ceil(result.count / validated.limit) || 1),
+      },
     });
   } catch (err) {
     handleZodError(err, next);

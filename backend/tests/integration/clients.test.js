@@ -531,4 +531,101 @@ describe('/v1/clients', () => {
       expect(descRes.body.data.map((c) => c.id)).toEqual(['c-zebra', 'c-middle', 'c-alpha', 'c-beta']);
     });
   });
+
+  describe('Pagination & "View All" & Retainer filtering', () => {
+    let token;
+
+    beforeEach(() => {
+      mockTables.clients.clear();
+      token = registerUser({
+        email: 'admin-pagination@ata-lta.ph',
+        name: 'Admin Pagination',
+        role: 'Admin',
+        entities: ['ATA'],
+      });
+
+      // Seed 150 clients into ATA: 80 retainer, 70 non-retainer
+      for (let i = 1; i <= 150; i++) {
+        const id = `c-page-${String(i).padStart(3, '0')}`;
+        const isRetainer = i <= 80;
+        mockTables.clients.set(id, {
+          id,
+          name: `Client ${String(i).padStart(3, '0')}`,
+          client_number: `CLI-ATA-${String(i).padStart(4, '0')}`,
+          tin: `900-000-${String(i).padStart(3, '0')}-000`,
+          entity_id: 'ent-ata',
+          entity_code: 'ATA',
+          status: 'Active',
+          retainer: isRetainer,
+          deleted_at: null,
+          created_at: new Date(2026, 0, 1, 0, 0, i).toISOString(),
+          updated_at: new Date(2026, 0, 1, 0, 0, i).toISOString(),
+        });
+      }
+    });
+
+    it('returns all clients with limit=all and meta: { total, page: 1, limit: total, totalPages: 1 }', async () => {
+      const res = await request(app)
+        .get('/v1/clients?page=1&limit=all')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(150);
+      expect(res.body.meta).toEqual({
+        total: 150,
+        page: 1,
+        limit: 150,
+        totalPages: 1,
+      });
+    });
+
+    it('does NOT cap limit=200 at 100', async () => {
+      const res = await request(app)
+        .get('/v1/clients?page=1&limit=200')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(res.body.data).toHaveLength(150);
+      expect(res.body.meta).toEqual({
+        total: 150,
+        page: 1,
+        limit: 200,
+        totalPages: 1,
+      });
+    });
+
+    it('filters accurately on retainer=retainer and retainer=non-retainer with accurate meta.total', async () => {
+      const retainerRes = await request(app)
+        .get('/v1/clients?retainer=retainer&page=1&limit=50')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(retainerRes.body.data).toHaveLength(50);
+      expect(retainerRes.body.data.every((c) => c.retainer === true)).toBe(true);
+      expect(retainerRes.body.meta).toEqual({
+        total: 80,
+        page: 1,
+        limit: 50,
+        totalPages: 2,
+      });
+
+      const nonRetainerRes = await request(app)
+        .get('/v1/clients?retainer=non-retainer&page=1&limit=50')
+        .set('Authorization', `Bearer ${token}`)
+        .set('X-Active-Entity', 'ATA')
+        .expect(200);
+
+      expect(nonRetainerRes.body.data).toHaveLength(50);
+      expect(nonRetainerRes.body.data.every((c) => c.retainer === false)).toBe(true);
+      expect(nonRetainerRes.body.meta).toEqual({
+        total: 70,
+        page: 1,
+        limit: 50,
+        totalPages: 2,
+      });
+    });
+  });
 });

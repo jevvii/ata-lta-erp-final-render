@@ -357,8 +357,10 @@ const listTransmittals = async ({ entityId, filters = {}, user }) => {
   });
 
   const total = validRows.length;
-  const offset = (page - 1) * limit;
-  const rows = validRows.slice(offset, offset + limit);
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const effectiveLimit = isAll ? total : (parseInt(limit, 10) || 50);
+  const offset = isAll ? 0 : (page - 1) * effectiveLimit;
+  const rows = isAll ? validRows : validRows.slice(offset, offset + effectiveLimit);
 
   const { data: entitiesData } = rows.length
     ? await supabaseAdmin.from('entities').select('id, code')

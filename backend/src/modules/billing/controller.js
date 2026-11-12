@@ -40,6 +40,10 @@ const handleZodError = (err, next) => {
 /** @type {import('express').RequestHandler} */
 const listInvoices = async (req, res, next) => {
   try {
+    const isAll =
+      String(req.query.limit).toLowerCase() === 'all' ||
+      req.query.limit === '0' ||
+      req.query.limit === 0;
     const filters = {
       status: req.query.status,
       clientId: req.query.clientId,
@@ -51,11 +55,14 @@ const listInvoices = async (req, res, next) => {
       linked_work_request_id: req.query.linked_work_request_id,
       linkedTransmittalId: req.query.linkedTransmittalId,
       linked_transmittal_id: req.query.linked_transmittal_id,
+      employee: req.query.employee,
+      dueDate: req.query.dueDate || req.query.due_date,
+      workRequestTitle: req.query.workRequestTitle,
       search: req.query.search,
       archived: req.query.archived,
       includeDeleted: req.query.includeDeleted,
-      page: parseInt(req.query.page, 10) || 1,
-      limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
+      page: isAll ? 1 : (parseInt(req.query.page, 10) || 1),
+      limit: isAll ? 'all' : Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 10000),
     };
     const result = await service.listInvoices({
       entityId: req.activeEntity,
@@ -64,7 +71,12 @@ const listInvoices = async (req, res, next) => {
     });
     res.json({
       data: result.data,
-      meta: { total: result.count, page: filters.page, limit: filters.limit },
+      meta: {
+        total: result.count,
+        page: isAll ? 1 : filters.page,
+        limit: isAll ? result.count : filters.limit,
+        totalPages: isAll ? 1 : (Math.ceil(result.count / filters.limit) || 1),
+      },
     });
   } catch (err) {
     next(err);

@@ -1016,11 +1016,36 @@ const listDisbursements = async ({ entityId, filters = {}, user }) => {
     );
   }
 
+  const effectiveClientId = filters.clientId || filters.client_id;
+  if (effectiveClientId) {
+    filteredRows = filteredRows.filter((r) => r.client_id === effectiveClientId);
+  }
+
+  const effectiveEmployeeId = filters.employeeId || filters.employee_id;
+  if (effectiveEmployeeId) {
+    filteredRows = filteredRows.filter(
+      (r) => (r.requested_by || r.employee_id || r.created_by) === effectiveEmployeeId
+    );
+  }
+
+  const effectiveDueDate = filters.dueDate || filters.due_date;
+  if (effectiveDueDate) {
+    filteredRows = filteredRows.filter(
+      (r) => ((r.due_date || r.payment_date || r.created_at || '').slice(0, 10)) === effectiveDueDate
+    );
+  }
+
   const total = filteredRows.length;
-  const effectiveLimit = Number(limit) || 50;
-  const effectiveOffset =
-    filters.offset !== undefined ? Number(filters.offset) : (page - 1) * effectiveLimit;
-  const rows = filteredRows.slice(effectiveOffset, effectiveOffset + effectiveLimit);
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const effectiveLimit = isAll ? total : (Number(limit) || 50);
+  const effectiveOffset = isAll
+    ? 0
+    : filters.offset !== undefined
+    ? Number(filters.offset)
+    : (page - 1) * effectiveLimit;
+  const rows = isAll
+    ? filteredRows
+    : filteredRows.slice(effectiveOffset, effectiveOffset + effectiveLimit);
 
   const { data: entitiesData } = rows.length
     ? await supabaseAdmin.from('entities').select('id, code')

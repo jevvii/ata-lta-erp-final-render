@@ -105,20 +105,24 @@ const loadRelated = async (clientIds) => {
 
   if (!clientIds.length) return { contactDetails, relatedCompanies };
 
-  const [{ data: cdRows }, { data: rcRows }] = await Promise.all([
-    supabaseAdmin.from('client_contact_details').select('*').in('client_id', clientIds),
-    supabaseAdmin.from('client_related_companies').select('*').in('client_id', clientIds),
-  ]);
+  const chunkSize = 200;
+  for (let i = 0; i < clientIds.length; i += chunkSize) {
+    const chunk = clientIds.slice(i, i + chunkSize);
+    const [{ data: cdRows }, { data: rcRows }] = await Promise.all([
+      supabaseAdmin.from('client_contact_details').select('*').in('client_id', chunk),
+      supabaseAdmin.from('client_related_companies').select('*').in('client_id', chunk),
+    ]);
 
-  (cdRows || []).forEach((row) => {
-    if (!contactDetails.has(row.client_id)) contactDetails.set(row.client_id, []);
-    contactDetails.get(row.client_id).push(row);
-  });
+    (cdRows || []).forEach((row) => {
+      if (!contactDetails.has(row.client_id)) contactDetails.set(row.client_id, []);
+      contactDetails.get(row.client_id).push(row);
+    });
 
-  (rcRows || []).forEach((row) => {
-    if (!relatedCompanies.has(row.client_id)) relatedCompanies.set(row.client_id, []);
-    relatedCompanies.get(row.client_id).push(row);
-  });
+    (rcRows || []).forEach((row) => {
+      if (!relatedCompanies.has(row.client_id)) relatedCompanies.set(row.client_id, []);
+      relatedCompanies.get(row.client_id).push(row);
+    });
+  }
 
   return { contactDetails, relatedCompanies };
 };
@@ -174,6 +178,7 @@ const sortClientsList = (clients, { sortField, sortAsc }) => {
  * @param {string} params.entityId
  * @param {string} [params.search]
  * @param {string} [params.status]
+ * @param {string|boolean} [params.retainer]
  * @param {number|string} [params.page]
  * @param {number|string} [params.limit]
  * @param {string} [params.sortBy]
@@ -184,15 +189,17 @@ const listClients = async ({
   entityId,
   search,
   status,
+  retainer,
   archived,
   page,
   limit,
   sortBy,
   sortOrder,
 }) => {
+  const isAllLimit = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
   const isPaginated = page !== undefined || limit !== undefined;
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const pageNum = isAllLimit ? 1 : Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(10000, Math.max(1, parseInt(limit, 10) || 50));
   const normalizedSortBy = sortBy === 'rdoCode' ? 'rdo_code' : sortBy;
   const sortField = ['client_number', 'name', 'tin', 'rdo_code', 'created_at', 'updated_at', 'status'].includes(normalizedSortBy)
     ? normalizedSortBy
@@ -224,6 +231,12 @@ const listClients = async ({
       query = query.eq('status', status);
     }
 
+    if (retainer === 'retainer' || retainer === 'true' || retainer === true) {
+      query = query.eq('retainer', true);
+    } else if (retainer === 'non-retainer' || retainer === 'false' || retainer === false) {
+      query = query.eq('retainer', false);
+    }
+
     if (search) {
       query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
     }
@@ -234,14 +247,14 @@ const listClients = async ({
   // membership scopes work requests and their records, not the client directory.
 
   let response;
-  if (sortField === 'rdo_code') {
+  if (sortField === 'rdo_code' || isAllLimit || !isPaginated || limitNum > 1000) {
     // PostgreSQL text order differs from the directory's natural RDO order.
     // Sort the authorized rows before slicing, fetching past Supabase's row cap.
     const allRows = await fetchInPages(makeQuery);
     const sortedRows = sortClientsList(allRows, { sortField, sortAsc });
     const offset = (pageNum - 1) * limitNum;
     response = {
-      data: isPaginated ? sortedRows.slice(offset, offset + limitNum) : sortedRows,
+      data: isPaginated && !isAllLimit ? sortedRows.slice(offset, offset + limitNum) : sortedRows,
       error: null,
       count: sortedRows.length,
     };
@@ -294,8 +307,8 @@ const listClients = async ({
     meta: {
       total,
       page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum) || 1,
+      limit: isAllLimit ? total : limitNum,
+      totalPages: isAllLimit ? 1 : Math.ceil(total / limitNum) || 1,
     },
   };
 };

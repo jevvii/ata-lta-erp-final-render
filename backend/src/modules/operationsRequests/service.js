@@ -78,8 +78,10 @@ const listRequests = async ({ entityId, filters = {}, user }) => {
     concernedWrIds,
   });
 
-  const offset = (page - 1) * limit;
-  const pageRows = validRows.slice(offset, offset + limit);
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const effectiveLimit = isAll ? validRows.length : (parseInt(limit, 10) || 50);
+  const offset = isAll ? 0 : (page - 1) * effectiveLimit;
+  const pageRows = isAll ? validRows : validRows.slice(offset, offset + effectiveLimit);
   const parsed = pageRows.map(parseRequestPayload);
   const enriched = await batchEnrichRequests(parsed);
   return { data: enriched, count: validRows.length };

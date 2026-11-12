@@ -410,11 +410,25 @@ const listDocuments = async ({ entityId, filters = {}, user }) => {
     concernedWrIds,
   });
 
-  const visibleRows = (validRows || []).filter((d) => !isDisbursementReceiptDoc(d));
+  let visibleRows = (validRows || []).filter((d) => !isDisbursementReceiptDoc(d));
+
+  const effectiveUploaderId = filters.uploaderId || filters.uploader_id;
+  if (effectiveUploaderId) {
+    visibleRows = visibleRows.filter((d) => d.uploader_id === effectiveUploaderId);
+  }
+
+  const effectiveDueDate = filters.dueDate || filters.due_date;
+  if (effectiveDueDate) {
+    visibleRows = visibleRows.filter(
+      (d) => (d.due_date || d.created_at || '').slice(0, 10) === effectiveDueDate
+    );
+  }
 
   const total = visibleRows.length;
-  const offset = (page - 1) * limit;
-  const rows = visibleRows.slice(offset, offset + limit);
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const effectiveLimit = isAll ? total : (parseInt(limit, 10) || 50);
+  const offset = isAll ? 0 : (page - 1) * effectiveLimit;
+  const rows = isAll ? visibleRows : visibleRows.slice(offset, offset + effectiveLimit);
 
   const enriched = await enrichDocuments(rows);
 

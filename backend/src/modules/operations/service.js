@@ -726,9 +726,9 @@ const listWorkRequests = async ({
   sortOrder,
   includeTasks,
 }) => {
+  const isAllLimit = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
   const isPaginated = page !== undefined || limit !== undefined;
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const pageNum = isAllLimit ? 1 : Math.max(1, parseInt(page, 10) || 1);
   const sortField = ['created_at', 'due_date', 'title', 'status'].includes(sortBy)
     ? sortBy
     : 'created_at';
@@ -768,7 +768,7 @@ const listWorkRequests = async ({
         meta: {
           total: 0,
           page: pageNum,
-          limit: limitNum,
+          limit: isAllLimit ? 0 : Math.min(10000, Math.max(1, parseInt(limit, 10) || 50)),
           totalPages: 0,
         },
       };
@@ -785,7 +785,26 @@ const listWorkRequests = async ({
     });
   }
 
-  let visibleRows = data || [];
+  let allData = Array.isArray(data) ? [...data] : [];
+  if (Array.isArray(data) && data.length === 1000 && typeof query.range === 'function') {
+    let pageOffset = 1000;
+    let hasMoreWr = true;
+    while (hasMoreWr) {
+      const { data: pageData, error: pageErr } = await query.range(pageOffset, pageOffset + 999);
+      if (pageErr || !pageData || pageData.length === 0) {
+        hasMoreWr = false;
+        break;
+      }
+      allData = allData.concat(pageData);
+      if (pageData.length < 1000) {
+        hasMoreWr = false;
+        break;
+      }
+      pageOffset += 1000;
+    }
+  }
+
+  let visibleRows = allData;
   if (entityId === 'ALL' && user) {
     const allowedRows = [];
     for (const r of visibleRows) {
@@ -818,8 +837,12 @@ const listWorkRequests = async ({
     );
   }
 
+  const limitNum = isAllLimit
+    ? (visibleRows.length || 0)
+    : Math.min(10000, Math.max(1, parseInt(limit, 10) || 50));
+
   // Paginate from the pre-filtered set
-  const resultRows = isPaginated
+  const resultRows = (isPaginated && !isAllLimit)
     ? visibleRows.slice((pageNum - 1) * limitNum, pageNum * limitNum)
     : visibleRows;
 
@@ -874,13 +897,16 @@ const listWorkRequests = async ({
     return { data: result };
   }
 
+  const effectiveLimit = isAllLimit ? (visibleRows.length || 0) : limitNum;
+  const totalPages = isAllLimit ? 1 : (Math.ceil(visibleRows.length / limitNum) || 1);
+
   return {
     data: result,
     meta: {
       total: visibleRows.length,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(visibleRows.length / limitNum) || 1,
+      page: isAllLimit ? 1 : pageNum,
+      limit: effectiveLimit,
+      totalPages,
     },
   };
 };

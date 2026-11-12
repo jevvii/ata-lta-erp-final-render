@@ -108,7 +108,10 @@ const listQuerySchema = z.object({
   linkedTaskId: z.string().guid().optional(),
   requestedBy: z.string().guid().optional(),
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(1000).default(50),
+  limit: z.preprocess(
+    (val) => (typeof val === 'string' && val.toLowerCase() === 'all' ? 'all' : val),
+    z.union([z.literal('all'), z.coerce.number().int().min(0).max(1000)]).default(50)
+  ),
 });
 
 module.exports = {

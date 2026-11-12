@@ -39,11 +39,18 @@ const handleZodError = (err, next) => {
 /** @type {import('express').RequestHandler} */
 const listDisbursements = async (req, res, next) => {
   try {
+    const isAll =
+      String(req.query.limit).toLowerCase() === 'all' ||
+      req.query.limit === '0' ||
+      req.query.limit === 0;
     const filters = {
       queue: req.query.queue,
       status: req.query.status,
       category: req.query.category,
       fundSource: req.query.fundSource,
+      clientId: req.query.clientId || req.query.client_id,
+      employeeId: req.query.employeeId || req.query.employee_id,
+      dueDate: req.query.dueDate || req.query.due_date,
       taskId: req.query.taskId || req.query.task_id,
       linkedTaskId: req.query.linkedTaskId,
       linkedInvoiceId: req.query.linkedInvoiceId,
@@ -57,8 +64,8 @@ const listDisbursements = async (req, res, next) => {
       search: req.query.search,
       archived: req.query.archived,
       offset: req.query.offset !== undefined ? parseInt(req.query.offset, 10) : undefined,
-      page: parseInt(req.query.page, 10) || 1,
-      limit: Math.min(parseInt(req.query.limit, 10) || 50, 100),
+      page: isAll ? 1 : (parseInt(req.query.page, 10) || 1),
+      limit: isAll ? 'all' : Math.min(Math.max(1, parseInt(req.query.limit, 10) || 50), 10000),
     };
     const result = await service.listDisbursements({
       entityId: req.activeEntity,
@@ -67,7 +74,12 @@ const listDisbursements = async (req, res, next) => {
     });
     res.json({
       data: result.data,
-      meta: { total: result.count, page: filters.page, limit: filters.limit },
+      meta: {
+        total: result.count,
+        page: isAll ? 1 : filters.page,
+        limit: isAll ? result.count : filters.limit,
+        totalPages: isAll ? 1 : (Math.ceil(result.count / filters.limit) || 1),
+      },
     });
   } catch (err) {
     next(err);
