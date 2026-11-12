@@ -36,7 +36,8 @@ export function useOperationsRequests(
       if (filters?.linkedTaskId) params.append('linkedTaskId', filters.linkedTaskId);
       if (filters?.requestedBy) params.append('requestedBy', filters.requestedBy);
       if (filters?.page) params.append('page', String(filters.page));
-      if (filters?.limit) params.append('limit', String(filters.limit));
+      const limitVal = filters?.limit ?? 'all';
+      if (limitVal) params.append('limit', String(limitVal));
 
       const queryStr = params.toString();
       const path = `/operations-requests${queryStr ? `?${queryStr}` : ''}`;

@@ -817,7 +817,7 @@ export interface OperationsRequestFilters {
   linkedTaskId?: string;
   requestedBy?: string;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
 }
 
 export interface OperationsCounts {

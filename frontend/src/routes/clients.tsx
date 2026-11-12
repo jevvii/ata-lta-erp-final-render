@@ -62,8 +62,18 @@ export default function ClientsPage() {
 
   // Queries & Mutations
   const { data: counts } = useClientCounts();
+  const effectiveSortBy =
+    filters.sortBy === 'rdoCode'
+      ? 'rdo_code'
+      : filters.sortBy === 'clientNumber'
+        ? 'client_number'
+        : filters.sortBy;
+
   const { data: clientsData, isLoading } = useClientsList({
     ...filters,
+    sortBy: effectiveSortBy,
+    sortOrder: filters.sortOrder,
+    retainer: filters.retainer,
     archived: isArchived,
   });
 
@@ -148,21 +158,32 @@ export default function ClientsPage() {
       prev.set('tab', tab);
       return prev;
     });
+    setFilters((prev) => ({ ...prev, page: 1 }));
   };
 
   const handleFilterChange = (newFilters: Partial<ClientFilters>) => {
-    setFilters((prev) => ({ ...prev, ...newFilters }));
+    setFilters((prev) => ({
+      ...prev,
+      ...newFilters,
+      page:
+        newFilters.page ??
+        (newFilters.search !== undefined ||
+        newFilters.status !== undefined ||
+        newFilters.retainer !== undefined
+          ? 1
+          : prev.page),
+    }));
   };
 
   const handleResetFilters = () => {
-    setFilters({
+    setFilters((prev) => ({
       search: '',
       retainer: undefined,
       page: 1,
-      limit: 50,
+      limit: prev.limit ?? 50,
       sortBy: 'client_number',
       sortOrder: 'asc',
-    });
+    }));
   };
 
   const handleSortColumn = (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => {
@@ -281,6 +302,11 @@ export default function ClientsPage() {
         sortBy={filters.sortBy}
         sortOrder={filters.sortOrder}
         onSort={handleSortColumn}
+        total={clientsData?.meta?.total ?? clients.length}
+        page={filters.page || 1}
+        pageSize={filters.limit || 50}
+        onPageChange={(newPage) => setFilters((prev) => ({ ...prev, page: newPage }))}
+        onPageSizeChange={(newLimit) => setFilters((prev) => ({ ...prev, limit: newLimit, page: 1 }))}
       />
 
       {/* Client Detail Inspection Modal */}

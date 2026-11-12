@@ -97,12 +97,16 @@ export default function TransmittalsPage() {
   const canView = hasPermission(permissions, 'transmittal:view');
   const canCreate = hasPermission(permissions, 'transmittal:create');
 
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(50);
+
   // Queries
   const isArchivedTab = activeTab === 'archived';
   const { data: listResponse, isLoading: isListLoading } = useTransmittalsList(
     {
       archived: isArchivedTab,
-      limit: 100,
+      limit: 'all',
     },
     { enabled: canView }
   );
@@ -151,6 +155,7 @@ export default function TransmittalsPage() {
       next.set('tab', val);
       return next;
     });
+    setPage(1);
   };
 
   const handleViewChange = (mode: 'kanban' | 'table') => {
@@ -159,6 +164,7 @@ export default function TransmittalsPage() {
       next.set('view', mode);
       return next;
     });
+    setPage(1);
   };
 
   // Find target objects for dialogs
@@ -332,6 +338,13 @@ export default function TransmittalsPage() {
         <TransmittalTable
           transmittals={transmittals}
           isLoading={isListLoading}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setPage(1);
+          }}
           onView={(id) => setDetailModalId(id)}
           onEdit={(t) => {
             setFormEditTarget(t);

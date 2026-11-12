@@ -51,6 +51,7 @@ import {
   TooltipTrigger,
 } from './Tooltip';
 import { TransmittalStatusBadge, TransmittalApprovalBadge } from './TransmittalStatusBadge';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import { useSessionStore } from '@/lib/session';
 import { hasPermission } from '@/lib/permissions';
 import type { Transmittal } from '../api/types';
@@ -67,6 +68,10 @@ export interface TransmittalTableProps {
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
+  page?: number;
+  pageSize?: number | 'all';
+  onPageChange?: (newPage: number) => void;
+  onPageSizeChange?: (newSize: number | 'all') => void;
 }
 
 export function TransmittalTable({
@@ -81,6 +86,10 @@ export function TransmittalTable({
   onArchive,
   onUnarchive,
   onDelete,
+  page: propsPage,
+  pageSize: propsPageSize,
+  onPageChange: propsOnPageChange,
+  onPageSizeChange: propsOnPageSizeChange,
 }: TransmittalTableProps) {
   const permissions = useSessionStore((state) => state.permissions);
   const user = useSessionStore((state) => state.user);
@@ -90,6 +99,19 @@ export function TransmittalTable({
   const canApprovePermission = hasPermission(permissions, 'transmittal:approve');
   const canMarkPermission = hasPermission(permissions, 'transmittal:mark');
   const canDeletePermission = hasPermission(permissions, 'transmittal:delete');
+
+  const [localPage, setLocalPage] = useState(1);
+  const [localPageSize, setLocalPageSize] = useState<number | 'all'>(50);
+
+  const currentPage = propsPage ?? localPage;
+  const currentPageSize = propsPageSize ?? localPageSize;
+  const handlePageChange = propsOnPageChange ?? setLocalPage;
+  const handlePageSizeChange =
+    propsOnPageSizeChange ??
+    ((newSize: number | 'all') => {
+      setLocalPageSize(newSize);
+      setLocalPage(1);
+    });
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -116,6 +138,7 @@ export function TransmittalTable({
     setDueDateFilter('all');
     setClientSearch('');
     setClientSort(DEFAULT_CLIENT_SORT);
+    handlePageChange(1);
   };
 
   const hasActiveFilters =
@@ -182,6 +205,13 @@ export function TransmittalTable({
     searchTerm,
   ]);
 
+  const paginatedTransmittals = useMemo(() => {
+    if (currentPageSize === 'all') return filteredTransmittals;
+    const size = typeof currentPageSize === 'number' ? currentPageSize : 50;
+    const start = (currentPage - 1) * size;
+    return filteredTransmittals.slice(start, start + size);
+  }, [filteredTransmittals, currentPage, currentPageSize]);
+
   return (
     <div className="space-y-4" data-testid="transmittal-table-container">
       {/* Search and Filters Bar */}
@@ -192,7 +222,10 @@ export function TransmittalTable({
             <Input
               placeholder="Search tracking, client, recipient..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                handlePageChange(1);
+              }}
               className="pl-9 h-9 text-xs"
               data-testid="transmittal-search-input"
             />
@@ -200,7 +233,13 @@ export function TransmittalTable({
 
           {/* Status Filter */}
           <div className="w-[125px] sm:w-[135px]">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select
+              value={statusFilter}
+              onValueChange={(val) => {
+                setStatusFilter(val);
+                handlePageChange(1);
+              }}
+            >
               <SelectTrigger className="h-9 text-xs" data-testid="transmittal-status-filter">
                 <SelectValue placeholder="All Statuses" />
               </SelectTrigger>
@@ -216,7 +255,13 @@ export function TransmittalTable({
 
           {/* Work Request Filter */}
           <div className="w-[135px] sm:w-[150px]">
-            <Select value={workRequestFilter} onValueChange={setWorkRequestFilter}>
+            <Select
+              value={workRequestFilter}
+              onValueChange={(val) => {
+                setWorkRequestFilter(val);
+                handlePageChange(1);
+              }}
+            >
               <SelectTrigger className="h-9 text-xs" data-testid="transmittal-work-request-filter">
                 <SelectValue placeholder="All Work Requests" />
               </SelectTrigger>
@@ -233,7 +278,13 @@ export function TransmittalTable({
 
           {/* Client Filter */}
           <div className="w-[130px] sm:w-[145px]">
-            <Select value={clientFilter} onValueChange={setClientFilter}>
+            <Select
+              value={clientFilter}
+              onValueChange={(val) => {
+                setClientFilter(val);
+                handlePageChange(1);
+              }}
+            >
               <SelectTrigger className="h-9 text-xs" data-testid="transmittal-client-filter">
                 <SelectValue placeholder="All Clients" />
               </SelectTrigger>
@@ -261,7 +312,13 @@ export function TransmittalTable({
           {/* Employee Filter (Admin only) */}
           {isAdmin && (
             <div className="w-[130px] sm:w-[145px]">
-              <Select value={employeeFilter} onValueChange={setEmployeeFilter}>
+              <Select
+                value={employeeFilter}
+                onValueChange={(val) => {
+                  setEmployeeFilter(val);
+                  handlePageChange(1);
+                }}
+              >
                 <SelectTrigger className="h-9 text-xs" data-testid="transmittal-employee-filter">
                   <SelectValue placeholder="All Employees" />
                 </SelectTrigger>
@@ -279,7 +336,13 @@ export function TransmittalTable({
 
           {/* Due Date Filter */}
           <div className="w-[125px] sm:w-[135px]">
-            <Select value={dueDateFilter} onValueChange={setDueDateFilter}>
+            <Select
+              value={dueDateFilter}
+              onValueChange={(val) => {
+                setDueDateFilter(val);
+                handlePageChange(1);
+              }}
+            >
               <SelectTrigger className="h-9 text-xs" data-testid="transmittal-due-date-filter">
                 <SelectValue placeholder="All Due Dates" />
               </SelectTrigger>
@@ -338,7 +401,7 @@ export function TransmittalTable({
                   </td>
                 </tr>
               ) : (
-                filteredTransmittals.map((t) => {
+                paginatedTransmittals.map((t) => {
                   const itemsCount = t.items?.length ?? 0;
                   const canEdit = canEditPermission && (isAdmin || t.status === 'Draft');
                   const canApprove = canApprovePermission && t.status === 'Draft';
@@ -564,6 +627,14 @@ export function TransmittalTable({
               )}
             </tbody>
           </table>
+          <TablePaginationBar
+            total={filteredTransmittals.length}
+            page={currentPage}
+            pageSize={currentPageSize}
+            onPageChange={handlePageChange}
+            onPageSizeChange={handlePageSizeChange}
+            itemLabel="transmittals"
+          />
         </div>
       </div>
     </div>

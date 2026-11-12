@@ -3,14 +3,13 @@ import {
   Archive,
   RotateCcw,
   Search,
-  ChevronLeft,
-  ChevronRight,
   FileText,
   Eye,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import {
   Table,
   TableHeader,
@@ -36,20 +35,21 @@ export function InvoiceArchiveTab({ onSelectInvoice }: InvoiceArchiveTabProps) {
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const canEdit = usePermission('billing:edit');
 
+  const isAll = pageSize === 'all';
   const { data: invoicesResponse, isLoading, refetch } = useInvoices({
     archived: true,
     search: debouncedSearch || undefined,
-    page,
-    limit: 25,
+    page: isAll ? 1 : page,
+    limit: pageSize,
   });
 
   const invoices = invoicesResponse?.data || [];
   const totalCount = invoicesResponse?.meta?.total || 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / 25));
 
   const toggleSelectAll = () => {
     if (selectedIds.size === invoices.length && invoices.length > 0) {
@@ -278,33 +278,18 @@ export function InvoiceArchiveTab({ onSelectInvoice }: InvoiceArchiveTabProps) {
       )}
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between border-t border-[#E2E8F0] pt-3 tabular-nums">
-          <span className="text-xs text-[#475569]">
-            Page {page} of {totalPages}
-          </span>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="outline"
-              size="icon"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="h-7 w-7 cursor-pointer rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC]"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="h-7 w-7 cursor-pointer rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC]"
-            >
-              <ChevronRight className="w-3.5 h-3.5" />
-            </Button>
-          </div>
-        </div>
-      )}
+      <TablePaginationBar
+        total={totalCount}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={(newSize) => {
+          setPageSize(newSize);
+          setPage(1);
+        }}
+        pageSizeOptions={[10, 25, 50, 100, 'all']}
+        itemLabel="archived invoices"
+      />
     </div>
   );
 }

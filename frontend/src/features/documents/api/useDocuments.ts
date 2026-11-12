@@ -78,6 +78,8 @@ export function useDocumentsList(
       if (filters?.linkedTaskId) params.append('linkedTaskId', String(filters.linkedTaskId));
       if (filters?.search) params.append('search', String(filters.search));
       if (filters?.archived !== undefined) params.append('archived', String(filters.archived));
+      if (filters?.uploaderId) params.append('uploaderId', String(filters.uploaderId));
+      if (filters?.dueDate) params.append('dueDate', String(filters.dueDate));
       if (filters?.page) params.append('page', String(filters.page));
       if (filters?.limit) params.append('limit', String(filters.limit));
       params.append('_t', String(Date.now()));

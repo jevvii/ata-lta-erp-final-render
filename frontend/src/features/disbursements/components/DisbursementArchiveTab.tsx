@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Archive, RotateCcw, Search, ChevronLeft, ChevronRight, Eye, Wallet } from 'lucide-react';
+import { Archive, RotateCcw, Search, Eye, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import {
   Table,
   TableHeader,
@@ -32,6 +33,7 @@ export function DisbursementArchiveTab({
   const [searchInput, setSearchInput] = useState('');
   const debouncedSearch = useDebounce(searchInput, 300);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const permissions = useSessionStore((state) => state.permissions);
@@ -46,6 +48,7 @@ export function DisbursementArchiveTab({
     Number.isInteger(item.version) &&
     item.version > 0;
 
+  const isAll = pageSize === 'all';
   const {
     data: response,
     isLoading,
@@ -54,14 +57,13 @@ export function DisbursementArchiveTab({
   } = useDisbursementsList({
     archived: true,
     search: debouncedSearch || undefined,
-    page,
-    limit: 25,
+    page: isAll ? 1 : page,
+    limit: pageSize,
   });
 
   const isFiltering = searchInput !== debouncedSearch || isFetching;
   const disbursements: Disbursement[] = response?.data || [];
   const totalCount = response?.meta?.total ?? disbursements.length;
-  const totalPages = Math.max(1, Math.ceil(totalCount / 25));
 
   const restorable = disbursements.filter(canRestore);
 
@@ -308,36 +310,18 @@ export function DisbursementArchiveTab({
       </div>
 
         {/* Pagination Bar */}
-        {totalPages > 1 && (
-          <div className="shrink-0 flex items-center justify-between px-4 py-2 border-t border-border bg-canvas/50 text-xs text-muted">
-            <span>
-              Page <span className="font-semibold text-ink">{page}</span> of{' '}
-              <span className="font-semibold text-ink">{totalPages}</span>
-            </span>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="h-7 px-2 text-xs"
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-                className="h-7 px-2 text-xs"
-              >
-                Next
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        )}
+        <TablePaginationBar
+          total={totalCount}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setPage(1);
+          }}
+          pageSizeOptions={[10, 25, 50, 100, 'all']}
+          itemLabel="archived disbursements"
+        />
       </div>
     </div>
   );

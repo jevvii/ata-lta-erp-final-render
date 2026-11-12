@@ -14,11 +14,10 @@ import {
   Archive,
   ArchiveRestore,
   Trash2,
-  ChevronLeft,
-  ChevronRight,
   FolderOpen,
   MoreHorizontal,
 } from 'lucide-react';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 
 import {
   Table,
@@ -52,8 +51,9 @@ export interface DocumentTableProps {
   isLoading?: boolean;
   total?: number;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
   onPageChange?: (page: number) => void;
+  onLimitChange?: (limit: number | 'all') => void;
   onView: (doc: DmsDocument) => void;
   onDownload?: (doc: DmsDocument) => void;
   onTransition?: (doc: DmsDocument) => void;
@@ -72,6 +72,7 @@ export function DocumentTable({
   page = 1,
   limit = 50,
   onPageChange,
+  onLimitChange,
   onView,
   onDownload,
   onTransition,
@@ -84,7 +85,6 @@ export function DocumentTable({
 }: DocumentTableProps) {
   const visibleDocuments = documents.filter((doc) => !isDisbursementReceiptDocument(doc));
   const effectiveTotal = Math.min(total, visibleDocuments.length > 0 ? total : 0);
-  const totalPages = Math.max(1, Math.ceil(effectiveTotal / limit));
 
   if (isLoading) {
     return (
@@ -325,36 +325,15 @@ export function DocumentTable({
 
       {/* Pagination Controls */}
       {total > 0 && onPageChange && (
-        <div className="flex items-center justify-between px-2 py-1 text-sm text-[#475569]">
-          <div>
-            Showing {Math.min((page - 1) * limit + 1, total)} to {Math.min(page * limit, total)} of {total} documents
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onPageChange(page - 1)}
-              disabled={page <= 1}
-              data-testid="pagination-prev"
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              Previous
-            </Button>
-            <span className="text-xs px-2">
-              Page {page} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onPageChange(page + 1)}
-              disabled={page >= totalPages}
-              data-testid="pagination-next"
-            >
-              Next
-              <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
-        </div>
+        <TablePaginationBar
+          total={effectiveTotal}
+          page={page}
+          pageSize={limit}
+          onPageChange={onPageChange}
+          onPageSizeChange={onLimitChange}
+          itemLabel="documents"
+          pageSizeOptions={[10, 25, 50, 100, 'all']}
+        />
       )}
     </div>
   );

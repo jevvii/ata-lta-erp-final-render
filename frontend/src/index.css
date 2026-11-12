@@ -207,6 +207,14 @@
   --red-800: #991B1B;
 
   /* Tier 2 Semantic Role Tokens */
+  --bg-subtle: #F1F5F9;
+  --bg-surface: #FFFFFF;
+  --border-subtle: #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --brand-primary: #1D4ED8;
+
   --color-canvas: var(--slate-50);
   --color-bg-app: var(--slate-50);
   --color-bg: var(--slate-50);

@@ -194,7 +194,7 @@ export interface TransmittalFilters {
   archived?: boolean | string;
   includeDeleted?: boolean | string;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
 }
 
 // ============================================================================

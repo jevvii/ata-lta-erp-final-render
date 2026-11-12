@@ -135,7 +135,10 @@ export interface InvoiceFilters {
   archived?: boolean;
   includeDeleted?: boolean;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
+  employee?: string;
+  dueDate?: string;
+  workRequestTitle?: string;
 }
 
 export interface InvoiceListResponse {

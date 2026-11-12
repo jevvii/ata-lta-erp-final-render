@@ -41,8 +41,6 @@ import {
 import { AuditLogDetailModal } from './AuditLogDetailModal';
 import type { AdminUser, AuditLogEntry, AuditLogFilterParams, EntityCode } from '../api/types';
 
-const PAGE_LIMIT = 50;
-
 const MODULE_FILTER_OPTIONS = [
   { value: 'ALL', label: 'All Modules' },
   { value: 'users', label: 'Users & Access' },
@@ -87,6 +85,7 @@ export function AuditLogView() {
   const [dateTo, setDateTo] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [page, setPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(50);
 
   // Selected entry for Detail Modal
   const [selectedEntry, setSelectedEntry] = useState<AuditLogEntry | null>(null);
@@ -103,10 +102,13 @@ export function AuditLogView() {
 
   const filterParams = useMemo<AuditLogFilterParams>(() => {
     const params: AuditLogFilterParams = {
-      page,
-      limit: PAGE_LIMIT,
+      page: pageSize === 'all' ? 1 : page,
+      limit: pageSize,
       sortOrder,
     };
+    if (pageSize === 'all') {
+      params.offset = 0;
+    }
     if (searchQuery.trim()) {
       params.search = searchQuery.trim();
     }
@@ -123,17 +125,17 @@ export function AuditLogView() {
       params.to = dateTo;
     }
     return params;
-  }, [page, sortOrder, searchQuery, moduleFilter, userFilter, dateFrom, dateTo]);
+  }, [page, pageSize, sortOrder, searchQuery, moduleFilter, userFilter, dateFrom, dateTo]);
 
   const { data: auditResponse, isLoading, error } = useAuditLogsList(filterParams);
 
   const entries = auditResponse?.data ?? [];
   const totalEntries = auditResponse?.meta?.total ?? entries.length;
-  const currentLimit = auditResponse?.meta?.limit ?? PAGE_LIMIT;
-  const totalPages = Math.max(1, Math.ceil(totalEntries / currentLimit));
+  const isAll = pageSize === 'all';
+  const totalPages = isAll ? 1 : Math.max(1, Math.ceil(totalEntries / (typeof pageSize === 'number' && pageSize > 0 ? pageSize : 50)));
 
-  const startIndex = totalEntries === 0 ? 0 : (page - 1) * currentLimit + 1;
-  const endIndex = Math.min(totalEntries, page * currentLimit);
+  const startIndex = totalEntries === 0 ? 0 : (isAll ? 1 : (page - 1) * (typeof pageSize === 'number' ? pageSize : 50) + 1);
+  const endIndex = isAll ? totalEntries : Math.min(totalEntries, page * (typeof pageSize === 'number' ? pageSize : 50));
 
   const handleResetFilters = () => {
     setSearchQuery('');
@@ -529,41 +531,71 @@ export function AuditLogView() {
 
         {/* Server-Side Pagination Bar */}
         <div
-          className="flex flex-col items-center justify-between gap-2 border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-xs text-[#475569] sm:flex-row"
+          className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-3.5 border-t border-[var(--border-subtle)] bg-[var(--bg-subtle)]/50 text-xs text-[var(--text-secondary)]"
           data-testid="audit-pagination-bar"
         >
-          <div className="font-mono tabular-nums" data-testid="audit-pagination-summary">
-            Showing {startIndex}–{endIndex} of {totalEntries} audit entries
+          {/* Left side: Showing X to Y of Z & Rows per page */}
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="font-mono tabular-nums" data-testid="audit-pagination-summary">
+              Showing {startIndex}–{endIndex} of {totalEntries} audit entries
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--text-muted)]">Rows per page:</span>
+              <select
+                aria-label="Rows per page"
+                data-testid="rows-per-page-select"
+                value={pageSize === 'all' ? 'all' : String(pageSize)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const newSize = val === 'all' ? 'all' : Number(val);
+                  setPageSize(newSize);
+                  setPage(1);
+                }}
+                className="px-2 py-1 text-xs rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--brand-primary)] cursor-pointer"
+              >
+                {[10, 25, 50, 100, 'all'].map((opt) => (
+                  <option key={String(opt)} value={String(opt)}>
+                    {opt === 'all' ? 'All' : opt}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-[#475569] tabular-nums">
-              Page {page} of {totalPages}
+          {/* Right side: Page indicator & Navigation buttons */}
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-xs text-[var(--text-secondary)] tabular-nums" data-testid="page-indicator">
+              Page {pageSize === 'all' ? 1 : page} of {totalPages}
             </span>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={page <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="h-8 gap-1 rounded-[6px] border-[#E2E8F0] bg-[#FFFFFF] px-2.5 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] disabled:opacity-50 cursor-pointer"
-              data-testid="audit-prev-page"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" />
-              Previous
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={page >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 gap-1 rounded-[6px] border-[#E2E8F0] bg-[#FFFFFF] px-2.5 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] disabled:opacity-50 cursor-pointer"
-              data-testid="audit-next-page"
-            >
-              Next
-              <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={page <= 1 || pageSize === 'all'}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="h-8 gap-1 rounded-[6px] border-[#E2E8F0] bg-[#FFFFFF] px-2.5 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] disabled:opacity-50 cursor-pointer"
+                data-testid="audit-prev-page"
+                aria-label="Previous Page"
+              >
+                <ChevronLeft className="h-3.5 w-3.5 mr-1" />
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages || pageSize === 'all'}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="h-8 gap-1 rounded-[6px] border-[#E2E8F0] bg-[#FFFFFF] px-2.5 text-xs font-medium text-[#1E293B] hover:bg-[#F8FAFC] disabled:opacity-50 cursor-pointer"
+                data-testid="audit-next-page"
+                aria-label="Next Page"
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5 ml-1" />
+              </Button>
+            </div>
           </div>
         </div>
       </div>

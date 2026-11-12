@@ -333,7 +333,9 @@ export interface DisbursementFilters {
   archived?: boolean | string;
   queue?: 'initial_requests' | 'payment_releases' | 'ready_for_funding' | 'needs_correction';
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
+  employeeId?: string;
+  dueDate?: string;
 }
 
 // ============================================================================

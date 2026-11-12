@@ -1,7 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Eye, ChevronLeft, ChevronRight, Filter, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, Eye, Filter, RefreshCw, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import {
   Table,
   TableHeader,
@@ -67,7 +68,7 @@ export function DisbursementsTable({
   const [selectedEmployee, setSelectedEmployee] = useState<string>('');
   const [selectedDueDate, setSelectedDueDate] = useState<string>('all');
   const [page, setPage] = useState(1);
-  const limit = 20;
+  const [pageSize, setPageSize] = useState<number | 'all'>(20);
 
   const user = useSessionStore((state) => state.user);
   const isAdmin = String(user?.role || '').toLowerCase() === 'admin';
@@ -93,6 +94,7 @@ export function DisbursementsTable({
   };
 
   // Active query
+  const isAll = pageSize === 'all';
   const queryFilters = useMemo(() => {
     const filters: {
       search?: string;
@@ -102,8 +104,16 @@ export function DisbursementsTable({
       fundSource?: FundSource;
       queue?: DisbursementQueue;
       page: number;
-      limit: number;
-    } = { page, limit, archived: false };
+      limit: number | 'all';
+      clientId?: string;
+      employeeId?: string;
+      dueDate?: string;
+      workRequestId?: string;
+    } = {
+      page: isAll ? 1 : page,
+      limit: pageSize,
+      archived: false,
+    };
 
     if (search.trim()) filters.search = search.trim();
     if (statusFilter) {
@@ -114,6 +124,10 @@ export function DisbursementsTable({
     if (selectedCategory) filters.category = selectedCategory;
     if (selectedFundSource) filters.fundSource = selectedFundSource;
     if (queueFilter) filters.queue = queueFilter;
+    if (selectedClient) filters.clientId = selectedClient;
+    if (selectedEmployee) filters.employeeId = selectedEmployee;
+    if (selectedDueDate && selectedDueDate !== 'all') filters.dueDate = selectedDueDate;
+    if (selectedWorkRequest) filters.workRequestId = selectedWorkRequest;
 
     return filters;
   }, [
@@ -123,7 +137,13 @@ export function DisbursementsTable({
     selectedCategory,
     selectedFundSource,
     queueFilter,
+    selectedClient,
+    selectedEmployee,
+    selectedDueDate,
+    selectedWorkRequest,
     page,
+    pageSize,
+    isAll,
   ]);
 
   const { data: response, isLoading, isFetching, isError, error, refetch } = useDisbursementsList(queryFilters);
@@ -163,8 +183,7 @@ export function DisbursementsTable({
     selectedEmployee,
     selectedDueDate,
   ]);
-  const total = response?.meta?.total ?? 0;
-  const totalPages = Math.ceil(total / limit) || 1;
+  const total = response?.meta?.total ?? disbursements.length;
 
   const selectedIndex = useMemo(
     () => disbursements.findIndex((d) => d.id === activeSelectedId),
@@ -789,38 +808,18 @@ export function DisbursementsTable({
         </div>
 
         {/* Pagination Bar */}
-        {totalPages > 1 && (
-          <div className="shrink-0 flex items-center justify-between px-4 py-2 border-t border-border bg-canvas/50 text-xs text-muted">
-            <span>
-              Page <span className="font-semibold text-ink">{page}</span> of{' '}
-              <span className="font-semibold text-ink">{totalPages}</span>
-            </span>
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={page <= 1}
-                onClick={() => setPage((p) => Math.max(p - 1, 1))}
-                className="h-7 px-2 text-xs"
-                data-testid="pagination-prev-btn"
-              >
-                <ChevronLeft className="h-3.5 w-3.5 mr-0.5" /> Prev
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={page >= totalPages}
-                onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
-                className="h-7 px-2 text-xs"
-                data-testid="pagination-next-btn"
-              >
-                Next <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-              </Button>
-            </div>
-          </div>
-        )}
+        <TablePaginationBar
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setPage(1);
+          }}
+          pageSizeOptions={[10, 20, 25, 50, 100, 'all']}
+          itemLabel="disbursements"
+        />
       </div>
   );
 }

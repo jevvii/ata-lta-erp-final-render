@@ -49,6 +49,9 @@ export function useClientsList(filters?: ClientFilters) {
       if (filters?.archived) searchParams.append('archived', 'true');
       if (filters?.page !== undefined) searchParams.append('page', String(filters.page));
       if (filters?.limit !== undefined) searchParams.append('limit', String(filters.limit));
+      if (filters?.retainer !== undefined && filters.retainer !== 'all') {
+        searchParams.append('retainer', String(filters.retainer));
+      }
       if (filters?.sortBy) searchParams.append('sortBy', filters.sortBy);
       if (filters?.sortOrder) searchParams.append('sortOrder', filters.sortOrder);
 

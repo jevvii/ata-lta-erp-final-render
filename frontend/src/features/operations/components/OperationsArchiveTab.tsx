@@ -17,6 +17,7 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { ArchiveConfirmModal } from './ArchiveConfirmModal';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import { useWorkRequests } from '../api/useWorkRequests';
 import type { WorkRequest } from '../api/types';
 
@@ -32,6 +33,8 @@ export function OperationsArchiveTab({
   const [category, setCategory] = useState<'All' | 'Completed' | 'Cancelled'>('All');
   const [search, setSearch] = useState('');
   const [restoreTargetWr, setRestoreTargetWr] = useState<WorkRequest | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
 
   // Queries archived work requests
   const { data: rawArchived, isLoading, refetch } = useWorkRequests({
@@ -65,6 +68,13 @@ export function OperationsArchiveTab({
     });
   }, [archivedRequests, category, search]);
 
+  const paginatedList = useMemo(() => {
+    if (pageSize === 'all') return filteredList;
+    const size = typeof pageSize === 'number' ? pageSize : 25;
+    const start = (page - 1) * size;
+    return filteredList.slice(start, start + size);
+  }, [filteredList, page, pageSize]);
+
   const handleOpenRestore = (wr: WorkRequest) => {
     if (onRestoreWr) {
       onRestoreWr(wr);
@@ -83,7 +93,10 @@ export function OperationsArchiveTab({
             type="button"
             variant={category === 'All' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setCategory('All')}
+            onClick={() => {
+              setCategory('All');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] ${
               category === 'All'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -97,7 +110,10 @@ export function OperationsArchiveTab({
             type="button"
             variant={category === 'Completed' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setCategory('Completed')}
+            onClick={() => {
+              setCategory('Completed');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] ${
               category === 'Completed'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -111,7 +127,10 @@ export function OperationsArchiveTab({
             type="button"
             variant={category === 'Cancelled' ? 'default' : 'outline'}
             size="sm"
-            onClick={() => setCategory('Cancelled')}
+            onClick={() => {
+              setCategory('Cancelled');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] ${
               category === 'Cancelled'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -128,7 +147,10 @@ export function OperationsArchiveTab({
           <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-[#475569]" />
           <Input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search archive..."
             className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
             data-testid="archive-search-input"
@@ -177,7 +199,7 @@ export function OperationsArchiveTab({
                 </TableCell>
               </TableRow>
             ) : (
-              filteredList.map((wr) => (
+              paginatedList.map((wr) => (
                 <TableRow key={wr.id} className="hover:bg-[#F8FAFC]/60 border-b border-[#E2E8F0]" data-testid={`archive-row-${wr.id}`}>
                   {/* ID */}
                   <TableCell className="font-mono text-xs font-medium text-[#475569] tabular-nums whitespace-nowrap">
@@ -287,6 +309,17 @@ export function OperationsArchiveTab({
             )}
           </TableBody>
         </Table>
+        <TablePaginationBar
+          total={filteredList.length}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(newSize) => {
+            setPageSize(newSize);
+            setPage(1);
+          }}
+          itemLabel="archived requests"
+        />
       </div>
 
       {/* Internal Archive Confirm Modal for restore */}

@@ -8,9 +8,15 @@ function buildAuditQueryString(params?: AuditLogFilterParams): string {
   if (!params) return '';
   const searchParams = new URLSearchParams();
 
+  const isAll = params.limit === 'all';
   const limit = params.limit ?? 20;
   const page = params.page ?? 1;
-  const offset = params.offset !== undefined ? params.offset : (page - 1) * limit;
+  const offset =
+    params.offset !== undefined
+      ? params.offset
+      : isAll
+      ? 0
+      : (page - 1) * (typeof limit === 'number' ? limit : 20);
 
   searchParams.set('limit', String(limit));
   searchParams.set('offset', String(offset));
@@ -64,14 +70,17 @@ export function useAuditLogsList(params?: AuditLogFilterParams) {
       const res = await apiRequest<AuditLogResponse>(`/admin/audit${qs}`);
       const items = Array.isArray(res?.data) ? res.data : [];
       const limit = res?.meta?.limit ?? params?.limit ?? 20;
+      const isAll = limit === 'all' || params?.limit === 'all';
       const offset =
         res?.meta?.offset ??
         params?.offset ??
-        ((params?.page ?? 1) - 1) * limit;
+        (isAll ? 0 : ((params?.page ?? 1) - 1) * (typeof limit === 'number' ? limit : 20));
       const total = res?.meta?.total ?? items.length;
       const hasMore =
         typeof res?.meta?.hasMore === 'boolean'
           ? res.meta.hasMore
+          : isAll
+          ? false
           : offset + items.length < total;
 
       return {
