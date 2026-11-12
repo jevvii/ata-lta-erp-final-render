@@ -45,6 +45,7 @@ const list = async (req, res, next) => {
       entityId,
       search: req.query.search,
       status: req.query.status,
+      retainer: req.query.retainer,
       archived: req.query.archived,
       page: req.query.page,
       limit: req.query.limit,

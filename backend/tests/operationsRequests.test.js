@@ -172,7 +172,7 @@ describe('/v1/operations-requests', () => {
     expect(res.body.data.type).toBe('disbursement');
   });
 
-  it('fulfills a pending request', async () => {
+  it('fulfills a pending request for its assigned Manager', async () => {
     const token = registerUser({
       email: 'admin@ata-lta.ph',
       name: 'Admin',
@@ -187,6 +187,8 @@ describe('/v1/operations-requests', () => {
       entities: ['ATA'],
       id: FULFILLER_ID,
     });
+
+    mockTables.work_requests.get(WORK_REQUEST_ID).assigned_to = FULFILLER_ID;
 
     const created = await request(app)
       .post('/v1/operations-requests')
@@ -357,7 +359,10 @@ describe('/v1/operations-requests', () => {
       .send(validRequest)
       .expect(201);
 
+    const accountingId = '77777777-7777-4777-8777-777777777777';
+    mockTables.work_requests.get(WORK_REQUEST_ID).co_assignees = [accountingId];
     const accounting = registerUser({
+      id: accountingId,
       email: 'accounting@ata-lta.ph',
       name: 'Accounting Staff',
       role: 'Accounting',
@@ -399,7 +404,7 @@ describe('/v1/operations-requests', () => {
     expect(res2.body.data.id).toBe(res1.body.data.id);
   });
 
-  it('creates operations_requests record when a manager creates a work request (UAT2-4-server)', async () => {
+  it('gates a Manager work request behind creation approval without premature phase-transition requests', async () => {
     const managerToken = registerUser({
       id: 'manager-user-001',
       email: 'UAT-manager-ops@ata-lta.ph',
@@ -434,19 +439,14 @@ describe('/v1/operations-requests', () => {
 
     const wrId = createWrRes.body.data.id;
 
-    // Check that an operations_requests record was created for wrId
-    const opReq = Array.from(mockTables.operations_requests.values()).find(
+    expect(createWrRes.body.data.creationApprovalStatus).toBe('pending');
+    expect(createWrRes.body.data.canReviewCreation).toBe(false);
+    expect(mockTables.work_requests.get(wrId).creation_approval_status).toBe('pending');
+    expect(mockTables.work_requests.get(wrId).created_by).toBe('manager-user-001');
+    const prematureRequests = Array.from(mockTables.operations_requests.values()).filter(
       (r) => r.work_request_id === wrId
     );
-    expect(opReq).toBeDefined();
-    expect(opReq.type).toBe('wr_phase_transition');
-    expect(opReq.status).toBe('pending');
-    expect(opReq.requested_by).toBe('manager-user-001');
-
-    const parsedNotes = JSON.parse(opReq.notes);
-    expect(parsedNotes.from_phase).toBe('pre_processing');
-    expect(parsedNotes.to_phase).toBe('processing');
-    expect(parsedNotes.work_request_id).toBe(wrId);
+    expect(prematureRequests).toHaveLength(0);
   });
 
   it('returns enriched client code, work_request with tasks, and requester info in operations requests (UAT2-4-server)', async () => {

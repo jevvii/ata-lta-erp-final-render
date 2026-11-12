@@ -269,6 +269,91 @@ const applyDisbursementInvoiceLinks = async ({
  * @param {object} [params.filters]
  * @returns {Promise<{ data: object[], count: number }>}
  */
+const enrichInvoices = async (rows) => {
+  if (!rows || rows.length === 0) return [];
+
+  const { data: entitiesData } = await supabaseAdmin.from('entities').select('id, code');
+  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+
+  // Batch resolve parent Work Request and creator (Task A.3)
+  const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
+  const transmittalIds = [...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean))];
+  let wrMap = new Map();
+  let userMap = new Map();
+  let transmittalMap = new Map();
+
+  if (wrIds.length > 0) {
+    const { data: wrData } = await supabaseAdmin
+      .from('work_requests')
+      .select('id, title, work_order_number, work_request_number, created_by')
+      .in('id', wrIds);
+
+    const wrs = wrData || [];
+    const creatorUserIds = [...new Set(wrs.map((w) => w.created_by).filter(Boolean))];
+    if (creatorUserIds.length > 0) {
+      const { data: usersData } = await supabaseAdmin
+        .from('users')
+        .select('id, name, email')
+        .in('id', creatorUserIds);
+      userMap = new Map((usersData || []).map((u) => [u.id, u]));
+    }
+    wrMap = new Map(wrs.map((w) => [w.id, w]));
+  }
+
+  if (transmittalIds.length > 0) {
+    const { data: trData } = await supabaseAdmin
+      .from('transmittals')
+      .select('id, tracking_number, status, recipient_name')
+      .in('id', transmittalIds);
+    transmittalMap = new Map((trData || []).map((t) => [t.id, t]));
+  }
+
+  return rows.map((row) => {
+    const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
+    const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
+    const tr = row.linked_transmittal_id ? transmittalMap.get(row.linked_transmittal_id) : null;
+    const clientNumber = row.clients?.client_number || row.client_number || null;
+    const clientName = row.clients?.name || row.client_name || null;
+    const clientTin = row.clients?.tin || row.client_tin || null;
+    const clientTradeName = row.clients?.trade_name || row.client_trade_name || null;
+    const wrNumber = wr?.work_request_number || null;
+    return {
+      ...row,
+      clientName,
+      client_name: clientName,
+      clientNumber,
+      client_number: clientNumber,
+      clientTin,
+      client_tin: clientTin,
+      clientTradeName,
+      client_trade_name: clientTradeName,
+      workRequestNumber: wrNumber,
+      work_request_number: wrNumber,
+      entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
+      work_request_title: wr?.title || null,
+      work_request_creator_name: creator?.name || null,
+      work_request: wr
+        ? {
+            id: wr.id,
+            title: wr.title,
+            workOrderNumber: wr.work_order_number || null,
+            creatorName: creator?.name || null,
+            creatorEmail: creator?.email || null,
+          }
+        : null,
+      linked_transmittal_tracking_number: tr?.tracking_number || null,
+      linked_transmittal: tr
+        ? {
+            id: tr.id,
+            tracking_number: tr.tracking_number,
+            status: tr.status,
+            recipient_name: tr.recipient_name || null,
+          }
+        : null,
+    };
+  });
+};
+
 const listInvoices = async ({ entityId, filters = {}, user }) => {
   if (!user) {
     throw new AppError({
@@ -290,6 +375,10 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     linked_work_request_id,
     linkedTransmittalId,
     linked_transmittal_id,
+    employee,
+    dueDate,
+    due_date,
+    workRequestTitle,
     search,
     archived,
     includeDeleted,
@@ -349,94 +438,55 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     concernedWrIds,
   });
 
-  const total = validRows.length;
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.max(1, parseInt(limit, 10) || 50);
-  const offset = (pageNum - 1) * limitNum;
-  const rows = validRows.slice(offset, offset + limitNum);
-  const { data: entitiesData } = rows.length
-    ? await supabaseAdmin.from('entities').select('id, code')
-    : { data: [] };
-  const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const effectiveDueDate = dueDate || due_date;
+  const hasEnrichmentFilters = Boolean(employee || effectiveDueDate || workRequestTitle);
 
-  // Batch resolve parent Work Request and creator (Task A.3)
-  const wrIds = [...new Set(rows.map((r) => r.work_request_id).filter(Boolean))];
-  const transmittalIds = [...new Set(rows.map((r) => r.linked_transmittal_id).filter(Boolean))];
-  let wrMap = new Map();
-  let userMap = new Map();
-  let transmittalMap = new Map();
-
-  if (wrIds.length > 0) {
-    const { data: wrData } = await supabaseAdmin
-      .from('work_requests')
-      .select('id, title, work_order_number, work_request_number, created_by')
-      .in('id', wrIds);
-
-    const wrs = wrData || [];
-    const creatorUserIds = [...new Set(wrs.map((w) => w.created_by).filter(Boolean))];
-    if (creatorUserIds.length > 0) {
-      const { data: usersData } = await supabaseAdmin
-        .from('users')
-        .select('id, name, email')
-        .in('id', creatorUserIds);
-      userMap = new Map((usersData || []).map((u) => [u.id, u]));
+  if (hasEnrichmentFilters) {
+    const allEnriched = await enrichInvoices(validRows);
+    let filtered = allEnriched;
+    if (workRequestTitle) {
+      const wrt = String(workRequestTitle).toLowerCase();
+      filtered = filtered.filter(
+        (r) =>
+          (r.work_request_title || '').toLowerCase().includes(wrt) ||
+          (r.work_request?.title || '').toLowerCase().includes(wrt)
+      );
     }
-    wrMap = new Map(wrs.map((w) => [w.id, w]));
+    if (employee) {
+      const emp = String(employee).toLowerCase();
+      filtered = filtered.filter(
+        (r) =>
+          (r.work_request_creator_name || '').toLowerCase().includes(emp) ||
+          (r.work_request?.creatorName || '').toLowerCase().includes(emp) ||
+          r.created_by === employee
+      );
+    }
+    if (effectiveDueDate) {
+      filtered = filtered.filter((r) => (r.due_date || '').startsWith(effectiveDueDate));
+    }
+    const total = filtered.length;
+    if (isAll) {
+      return { data: filtered, count: total };
+    }
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 50);
+    const offset = (pageNum - 1) * limitNum;
+    return { data: filtered.slice(offset, offset + limitNum), count: total };
   }
 
-  if (transmittalIds.length > 0) {
-    const { data: trData } = await supabaseAdmin
-      .from('transmittals')
-      .select('id, tracking_number, status, recipient_name')
-      .in('id', transmittalIds);
-    transmittalMap = new Map((trData || []).map((t) => [t.id, t]));
+  const total = validRows.length;
+  let rows;
+  if (isAll) {
+    rows = validRows;
+  } else {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit, 10) || 50);
+    const offset = (pageNum - 1) * limitNum;
+    rows = validRows.slice(offset, offset + limitNum);
   }
 
-  const mapped = rows.map((row) => {
-    const wr = row.work_request_id ? wrMap.get(row.work_request_id) : null;
-    const creator = wr?.created_by ? userMap.get(wr.created_by) : null;
-    const tr = row.linked_transmittal_id ? transmittalMap.get(row.linked_transmittal_id) : null;
-    const clientNumber = row.clients?.client_number || row.client_number || null;
-    const clientName = row.clients?.name || row.client_name || null;
-    const clientTin = row.clients?.tin || row.client_tin || null;
-    const clientTradeName = row.clients?.trade_name || row.client_trade_name || null;
-    const wrNumber = wr?.work_request_number || null;
-    return {
-      ...row,
-      clientName,
-      client_name: clientName,
-      clientNumber,
-      client_number: clientNumber,
-      clientTin,
-      client_tin: clientTin,
-      clientTradeName,
-      client_trade_name: clientTradeName,
-      workRequestNumber: wrNumber,
-      work_request_number: wrNumber,
-      entity_code: entityCodeMap.get(row.entity_id) || row.entity_id,
-      work_request_title: wr?.title || null,
-      work_request_creator_name: creator?.name || null,
-      work_request: wr
-        ? {
-            id: wr.id,
-            title: wr.title,
-            workOrderNumber: wr.work_order_number || null,
-            creatorName: creator?.name || null,
-            creatorEmail: creator?.email || null,
-          }
-        : null,
-      linked_transmittal_tracking_number: tr?.tracking_number || null,
-      linked_transmittal: tr
-        ? {
-            id: tr.id,
-            tracking_number: tr.tracking_number,
-            status: tr.status,
-            recipient_name: tr.recipient_name || null,
-          }
-        : null,
-    };
-  });
-
+  const mapped = await enrichInvoices(rows);
   return { data: mapped, count: total };
 };
 

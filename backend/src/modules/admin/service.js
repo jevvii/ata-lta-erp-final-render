@@ -1450,9 +1450,10 @@ const getAuditLogs = async (params = {}) => {
     sortOrder = 'desc',
   } = mergedFilters;
 
-  const limitNum = Number(limit);
-  const page = pageParam ? Number(pageParam) : Math.floor(Number(offsetParam) / limitNum) + 1;
-  const offset = pageParam ? (page - 1) * limitNum : Number(offsetParam);
+  const isAll = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
+  const limitNum = isAll ? 0 : Number(limit);
+  const page = isAll ? 1 : (pageParam ? Number(pageParam) : Math.floor(Number(offsetParam) / (limitNum || 20)) + 1);
+  const offset = isAll ? 0 : (pageParam ? (page - 1) * limitNum : Number(offsetParam));
   const ascending = sortOrder === 'asc';
   const searchTerm = typeof search === 'string' ? search.trim().toLowerCase() : '';
 
@@ -1469,9 +1470,9 @@ const getAuditLogs = async (params = {}) => {
       data: [],
       meta: {
         total: 0,
-        page,
-        limit: limitNum,
-        offset,
+        page: isAll ? 1 : page,
+        limit: isAll ? 0 : limitNum,
+        offset: isAll ? 0 : offset,
         hasMore: false,
       },
     };
@@ -1480,8 +1481,9 @@ const getAuditLogs = async (params = {}) => {
   let rows = [];
   let total = 0;
 
-  if (searchTerm) {
-    const { data, error } = await query.order('created_at', { ascending });
+  if (isAll || searchTerm) {
+    const q = query.order('created_at', { ascending });
+    const { data, error } = await q;
     if (error) {
       throw new AppError({
         statusCode: 500,
@@ -1489,12 +1491,38 @@ const getAuditLogs = async (params = {}) => {
         detail: 'Unable to list audit logs',
       });
     }
-    const matchedUserIds = await resolveMatchingUserIdsForSearch(searchTerm);
-    const filteredRows = (data || []).filter((row) =>
-      matchesAuditSearch(row, searchTerm, matchedUserIds)
-    );
-    total = filteredRows.length;
-    rows = filteredRows.slice(offset, offset + limitNum);
+    let allData = Array.isArray(data) ? [...data] : [];
+    if (Array.isArray(data) && data.length === 1000 && typeof query.range === 'function') {
+      let pageOffset = 1000;
+      let hasMoreAudit = true;
+      while (hasMoreAudit) {
+        const { data: pageData, error: pageErr } = await query
+          .order('created_at', { ascending })
+          .range(pageOffset, pageOffset + 999);
+        if (pageErr || !pageData || pageData.length === 0) {
+          hasMoreAudit = false;
+          break;
+        }
+        allData = allData.concat(pageData);
+        if (pageData.length < 1000) {
+          hasMoreAudit = false;
+          break;
+        }
+        pageOffset += 1000;
+      }
+    }
+
+    if (searchTerm) {
+      const matchedUserIds = await resolveMatchingUserIdsForSearch(searchTerm);
+      const filteredRows = (allData || []).filter((row) =>
+        matchesAuditSearch(row, searchTerm, matchedUserIds)
+      );
+      total = filteredRows.length;
+      rows = isAll ? filteredRows : filteredRows.slice(offset, offset + limitNum);
+    } else {
+      total = allData.length;
+      rows = allData;
+    }
   } else {
     const { data, error, count } = await query
       .order('created_at', { ascending })
@@ -1565,10 +1593,10 @@ const getAuditLogs = async (params = {}) => {
     }),
     meta: {
       total,
-      page,
-      limit: limitNum,
-      offset,
-      hasMore: offset + rows.length < total,
+      page: isAll ? 1 : page,
+      limit: isAll ? total : limitNum,
+      offset: isAll ? 0 : offset,
+      hasMore: isAll ? false : offset + rows.length < total,
     },
   };
 };

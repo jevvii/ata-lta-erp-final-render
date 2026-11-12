@@ -105,20 +105,24 @@ const loadRelated = async (clientIds) => {
 
   if (!clientIds.length) return { contactDetails, relatedCompanies };
 
-  const [{ data: cdRows }, { data: rcRows }] = await Promise.all([
-    supabaseAdmin.from('client_contact_details').select('*').in('client_id', clientIds),
-    supabaseAdmin.from('client_related_companies').select('*').in('client_id', clientIds),
-  ]);
+  const chunkSize = 200;
+  for (let i = 0; i < clientIds.length; i += chunkSize) {
+    const chunk = clientIds.slice(i, i + chunkSize);
+    const [{ data: cdRows }, { data: rcRows }] = await Promise.all([
+      supabaseAdmin.from('client_contact_details').select('*').in('client_id', chunk),
+      supabaseAdmin.from('client_related_companies').select('*').in('client_id', chunk),
+    ]);
 
-  (cdRows || []).forEach((row) => {
-    if (!contactDetails.has(row.client_id)) contactDetails.set(row.client_id, []);
-    contactDetails.get(row.client_id).push(row);
-  });
+    (cdRows || []).forEach((row) => {
+      if (!contactDetails.has(row.client_id)) contactDetails.set(row.client_id, []);
+      contactDetails.get(row.client_id).push(row);
+    });
 
-  (rcRows || []).forEach((row) => {
-    if (!relatedCompanies.has(row.client_id)) relatedCompanies.set(row.client_id, []);
-    relatedCompanies.get(row.client_id).push(row);
-  });
+    (rcRows || []).forEach((row) => {
+      if (!relatedCompanies.has(row.client_id)) relatedCompanies.set(row.client_id, []);
+      relatedCompanies.get(row.client_id).push(row);
+    });
+  }
 
   return { contactDetails, relatedCompanies };
 };
@@ -174,6 +178,7 @@ const sortClientsList = (clients, { sortField, sortAsc }) => {
  * @param {string} params.entityId
  * @param {string} [params.search]
  * @param {string} [params.status]
+ * @param {string|boolean} [params.retainer]
  * @param {number|string} [params.page]
  * @param {number|string} [params.limit]
  * @param {string} [params.sortBy]
@@ -184,15 +189,17 @@ const listClients = async ({
   entityId,
   search,
   status,
+  retainer,
   archived,
   page,
   limit,
   sortBy,
   sortOrder,
 }) => {
+  const isAllLimit = String(limit).toLowerCase() === 'all' || limit === 0 || limit === '0';
   const isPaginated = page !== undefined || limit !== undefined;
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 50));
+  const pageNum = isAllLimit ? 1 : Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = isAllLimit ? 0 : Math.min(10000, Math.max(1, parseInt(limit, 10) || 50));
   const normalizedSortBy = sortBy === 'rdoCode' ? 'rdo_code' : sortBy;
   const sortField = ['client_number', 'name', 'tin', 'rdo_code', 'created_at', 'updated_at', 'status'].includes(normalizedSortBy)
     ? normalizedSortBy
@@ -204,38 +211,40 @@ const listClients = async ({
 
   const isArchived = archived === true || archived === 'true' || status === 'Archived';
 
-  let query = supabaseAdmin
-    .from('clients')
-    .select('*', { count: 'exact' })
-    .order(sortField, { ascending: sortAsc });
+  const buildQuery = () => {
+    let query = supabaseAdmin
+      .from('clients')
+      .select('*', { count: 'exact' })
+      .order(sortField, { ascending: sortAsc });
 
-  if (isArchived) {
-    query = query.or('status.eq.Archived,deleted_at.not.is.null');
-  } else {
-    query = query.is('deleted_at', null).neq('status', 'Archived');
-  }
+    if (isArchived) {
+      query = query.or('status.eq.Archived,deleted_at.not.is.null');
+    } else {
+      query = query.is('deleted_at', null).neq('status', 'Archived');
+    }
 
-  if (entityId && entityId !== 'ALL') {
-    query = query.eq('entity_id', entityId);
-  }
+    if (entityId && entityId !== 'ALL') {
+      query = query.eq('entity_id', entityId);
+    }
 
-  if (status && status !== 'Archived') {
-    query = query.eq('status', status);
-  }
+    if (status && status !== 'Archived') {
+      query = query.eq('status', status);
+    }
 
-  if (search) {
-    query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
-  }
+    if (retainer === 'retainer' || retainer === 'true' || retainer === true) {
+      query = query.eq('retainer', true);
+    } else if (retainer === 'non-retainer' || retainer === 'false' || retainer === false) {
+      query = query.eq('retainer', false);
+    }
 
-  // Client master records are shared within the authorized entity. Project
-  // membership scopes work requests and their records, not the client directory.
+    if (search) {
+      query = query.or(`name.ilike.%${search}%,tin.ilike.%${search}%,trade_name.ilike.%${search}%,client_number.ilike.%${search}%`);
+    }
 
-  if (isPaginated) {
-    const offset = (pageNum - 1) * limitNum;
-    query = query.range(offset, offset + limitNum - 1);
-  }
+    return query;
+  };
 
-  const { data, error, count } = await query;
+  const { data, error } = await buildQuery();
 
   if (error) {
     throw new AppError({
@@ -245,9 +254,35 @@ const listClients = async ({
     });
   }
 
-  const rows = data || [];
+  let allRows = Array.isArray(data) ? [...data] : [];
 
-  const clientIds = rows.map((r) => r.id);
+  if (Array.isArray(data) && data.length === 1000) {
+    let pageOffset = 1000;
+    let hasMoreClients = true;
+    while (hasMoreClients) {
+      const q = buildQuery();
+      if (typeof q.range !== 'function') break;
+      const { data: pageData, error: pageErr } = await q.range(pageOffset, pageOffset + 999);
+      if (pageErr || !pageData || pageData.length === 0) {
+        hasMoreClients = false;
+        break;
+      }
+      allRows = allRows.concat(pageData);
+      if (pageData.length < 1000) {
+        hasMoreClients = false;
+        break;
+      }
+      pageOffset += 1000;
+    }
+  }
+
+  const sortedRawRows = sortClientsList(allRows, { sortField, sortAsc });
+  const total = sortedRawRows.length;
+  const pagedRows = (isPaginated && !isAllLimit)
+    ? sortedRawRows.slice((pageNum - 1) * limitNum, pageNum * limitNum)
+    : sortedRawRows;
+
+  const clientIds = pagedRows.map((r) => r.id);
   const [related, { data: entitiesData }] = await Promise.all([
     loadRelated(clientIds),
     supabaseAdmin.from('entities').select('id, code'),
@@ -255,7 +290,7 @@ const listClients = async ({
 
   const entityCodeMap = new Map((entitiesData || []).map((e) => [e.id, e.code]));
 
-  const mapped = rows.map((row) =>
+  const mapped = pagedRows.map((row) =>
     toApiClient(row, {
       entityCode: entityCodeMap.get(row.entity_id) || row.entity_id,
       contactDetails: related.contactDetails.get(row.id) || [],
@@ -264,19 +299,21 @@ const listClients = async ({
   );
 
   const result = sortClientsList(mapped, { sortField, sortAsc });
-  const total = count || 0;
 
   if (!isPaginated) {
     return { data: result };
   }
+
+  const effectiveLimit = isAllLimit ? (total || 0) : limitNum;
+  const totalPages = isAllLimit ? 1 : (Math.ceil(total / limitNum) || 1);
 
   return {
     data: result,
     meta: {
       total,
       page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum) || 1,
+      limit: effectiveLimit,
+      totalPages,
     },
   };
 };

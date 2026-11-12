@@ -56,7 +56,10 @@ const listAuditQuerySchema = z.object({
   search: z.string().trim().max(200).optional(),
   sortOrder: z.enum(['asc', 'desc']).optional().default('desc'),
   page: z.coerce.number().int().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.preprocess(
+    (val) => (typeof val === 'string' && val.toLowerCase() === 'all' ? 'all' : val),
+    z.union([z.literal('all'), z.coerce.number().int().min(0).max(10000)]).default(20)
+  ),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
