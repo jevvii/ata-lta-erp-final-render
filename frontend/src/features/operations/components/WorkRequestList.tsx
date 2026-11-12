@@ -135,7 +135,7 @@ function WorkRequestListInner({
 
   // Pagination State
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
 
   // Selection for bulk actions
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -293,8 +293,10 @@ function WorkRequestListInner({
 
   // Pagination calculation
   const totalItems = filteredRequests.length;
-  const totalPages = Math.ceil(totalItems / pageSize) || 1;
+  const isAll = pageSize === 'all';
+  const totalPages = isAll ? 1 : (Math.ceil(totalItems / (typeof pageSize === 'number' && pageSize > 0 ? pageSize : 1)) || 1);
   const paginatedRequests = useMemo(() => {
+    if (pageSize === 'all') return filteredRequests;
     const start = (page - 1) * pageSize;
     return filteredRequests.slice(start, start + pageSize);
   }, [filteredRequests, page, pageSize]);
@@ -1281,11 +1283,11 @@ function WorkRequestListInner({
         <div>
           Showing{' '}
           <span className="font-bold text-[#1E293B] tabular-nums">
-            {totalItems === 0 ? 0 : (page - 1) * pageSize + 1}
+            {totalItems === 0 ? 0 : isAll ? 1 : (page - 1) * pageSize + 1}
           </span>{' '}
           to{' '}
           <span className="font-bold text-[#1E293B] tabular-nums">
-            {Math.min(page * pageSize, totalItems)}
+            {isAll ? totalItems : Math.min(page * pageSize, totalItems)}
           </span>{' '}
           of <span className="font-bold text-[#1E293B] tabular-nums">{totalItems}</span> work requests
         </div>
@@ -1297,7 +1299,7 @@ function WorkRequestListInner({
             <Select
               value={String(pageSize)}
               onValueChange={(val) => {
-                setPageSize(Number(val));
+                setPageSize(val === 'all' ? 'all' : Number(val));
                 setPage(1);
               }}
             >
@@ -1309,6 +1311,7 @@ function WorkRequestListInner({
                 <SelectItem value="25" className="text-xs">25</SelectItem>
                 <SelectItem value="50" className="text-xs">50</SelectItem>
                 <SelectItem value="100" className="text-xs">100</SelectItem>
+                <SelectItem value="all" className="text-xs">All</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -1319,7 +1322,7 @@ function WorkRequestListInner({
               type="button"
               variant="outline"
               size="icon-xs"
-              disabled={page <= 1}
+              disabled={page <= 1 || isAll}
               onClick={() => setPage((p) => Math.max(p - 1, 1))}
               aria-label="Previous Page"
               className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] disabled:opacity-40"
@@ -1327,13 +1330,13 @@ function WorkRequestListInner({
               <ChevronLeft className="h-3.5 w-3.5" />
             </Button>
             <span className="px-2 text-xs font-bold text-[#1E293B] tabular-nums">
-              Page {page} of {totalPages}
+              Page {isAll ? 1 : page} of {totalPages}
             </span>
             <Button
               type="button"
               variant="outline"
               size="icon-xs"
-              disabled={page >= totalPages}
+              disabled={page >= totalPages || isAll}
               onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
               aria-label="Next Page"
               className="rounded-[8px] border-[#E2E8F0] bg-[#FFFFFF] hover:bg-[#F8FAFC] text-[#1E293B] disabled:opacity-40"

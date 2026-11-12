@@ -49,6 +49,7 @@ export function useClients(filters?: ClientFilters, options?: { enabled?: boolea
     queryKey: ['clients', 'list', effectiveEntity, filters?.search, filters?.status],
     queryFn: async () => {
       const searchParams = new URLSearchParams();
+      searchParams.append('limit', 'all');
       if (effectiveEntity) {
         searchParams.append('entity', effectiveEntity);
       }

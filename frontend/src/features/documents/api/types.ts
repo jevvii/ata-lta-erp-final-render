@@ -159,7 +159,9 @@ export interface DocumentFilterParams {
   search?: string;
   archived?: boolean;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
+  uploaderId?: string;
+  dueDate?: string;
   [key: string]: unknown;
 }
 

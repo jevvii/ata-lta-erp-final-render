@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import { RejectReasonModal } from './RejectReasonModal';
 import { runBlockingAction } from './BlockingActionModal';
 import { WorkRequestModal } from './WorkRequestModal';
@@ -51,6 +52,8 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
   const [category, setCategory] = useState<'transitions' | 'wr-creations'>('transitions');
   const [activeSubTab, setActiveSubTab] = useState<'pending' | 'rejected' | 'fulfilled' | 'all'>('pending');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [isRejectModalOpen, setIsRejectModalOpen] = useState(false);
   const [resubmitNotes, setResubmitNotes] = useState('');
@@ -277,6 +280,13 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
     });
   }, [requests, search]);
 
+  const paginatedRequests = useMemo(() => {
+    if (pageSize === 'all') return filteredRequests;
+    const size = typeof pageSize === 'number' ? pageSize : 25;
+    const start = (page - 1) * size;
+    return filteredRequests.slice(start, start + size);
+  }, [filteredRequests, page, pageSize]);
+
   // Selected request
   const selectedRequest = useMemo(() => {
     if (!selectedRequestId && filteredRequests.length > 0) {
@@ -473,7 +483,10 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
             type="button"
             variant={activeSubTab === 'pending' ? 'default' : 'outline'}
             size="xs"
-            onClick={() => setActiveSubTab('pending')}
+            onClick={() => {
+              setActiveSubTab('pending');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
               activeSubTab === 'pending'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -492,7 +505,10 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
             type="button"
             variant={activeSubTab === 'rejected' ? 'default' : 'outline'}
             size="xs"
-            onClick={() => setActiveSubTab('rejected')}
+            onClick={() => {
+              setActiveSubTab('rejected');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
               activeSubTab === 'rejected'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -511,7 +527,10 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
             type="button"
             variant={activeSubTab === 'fulfilled' ? 'default' : 'outline'}
             size="xs"
-            onClick={() => setActiveSubTab('fulfilled')}
+            onClick={() => {
+              setActiveSubTab('fulfilled');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] gap-1.5 ${
               activeSubTab === 'fulfilled'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -530,7 +549,10 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
             type="button"
             variant={activeSubTab === 'all' ? 'default' : 'outline'}
             size="xs"
-            onClick={() => setActiveSubTab('all')}
+            onClick={() => {
+              setActiveSubTab('all');
+              setPage(1);
+            }}
             className={`text-xs  tracking-normal rounded-[6px] ${
               activeSubTab === 'all'
                 ? 'bg-[#1D4ED8] text-[#FFFFFF] hover:bg-[#1E40AF] shadow-2xs hover:bg-[#1D4ED8]'
@@ -546,7 +568,10 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
           <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-[#475569]" />
           <Input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search queue..."
             className="h-8 pl-8 text-xs bg-[#FFFFFF] border-[#E2E8F0] rounded-[6px] text-[#1E293B] placeholder:text-[#475569]"
           />
@@ -556,110 +581,125 @@ export function PendingApprovalsInbox({ onNavigateToWr }: PendingApprovalsInboxP
       {/* Main 2-Column Layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Column: Queue Cards (40% width) */}
-        <div className="w-[380px] border-r border-[#E2E8F0] overflow-y-auto divide-y divide-[#CBD5E1] bg-[#F8FAFC]/30">
-          {isLoading ? (
-            <div className="p-8 text-center text-xs text-[#475569]">Loading transition queue...</div>
-          ) : isError ? (
-            <div className="p-8 text-center text-xs text-[#DC2626] space-y-2">
-              <p>Failed to load transition requests.</p>
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={() => refetch()}
-                className="text-xs rounded-[8px] border-[#E2E8F0]"
-              >
-                Retry
-              </Button>
-            </div>
-          ) : filteredRequests.length === 0 ? (
-            <div className="p-8 text-center text-xs text-[#475569] italic">
-              No {activeSubTab} transition requests found.
-            </div>
-          ) : (
-            filteredRequests.map((req) => {
-              const isSelected = selectedRequest?.id === req.id;
-              const reqTitle =
-                req.work_requests?.title ||
-                (req as unknown as { workRequestTitle?: string }).workRequestTitle ||
-                'Work Request';
-              const submitter = req.requester?.name || req.requestedByName || 'Staff';
-              const fromP = req.from_phase || (req as unknown as { fromPhase?: Phase }).fromPhase || 'pre_processing';
-              const toP = req.to_phase || (req as unknown as { toPhase?: Phase }).toPhase || 'processing';
-
-              return (
-                <div
-                  key={req.id}
-                  onClick={() => setSelectedRequestId(req.id)}
-                  className={`p-3 cursor-pointer transition-colors space-y-1.5 ${
-                    isSelected
-                      ? 'bg-[#FFFFFF] border-l-4 border-l-[#1D4ED8]'
-                      : 'hover:bg-[#F8FAFC]/60 border-l-4 border-l-transparent'
-                  }`}
-                  data-testid={`approval-item-${req.id}`}
+        <div className="w-[380px] border-r border-[#E2E8F0] flex flex-col bg-[#F8FAFC]/30">
+          <div className="flex-1 overflow-y-auto divide-y divide-[#CBD5E1]">
+            {isLoading ? (
+              <div className="p-8 text-center text-xs text-[#475569]">Loading transition queue...</div>
+            ) : isError ? (
+              <div className="p-8 text-center text-xs text-[#DC2626] space-y-2">
+                <p>Failed to load transition requests.</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => refetch()}
+                  className="text-xs rounded-[8px] border-[#E2E8F0]"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-xs text-[#1E293B] truncate max-w-[240px]">
-                      {reqTitle}
-                    </span>
-                    <Badge
-                      variant={
-                        req.status === 'pending'
-                          ? 'warning'
-                          : req.status === 'fulfilled'
-                            ? 'success'
-                            : req.status === 'rejected'
-                              ? 'destructive'
-                              : 'secondary'
-                      }
-                      size="compact"
-                      className="text-xs uppercase tracking-wide rounded-[6px]"
-                    >
-                      {req.status}
-                    </Badge>
-                  </div>
+                  Retry
+                </Button>
+              </div>
+            ) : filteredRequests.length === 0 ? (
+              <div className="p-8 text-center text-xs text-[#475569] italic">
+                No {activeSubTab} transition requests found.
+              </div>
+            ) : (
+              paginatedRequests.map((req) => {
+                const isSelected = selectedRequest?.id === req.id;
+                const reqTitle =
+                  req.work_requests?.title ||
+                  (req as unknown as { workRequestTitle?: string }).workRequestTitle ||
+                  'Work Request';
+                const submitter = req.requester?.name || req.requestedByName || 'Staff';
+                const fromP = req.from_phase || (req as unknown as { fromPhase?: Phase }).fromPhase || 'pre_processing';
+                const toP = req.to_phase || (req as unknown as { toPhase?: Phase }).toPhase || 'processing';
 
-                  <div className="flex items-center gap-1.5 text-xs text-[#475569]">
-                    <Badge variant={(req.entity || req.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact" className="text-xs rounded-[6px]">
-                      {req.entity || (req.entity_id === 'LTA' || req.entity_id === 'ATA' ? req.entity_id : 'ATA')}
-                    </Badge>
-                    <span className="truncate max-w-[200px]" data-testid={`approval-client-${req.id}`}>
-                      {req.clients?.name || (req as unknown as { clientName?: string }).clientName || '—'}
-                    </span>
-                  </div>
+                return (
+                  <div
+                    key={req.id}
+                    onClick={() => setSelectedRequestId(req.id)}
+                    className={`p-3 cursor-pointer transition-colors space-y-1.5 ${
+                      isSelected
+                        ? 'bg-[#FFFFFF] border-l-4 border-l-[#1D4ED8]'
+                        : 'hover:bg-[#F8FAFC]/60 border-l-4 border-l-transparent'
+                    }`}
+                    data-testid={`approval-item-${req.id}`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-xs text-[#1E293B] truncate max-w-[240px]">
+                        {reqTitle}
+                      </span>
+                      <Badge
+                        variant={
+                          req.status === 'pending'
+                            ? 'warning'
+                            : req.status === 'fulfilled'
+                              ? 'success'
+                              : req.status === 'rejected'
+                                ? 'destructive'
+                                : 'secondary'
+                        }
+                        size="compact"
+                        className="text-xs uppercase tracking-wide rounded-[6px]"
+                      >
+                        {req.status}
+                      </Badge>
+                    </div>
 
-                  {/* Route Badge or Request Type Badge */}
-                  {req.type === 'billing' ? (
-                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
-                      <Receipt className="h-3.5 w-3.5 shrink-0" />
-                      <span>Invoice Request</span>
-                    </div>
-                  ) : req.type === 'transmittal' ? (
-                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
-                      <Send className="h-3.5 w-3.5 shrink-0" />
-                      <span>Transmittal Request</span>
-                    </div>
-                  ) : req.type === 'disbursement' ? (
-                    <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
-                      <CreditCard className="h-3.5 w-3.5 shrink-0" />
-                      <span>Disbursement Request</span>
-                    </div>
-                  ) : (
                     <div className="flex items-center gap-1.5 text-xs text-[#475569]">
-                      <span className="font-medium capitalize text-[#1E293B]">{fromP.replace('_', ' ')}</span>
-                      <ArrowRight className="h-3 w-3 text-[#475569]" />
-                      <span className="font-medium capitalize text-[#1E293B]">{toP.replace('_', ' ')}</span>
+                      <Badge variant={(req.entity || req.entity_id) === 'LTA' ? 'lta' : 'ata'} size="compact" className="text-xs rounded-[6px]">
+                        {req.entity || (req.entity_id === 'LTA' || req.entity_id === 'ATA' ? req.entity_id : 'ATA')}
+                      </Badge>
+                      <span className="truncate max-w-[200px]" data-testid={`approval-client-${req.id}`}>
+                        {req.clients?.name || (req as unknown as { clientName?: string }).clientName || '—'}
+                      </span>
                     </div>
-                  )}
 
-                  <div className="flex items-center justify-between text-xs text-[#475569] pt-0.5">
-                    <span>By {submitter}</span>
-                    <span>{req.createdAt ? new Date(req.createdAt).toLocaleDateString() : ''}</span>
+                    {/* Route Badge or Request Type Badge */}
+                    {req.type === 'billing' ? (
+                      <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
+                        <Receipt className="h-3.5 w-3.5 shrink-0" />
+                        <span>Invoice Request</span>
+                      </div>
+                    ) : req.type === 'transmittal' ? (
+                      <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
+                        <Send className="h-3.5 w-3.5 shrink-0" />
+                        <span>Transmittal Request</span>
+                      </div>
+                    ) : req.type === 'disbursement' ? (
+                      <div className="flex items-center gap-1.5 text-xs text-[#1E293B] font-medium">
+                        <CreditCard className="h-3.5 w-3.5 shrink-0" />
+                        <span>Disbursement Request</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-xs text-[#475569]">
+                        <span className="font-medium capitalize text-[#1E293B]">{fromP.replace('_', ' ')}</span>
+                        <ArrowRight className="h-3 w-3 text-[#475569]" />
+                        <span className="font-medium capitalize text-[#1E293B]">{toP.replace('_', ' ')}</span>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between text-xs text-[#475569] pt-0.5">
+                      <span>By {submitter}</span>
+                      <span>{req.createdAt ? new Date(req.createdAt).toLocaleDateString() : ''}</span>
+                    </div>
                   </div>
-                </div>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </div>
+          <TablePaginationBar
+            total={filteredRequests.length}
+            page={page}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={(newSize) => {
+              setPageSize(newSize);
+              setPage(1);
+            }}
+            pageSizeOptions={[10, 25, 50, 100, 'all']}
+            itemLabel="requests"
+            className="px-3 py-2 text-[11px] gap-2 border-t border-[#E2E8F0] bg-white flex-wrap"
+          />
         </div>
 
         {/* Right Column: Diff & Validation Inspector (60% width) */}

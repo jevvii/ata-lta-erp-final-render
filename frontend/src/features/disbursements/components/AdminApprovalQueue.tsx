@@ -50,7 +50,7 @@ export type QueueSegment =
 export interface AdminApprovalQueueProps {
   selectedId?: string | null;
   onSelectDisbursement?: (id: string) => void;
-  pageSize?: number;
+  pageSize?: number | 'all';
   activeTab?: QueueSegment;
   onTabChange?: (tab: QueueSegment) => void;
 }
@@ -69,7 +69,8 @@ export function AdminApprovalQueue({
   const [releasingItem, setReleasingItem] = useState<Disbursement | null>(null);
   const [fundingItem, setFundingItem] = useState<Disbursement | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = propPageSize ?? 20;
+  const [internalPageSize, setInternalPageSize] = useState<number | 'all'>(20);
+  const pageSize = propPageSize ?? internalPageSize;
 
   const currentUser = useSessionStore((state) => state.user);
   const isAdmin = currentUser?.role === 'Admin';
@@ -281,7 +282,11 @@ export function AdminApprovalQueue({
     });
   }, [items, search]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const isAll = pageSize === 'all';
+  const effectivePageSize = isAll
+    ? filteredItems.length
+    : (typeof pageSize === 'number' && pageSize > 0 ? pageSize : 20);
+  const totalPages = isAll ? 1 : Math.max(1, Math.ceil(filteredItems.length / effectivePageSize));
 
   useEffect(() => {
     if (page > totalPages) {
@@ -290,9 +295,10 @@ export function AdminApprovalQueue({
   }, [page, totalPages]);
 
   const paginatedItems = useMemo(() => {
-    const start = (page - 1) * pageSize;
-    return filteredItems.slice(start, start + pageSize);
-  }, [filteredItems, page, pageSize]);
+    if (isAll) return filteredItems;
+    const start = (page - 1) * (pageSize as number);
+    return filteredItems.slice(start, start + (pageSize as number));
+  }, [filteredItems, page, pageSize, isAll]);
 
   const handleApprove = (item: Disbursement) => {
     setApprovingItem(item);
@@ -820,21 +826,43 @@ export function AdminApprovalQueue({
       )}
 
       {/* Pagination Controls */}
-      {filteredItems.length > pageSize && (
+      {filteredItems.length > (isAll ? 0 : (typeof pageSize === 'number' ? pageSize : 20)) && (
         <div
-          className="shrink-0 flex items-center justify-between px-2 pt-2 text-xs text-muted border-t border-border"
+          className="shrink-0 flex flex-col sm:flex-row items-center justify-between gap-3 px-2 pt-2 text-xs text-muted border-t border-border"
           data-testid="queue-pagination-bar"
         >
-          <span data-testid="queue-page-info">
-            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filteredItems.length)} of{' '}
-            {filteredItems.length}
-          </span>
+          <div className="flex flex-wrap items-center gap-4">
+            <span data-testid="queue-page-info">
+              Showing {isAll ? (filteredItems.length > 0 ? 1 : 0) : (page - 1) * (pageSize as number) + 1}–{isAll ? filteredItems.length : Math.min(page * (pageSize as number), filteredItems.length)} of{' '}
+              {filteredItems.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--text-muted)]">Rows per page:</span>
+              <select
+                aria-label="Rows per page"
+                data-testid="rows-per-page-select"
+                value={isAll ? 'all' : String(pageSize)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setInternalPageSize(val === 'all' ? 'all' : Number(val));
+                  setPage(1);
+                }}
+                className="px-2 py-1 text-xs rounded border border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--brand-primary)] cursor-pointer"
+              >
+                {[10, 20, 25, 50, 100, 'all'].map((opt) => (
+                  <option key={String(opt)} value={String(opt)}>
+                    {opt === 'all' ? 'All' : opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div className="flex items-center gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={page <= 1}
+              disabled={page <= 1 || isAll}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               data-testid="queue-prev-page"
               className="h-7 px-2 text-xs cursor-pointer"
@@ -842,13 +870,13 @@ export function AdminApprovalQueue({
               Previous
             </Button>
             <span data-testid="queue-page-indicator">
-              Page {page} of {totalPages}
+              Page {isAll ? 1 : page} of {totalPages}
             </span>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              disabled={page >= totalPages}
+              disabled={page >= totalPages || isAll}
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               data-testid="queue-next-page"
               className="h-7 px-2 text-xs cursor-pointer"

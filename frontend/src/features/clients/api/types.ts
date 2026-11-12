@@ -63,11 +63,11 @@ export interface ClientFilters {
   status?: string;
   archived?: boolean;
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
   sortBy?: 'client_number' | 'name' | 'tin' | 'rdo_code' | 'created_at' | 'updated_at' | 'status' | string;
   sortOrder?: 'asc' | 'desc';
   entity?: string | null;
-  retainer?: boolean | 'all';
+  retainer?: boolean | 'all' | 'retainer' | 'non-retainer' | string;
 }
 
 export interface CreateClientInput {

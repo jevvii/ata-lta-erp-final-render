@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { TablePaginationBar } from '@/components/ui/TablePaginationBar';
 import { usePermission } from '@/lib/permissions';
 import type { Client } from '../api/types';
 
@@ -35,6 +36,11 @@ export interface ClientTableProps {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   onSort?: (field: 'client_number' | 'name' | 'tin' | 'rdo_code') => void;
+  total?: number;
+  page?: number;
+  pageSize?: number | 'all';
+  onPageChange?: (newPage: number) => void;
+  onPageSizeChange?: (newSize: number | 'all') => void;
 }
 
 export function ClientTable({
@@ -47,6 +53,11 @@ export function ClientTable({
   sortBy,
   sortOrder,
   onSort,
+  total,
+  page = 1,
+  pageSize = 50,
+  onPageChange,
+  onPageSizeChange,
 }: ClientTableProps) {
   const canEditClients = usePermission('clients:edit');
 
@@ -322,6 +333,16 @@ export function ClientTable({
           })}
         </TableBody>
       </Table>
+      {total !== undefined && onPageChange && (
+        <TablePaginationBar
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          itemLabel="clients"
+        />
+      )}
     </div>
   );
 }

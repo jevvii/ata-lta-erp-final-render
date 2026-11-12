@@ -96,7 +96,7 @@ export interface AuditLogResponse {
   data: AuditLogEntry[];
   meta: {
     total: number;
-    limit: number;
+    limit: number | 'all';
     offset: number;
     hasMore: boolean;
   };
@@ -104,7 +104,7 @@ export interface AuditLogResponse {
 
 export interface AuditLogFilterParams {
   page?: number;
-  limit?: number;
+  limit?: number | 'all';
   offset?: number;
   module?: string;
   action?: string;

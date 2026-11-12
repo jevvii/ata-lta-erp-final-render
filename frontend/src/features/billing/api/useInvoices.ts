@@ -57,6 +57,9 @@ export function useInvoices(
       }
       if (filters?.page) params.append('page', String(filters.page));
       if (filters?.limit) params.append('limit', String(filters.limit));
+      if (filters?.employee) params.append('employee', filters.employee);
+      if (filters?.dueDate) params.append('dueDate', filters.dueDate);
+      if (filters?.workRequestTitle) params.append('workRequestTitle', filters.workRequestTitle);
 
       const queryStr = params.toString();
       const path = `/invoices${queryStr ? `?${queryStr}` : ''}`;

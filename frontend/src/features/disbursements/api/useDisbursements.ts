@@ -273,6 +273,9 @@ export function useDisbursementsList(
       if (filters?.linkedInvoiceId) params.append('linkedInvoiceId', filters.linkedInvoiceId);
       if (filters?.linkedTaskId) params.append('linkedTaskId', filters.linkedTaskId);
       if (filters?.linkedTransmittalId) params.append('linkedTransmittalId', filters.linkedTransmittalId);
+      if (filters?.clientId) params.append('clientId', filters.clientId);
+      if (filters?.employeeId) params.append('employeeId', filters.employeeId);
+      if (filters?.dueDate) params.append('dueDate', filters.dueDate);
       if (filters?.search) params.append('search', filters.search);
       if (filters?.archived !== undefined) params.append('archived', String(filters.archived));
       if (filters?.queue) params.append('queue', filters.queue);
@@ -362,15 +365,28 @@ export function useAllDisbursementsForStatus(
  */
 export async function fetchAllDisbursementsForQueue(
   queue: 'initial_requests' | 'payment_releases' | 'ready_for_funding' | 'needs_correction',
-  limitPerPage = 100
+  limitPerPage: number | 'all' = 100
 ): Promise<Disbursement[]> {
   if (isTestWithoutMock()) return [];
-  const all: Disbursement[] = [];
-  const seen = new Set<string>();
-  let page = 1;
   const initialSession = useSessionStore.getState();
   const requestUser = initialSession.user?.id;
   const requestEntity = initialSession.activeEntity;
+
+  if (limitPerPage === 'all') {
+    const params = new URLSearchParams();
+    params.append('queue', queue);
+    params.append('limit', 'all');
+    const path = `/disbursements?${params.toString()}`;
+    const res = await apiRequest<DisbursementListResponse>(path);
+    if (useSessionStore.getState().user?.id !== requestUser || useSessionStore.getState().activeEntity !== requestEntity) {
+      throw new Error('Queue context changed. Reload the current workspace.');
+    }
+    return res.data ?? [];
+  }
+
+  const all: Disbursement[] = [];
+  const seen = new Set<string>();
+  let page = 1;
 
   while (true) {
     const params = new URLSearchParams();

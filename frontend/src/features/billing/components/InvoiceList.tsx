@@ -93,7 +93,7 @@ export function InvoiceList({
 
   // Pagination state
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState<number | 'all'>(25);
 
   // Permissions (hooks must be unconditional)
   const canRecordPayment = usePermission('billing:payments');
@@ -112,12 +112,29 @@ export function InvoiceList({
   const { data: teamData = [] } = useTeam();
 
   const effectiveStatus = statusFilter === 'Approved' ? 'Sent' : statusFilter;
+  const isAll = pageSize === 'all';
   const { data: invoicesResponse, isLoading } = useInvoices({
     status: effectiveStatus,
     clientId: clientFilter !== 'all' ? clientFilter : undefined,
+    workRequestId:
+      workRequestFilter !== 'all' && workRequestFilter !== 'ALL'
+        ? workRequestFilter
+        : undefined,
+    workRequestTitle:
+      workRequestFilter !== 'all' && workRequestFilter !== 'ALL'
+        ? workRequestFilter
+        : undefined,
+    employee:
+      employeeFilter !== 'all' && employeeFilter !== 'ALL'
+        ? employeeFilter
+        : undefined,
+    dueDate:
+      dueDateFilter !== 'all' && dueDateFilter !== ''
+        ? dueDateFilter
+        : undefined,
     search: debouncedSearch || undefined,
     archived: false,
-    page,
+    page: isAll ? 1 : page,
     limit: pageSize,
   });
 
@@ -146,7 +163,9 @@ export function InvoiceList({
     });
   }, [rawInvoices, workRequestFilter, employeeFilter, dueDateFilter, teamData]);
   const totalCount = invoicesResponse?.meta?.total || 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const totalPages = isAll
+    ? 1
+    : Math.max(1, Math.ceil(totalCount / (typeof pageSize === 'number' && pageSize > 0 ? pageSize : 1)));
 
   // Stats calculation
   const stats = useMemo(() => {
@@ -408,8 +427,15 @@ export function InvoiceList({
         </div>
 
         <div className="text-xs text-[#475569] self-center">
-          Showing <span className="font-semibold text-[#1E293B]">{invoices.length}</span> of{' '}
-          <span className="font-semibold text-[#1E293B]">{totalCount}</span>
+          Showing{' '}
+          <span className="font-semibold text-[#1E293B]">
+            {totalCount === 0 ? 0 : isAll ? 1 : (page - 1) * pageSize + 1}
+          </span>{' '}
+          to{' '}
+          <span className="font-semibold text-[#1E293B]">
+            {isAll ? totalCount : Math.min(page * pageSize, totalCount)}
+          </span>{' '}
+          of <span className="font-semibold text-[#1E293B]">{totalCount}</span>
         </div>
       </div>
 
@@ -709,7 +735,7 @@ export function InvoiceList({
       )}
 
       {/* 5. Pagination Controls */}
-      {totalPages > 1 && (
+      {(totalCount > 0 || isAll) && (
         <div
           className="flex items-center justify-between border-t border-[#E2E8F0] pt-3"
           data-testid="invoice-pagination"
@@ -717,9 +743,9 @@ export function InvoiceList({
           <div className="flex items-center gap-2">
             <span className="text-xs text-[#475569]">Rows per page:</span>
             <Select
-              value={String(pageSize)}
+              value={isAll ? 'all' : String(pageSize)}
               onValueChange={(val) => {
-                setPageSize(Number(val));
+                setPageSize(val === 'all' ? 'all' : Number(val));
                 setPage(1);
               }}
             >
@@ -730,19 +756,21 @@ export function InvoiceList({
                 <SelectItem value="10">10</SelectItem>
                 <SelectItem value="25">25</SelectItem>
                 <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+                <SelectItem value="all">All</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="text-xs text-[#475569]" data-testid="page-indicator">
-              Page {page} of {totalPages}
+              Page {isAll ? 1 : page} of {totalPages}
             </span>
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="icon"
-                disabled={page <= 1}
+                disabled={page <= 1 || isAll}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 className="h-7 w-7 cursor-pointer"
                 data-testid="pagination-prev"
@@ -752,7 +780,7 @@ export function InvoiceList({
               <Button
                 variant="outline"
                 size="icon"
-                disabled={page >= totalPages}
+                disabled={page >= totalPages || isAll}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 className="h-7 w-7 cursor-pointer"
                 data-testid="pagination-next"

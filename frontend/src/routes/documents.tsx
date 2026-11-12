@@ -59,7 +59,7 @@ export default function DocumentsPage() {
   const [employee, setEmployee] = useState<string>('all');
   const [dueDate, setDueDate] = useState<string>('all');
   const [page, setPage] = useState(parseInt(searchParams.get('page') || '1', 10));
-  const limit = 50;
+  const [limit, setLimit] = useState<number | 'all'>(50);
 
   // Modals state
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -87,6 +87,9 @@ export default function DocumentsPage() {
   const { data: clientsData = [] } = useClients();
   const { data: teamData = [] } = useTeam();
 
+  const hasSecondaryFilters =
+    workRequest !== 'all' || client !== 'all' || employee !== 'all' || dueDate !== 'all';
+
   // Queries
   const { data: countsData } = useDocumentCounts({ enabled: canView });
   const { data: listResponse, isLoading: isListLoading } = useDocumentsList(
@@ -95,8 +98,12 @@ export default function DocumentsPage() {
       search: search || undefined,
       category: category || undefined,
       lifecycle: lifecycle || undefined,
-      page,
-      limit,
+      clientId: client !== 'all' ? client : undefined,
+      workRequestId: workRequest !== 'all' ? workRequest : undefined,
+      uploaderId: employee !== 'all' ? employee : undefined,
+      dueDate: dueDate !== 'all' ? dueDate : undefined,
+      page: hasSecondaryFilters ? 1 : (limit === 'all' ? 1 : page),
+      limit: hasSecondaryFilters ? 'all' : limit,
     },
     { enabled: canView }
   );
@@ -234,7 +241,19 @@ export default function DocumentsPage() {
       return true;
     });
   }, [rawDocuments, workRequest, client, employee, dueDate]);
-  const total = listResponse?.meta?.total ?? 0;
+
+  const total = hasSecondaryFilters ? documents.length : (listResponse?.meta?.total ?? documents.length);
+
+  const paginatedDocuments = useMemo(() => {
+    if (!hasSecondaryFilters) {
+      return documents;
+    }
+    if (limit === 'all') {
+      return documents;
+    }
+    const startIndex = (page - 1) * limit;
+    return documents.slice(startIndex, startIndex + limit);
+  }, [documents, hasSecondaryFilters, limit, page]);
 
   return (
     <div className="w-full space-y-6" data-testid="documents-page">
@@ -312,19 +331,40 @@ export default function DocumentsPage() {
       {/* Filter Bar */}
       <DocumentFilterBar
         search={search}
-        onSearchChange={setSearch}
+        onSearchChange={(val) => {
+          setSearch(val);
+          setPage(1);
+        }}
         category={category}
-        onCategoryChange={setCategory}
+        onCategoryChange={(val) => {
+          setCategory(val);
+          setPage(1);
+        }}
         lifecycle={lifecycle}
-        onLifecycleChange={setLifecycle}
+        onLifecycleChange={(val) => {
+          setLifecycle(val);
+          setPage(1);
+        }}
         workRequest={workRequest}
-        onWorkRequestChange={setWorkRequest}
+        onWorkRequestChange={(val) => {
+          setWorkRequest(val);
+          setPage(1);
+        }}
         client={client}
-        onClientChange={setClient}
+        onClientChange={(val) => {
+          setClient(val);
+          setPage(1);
+        }}
         employee={employee}
-        onEmployeeChange={setEmployee}
+        onEmployeeChange={(val) => {
+          setEmployee(val);
+          setPage(1);
+        }}
         dueDate={dueDate}
-        onDueDateChange={setDueDate}
+        onDueDateChange={(val) => {
+          setDueDate(val);
+          setPage(1);
+        }}
         workRequests={workRequests}
         clients={clientsData}
         team={teamData}
@@ -334,12 +374,16 @@ export default function DocumentsPage() {
 
       {/* Document Table */}
       <DocumentTable
-        documents={documents}
+        documents={paginatedDocuments}
         isLoading={isListLoading}
         total={total}
         page={page}
         limit={limit}
         onPageChange={setPage}
+        onLimitChange={(newLimit) => {
+          setLimit(newLimit);
+          setPage(1);
+        }}
         onView={(doc) => setViewerDoc(doc)}
         onDownload={handleDownload}
         onTransition={(doc) => setLifecycleDoc(doc)}
