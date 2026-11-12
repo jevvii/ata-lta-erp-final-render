@@ -61,7 +61,7 @@ describe('work request clients follow the operating entity', () => {
   it('shows only ATA clients before selection in global ALL view', async () => {
     renderModal();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/clients?entity=ATA'),
+      expect.stringMatching(/\/clients\?(?:[^#]*&)?entity=ATA(?:&|$)/),
       expect.objectContaining({ headers: expect.objectContaining({ 'X-Active-Entity': 'ATA' }) })
     ));
     await openClients();
@@ -75,7 +75,7 @@ describe('work request clients follow the operating entity', () => {
     renderModal();
     fireEvent.click(screen.getByRole('button', { name: 'LTA' }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/clients?entity=LTA'),
+      expect.stringMatching(/\/clients\?(?:[^#]*&)?entity=LTA(?:&|$)/),
       expect.objectContaining({ headers: expect.objectContaining({ 'X-Active-Entity': 'LTA' }) })
     ));
     await openClients();

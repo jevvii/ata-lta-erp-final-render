@@ -221,7 +221,7 @@ describe('Adversarial Verification Suite: Parcel 1 W2-ENTITY (Branch fix/uat2-en
       renderHook(() => useClients(), { wrapper });
 
       await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-      expect(lastRequestUrl).toBe('https://ata-lta-erp-api-staging.onrender.com/v1/clients');
+      expect(lastRequestUrl).toBe('https://ata-lta-erp-api-staging.onrender.com/v1/clients?limit=all');
       expect(lastRequestUrl).not.toContain('entity=');
       expect(lastRequestHeaders['X-Active-Entity']).toBeUndefined();
     });
@@ -231,7 +231,7 @@ describe('Adversarial Verification Suite: Parcel 1 W2-ENTITY (Branch fix/uat2-en
       renderHook(() => useClients(), { wrapper });
 
       await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-      expect(lastRequestUrl).toContain('/clients?entity=ATA');
+      expect(lastRequestUrl).toMatch(/\/clients\?(?:[^#]*&)?entity=ATA(?:&|$)/);
       expect(lastRequestHeaders['X-Active-Entity']).toBe('ATA');
     });
 
@@ -240,7 +240,7 @@ describe('Adversarial Verification Suite: Parcel 1 W2-ENTITY (Branch fix/uat2-en
       renderHook(() => useClients({ entity: 'LTA' }), { wrapper });
 
       await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-      expect(lastRequestUrl).toContain('/clients?entity=LTA');
+      expect(lastRequestUrl).toMatch(/\/clients\?(?:[^#]*&)?entity=LTA(?:&|$)/);
     });
 
     it('differentiates query cache keys between ALL and ATA', () => {
@@ -263,7 +263,7 @@ describe('Adversarial Verification Suite: Parcel 1 W2-ENTITY (Branch fix/uat2-en
       renderHook(() => useClients({ entity: 'ALL' }), { wrapper });
 
       await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-      expect(lastRequestUrl).toBe('https://ata-lta-erp-api-staging.onrender.com/v1/clients');
+      expect(lastRequestUrl).toBe('https://ata-lta-erp-api-staging.onrender.com/v1/clients?limit=all');
       expect(lastRequestUrl).not.toContain('entity=');
       expect(lastRequestHeaders['X-Active-Entity']).toBeUndefined();
     });
