@@ -131,6 +131,7 @@ After migration succeeds, manually sync the prepared Blueprint from the reviewed
 2. **SPA service → Manual Deploy → Deploy a specific commit**, select the same SHA. Use **Clear build cache & deploy** if Render is retaining legacy build settings.
 3. Open `https://ata-lta-erp-spa-main.onrender.com/deployment.json`. It must identify `enterprise-v2`, the main API URL ending in `/v1`, and the reviewed commit SHA. A staging URL here requires fixing the static site's environment and rebuilding.
 4. Refresh `/operations` directly. It should load the React login/application rather than a Render 404.
+5. Confirm `/sw.js` returns HTTP 200 with a JavaScript content type. This file is the kill-switch for browsers that still hold the pre-React `erp_prototype` service worker. Removing it strands those clients on the cached prototype shell indefinitely: a 404 on the worker update check rejects the update and leaves the old registration active. Never delete `frontend/public/sw.js` while any client could still carry the legacy registration; the production smoke check asserts it automatically.
 
 The API and SPA are separate deployments. Logs that show Docker `COPY src`, Express startup, or `/readyz` requests belong to the API. They do not confirm that the SPA has deployed. The SPA deployment must show a Vite/TypeScript build in `frontend` and publish `dist`; its `/deployment.json` identifies the **frontend** commit only. If it still reports an older revision, open **ata-lta-erp-spa-main** and deploy the reviewed commit there. Do not manually edit `RENDER_GIT_COMMIT` or `deployment.json` to bypass verification.
 
@@ -144,7 +145,7 @@ Run **Deploy Production** again with `action: verify` and the same `revision`. O
 EXPECTED_COMMIT=<full-reviewed-SHA> EXPECTED_SUPABASE_URL=https://nohelmujoswmmqedgern.supabase.co npm run smoke:main
 ```
 
-This check uses GET requests only. It verifies the React shell, built script assets, deep-link fallback, built API target, commit metadata, backend health/readiness, and browser-safe public configuration. It does not sign in or create ledger records.
+This check uses GET requests only. It verifies the React shell, built script assets, deep-link fallback, the service-worker kill-switch at `/sw.js`, built API target, commit metadata, backend health/readiness, and browser-safe public configuration. It does not sign in or create ledger records.
 
 Then perform the accepted staging QA journeys with an Admin and a staff account: login/session refresh; entity switching and denials; work-request/task creation review; document upload and protected deletion; invoice edits and PDF; client-fund invoice/voucher lifecycle; receipt paste/download; and role-based draft visibility. Reopen user access after those pass. Keep automatic deploys off until a future release process coordinates schema, API, and SPA changes.
 

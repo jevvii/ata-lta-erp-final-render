@@ -30,6 +30,39 @@
         </style>
       </div>
     </div>
+    <script>
+      // Legacy prototype cleanup: the React app ships no service worker, but a
+      // browser that used the old erp_prototype build may still have one
+      // registered. Release it and drop its prototype-era caches. The kill-switch
+      // at /sw.js handles browsers whose stale worker never lets this HTML load.
+      (function () {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker
+            .getRegistrations()
+            .then(function (registrations) {
+              registrations.forEach(function (registration) {
+                registration.unregister().catch(function () {});
+              });
+            })
+            .catch(function () {});
+        }
+
+        if ('caches' in window) {
+          caches
+            .keys()
+            .then(function (keys) {
+              keys
+                .filter(function (key) {
+                  return key.indexOf('erp-') === 0;
+                })
+                .forEach(function (key) {
+                  caches.delete(key).catch(function () {});
+                });
+            })
+            .catch(function () {});
+        }
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

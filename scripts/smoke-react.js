@@ -75,6 +75,28 @@ async function smoke({
     /id=["']root["']/,
     "React deep link fallback is missing",
   );
+  // Browsers that still hold the erp_prototype service worker only release it
+  // when its registered script URL returns this kill-switch. A 404 leaves the
+  // stale worker in control of the origin indefinitely.
+  const swResponse = await fetch(`${spa}/sw.js`, {
+    signal: AbortSignal.timeout(timeoutMs),
+    cache: "no-store",
+  });
+  assert.equal(
+    swResponse.status,
+    200,
+    "Legacy service-worker kill-switch is missing",
+  );
+  assert.match(
+    swResponse.headers.get("content-type") || "",
+    /javascript/i,
+    "Service worker must be served as JavaScript, not the SPA fallback",
+  );
+  assert.match(
+    await swResponse.text(),
+    /unregister\(\)/,
+    "Service worker must unregister the legacy registration",
+  );
   const apiRoot = api.slice(0, -3);
   assert.equal(
     (await get(`${apiRoot}/health`, true)).status,

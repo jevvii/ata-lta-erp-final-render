@@ -8,6 +8,7 @@ async function fixture(t, overrides = {}) {
     "/": '<div id="root"></div><script type="module" src="/assets/app.js"></script>',
     "/operations": '<div id="root"></div>',
     "/assets/app.js": 'console.log("app")',
+    "/sw.js": "self.addEventListener('activate', () => self.registration.unregister());",
     "/health": { status: "ok" },
     "/readyz": { status: "ready" },
     "/v1/config/public": {
@@ -20,14 +21,19 @@ async function fixture(t, overrides = {}) {
   };
   const server = http.createServer((req, res) => {
     const value = routes[req.url];
-    if (value === undefined) {
+    if (value === undefined || value === null) {
       res.writeHead(404);
       res.end();
       return;
     }
+    const isJavaScript = /\.js(\?|$)/.test(req.url);
     res.setHeader(
       "Content-Type",
-      typeof value === "string" ? "text/html" : "application/json",
+      typeof value === "string"
+        ? isJavaScript
+          ? "application/javascript"
+          : "text/html"
+        : "application/json",
     );
     res.end(typeof value === "string" ? value : JSON.stringify(value));
   });
@@ -65,6 +71,12 @@ test("rejects a deployment built against a different API", async (t) => {
       }),
     ),
     /API target/,
+  );
+});
+test("rejects a deployment without the legacy service-worker kill-switch", async (t) => {
+  await assert.rejects(
+    smoke(await fixture(t, { "/sw.js": null })),
+    /kill-switch/,
   );
 });
 test("rejects a legacy frontend", async (t) => {
