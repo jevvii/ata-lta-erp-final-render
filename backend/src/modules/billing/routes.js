@@ -66,12 +66,18 @@ const fieldLevelSecurity = (req, res, next) => {
   next();
 };
 
-// --- Badge Counts (before resolveEntity so ALL can be summed) ---
+// --- Badge Counts & Next Number Preview (before resolveEntity so ALL can be handled) ---
 router.get(
   '/counts',
   resolveEntity({ allowAll: true }),
   requirePermission('billing:view'),
   billingController.getInvoiceCounts
+);
+router.get(
+  '/next-number',
+  resolveEntity({ allowAll: true }),
+  requirePermission('billing:view'),
+  billingController.getNextInvoiceNumber
 );
 
 // --- Listing and Read Endpoints (allowAll: true) ---
