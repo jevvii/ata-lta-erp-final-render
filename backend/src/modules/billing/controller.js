@@ -220,6 +220,26 @@ const getInvoiceCounts = async (req, res, next) => {
   }
 };
 
+/** @type {import('express').RequestHandler} */
+const getNextInvoiceNumber = async (req, res, next) => {
+  try {
+    const data = await service.getNextInvoiceNumber({
+      entityId: req.activeEntity,
+      entityCode: req.entityCode,
+      user: req.user,
+      query: {
+        entity: req.query.entity,
+        clientId: req.query.clientId || req.query.client_id,
+        workRequestId: req.query.workRequestId || req.query.work_request_id,
+        issueDate: req.query.issueDate || req.query.issue_date,
+      },
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ============================================================
 // Template Handlers
 // ============================================================
@@ -319,6 +339,7 @@ module.exports = {
     getVoucherPdf,
     getAgingReport,
     getInvoiceCounts,
+    getNextInvoiceNumber,
     listTemplates,
     createTemplate,
     updateTemplate,
