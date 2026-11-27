@@ -161,6 +161,24 @@ export interface InvoiceCountsResponse {
   data: InvoiceCounts;
 }
 
+export interface NextInvoiceNumberParams {
+  entity?: string;
+  clientId?: string;
+  workRequestId?: string;
+  issueDate?: string;
+}
+
+export interface NextInvoiceNumberData {
+  invoiceNumber: string;
+  prefix: string;
+  nextSequence: number;
+  entityCode: EntityCode;
+}
+
+export interface NextInvoiceNumberResponse {
+  data: NextInvoiceNumberData;
+}
+
 export interface AgingEntry {
   id: string;
   invoiceNumber: string;

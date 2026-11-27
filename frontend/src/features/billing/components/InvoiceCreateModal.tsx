@@ -38,7 +38,7 @@ import {
   isRoleAdmin,
   isTaskOfWorkRequest,
 } from '@/features/operations/lib/taskScope';
-import { useInvoices } from '../api/useInvoices';
+import { useInvoices, useNextInvoiceNumber } from '../api/useInvoices';
 import { createInvoiceSchema, LINE_ITEM_TYPES } from '../api/schemas';
 import { createInvoiceAction } from '../api/useBillingMutations';
 import { useDisbursements } from '@/features/disbursements/api/useDisbursements';
@@ -378,8 +378,43 @@ export function InvoiceCreateModal({
     taskOptions,
   ]);
 
-  // Existing Invoices for sequential number calculation
-  const { data: existingInvoicesData } = useInvoices({ limit: 100 }, { enabled: isOpen });
+  // Resolve effective target entity for preview when activeEntity is ALL
+  const resolvedTargetEntity = useMemo(() => {
+    if (activeEntity && activeEntity !== 'ALL') {
+      return activeEntity;
+    }
+    const wrEntity =
+      (selectedWorkRequest as { entity?: string; entity_code?: string } | undefined)?.entity ||
+      (selectedWorkRequest as { entity_code?: string } | undefined)?.entity_code;
+    if (wrEntity && wrEntity !== 'ALL') {
+      return wrEntity;
+    }
+    const matchedClient = clients.find((c) => c.id === clientId);
+    const clientEntity =
+      (matchedClient as { entity?: string; entity_code?: string } | undefined)?.entity ||
+      (matchedClient as { entity_code?: string } | undefined)?.entity_code;
+    if (clientEntity && clientEntity !== 'ALL') {
+      return clientEntity;
+    }
+    return undefined;
+  }, [activeEntity, selectedWorkRequest, clients, clientId]);
+
+  // Authoritative server-side next invoice number preview (accounts for rogue, soft-deleted, and out-of-scope rows)
+  const { data: nextNumberData, isFetched: isNextNumberFetched } = useNextInvoiceNumber(
+    {
+      entity: resolvedTargetEntity,
+      clientId: clientId || undefined,
+      workRequestId: workRequestId || undefined,
+      issueDate: issueDate || undefined,
+    },
+    { enabled: isOpen }
+  );
+
+  // Fallback list query only used if backend /invoices/next-number preview is unavailable
+  const { data: existingInvoicesData } = useInvoices(
+    { limit: 100 },
+    { enabled: isOpen && isNextNumberFetched && !nextNumberData?.invoiceNumber }
+  );
 
   // Work Request Transmittals & Unbilled Disbursements (SOP Step 2.5 / Step 2.7)
   const { data: wrTransmittalsData } = useTransmittals(
@@ -466,18 +501,25 @@ export function InvoiceCreateModal({
     setLinkedDisbursementIds((prev) => Array.from(new Set([...prev, ...newIds])));
   };
 
-  // Auto-generate sequential invoice number matching prototype
+  // Sync read-only invoice number preview from authoritative backend sequence endpoint
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+
+    if (nextNumberData?.invoiceNumber) {
+      setInvoiceNumber(nextNumberData.invoiceNumber);
+      return;
+    }
+
+    if (isNextNumberFetched) {
       const invoices = Array.isArray(existingInvoicesData?.data)
         ? existingInvoicesData.data
         : Array.isArray(existingInvoicesData)
           ? existingInvoicesData
           : [];
-      const nextNumber = getNextInvoiceNumber(activeEntity, invoices);
-      setInvoiceNumber(nextNumber);
+      const fallbackNumber = getNextInvoiceNumber(resolvedTargetEntity || activeEntity, invoices);
+      setInvoiceNumber(fallbackNumber);
     }
-  }, [isOpen, activeEntity, existingInvoicesData]);
+  }, [isOpen, nextNumberData, isNextNumberFetched, resolvedTargetEntity, activeEntity, existingInvoicesData]);
 
   // Live calculations (total = subtotal per backend logic)
   const totals = useMemo(() => {
@@ -609,7 +651,6 @@ export function InvoiceCreateModal({
         : {}),
       ...(linkedTransmittalId ? { linkedTransmittalId } : {}),
       ...(linkedDisbursementIds.length > 0 ? { linkedDisbursementIds } : {}),
-      invoiceNumber: invoiceNumber.trim(),
       issueDate,
       dueDate,
       status: 'Draft' as const,
