@@ -56,7 +56,9 @@ export async function createInvoiceAction(
 ): Promise<Invoice> {
   return runBlockingAction<Invoice>({
     title: 'Creating Invoice',
-    message: `Submitting invoice ${data.invoiceNumber} with ${data.lineItems.length} line item(s)...`,
+    message: data.invoiceNumber
+      ? `Submitting invoice ${data.invoiceNumber} with ${data.lineItems.length} line item(s)...`
+      : `Creating invoice with ${data.lineItems.length} line item(s)...`,
     actionName: 'Create Invoice',
     apiCall: async () => {
       const res = await apiRequest<{ data: Invoice }>('/invoices', {
