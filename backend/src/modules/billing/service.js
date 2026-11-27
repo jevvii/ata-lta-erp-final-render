@@ -27,7 +27,7 @@ const {
   resolveAndAuthorizeTaskTarget,
   authorizeTaskRelink,
 } = require('../../lib/taskAssignment');
-const { getUserConcernedWorkRequestIds, fetchInPages } = require('../../lib/userScope');
+const { getUserConcernedWorkRequestIds, fetchInPages, isValidUUID } = require('../../lib/userScope');
 const {
   validateRecordProjectLinkage,
   filterValidProjectRecords,
@@ -36,6 +36,247 @@ const {
   syncLinkedClientFundDisbursementsForInvoice,
   unlinkAndRevertClientFundDisbursements,
 } = require('../disbursements/billingLifecycleSync');
+
+// ============================================================
+// Invoice Numbering (Authoritative Preview & Collision-Free Allocation)
+// ============================================================
+
+const VALID_ENTITY_CODES = ['ATA', 'LTA'];
+
+const normalizeEntityCode = (value) => {
+  if (typeof value !== 'string') return null;
+  const upper = value.trim().toUpperCase();
+  return VALID_ENTITY_CODES.includes(upper) ? upper : null;
+};
+
+const resolveInvoiceYear = (issueDate) => {
+  if (typeof issueDate === 'string') {
+    const match = issueDate.trim().match(/^(\d{4})-/);
+    if (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (parsed >= 2000 && parsed <= 2100) return parsed;
+    }
+  }
+  return new Date().getFullYear();
+};
+
+const formatInvoiceSequenceNumber = (prefix, seqNum) => {
+  const valStr = String(seqNum);
+  const padded = valStr.length < 4 ? valStr.padStart(4, '0') : valStr;
+  return `${prefix}-${padded}`;
+};
+
+const extractInvoiceSequenceNumber = (invoiceNumber, prefix) => {
+  if (typeof invoiceNumber !== 'string' || !invoiceNumber.startsWith(`${prefix}-`)) {
+    return null;
+  }
+  const suffix = invoiceNumber.slice(prefix.length + 1);
+  if (!/^\d+$/.test(suffix)) return null;
+  const parsed = Number.parseInt(suffix, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+/**
+ * Inspect ALL invoice rows (including soft-deleted, archived, hidden/rogue, and
+ * cross-team rows) plus document_sequences for the given prefix to determine the
+ * true highest sequence number already occupied in PostgreSQL.
+ */
+const getInvoiceSequenceState = async (prefix) => {
+  const [matchingRows, seqResult] = await Promise.all([
+    fetchInPages(() =>
+      supabaseAdmin
+        .from('invoices')
+        .select('id, invoice_number')
+        .ilike('invoice_number', `${prefix}-%`)
+    ),
+    supabaseAdmin
+      .from('document_sequences')
+      .select('current_val')
+      .eq('prefix', prefix)
+      .maybeSingle(),
+  ]);
+
+  if (seqResult?.error) {
+    throw new AppError({
+      statusCode: 500,
+      title: 'Database Error',
+      detail: 'Failed to inspect invoice sequence state',
+    });
+  }
+
+  let maxInvoiceSeq = 0;
+  const usedNumbers = new Set();
+  for (const row of matchingRows || []) {
+    if (!row?.invoice_number) continue;
+    usedNumbers.add(row.invoice_number);
+    const seq = extractInvoiceSequenceNumber(row.invoice_number, prefix);
+    if (seq !== null && seq > maxInvoiceSeq) {
+      maxInvoiceSeq = seq;
+    }
+  }
+
+  const sequenceVal = Number(seqResult?.data?.current_val) || 0;
+  const highestSeq = Math.max(maxInvoiceSeq, sequenceVal);
+
+  return {
+    maxInvoiceSeq,
+    sequenceVal,
+    highestSeq,
+    usedNumbers,
+    hasSequenceRow: Boolean(seqResult?.data),
+  };
+};
+
+/**
+ * Race-safely raise an existing document_sequences row so it never lags behind
+ * historical or explicitly-numbered invoices. Only moves forward (WHERE current_val < minVal).
+ */
+const syncDocumentSequenceFloor = async (prefix, minVal) => {
+  if (!Number.isSafeInteger(minVal) || minVal <= 0) return;
+
+  const { data: seqRow, error } = await supabaseAdmin
+    .from('document_sequences')
+    .select('current_val')
+    .eq('prefix', prefix)
+    .maybeSingle();
+
+  if (error || !seqRow) return;
+  if ((Number(seqRow.current_val) || 0) >= minVal) return;
+
+  await supabaseAdmin
+    .from('document_sequences')
+    .update({
+      current_val: minVal,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('prefix', prefix)
+    .lt('current_val', minVal);
+};
+
+/**
+ * Atomically allocate the next unique invoice number for an entity & year via
+ * next_document_sequence(), syncing past any rogue/deleted/explicitly-numbered
+ * invoices that were inserted without advancing document_sequences.
+ */
+const allocateUniqueInvoiceNumber = async ({ entityCode, year }) => {
+  const code = normalizeEntityCode(entityCode) || 'ATA';
+  const prefix = `${code}-SI-${year}`;
+  const { maxInvoiceSeq, sequenceVal, usedNumbers, hasSequenceRow } =
+    await getInvoiceSequenceState(prefix);
+  const requiredFloor = Math.max(maxInvoiceSeq, sequenceVal);
+
+  if (hasSequenceRow && sequenceVal < requiredFloor) {
+    await syncDocumentSequenceFloor(prefix, requiredFloor);
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data: seqData, error: seqErr } = await supabaseAdmin.rpc('next_document_sequence', {
+      p_prefix: prefix,
+    });
+
+    if (seqErr) {
+      throw new AppError({
+        statusCode: 500,
+        title: 'Sequence Error',
+        detail: 'Failed to allocate an invoice number',
+      });
+    }
+
+    const candidate = typeof seqData === 'string' && seqData.length > 0 ? seqData : null;
+    const candidateSeq = candidate ? extractInvoiceSequenceNumber(candidate, prefix) : null;
+
+    if (
+      candidate &&
+      candidateSeq !== null &&
+      candidateSeq > maxInvoiceSeq &&
+      !usedNumbers.has(candidate)
+    ) {
+      return candidate;
+    }
+
+    // The first RPC call guarantees the document_sequences row now exists;
+    // advance its floor past existing invoices before allocating the next slot.
+    const bumpFloor = Math.max(requiredFloor, candidateSeq || 0);
+    await syncDocumentSequenceFloor(prefix, bumpFloor);
+  }
+
+  return formatInvoiceSequenceNumber(prefix, requiredFloor + 1);
+};
+
+/**
+ * Read-only preview of the next invoice number for the create form.
+ * Considers ALL existing invoices (including rogue/deleted/other-WR rows)
+ * and document_sequences without consuming a sequence number.
+ */
+const getNextInvoiceNumber = async ({ entityId, entityCode, user, query = {} }) => {
+  let resolvedCode = null;
+
+  if (entityId && entityId !== 'ALL') {
+    resolvedCode = normalizeEntityCode(entityCode);
+    if (!resolvedCode) {
+      const codeFromDb = await resolveEntityCode(entityId);
+      resolvedCode = normalizeEntityCode(codeFromDb);
+    }
+  } else {
+    resolvedCode = normalizeEntityCode(query.entity);
+
+    if (!resolvedCode && query.workRequestId && isValidUUID(query.workRequestId)) {
+      const { data: wr, error: wrErr } = await supabaseAdmin
+        .from('work_requests')
+        .select('entity_id')
+        .eq('id', query.workRequestId)
+        .maybeSingle();
+      if (wrErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Unable to resolve entity for work request',
+        });
+      }
+      if (wr?.entity_id) {
+        resolvedCode = normalizeEntityCode(await resolveEntityCode(wr.entity_id));
+      }
+    }
+
+    if (!resolvedCode && query.clientId && isValidUUID(query.clientId)) {
+      const { data: client, error: clientErr } = await supabaseAdmin
+        .from('clients')
+        .select('entity_id')
+        .eq('id', query.clientId)
+        .maybeSingle();
+      if (clientErr) {
+        throw new AppError({
+          statusCode: 500,
+          title: 'Database Error',
+          detail: 'Unable to resolve entity for client',
+        });
+      }
+      if (client?.entity_id) {
+        resolvedCode = normalizeEntityCode(await resolveEntityCode(client.entity_id));
+      }
+    }
+
+    if (!resolvedCode) {
+      const userFirstValid = (user?.entities || [])
+        .map((e) => normalizeEntityCode(e))
+        .find(Boolean);
+      resolvedCode = userFirstValid || 'ATA';
+    }
+  }
+
+  resolvedCode = resolvedCode || 'ATA';
+  const year = resolveInvoiceYear(query.issueDate);
+  const prefix = `${resolvedCode}-SI-${year}`;
+  const { highestSeq } = await getInvoiceSequenceState(prefix);
+  const nextSequence = highestSeq + 1;
+
+  return {
+    invoiceNumber: formatInvoiceSequenceNumber(prefix, nextSequence),
+    prefix,
+    nextSequence,
+    entityCode: resolvedCode,
+  };
+};
 
 // ============================================================
 // Invoice CRUD
@@ -412,7 +653,7 @@ const listInvoices = async ({ entityId, filters = {}, user }) => {
     if (isArchived) {
       q = q.or('archived.eq.true,status.eq.Cancelled');
     } else if (archived === false || archived === 'false') {
-      q = q.eq('archived', false).neq('status', 'Cancelled');
+      q = q.not('archived', 'is', true).neq('status', 'Cancelled');
     }
     if (status) q = q.eq('status', status);
     if (clientId) q = q.eq('client_id', clientId);
@@ -555,22 +796,26 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
     sort_order: idx,
   }));
 
-  let invoiceNumber = (data.invoiceNumber || '').trim();
-  if (!invoiceNumber) {
-    const entityCode = await resolveEntityCode(entityId);
-    const code = entityCode && entityCode !== 'ALL' && entityCode.length <= 5 ? entityCode : 'ATA';
-    const year = new Date().getFullYear();
-    const { data: seqData } = await supabaseAdmin.rpc('next_document_sequence', {
-      p_prefix: `${code}-SI-${year}`,
-    });
-    if (typeof seqData === 'string' && seqData.length > 0) {
-      invoiceNumber = seqData;
-    }
-  }
+  const explicitInvoiceNumber = (data.invoiceNumber || '').trim();
+  const isAutoAllocatedNumber = !explicitInvoiceNumber;
+  const resolvedEntityCode = await resolveEntityCode(entityId);
+  const effectiveCode = normalizeEntityCode(resolvedEntityCode) || 'ATA';
+  const invoiceYear = resolveInvoiceYear(data.issueDate);
 
-  const { data: invoice, error: invoiceErr } = await supabaseAdmin.rpc(
-    'invoice_create_transactional',
-    {
+  let invoiceNumber = explicitInvoiceNumber;
+  let invoice = null;
+  let invoiceErr = null;
+
+  const maxCreateAttempts = isAutoAllocatedNumber ? 5 : 1;
+  for (let attempt = 0; attempt < maxCreateAttempts; attempt += 1) {
+    if (isAutoAllocatedNumber) {
+      invoiceNumber = await allocateUniqueInvoiceNumber({
+        entityCode: effectiveCode,
+        year: invoiceYear,
+      });
+    }
+
+    const rpcRes = await supabaseAdmin.rpc('invoice_create_transactional', {
       p_invoice_data: {
         clientId: data.clientId,
         workRequestId: validatedWrId,
@@ -600,8 +845,21 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
       p_line_items: lineItems,
       p_user_id: userId,
       p_entity_id: entityId,
+    });
+
+    invoice = rpcRes.data;
+    invoiceErr = rpcRes.error;
+
+    if (!invoiceErr && invoice) {
+      break;
     }
-  );
+
+    // Retry only when an auto-allocated number raced with a concurrent insert
+    if (isAutoAllocatedNumber && invoiceErr?.code === '23505') {
+      continue;
+    }
+    break;
+  }
 
   if (invoiceErr || !invoice) {
     if (invoiceErr?.code === '23505') {
@@ -616,6 +874,15 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
       title: 'Database Error',
       detail: 'Failed to create invoice',
     });
+  }
+
+  // If an explicit invoiceNumber followed the standard sequence pattern, keep document_sequences floor synced
+  if (!isAutoAllocatedNumber) {
+    const explicitPrefix = `${effectiveCode}-SI-${invoiceYear}`;
+    const explicitSeq = extractInvoiceSequenceNumber(invoice.invoice_number || invoiceNumber, explicitPrefix);
+    if (explicitSeq !== null) {
+      await syncDocumentSequenceFloor(explicitPrefix, explicitSeq);
+    }
   }
 
   const createdInvoice = {
@@ -655,7 +922,7 @@ const createInvoice = async ({ entityId, userId, user, data }) => {
     recordId: invoice.id,
     entity: entityId,
     userId,
-    details: { invoiceNumber: data.invoiceNumber, total },
+    details: { invoiceNumber: createdInvoice.invoice_number, total },
   });
 
   const entityCode = await resolveEntityCode(invoice.entity_id);
@@ -1663,17 +1930,17 @@ const getAgingReport = async ({ entityId, user }) => {
 };
 
 // ============================================================
-// Counts for tab badges (no full-table scans)
+// Counts for tab badges (strict linkage parity with listInvoices)
 // ============================================================
 
 /**
  * Count invoices grouped for module tab badges.
+ * Applies filterValidProjectRecords so orphaned/deleted-parent/corrupt ("rogue")
+ * invoice rows hidden from listInvoices are never counted in tab badges.
  * @param {object} params
  * @param {string} params.entityId
  * @returns {Promise<{ active: number, archived: number, rejected: number, templates: number }>}
  */
-const VALID_ENTITY_CODES = ['ATA', 'LTA'];
-
 const getInvoiceCounts = async ({ entityId, user }) => {
   const resolve = async (code) => {
     const { data } = await supabaseAdmin
@@ -1684,14 +1951,18 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return data?.id;
   };
 
+  const isAdmin = user?.role === 'Admin';
+  const userEntities = (user?.entities || []).map((c) => String(c).toUpperCase());
+
   const entityIds = [];
   if (entityId === 'ALL') {
-    const codes = (user?.entities || []).filter((c) =>
-      VALID_ENTITY_CODES.includes(c.toUpperCase())
-    );
+    const codes =
+      userEntities.includes('ALL') || (isAdmin && userEntities.length === 0)
+        ? VALID_ENTITY_CODES
+        : userEntities.filter((c) => VALID_ENTITY_CODES.includes(c));
     const resolved = await Promise.all(codes.map(resolve));
     entityIds.push(...resolved.filter(Boolean));
-  } else {
+  } else if (entityId) {
     entityIds.push(entityId);
   }
 
@@ -1699,8 +1970,7 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return { active: 0, archived: 0, rejected: 0, templates: 0 };
   }
 
-  const isAdmin = user?.role === 'Admin';
-  let concernedWrIds = [];
+  let concernedWrIds = null;
   if (!isAdmin) {
     if (!user) return { active: 0, archived: 0, rejected: 0, templates: 0 };
     concernedWrIds = await getUserConcernedWorkRequestIds(user, { entityId });
@@ -1721,57 +1991,58 @@ const getInvoiceCounts = async ({ entityId, user }) => {
     return count || 0;
   };
 
-  const baseQuery = () => {
-    let q = supabaseAdmin
+  const makeInvoicesQuery = () =>
+    supabaseAdmin
       .from('invoices')
-      .select('*', { count: 'exact', head: true })
+      .select('id, entity_id, work_request_id, task_id, linked_task_id, status, archived')
       .in('entity_id', entityIds)
       .is('deleted_at', null);
-    if (!isAdmin) {
-      q = q.in('work_request_id', concernedWrIds);
-    }
-    return q;
-  };
 
-  const activeQuery = baseQuery().neq('status', 'Cancelled').neq('archived', true);
-
-  const [active, cancelled, paidArchived, pendingRejected, opsRejected, templates] =
-    await Promise.all([
-      runCount(activeQuery),
-      runCount(baseQuery().eq('status', 'Cancelled')),
-      runCount(baseQuery().eq('status', 'Paid').eq('archived', true)),
-      runCount(
-        supabaseAdmin
-          .from('pending_changes')
+  const [rawInvoices, pendingRejected, opsRejected, templates] = await Promise.all([
+    fetchInPages(makeInvoicesQuery),
+    runCount(
+      supabaseAdmin
+        .from('pending_changes')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .eq('table_name', 'invoices')
+        .eq('status', 'rejected')
+    ),
+    runCount(
+      (() => {
+        let q = supabaseAdmin
+          .from('operations_requests')
           .select('*', { count: 'exact', head: true })
           .in('entity_id', entityIds)
-          .eq('table_name', 'invoices')
-          .eq('status', 'rejected')
-      ),
-      runCount(
-        (() => {
-          let q = supabaseAdmin
-            .from('operations_requests')
-            .select('*', { count: 'exact', head: true })
-            .in('entity_id', entityIds)
-            .eq('type', 'billing')
-            .eq('status', 'rejected');
-          if (!isAdmin) {
-            q = q.in('work_request_id', concernedWrIds);
-          }
-          return q;
-        })()
-      ),
-      runCount(
-        supabaseAdmin
-          .from('billing_templates')
-          .select('*', { count: 'exact', head: true })
-          .in('entity_id', entityIds)
-          .is('deleted_at', null)
-      ),
-    ]);
+          .eq('type', 'billing')
+          .eq('status', 'rejected');
+        if (!isAdmin) {
+          q = q.in('work_request_id', concernedWrIds);
+        }
+        return q;
+      })()
+    ),
+    runCount(
+      supabaseAdmin
+        .from('billing_templates')
+        .select('*', { count: 'exact', head: true })
+        .in('entity_id', entityIds)
+        .is('deleted_at', null)
+    ),
+  ]);
 
-  const archived = cancelled + paidArchived;
+  const validRows = await filterValidProjectRecords(rawInvoices || [], {
+    user,
+    entityId,
+    concernedWrIds,
+  });
+
+  const active = validRows.filter(
+    (inv) => inv.status !== 'Cancelled' && inv.archived !== true
+  ).length;
+  const archived = validRows.filter(
+    (inv) => inv.archived === true || inv.status === 'Cancelled'
+  ).length;
   const rejected = pendingRejected + opsRejected;
 
   return {
@@ -2021,6 +2292,7 @@ module.exports = {
   generateVoucherPdf,
   getAgingReport,
   getInvoiceCounts,
+  getNextInvoiceNumber,
   listTemplates,
   createTemplate,
   updateTemplate,
