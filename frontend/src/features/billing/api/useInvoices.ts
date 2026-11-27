@@ -7,6 +7,9 @@ import type {
   InvoiceFilters,
   InvoiceListResponse,
   InvoiceCountsResponse,
+  NextInvoiceNumberParams,
+  NextInvoiceNumberData,
+  NextInvoiceNumberResponse,
 } from './types';
 
 function isTestWithoutMock(): boolean {
@@ -113,5 +116,49 @@ export function useInvoiceCounts(options?: { enabled?: boolean }) {
     },
     enabled: options?.enabled ?? true,
     staleTime: 30 * 1000,
+  });
+}
+
+export function useNextInvoiceNumber(
+  params?: NextInvoiceNumberParams,
+  options?: { enabled?: boolean }
+) {
+  const activeEntity = useSessionStore((state) => state.activeEntity);
+
+  return useQuery<NextInvoiceNumberData | null>({
+    queryKey: billingKeys.nextNumber(activeEntity, params),
+    queryFn: async () => {
+      if (isTestWithoutMock()) {
+        return null;
+      }
+      const search = new URLSearchParams();
+      if (params?.entity && params.entity !== 'ALL') {
+        search.append('entity', params.entity);
+      }
+      if (params?.clientId) search.append('clientId', params.clientId);
+      if (params?.workRequestId) search.append('workRequestId', params.workRequestId);
+      if (params?.issueDate) search.append('issueDate', params.issueDate);
+
+      const queryStr = search.toString();
+      const path = `/invoices/next-number${queryStr ? `?${queryStr}` : ''}`;
+      try {
+        const res = await apiRequest<NextInvoiceNumberResponse>(path);
+        if (
+          res?.data &&
+          typeof res.data === 'object' &&
+          !Array.isArray(res.data) &&
+          typeof res.data.invoiceNumber === 'string' &&
+          res.data.invoiceNumber.trim().length > 0
+        ) {
+          return res.data;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    enabled: options?.enabled ?? true,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 }

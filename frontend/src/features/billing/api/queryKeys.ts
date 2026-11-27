@@ -1,4 +1,4 @@
-import type { InvoiceFilters } from './types';
+import type { InvoiceFilters, NextInvoiceNumberParams } from './types';
 
 export const billingKeys = {
   all: ['billing'] as const,
@@ -9,6 +9,8 @@ export const billingKeys = {
     [...billingKeys.invoices(), 'detail', id] as const,
   counts: (entity: string | null | undefined) =>
     [...billingKeys.all, 'counts', entity] as const,
+  nextNumber: (entity: string | null | undefined, params?: NextInvoiceNumberParams) =>
+    [...billingKeys.all, 'next-number', entity, params] as const,
   aging: (entity: string | null | undefined) =>
     [...billingKeys.all, 'aging', entity] as const,
   templates: (entity: string | null | undefined) =>
